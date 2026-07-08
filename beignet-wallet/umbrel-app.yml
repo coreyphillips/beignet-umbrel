@@ -1,0 +1,37 @@
+manifestVersion: 1
+id: beignet-wallet
+name: Beignet
+tagline: Self-custodial Bitcoin and Lightning wallets
+icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
+category: bitcoin
+version: "0.1.0"
+port: 2113
+description: >-
+  Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
+  on your Umbrel, powered by the beignet wallet engine.
+
+
+  Create new wallets on the fly or import your own seed phrase. Each wallet runs
+  as an independent node with its own on-chain wallet and Lightning identity.
+
+
+  By default every wallet connects to your Umbrel's Electrum server, or you can
+  point any wallet at an Electrum server of your choosing.
+developer: Corey Phillips
+website: https://github.com/coreyphillips/beignet
+submitter: Corey Phillips
+submission: https://github.com/coreyphillips/beignet-umbrel
+repo: https://github.com/coreyphillips/beignet-umbrel
+support: https://github.com/coreyphillips/beignet/issues
+gallery:
+  - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/1.png
+  - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
+  - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
+releaseNotes: >-
+  Initial community release. Multi-wallet management, create or import wallets,
+  configurable Electrum server, and a per-wallet API explorer.
+dependencies:
+  - electrs
+path: ""
+defaultUsername: ""
+defaultPassword: ""

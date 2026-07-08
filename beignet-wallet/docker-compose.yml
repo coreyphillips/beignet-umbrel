@@ -1,0 +1,30 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: beignet-wallet_manager_1
+      APP_PORT: 3000
+
+  manager:
+    image: ghcr.io/coreyphillips/beignet-app:0.1.0
+    restart: on-failure
+    init: true
+    user: "1000:1000"
+    stop_grace_period: 1m
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+      # Defaults applied to every new wallet (overridable per wallet in the UI):
+      DEFAULT_ELECTRUM_HOST: ${APP_ELECTRS_NODE_IP}
+      DEFAULT_ELECTRUM_PORT: ${APP_ELECTRS_NODE_PORT}
+      DEFAULT_ELECTRUM_TLS: "false"
+      DEFAULT_NETWORK: ${APP_BITCOIN_NETWORK}
+      # Internal port range for the per-wallet beignet daemons:
+      CHILD_PORT_BASE: "3101"
+      CHILD_PORT_MAX: "3999"
+      # Tor proxy (available for future Lightning connectivity work):
+      TOR_PROXY_IP: ${TOR_PROXY_IP}
+      TOR_PROXY_PORT: ${TOR_PROXY_PORT}

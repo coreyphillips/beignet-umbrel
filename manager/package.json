@@ -1,0 +1,21 @@
+{
+  "name": "beignet-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Manager service for the Beignet Umbrel app. Supervises one beignet daemon per wallet and serves the dashboard.",
+  "license": "MIT",
+  "author": "Corey Phillips",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bip39": "3.1.0",
+    "express": "4.21.2",
+    "http-proxy-middleware": "2.0.7",
+    "swagger-ui-dist": "5.17.14"
+  }
+}

@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+**/*.log
+.git
+.github
+data
+manager/web/vendor
+.DS_Store
