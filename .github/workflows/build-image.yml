@@ -28,11 +28,14 @@ jobs:
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            BEIGNET="${{ github.event.inputs.beignet_version || '' }}"
+            BEIGNET="${BEIGNET:-$VERSION}"
           else
             VERSION="dev"
+            BEIGNET="${{ github.event.inputs.beignet_version || 'latest' }}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "beignet_version=${{ github.event.inputs.beignet_version || 'latest' }}" >> "$GITHUB_OUTPUT"
+          echo "beignet_version=$BEIGNET" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
