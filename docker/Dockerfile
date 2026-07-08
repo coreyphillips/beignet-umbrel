@@ -4,6 +4,8 @@ ARG NODE_IMAGE=node:20-bookworm-slim
 
 # ---- UI build: compile the React/Vite dashboard to static assets ----
 FROM ${NODE_IMAGE} AS ui
+# Harden npm against flaky networks (arm64 emulation on CI is prone to resets).
+ENV NPM_CONFIG_FETCH_RETRIES=6 NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 NPM_CONFIG_FETCH_TIMEOUT=300000
 WORKDIR /ui
 COPY manager/ui/package.json manager/ui/package-lock.json ./
 RUN npm install --no-audit --no-fund
@@ -14,6 +16,7 @@ RUN npm run build
 # ---- server build: manager deps + the beignet daemon (compiles better-sqlite3) ----
 FROM ${NODE_IMAGE} AS build
 ARG BEIGNET_VERSION=latest
+ENV NPM_CONFIG_FETCH_RETRIES=6 NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 NPM_CONFIG_FETCH_TIMEOUT=300000
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
