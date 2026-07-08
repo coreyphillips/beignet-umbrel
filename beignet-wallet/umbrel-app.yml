@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.2.1"
+version: "0.3.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,9 +30,9 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Fixes the app getting stuck on "Starting". Corrects the internal service
-  hostname and makes the container fix its own data directory permissions on
-  startup, so no manual steps are needed.
+  New per-wallet dashboard: Overview (balances, sync, liquidity, readiness),
+  Receive, Send, Channels with splice in and splice out, Peers, Activity, and
+  BOLT12 Offers. Adds a proper beignet logo and live updates.
 dependencies: []
 path: ""
 defaultUsername: ""

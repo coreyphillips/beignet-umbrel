@@ -4,5 +4,6 @@
 .git
 .github
 data
-manager/web/vendor
+manager/public
+manager/web
 .DS_Store

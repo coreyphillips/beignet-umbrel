@@ -3,5 +3,5 @@ dist/
 *.log
 .DS_Store
 .env
-manager/web/vendor/
+manager/public/
 data/

@@ -179,12 +179,24 @@ async function main() {
 
 	app.use('/api', api);
 
-	// --- Static assets ---
+	// --- Static assets + SPA ---
 	const swaggerPath = swaggerAssetsPath();
 	if (swaggerPath) {
 		app.use('/vendor/swagger', express.static(swaggerPath));
 	}
-	app.use('/', express.static(path.join(__dirname, '..', 'web')));
+	const publicDir = path.join(__dirname, '..', 'public');
+	app.use(express.static(publicDir));
+	// Client-side routing fallback: serve index.html for non-API GET routes.
+	app.get('*', (req, res, next) => {
+		if (
+			req.path.startsWith('/api') ||
+			req.path.startsWith('/wallets') ||
+			req.path.startsWith('/vendor')
+		) {
+			return next();
+		}
+		res.sendFile(path.join(publicDir, 'index.html'), (err) => err && next());
+	});
 
 	// --- Error handler (must be last) ---
 	// eslint-disable-next-line no-unused-vars
