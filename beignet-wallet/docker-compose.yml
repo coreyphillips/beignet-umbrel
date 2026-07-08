@@ -7,7 +7,7 @@ services:
       APP_PORT: 3000
 
   manager:
-    image: ghcr.io/coreyphillips/beignet-app:0.1.0@sha256:e779c184556195fca13c63eb52ac7381fbc899d58ef9114a646df5246db0205f
+    image: ghcr.io/coreyphillips/beignet-app:0.2.0@sha256:e33fd3fea206d7348b0e1003395954985d4d23c373313b1d017873198bc7e1fe
     restart: on-failure
     init: true
     user: "1000:1000"

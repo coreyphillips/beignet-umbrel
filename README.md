@@ -8,7 +8,7 @@ A [community app store](https://github.com/getumbrel/umbrel-community-app-store)
 2. Add this store by URL: `https://github.com/coreyphillips/beignet-umbrel`
 3. Install **Beignet** from the "Beignet App Store".
 
-The app depends on the Umbrel **Electrum (electrs)** app, which is installed automatically as a dependency.
+**No full node required.** Beignet does not depend on any other app, so it installs on its own. Point it at any Electrum server you like. If you run the **Electrs** or **Fulcrum** app on your Umbrel, use the one-click presets in **Settings** (or the per-wallet Electrum field) to connect to it. You can set an app-wide default Electrum server and network for new wallets, and override them per wallet.
 
 ## What it does
 
@@ -16,7 +16,7 @@ Beignet runs one or many self-custodial wallets on your Umbrel:
 
 - **Multiple wallets at once**, each an independent node with its own on-chain wallet and Lightning identity.
 - **Create** a new wallet (generates a fresh seed) or **import** your own recovery phrase.
-- **Bring your own Electrum server**: every wallet defaults to your Umbrel's electrs, or you can point a wallet at any Electrum server.
+- **Bring your own Electrum server**: no full node needed. Point at any Electrum server, or connect to your Umbrel's Electrs/Fulcrum with a one-click preset. Set an app-wide default and override it per wallet.
 - A per-wallet **API explorer** (Swagger UI) over the full beignet JSON API.
 
 ## Architecture
