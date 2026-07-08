@@ -15,8 +15,10 @@ RUN npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet "beignet@$
 
 # ---- runtime stage ----
 FROM ${NODE_IMAGE}
+# gosu drops privileges after the entrypoint fixes ownership of the data volume.
+# Zombie reaping is handled by Docker's own init (compose `init: true`).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      openssl ca-certificates tini && rm -rf /var/lib/apt/lists/*
+      openssl ca-certificates gosu && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 # The manager runs this with node when it ends in .js (see beignetSpawn()).
 ENV BEIGNET_BIN=/opt/beignet/node_modules/beignet/dist/cli/cli.js
@@ -27,4 +29,4 @@ COPY manager/ ./
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 3000
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
