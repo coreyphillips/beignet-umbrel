@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, Field, Badge } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
@@ -32,6 +33,7 @@ function OnChain({ api, info, bump }) {
 	const [feeRate, setFeeRate] = useState('');
 	const [busy, setBusy] = useState(false);
 	const [txid, setTxid] = useState('');
+	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
 
 	const send = async () => {
 		setBusy(true);
@@ -66,6 +68,19 @@ function OnChain({ api, info, bump }) {
 					<input value={feeRate} onChange={(e) => setFeeRate(e.target.value)} placeholder="auto" />
 				</Field>
 			</div>
+			{fees && (
+				<div className="preset-row" style={{ marginBottom: 14 }}>
+					{[
+						['Fast', fees.fast],
+						['Normal', fees.normal],
+						['Slow', fees.slow]
+					].map(([label, rate]) => (
+						<button key={label} type="button" className="btn sm" onClick={() => setFeeRate(String(rate))}>
+							{label} · {rate} sat/vB
+						</button>
+					))}
+				</div>
+			)}
 			<Button variant="primary" busy={busy} onClick={send} disabled={!address || !amount}>
 				Send
 			</Button>

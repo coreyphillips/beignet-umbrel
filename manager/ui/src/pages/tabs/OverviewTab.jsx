@@ -7,13 +7,14 @@ const CHECK_TONE = { PASS: 'green', WARN: 'yellow', FAIL: 'red' };
 export default function OverviewTab({ id, api, info, health, tick }) {
 	const { data } = usePoll(
 		async () => {
-			const [balance, readiness, liquidity, fees] = await Promise.all([
+			const [balance, readiness, liquidity, fees, feeEst] = await Promise.all([
 				api.get('/balance').catch(() => null),
 				api.get('/readiness').catch(() => null),
 				api.get('/liquidity').catch(() => null),
-				api.get('/fees').catch(() => null)
+				api.get('/fees').catch(() => null),
+				api.get('/fees/estimates').catch(() => null)
 			]);
-			return { balance, readiness, liquidity, fees };
+			return { balance, readiness, liquidity, fees, feeEst };
 		},
 		10000,
 		[id, tick]
@@ -22,6 +23,7 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 	const bal = data?.balance;
 	const liq = data?.liquidity;
 	const fees = data?.fees;
+	const feeEst = data?.feeEst;
 	const readiness = data?.readiness;
 
 	return (
@@ -77,14 +79,20 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 					)}
 				</Card>
 
-				<Card title="Fee advisor">
-					{fees ? (
-						<div className="grid cols-2">
-							<Stat label="Current" value={`${fees.currentSatPerVbyte} sat/vB`} sub={`trend ${fees.trend}`} />
-							<Stat label="Recommendation" value={fees.recommendation} sub={`open cost ~${fmtSats(fees.estimatedOpenChannelCostSats)}`} />
+				<Card title="Fees">
+					{feeEst ? (
+						<div className="grid cols-3">
+							<Stat label="Fast" value={`${feeEst.fast}`} sub="sat/vB" />
+							<Stat label="Normal" value={`${feeEst.normal}`} sub="sat/vB" />
+							<Stat label="Slow" value={`${feeEst.slow}`} sub="sat/vB" />
 						</div>
 					) : (
-						<div className="empty">Fee data not available yet.</div>
+						<div className="empty">Fee estimates not available yet.</div>
+					)}
+					{fees && (
+						<div className="wallet-meta" style={{ marginTop: 10 }}>
+							Channel-open advice: {fees.recommendation} · ~{fmtSats(fees.estimatedOpenChannelCostSats)}
+						</div>
 					)}
 				</Card>
 
