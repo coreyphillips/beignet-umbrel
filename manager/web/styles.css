@@ -58,10 +58,55 @@ h1 {
 	font-size: 13px;
 }
 
+.topbar-right {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+}
+
 .env {
 	color: var(--muted);
 	font-size: 13px;
 	text-align: right;
+}
+
+.preset-row {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin: 10px 0;
+}
+
+.preset {
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	color: var(--text);
+	border-radius: 8px;
+	padding: 8px 12px;
+	font-size: 13px;
+	cursor: pointer;
+	text-align: left;
+}
+
+.preset:hover {
+	border-color: var(--accent);
+}
+
+.preset small {
+	display: block;
+	color: var(--muted);
+	font-size: 11px;
+	margin-top: 2px;
+}
+
+.settings-current {
+	color: var(--muted);
+	font-size: 13px;
+	margin-bottom: 12px;
+}
+
+.settings-current b {
+	color: var(--text);
 }
 
 main {

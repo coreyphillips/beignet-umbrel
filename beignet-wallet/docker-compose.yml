@@ -17,14 +17,19 @@ services:
     environment:
       PORT: "3000"
       DATA_DIR: /data
-      # Defaults applied to every new wallet (overridable per wallet in the UI):
-      DEFAULT_ELECTRUM_HOST: ${APP_ELECTRS_NODE_IP}
-      DEFAULT_ELECTRUM_PORT: ${APP_ELECTRS_NODE_PORT}
+      # Electrum is optional: this app declares no dependency, so a local
+      # Electrs/Fulcrum is not required. If those apps are installed their
+      # exported vars are not injected here (only declared deps are), so these
+      # seed defaults are normally empty and the user picks a server in the UI
+      # (with one-click presets for Umbrel's Electrs/Fulcrum). If a value is
+      # present it seeds the app default on first boot.
+      DEFAULT_ELECTRUM_HOST: "${APP_ELECTRS_NODE_IP:-}"
+      DEFAULT_ELECTRUM_PORT: "${APP_ELECTRS_NODE_PORT:-50001}"
       DEFAULT_ELECTRUM_TLS: "false"
-      DEFAULT_NETWORK: ${APP_BITCOIN_NETWORK}
+      DEFAULT_NETWORK: "${APP_BITCOIN_NETWORK:-mainnet}"
       # Internal port range for the per-wallet beignet daemons:
       CHILD_PORT_BASE: "3101"
       CHILD_PORT_MAX: "3999"
       # Tor proxy (available for future Lightning connectivity work):
-      TOR_PROXY_IP: ${TOR_PROXY_IP}
-      TOR_PROXY_PORT: ${TOR_PROXY_PORT}
+      TOR_PROXY_IP: "${TOR_PROXY_IP:-}"
+      TOR_PROXY_PORT: "${TOR_PROXY_PORT:-}"

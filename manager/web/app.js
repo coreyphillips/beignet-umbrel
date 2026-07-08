@@ -55,31 +55,115 @@ function closeModal() {
 
 // --- Electrum override block (shared by create & import forms) ---
 function buildElectrumBlock(container) {
+	container.innerHTML = '';
 	const def = state.config.defaultElectrum;
-	const hasDefault = def && def.host;
+	const hasDefault = !!(def && def.host);
 	const fields = el('div', { class: 'electrum-fields' }, [
 		el('label', {}, ['Host', el('input', { name: 'electrumHost', placeholder: 'electrum.example.com' })]),
-		el('label', {}, ['Port', el('input', { name: 'electrumPort', value: String(def.port || 50001) })]),
+		el('label', {}, ['Port', el('input', { name: 'electrumPort', value: '50001' })]),
 		el('label', { class: 'checkbox' }, [el('input', { type: 'checkbox', name: 'electrumTls' }), 'Use TLS'])
 	]);
+	// Preset buttons fill the custom fields quickly.
+	const presetRow = el('div', { class: 'preset-row' },
+		(state.config.electrumPresets || []).map((p) =>
+			el('button', {
+				type: 'button', class: 'preset',
+				onclick: () => {
+					fields.querySelector('[name=electrumHost]').value = p.host;
+					fields.querySelector('[name=electrumPort]').value = String(p.port);
+					fields.querySelector('[name=electrumTls]').checked = !!p.tls;
+				}
+			}, [p.label, el('small', {}, `${p.host}:${p.port}`)])
+		)
+	);
 	const toggle = el('label', { class: 'electrum-toggle' }, [
 		el('input', {
 			type: 'checkbox',
 			name: 'customElectrum',
 			onchange: (e) => fields.classList.toggle('show', e.target.checked)
 		}),
-		'Use a custom Electrum server'
+		hasDefault ? 'Use a different Electrum server for this wallet' : 'Electrum server for this wallet'
 	]);
-	container.appendChild(toggle);
 	const note = hasDefault
-		? `Default: ${def.host}:${def.port} (Umbrel Electrum, TLS ${def.tls ? 'on' : 'off'})`
-		: 'No default Electrum server detected. A custom server is required.';
+		? `Default: ${def.host}:${def.port} (TLS ${def.tls ? 'on' : 'off'}). Change it in Settings.`
+		: 'No default Electrum server set. Choose one for this wallet, or set a default in Settings.';
+	container.appendChild(toggle);
 	container.appendChild(el('div', { class: 'electrum-default' }, note));
+	if ((state.config.electrumPresets || []).length) fields.appendChild(presetRow);
 	container.appendChild(fields);
 	if (!hasDefault) {
 		toggle.querySelector('input').checked = true;
 		fields.classList.add('show');
 	}
+}
+
+// --- App-level Settings (default network + default Electrum) ---
+function openSettings() {
+	const cfg = state.config;
+	const def = cfg.defaultElectrum;
+	const netSelect = el('select', { name: 's-network' },
+		cfg.supportedNetworks.map((n) => {
+			const o = el('option', { value: n }, n);
+			if (n === cfg.defaultNetwork) o.selected = true;
+			return o;
+		})
+	);
+	const host = el('input', { name: 's-host', value: def ? def.host : '', placeholder: 'electrum.example.com' });
+	const port = el('input', { name: 's-port', value: def ? String(def.port) : '50001' });
+	const tls = el('input', { type: 'checkbox', name: 's-tls' });
+	if (def && def.tls) tls.checked = true;
+	const presetRow = el('div', { class: 'preset-row' },
+		(cfg.electrumPresets || []).map((p) =>
+			el('button', { type: 'button', class: 'preset', onclick: () => {
+				host.value = p.host; port.value = String(p.port); tls.checked = !!p.tls;
+			} }, [p.label, el('small', {}, p.note)])
+		)
+	);
+	const body = el('div', {}, [
+		el('div', { class: 'settings-current' }, [
+			'These defaults apply to new wallets. Each wallet can still override them. ',
+			'No full node is required. If you run Electrs or Fulcrum here, use a preset.'
+		]),
+		el('label', {}, ['Default network', netSelect]),
+		el('div', { style: 'height:12px' }),
+		el('div', { class: 'wallet-meta' }, 'Default Electrum server'),
+		presetRow,
+		el('div', { class: 'row' }, [
+			el('label', {}, ['Host', host]),
+			el('label', {}, ['Port', port]),
+			el('label', { class: 'checkbox' }, [tls, 'Use TLS'])
+		]),
+		el('div', { style: 'margin-top:16px; display:flex; gap:8px;' }, [
+			el('button', { class: 'primary', onclick: async () => {
+				const patch = { defaultNetwork: netSelect.value };
+				patch.defaultElectrum = host.value.trim()
+					? { host: host.value.trim(), port: parseInt(port.value, 10), tls: tls.checked }
+					: null;
+				try {
+					await api('PUT', '/settings', patch);
+					state.config = await api('GET', '/config');
+					buildElectrumBlock(document.querySelector('.electrum-block[data-for="create"]'));
+					buildElectrumBlock(document.querySelector('.electrum-block[data-for="import"]'));
+					fillNetworks();
+					updateEnv();
+					closeModal();
+					toast('Settings saved');
+				} catch (err) { toast(err.message, true); }
+			} }, 'Save settings'),
+			el('button', { class: 'ghost', onclick: () => {
+				host.value = ''; port.value = '50001'; tls.checked = false;
+			} }, 'Clear Electrum default'),
+			el('button', { class: 'ghost', onclick: closeModal }, 'Cancel')
+		])
+	]);
+	openModal('Settings', body);
+}
+
+function updateEnv() {
+	const def = state.config.defaultElectrum;
+	document.getElementById('env').textContent =
+		`Network: ${state.config.defaultNetwork}` +
+		(def && def.host ? ` · Electrum: ${def.host}:${def.port}` : ' · Electrum: not set');
 }
 
 function readElectrum(form) {
@@ -279,6 +363,7 @@ function setupForms() {
 	});
 
 	document.getElementById('refresh').addEventListener('click', refresh);
+	document.getElementById('settings-btn').addEventListener('click', openSettings);
 	document.getElementById('modal-close').addEventListener('click', closeModal);
 	document.getElementById('modal').addEventListener('click', (e) => {
 		if (e.target.id === 'modal') closeModal();
@@ -292,10 +377,7 @@ async function boot() {
 		toast(`Failed to load config: ${err.message}`, true);
 		return;
 	}
-	const def = state.config.defaultElectrum;
-	document.getElementById('env').textContent =
-		`Network: ${state.config.defaultNetwork}` +
-		(def && def.host ? ` · Electrum: ${def.host}:${def.port}` : ' · Electrum: not set');
+	updateEnv();
 	fillNetworks();
 	setupForms();
 	await refresh();

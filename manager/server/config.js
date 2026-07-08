@@ -22,4 +22,26 @@ const config = {
 // beignet's internal "bitcoin" network downstream.
 const SUPPORTED_NETWORKS = ['mainnet', 'testnet', 'regtest'];
 
-module.exports = { config, toBool, SUPPORTED_NETWORKS };
+// One-click Electrum presets. The Umbrel Electrs/Fulcrum apps use fixed
+// internal IPs and are reachable over Umbrel's shared app network even though
+// this app declares no dependency on them.
+const ELECTRUM_PRESETS = [
+	{
+		id: 'umbrel-electrs',
+		label: 'Umbrel Electrs',
+		host: '10.21.21.10',
+		port: 50001,
+		tls: false,
+		note: 'Use if the Electrs app is installed on this Umbrel'
+	},
+	{
+		id: 'umbrel-fulcrum',
+		label: 'Umbrel Fulcrum',
+		host: '10.21.21.200',
+		port: 50002,
+		tls: false,
+		note: 'Use if the Fulcrum app is installed on this Umbrel'
+	}
+];
+
+module.exports = { config, toBool, SUPPORTED_NETWORKS, ELECTRUM_PRESETS };

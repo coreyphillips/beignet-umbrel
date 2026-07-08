@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.1.0"
+version: "0.2.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -15,8 +15,10 @@ description: >-
   as an independent node with its own on-chain wallet and Lightning identity.
 
 
-  By default every wallet connects to your Umbrel's Electrum server, or you can
-  point any wallet at an Electrum server of your choosing.
+  No full node required. Point Beignet at any Electrum server you like, or, if
+  you run the Electrs or Fulcrum app on your Umbrel, connect to it with a single
+  click. You can set a default Electrum server for new wallets and override it
+  per wallet.
 developer: Corey Phillips
 website: https://github.com/coreyphillips/beignet
 submitter: Corey Phillips
@@ -28,10 +30,10 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Initial community release. Multi-wallet management, create or import wallets,
-  configurable Electrum server, and a per-wallet API explorer.
-dependencies:
-  - electrs
+  Electrum server is now optional. Beignet installs without a full node, so you
+  can point at any external Electrum server. If you run Electrs or Fulcrum, use
+  the one-click presets. Adds an app default Electrum setting.
+dependencies: []
 path: ""
 defaultUsername: ""
 defaultPassword: ""

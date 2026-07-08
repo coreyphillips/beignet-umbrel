@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const bip39 = require('bip39');
 const { config, SUPPORTED_NETWORKS } = require('./config');
 const { Registry } = require('./registry');
+const { Settings } = require('./settings');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -43,10 +44,15 @@ function beignetSpawn() {
 class WalletManager {
 	constructor() {
 		this.registry = new Registry(path.join(config.dataDir, 'registry.json'));
+		this.settings = new Settings(path.join(config.dataDir, 'settings.json'), {
+			defaultNetwork: config.defaultNetwork,
+			defaultElectrum: config.defaultElectrum.host ? { ...config.defaultElectrum } : null
+		});
 		this.runtime = new Map();
 	}
 
 	async init() {
+		this.settings.load();
 		this.registry.load();
 		for (const rec of this.registry.list()) {
 			if (rec.running) {
@@ -114,26 +120,38 @@ class WalletManager {
 		throw httpError(507, 'NO_PORT', 'No free wallet port available');
 	}
 
+	_normalizeElectrum(input) {
+		const host = String((input && input.host) || '').trim();
+		if (!host) throw httpError(400, 'BAD_ELECTRUM', 'Electrum host is required');
+		const port = parseInt(input.port, 10);
+		if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+			throw httpError(400, 'BAD_ELECTRUM', 'Invalid Electrum port');
+		}
+		return { host, port, tls: !!input.tls };
+	}
+
+	defaultElectrum() {
+		const def = this.settings.get().defaultElectrum;
+		return def && def.host ? { ...def } : null;
+	}
+
+	defaultNetwork() {
+		return this.settings.get().defaultNetwork || config.defaultNetwork || 'mainnet';
+	}
+
 	_resolveElectrum(input) {
-		if (input && input.host) {
-			const port = parseInt(input.port, 10);
-			if (!Number.isFinite(port) || port <= 0) {
-				throw httpError(400, 'BAD_ELECTRUM', 'Invalid Electrum port');
-			}
-			return { host: String(input.host).trim(), port, tls: !!input.tls };
-		}
-		if (!config.defaultElectrum.host) {
-			throw httpError(
-				400,
-				'NO_ELECTRUM',
-				'No Electrum server configured. Provide one for this wallet.'
-			);
-		}
-		return { ...config.defaultElectrum };
+		if (input && input.host) return this._normalizeElectrum(input);
+		const def = this.defaultElectrum();
+		if (def) return def;
+		throw httpError(
+			400,
+			'NO_ELECTRUM',
+			'No Electrum server set. Choose one for this wallet or set an app default in Settings.'
+		);
 	}
 
 	_validateNetwork(network) {
-		const net = network || config.defaultNetwork;
+		const net = network || this.defaultNetwork();
 		if (!SUPPORTED_NETWORKS.includes(net)) {
 			throw httpError(
 				400,
@@ -142,6 +160,35 @@ class WalletManager {
 			);
 		}
 		return net;
+	}
+
+	getSettings() {
+		return {
+			defaultNetwork: this.defaultNetwork(),
+			defaultElectrum: this.defaultElectrum()
+		};
+	}
+
+	updateSettings(patch = {}) {
+		const next = {};
+		if (patch.defaultNetwork !== undefined) {
+			if (!SUPPORTED_NETWORKS.includes(patch.defaultNetwork)) {
+				throw httpError(
+					400,
+					'BAD_NETWORK',
+					`Unsupported network "${patch.defaultNetwork}".`
+				);
+			}
+			next.defaultNetwork = patch.defaultNetwork;
+		}
+		if (patch.defaultElectrum !== undefined) {
+			next.defaultElectrum =
+				patch.defaultElectrum === null
+					? null
+					: this._normalizeElectrum(patch.defaultElectrum);
+		}
+		this.settings.update(next);
+		return this.getSettings();
 	}
 
 	async createWallet({ name, network, electrum, wordCount } = {}) {

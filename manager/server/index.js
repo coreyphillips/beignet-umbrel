@@ -3,7 +3,7 @@
 const path = require('path');
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
-const { config, SUPPORTED_NETWORKS } = require('./config');
+const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS } = require('./config');
 const { WalletManager } = require('./wallet-manager');
 
 function asyncHandler(fn) {
@@ -75,14 +75,28 @@ async function main() {
 
 	api.get('/health', (req, res) => res.json({ ok: true, result: { status: 'ok' } }));
 
-	api.get('/config', (req, res) =>
+	api.get('/config', (req, res) => {
+		const settings = manager.getSettings();
 		res.json({
 			ok: true,
 			result: {
-				defaultNetwork: config.defaultNetwork,
-				defaultElectrum: config.defaultElectrum,
-				supportedNetworks: SUPPORTED_NETWORKS
+				defaultNetwork: settings.defaultNetwork,
+				defaultElectrum: settings.defaultElectrum,
+				hasDefaultElectrum: !!settings.defaultElectrum,
+				supportedNetworks: SUPPORTED_NETWORKS,
+				electrumPresets: ELECTRUM_PRESETS
 			}
+		});
+	});
+
+	api.get('/settings', (req, res) =>
+		res.json({ ok: true, result: manager.getSettings() })
+	);
+
+	api.put(
+		'/settings',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: manager.updateSettings(req.body || {}) });
 		})
 	);
 
