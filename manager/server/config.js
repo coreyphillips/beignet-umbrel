@@ -5,10 +5,21 @@ function toBool(value, fallback = false) {
 	return String(value).toLowerCase() === 'true';
 }
 
+// Networks the beignet CLI understands (src/cli/types.ts). mainnet maps to
+// beignet's internal "bitcoin" network downstream. Defined early so the
+// default-network seed can be validated against it.
+const SUPPORTED_NETWORKS = ['mainnet', 'testnet', 'regtest'];
+
+// Umbrel may inject a network beignet cannot use (e.g. testnet4, signet). In
+// that case fall back to mainnet so wallet creation still works; the user picks
+// a supported network per wallet.
+const injectedNetwork = process.env.DEFAULT_NETWORK || 'mainnet';
+const defaultNetwork = SUPPORTED_NETWORKS.includes(injectedNetwork) ? injectedNetwork : 'mainnet';
+
 const config = {
 	port: parseInt(process.env.PORT || '3000', 10),
 	dataDir: process.env.DATA_DIR || '/data',
-	defaultNetwork: process.env.DEFAULT_NETWORK || 'mainnet',
+	defaultNetwork,
 	defaultElectrum: {
 		host: process.env.DEFAULT_ELECTRUM_HOST || '',
 		port: parseInt(process.env.DEFAULT_ELECTRUM_PORT || '50001', 10),
@@ -17,10 +28,6 @@ const config = {
 	childPortBase: parseInt(process.env.CHILD_PORT_BASE || '3101', 10),
 	childPortMax: parseInt(process.env.CHILD_PORT_MAX || '3999', 10)
 };
-
-// Networks the beignet CLI understands (src/cli/types.ts). mainnet maps to
-// beignet's internal "bitcoin" network downstream.
-const SUPPORTED_NETWORKS = ['mainnet', 'testnet', 'regtest'];
 
 // One-click Electrum presets. The Umbrel Electrs/Fulcrum apps use fixed
 // internal IPs and are reachable over Umbrel's shared app network even though

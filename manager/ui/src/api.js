@@ -27,6 +27,7 @@ export const manager = {
 	getWallet: (id) => request(`/api/wallets/${id}`),
 	createWallet: (body) => request('/api/wallets', { method: 'POST', body }),
 	importWallet: (body) => request('/api/wallets/import', { method: 'POST', body }),
+	updateWallet: (id, body) => request(`/api/wallets/${id}`, { method: 'PATCH', body }),
 	startWallet: (id) => request(`/api/wallets/${id}/start`, { method: 'POST' }),
 	stopWallet: (id) => request(`/api/wallets/${id}/stop`, { method: 'POST' }),
 	deleteWallet: (id, purge) =>

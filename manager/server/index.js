@@ -128,6 +128,13 @@ async function main() {
 		res.json({ ok: true, result: record });
 	});
 
+	api.patch(
+		'/wallets/:id',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: await manager.updateWallet(req.params.id, req.body || {}) });
+		})
+	);
+
 	api.post(
 		'/wallets/:id/start',
 		asyncHandler(async (req, res) => {

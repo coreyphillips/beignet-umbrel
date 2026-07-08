@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useSSE } from '../hooks/useSSE.js';
 import { useToast } from '../components/Toast.jsx';
-import { Badge, Button } from '../components/ui.jsx';
+import { Badge, Button, Field, Modal } from '../components/ui.jsx';
+import ElectrumFields from '../components/ElectrumFields.jsx';
 import { fmtSats, shortId } from '../lib/format.js';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import ReceiveTab from './tabs/ReceiveTab.jsx';
@@ -40,8 +41,13 @@ export default function WalletPage() {
 	const [tick, setTick] = useState(0);
 	const bump = useCallback(() => setTick((t) => t + 1), []);
 
-	const { data: rec } = usePoll(() => manager.getWallet(id), 5000, [id]);
+	const { data: rec, refresh: refreshRec } = usePoll(() => manager.getWallet(id), 5000, [id]);
 	const running = rec?.status === 'running';
+	const [config, setConfig] = useState(null);
+	const [editing, setEditing] = useState(false);
+	useEffect(() => {
+		manager.config().then(setConfig).catch(() => {});
+	}, []);
 
 	const { data: info } = usePoll(
 		() => (running ? api.get('/info') : Promise.resolve(null)),
@@ -81,6 +87,9 @@ export default function WalletPage() {
 						{health.electrumConnected ? 'electrum ok' : 'electrum down'}
 					</Badge>
 				)}
+				<Button className="sm" onClick={() => setEditing(true)}>
+					Edit
+				</Button>
 			</div>
 			<div className="wallet-meta" style={{ marginBottom: 16 }}>
 				{info ? (
@@ -138,6 +147,67 @@ export default function WalletPage() {
 					</div>
 				</div>
 			)}
+
+			{editing && rec && (
+				<EditWalletModal
+					rec={rec}
+					presets={config?.electrumPresets || []}
+					onClose={() => setEditing(false)}
+					onSaved={() => {
+						setEditing(false);
+						toast('Wallet updated', 'success');
+						refreshRec();
+						bump();
+					}}
+				/>
+			)}
 		</div>
+	);
+}
+
+function EditWalletModal({ rec, presets, onClose, onSaved }) {
+	const toast = useToast();
+	const [name, setName] = useState(rec.name);
+	const [electrum, setElectrum] = useState({ ...rec.electrum });
+	const [busy, setBusy] = useState(false);
+
+	const save = async () => {
+		setBusy(true);
+		try {
+			await manager.updateWallet(rec.id, {
+				name,
+				electrum: {
+					host: electrum.host.trim(),
+					port: parseInt(electrum.port, 10),
+					tls: !!electrum.tls
+				}
+			});
+			onSaved();
+		} catch (e) {
+			toast(e.message, 'error');
+			setBusy(false);
+		}
+	};
+
+	return (
+		<Modal title="Edit wallet" onClose={onClose}>
+			<div className="info-note">
+				Changing the Electrum server restarts this wallet so it reconnects. The network
+				({rec.network}) and seed stay the same.
+			</div>
+			<Field label="Name">
+				<input value={name} onChange={(e) => setName(e.target.value)} />
+			</Field>
+			<div className="field-label" style={{ marginBottom: 8 }}>
+				Electrum server
+			</div>
+			<ElectrumFields presets={presets} value={electrum} onChange={setElectrum} />
+			<div className="center-actions">
+				<Button variant="primary" busy={busy} onClick={save} disabled={!electrum.host}>
+					Save changes
+				</Button>
+				<Button onClick={onClose}>Cancel</Button>
+			</div>
+		</Modal>
 	);
 }

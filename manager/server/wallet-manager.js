@@ -136,7 +136,9 @@ class WalletManager {
 	}
 
 	defaultNetwork() {
-		return this.settings.get().defaultNetwork || config.defaultNetwork || 'mainnet';
+		const n = this.settings.get().defaultNetwork || config.defaultNetwork || 'mainnet';
+		// Guard against a previously-persisted unsupported network (e.g. testnet4).
+		return SUPPORTED_NETWORKS.includes(n) ? n : 'mainnet';
 	}
 
 	_resolveElectrum(input) {
@@ -235,6 +237,24 @@ class WalletManager {
 		this.registry.upsert(rec);
 		await this.startWallet(id);
 		return { record: this.publicRecord(id), mnemonic };
+	}
+
+	async updateWallet(id, { name, electrum } = {}) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
+		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
+		this.registry.upsert(rec);
+		// Restart a running daemon so it reconnects with the new Electrum config.
+		const rt = this.runtimeState(id);
+		if (rt.proc) {
+			rt.stopping = true;
+			await this._killProc(rt.proc);
+			rt.proc = null;
+			rt.stopping = false;
+			await this.startWallet(id);
+		}
+		return this.publicRecord(id);
 	}
 
 	async startWallet(id) {
