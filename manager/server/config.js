@@ -16,9 +16,17 @@ const SUPPORTED_NETWORKS = ['mainnet', 'testnet', 'regtest'];
 const injectedNetwork = process.env.DEFAULT_NETWORK || 'mainnet';
 const defaultNetwork = SUPPORTED_NETWORKS.includes(injectedNetwork) ? injectedNetwork : 'mainnet';
 
+// Umbrel injects its Tor SOCKS proxy. When present, wallets can opt into
+// routing Lightning peer connections through it (beignet BEIGNET_TOR_PROXY).
+const torProxy =
+	process.env.TOR_PROXY_IP && process.env.TOR_PROXY_PORT
+		? `${process.env.TOR_PROXY_IP}:${process.env.TOR_PROXY_PORT}`
+		: '';
+
 const config = {
 	port: parseInt(process.env.PORT || '3000', 10),
 	dataDir: process.env.DATA_DIR || '/data',
+	torProxy,
 	defaultNetwork,
 	defaultElectrum: {
 		host: process.env.DEFAULT_ELECTRUM_HOST || '',

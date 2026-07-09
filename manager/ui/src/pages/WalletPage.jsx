@@ -152,6 +152,7 @@ export default function WalletPage() {
 				<EditWalletModal
 					rec={rec}
 					presets={config?.electrumPresets || []}
+					torAvailable={!!config?.torAvailable}
 					onClose={() => setEditing(false)}
 					onSaved={() => {
 						setEditing(false);
@@ -165,10 +166,11 @@ export default function WalletPage() {
 	);
 }
 
-function EditWalletModal({ rec, presets, onClose, onSaved }) {
+function EditWalletModal({ rec, presets, torAvailable, onClose, onSaved }) {
 	const toast = useToast();
 	const [name, setName] = useState(rec.name);
 	const [electrum, setElectrum] = useState({ ...rec.electrum });
+	const [tor, setTor] = useState(!!rec.tor);
 	const [busy, setBusy] = useState(false);
 
 	const save = async () => {
@@ -176,6 +178,7 @@ function EditWalletModal({ rec, presets, onClose, onSaved }) {
 		try {
 			await manager.updateWallet(rec.id, {
 				name,
+				tor,
 				electrum: {
 					host: electrum.host.trim(),
 					port: parseInt(electrum.port, 10),
@@ -202,6 +205,12 @@ function EditWalletModal({ rec, presets, onClose, onSaved }) {
 				Electrum server
 			</div>
 			<ElectrumFields presets={presets} value={electrum} onChange={setElectrum} />
+			{torAvailable && (
+				<label className="checkbox field">
+					<input type="checkbox" checked={tor} onChange={(e) => setTor(e.target.checked)} />
+					Route Lightning connections over Tor
+				</label>
+			)}
 			<div className="center-actions">
 				<Button variant="primary" busy={busy} onClick={save} disabled={!electrum.host}>
 					Save changes

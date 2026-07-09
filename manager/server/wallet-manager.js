@@ -193,13 +193,13 @@ class WalletManager {
 		return this.getSettings();
 	}
 
-	async createWallet({ name, network, electrum, wordCount } = {}) {
+	async createWallet({ name, network, electrum, wordCount, tor } = {}) {
 		const strength = Number(wordCount) === 12 ? 128 : 256;
 		const mnemonic = bip39.generateMnemonic(strength);
-		return this._provision({ name, network, electrum, mnemonic });
+		return this._provision({ name, network, electrum, mnemonic, tor });
 	}
 
-	async importWallet({ name, network, electrum, mnemonic } = {}) {
+	async importWallet({ name, network, electrum, mnemonic, tor } = {}) {
 		const normalized = String(mnemonic || '')
 			.trim()
 			.toLowerCase()
@@ -207,10 +207,10 @@ class WalletManager {
 		if (!bip39.validateMnemonic(normalized)) {
 			throw httpError(400, 'BAD_MNEMONIC', 'Invalid mnemonic phrase');
 		}
-		return this._provision({ name, network, electrum, mnemonic: normalized });
+		return this._provision({ name, network, electrum, mnemonic: normalized, tor });
 	}
 
-	async _provision({ name, network, electrum, mnemonic }) {
+	async _provision({ name, network, electrum, mnemonic, tor }) {
 		const net = this._validateNetwork(network);
 		const resolvedElectrum = this._resolveElectrum(electrum);
 		const id = crypto.randomUUID();
@@ -220,6 +220,7 @@ class WalletManager {
 			name: (name && String(name).trim()) || `Wallet ${id.slice(0, 4)}`,
 			network: net,
 			electrum: resolvedElectrum,
+			tor: !!tor,
 			port,
 			running: true,
 			createdAt: nowIso()
@@ -239,11 +240,12 @@ class WalletManager {
 		return { record: this.publicRecord(id), mnemonic };
 	}
 
-	async updateWallet(id, { name, electrum } = {}) {
+	async updateWallet(id, { name, electrum, tor } = {}) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
+		if (tor !== undefined) rec.tor = !!tor;
 		this.registry.upsert(rec);
 		// Restart a running daemon so it reconnects with the new Electrum config.
 		const rt = this.runtimeState(id);
@@ -292,6 +294,8 @@ class WalletManager {
 		};
 		if (process.env.TOR_PROXY_IP) env.TOR_PROXY_IP = process.env.TOR_PROXY_IP;
 		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
+		// Route Lightning peer connections through Umbrel's Tor proxy when enabled.
+		if (rec.tor && config.torProxy) env.BEIGNET_TOR_PROXY = config.torProxy;
 
 		const { cmd, args } = beignetSpawn();
 		rt.status = 'starting';
@@ -436,6 +440,7 @@ class WalletManager {
 			name: rec.name,
 			network: rec.network,
 			electrum: rec.electrum,
+			tor: !!rec.tor,
 			port: rec.port,
 			desiredRunning: !!rec.running,
 			status: rt.status,
