@@ -1,0 +1,128 @@
+/* Base: reset, canvas, typography, ambient wallpaper, focus, scrollbars. */
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+	height: 100%;
+}
+
+body {
+	margin: 0;
+	font-family: var(--font-ui);
+	background: var(--bg-deep);
+	color: var(--text);
+	line-height: 1.5;
+	font-size: 14px;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+a {
+	color: var(--accent-2);
+	text-decoration: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+	margin: 0;
+	font-weight: 620;
+	letter-spacing: -0.01em;
+}
+
+::selection {
+	background: rgba(247, 147, 26, 0.3);
+}
+
+:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 3px var(--accent-glow);
+	border-radius: var(--r-sm);
+}
+
+/* Slim, glassy scrollbars (WebKit) */
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+::-webkit-scrollbar-thumb {
+	background: rgba(255, 255, 255, 0.12);
+	border-radius: 999px;
+	border: 3px solid transparent;
+	background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: rgba(255, 255, 255, 0.22);
+	border: 3px solid transparent;
+	background-clip: content-box;
+}
+
+:root[data-theme='light'] ::-webkit-scrollbar-thumb {
+	background: rgba(20, 30, 60, 0.18);
+	border: 3px solid transparent;
+	background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+/* ---------- Ambient wallpaper (fixed behind all glass) ---------- */
+.ambient {
+	position: fixed;
+	inset: 0;
+	z-index: -2;
+	pointer-events: none;
+	background: var(--bg-deep);
+	overflow: hidden;
+}
+
+.ambient::before {
+	/* Gradient mesh: amber / violet / teal blobs, Umbrel-wallpaper-esque */
+	content: '';
+	position: absolute;
+	inset: -20%;
+	background:
+		radial-gradient(38% 45% at 16% 12%, rgba(247, 147, 26, 0.13), transparent 70%),
+		radial-gradient(45% 55% at 88% 22%, rgba(96, 72, 190, 0.17), transparent 70%),
+		radial-gradient(50% 55% at 50% 100%, rgba(32, 110, 140, 0.14), transparent 72%),
+		radial-gradient(30% 35% at 72% 72%, rgba(184, 92, 30, 0.08), transparent 70%);
+	animation: ambient-drift 70s ease-in-out infinite alternate;
+	will-change: transform;
+}
+
+.ambient::after {
+	/* Fine noise to stop gradient banding */
+	content: '';
+	position: absolute;
+	inset: 0;
+	opacity: 0.035;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+:root[data-theme='light'] .ambient::before {
+	/* Light theme wears its color proudly — stronger pastel blobs */
+	background:
+		radial-gradient(38% 45% at 16% 12%, rgba(247, 147, 26, 0.22), transparent 70%),
+		radial-gradient(45% 55% at 88% 22%, rgba(126, 96, 245, 0.2), transparent 70%),
+		radial-gradient(50% 55% at 50% 100%, rgba(38, 168, 210, 0.18), transparent 72%),
+		radial-gradient(30% 35% at 72% 72%, rgba(245, 120, 40, 0.1), transparent 70%);
+}
+
+:root[data-theme='light'] .ambient::after {
+	opacity: 0.05;
+}
+
+/* ---------- Layout ---------- */
+.app {
+	min-height: 100%;
+}
+
+.container {
+	max-width: var(--content-max);
+	margin: 0 auto;
+	padding: 24px 22px 56px;
+}

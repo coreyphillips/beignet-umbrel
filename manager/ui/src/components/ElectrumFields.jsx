@@ -11,13 +11,12 @@ export default function ElectrumFields({ presets = [], value, onChange }) {
 						<button
 							type="button"
 							key={p.id}
-							className="btn sm"
+							className="btn sm preset-btn"
 							onClick={() => onChange({ host: p.host, port: p.port, tls: !!p.tls })}
 							title={p.note}
-							style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
 						>
-							<span style={{ color: 'var(--text)' }}>{p.label}</span>
-							<span style={{ color: 'var(--muted)', fontSize: 11 }}>
+							<span className="preset-name">{p.label}</span>
+							<span className="preset-host">
 								{p.host}:{p.port}
 							</span>
 						</button>

@@ -1,0 +1,93 @@
+/* Design tokens — glassmorphism + futuristic minimalist, Umbrel-adjacent. */
+:root {
+	/* Base canvas (under the ambient gradient mesh) */
+	--bg-deep: #0a0c12;
+
+	/* Text */
+	--text: #eef0f6;
+	--muted: #a0a7ba;
+	--faint: #667086;
+
+	/* Brand + semantic hues */
+	--accent: #f7931a;
+	--accent-2: #ffb454;
+	--accent-glow: rgba(247, 147, 26, 0.35);
+	--accent-dim: rgba(247, 147, 26, 0.12);
+	--green: #3ddc97;
+	--red: #ff5c61;
+	--yellow: #f0c23f;
+	--blue: #6ea8ff;
+
+	/* Glass surfaces */
+	--glass-bg: rgba(22, 25, 36, 0.55);
+	--glass-bg-heavy: rgba(17, 20, 30, 0.78);
+	--glass-inner: rgba(255, 255, 255, 0.04);
+	--glass-inner-2: rgba(255, 255, 255, 0.07);
+	--glass-border: rgba(255, 255, 255, 0.09);
+	--glass-border-bright: rgba(255, 255, 255, 0.18);
+	--hairline: rgba(255, 255, 255, 0.06);
+	--glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+	--glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+	--blur: 22px;
+	--blur-soft: 10px;
+
+	/* Shape */
+	--r-sm: 10px;
+	--r-md: 16px;
+	--r-lg: 22px;
+	--r-full: 999px;
+	--radius: var(--r-md); /* legacy alias */
+
+	/* Layout */
+	--sidebar: 220px;
+	--content-max: 1080px;
+
+	/* Motion */
+	--ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+	--dur-fast: 150ms;
+	--dur-med: 300ms;
+
+	/* Cursor spotlight tints */
+	--spot-warm: rgba(247, 147, 26, 0.04);
+	--spot-cool: rgba(110, 168, 255, 0.035);
+
+	/* Type */
+	--font-ui: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+		Arial, sans-serif;
+	--font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+	color-scheme: dark;
+}
+
+/* ---------- Light theme ---------- */
+:root[data-theme='light'] {
+	--bg-deep: #edeff6;
+
+	--text: #1b2030;
+	--muted: #59627a;
+	--faint: #8a92a8;
+
+	--accent: #ec8508;
+	--accent-2: #f7a23b;
+	--accent-glow: rgba(236, 133, 8, 0.3);
+	--accent-dim: rgba(236, 133, 8, 0.14);
+	--green: #0f9d63;
+	--red: #d93a40;
+	--yellow: #b8890b;
+	--blue: #2f6fdb;
+
+	--glass-bg: rgba(255, 255, 255, 0.52);
+	--glass-bg-heavy: rgba(255, 255, 255, 0.82);
+	--glass-inner: rgba(20, 30, 60, 0.045);
+	--glass-inner-2: rgba(20, 30, 60, 0.08);
+	--glass-border: rgba(20, 30, 60, 0.1);
+	--glass-border-bright: rgba(20, 30, 60, 0.18);
+	--hairline: rgba(20, 30, 60, 0.08);
+	--glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+	--glass-shadow: 0 8px 32px rgba(35, 45, 80, 0.12);
+
+	--spot-warm: rgba(247, 147, 26, 0.07);
+	--spot-cool: rgba(47, 111, 219, 0.05);
+
+	color-scheme: light;
+}

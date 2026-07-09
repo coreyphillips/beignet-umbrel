@@ -1,9 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useToast } from '../components/Toast.jsx';
-import { Button, Card, Modal, Field, Badge } from '../components/ui.jsx';
+import {
+	Button,
+	Card,
+	Modal,
+	Field,
+	Badge,
+	Segmented,
+	Skeleton,
+	staggerContainer,
+	staggerItem
+} from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import { copy, fmtSats } from '../lib/format.js';
 
@@ -12,6 +23,8 @@ function statusTone(s) {
 	if (s === 'starting' || s === 'restarting') return 'yellow';
 	return 'muted';
 }
+
+const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
 
 export default function WalletsPage() {
 	const toast = useToast();
@@ -39,13 +52,29 @@ export default function WalletsPage() {
 	);
 	const wallets = data?.list;
 	const infos = data?.infos || {};
-	const [modal, setModal] = useState(null); // {type, ...}
+	const [modal, setModal] = useState(null); // {type, origin?, ...}
+	// Stagger the list entrance only once; later polls re-render silently.
+	const staggered = useRef(false);
+	useEffect(() => {
+		if (wallets) staggered.current = true;
+	}, [wallets]);
 
 	useEffect(() => {
 		manager.config().then(setConfig).catch((e) => toast(e.message, 'error'));
+		// The header's Settings dialog broadcasts saved config so ours stays fresh.
+		const onCfg = (e) => setConfig(e.detail);
+		window.addEventListener('beignet:config', onCfg);
+		return () => window.removeEventListener('beignet:config', onCfg);
 	}, [toast]);
 
-	if (!config) return <div className="container spinner">Loading…</div>;
+	if (!config) {
+		return (
+			<div className="container">
+				<Skeleton height={180} style={{ marginBottom: 18 }} />
+				<Skeleton height={280} />
+			</div>
+		);
+	}
 
 	const act = async (fn, ok) => {
 		try {
@@ -57,91 +86,98 @@ export default function WalletsPage() {
 		}
 	};
 
+	const openWallet = (w) =>
+		navigate(`/w/${w.id}`, { state: { wallet: w, info: infos[w.id] || null } });
+
 	const hasWallets = wallets && wallets.length > 0;
 	const walletsCard = (
 		<Card title="Wallets" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
-			{!hasWallets ? (
+			{!wallets ? (
+				<>
+					<Skeleton height={74} style={{ marginBottom: 10 }} />
+					<Skeleton height={74} />
+				</>
+			) : !hasWallets ? (
 				<div className="empty">No wallets yet. Create or import one below.</div>
 			) : (
-				wallets.map((w) => {
-					const info = infos[w.id];
-					return (
-						<div key={w.id} className="wallet" onClick={() => navigate(`/w/${w.id}`)}>
-							<div className="wallet-main">
-								<div className="wallet-name">{w.name}</div>
-								<div className="wallet-meta">
-									{w.network} · {w.electrum.host}:{w.electrum.port}
-								</div>
-								{info && (
+				<m.div
+					variants={staggerContainer}
+					initial={staggered.current ? false : 'hidden'}
+					animate="show"
+				>
+					{wallets.map((w) => {
+						const info = infos[w.id];
+						return (
+							<m.div
+								key={w.id}
+								layoutId={`wallet-card-${w.id}`}
+								variants={staggerItem}
+								className="wallet"
+								onClick={() => openWallet(w)}
+							>
+								<div className="wallet-main">
+									<m.div layoutId={`wallet-name-${w.id}`} className="wallet-name">
+										{w.name}
+									</m.div>
 									<div className="wallet-meta">
-										{fmtSats((info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0))} ·{' '}
-										{info.channelCount} channels · {info.peerCount} peers
+										{w.network} · {w.electrum.host}:{w.electrum.port}
 									</div>
-								)}
-							</div>
-							<div className="wallet-actions" onClick={(e) => e.stopPropagation()}>
-								<Badge tone={statusTone(w.status)}>
-									<span className="dot" />
-									{w.status}
-								</Badge>
-								{w.status === 'running' ? (
-									<Button className="sm" onClick={() => navigate(`/w/${w.id}`)}>
-										Open
+									{info && (
+										<div className="wallet-meta">
+											{fmtSats((info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0))} ·{' '}
+											{info.channelCount} channels · {info.peerCount} peers
+										</div>
+									)}
+								</div>
+								<div className="wallet-actions" onClick={(e) => e.stopPropagation()}>
+									<m.span layoutId={`wallet-status-${w.id}`}>
+										<Badge tone={statusTone(w.status)}>
+											<span className="dot" />
+											{w.status}
+										</Badge>
+									</m.span>
+									{w.status === 'running' ? (
+										<Button className="sm" onClick={() => openWallet(w)}>
+											Open
+										</Button>
+									) : (
+										<Button className="sm" onClick={() => act(() => manager.startWallet(w.id))}>
+											Start
+										</Button>
+									)}
+									{w.status !== 'stopped' && (
+										<Button className="sm" onClick={() => act(() => manager.stopWallet(w.id))}>
+											Stop
+										</Button>
+									)}
+									<Button
+										className="sm"
+										onClick={(e) => setModal({ type: 'delete', wallet: w, origin: clickOrigin(e) })}
+									>
+										Delete
 									</Button>
-								) : (
-									<Button className="sm" onClick={() => act(() => manager.startWallet(w.id))}>
-										Start
-									</Button>
-								)}
-								{w.status !== 'stopped' && (
-									<Button className="sm" onClick={() => act(() => manager.stopWallet(w.id))}>
-										Stop
-									</Button>
-								)}
-								<Button className="sm" onClick={() => setModal({ type: 'delete', wallet: w })}>
-									Delete
-								</Button>
-							</div>
-						</div>
-					);
-				})
+								</div>
+							</m.div>
+						);
+					})}
+				</m.div>
 			)}
 		</Card>
 	);
 
 	return (
 		<div className="container">
-			<div className="card-head" style={{ marginBottom: 14 }}>
-				<div className="topbar-right" style={{ fontSize: 13 }}>
-					Network: {config.defaultNetwork}
-					{config.defaultElectrum
-						? ` · Electrum: ${config.defaultElectrum.host}:${config.defaultElectrum.port}`
-						: ' · Electrum: not set'}
-				</div>
-				<Button onClick={() => setModal({ type: 'settings' })}>Settings</Button>
-			</div>
-
 			{hasWallets && walletsCard}
 			<NewWallet config={config} onDone={refresh} onSeed={(s) => setModal(s)} />
 			{!hasWallets && walletsCard}
 
-			{modal?.type === 'settings' && (
-				<SettingsModal
-					config={config}
-					onClose={() => setModal(null)}
-					onSaved={(c) => {
-						setConfig(c);
-						setModal(null);
-						toast('Settings saved', 'success');
-					}}
-				/>
-			)}
 			{modal?.type === 'seed' && (
 				<SeedModal name={modal.name} mnemonic={modal.mnemonic} onClose={() => setModal(null)} />
 			)}
 			{modal?.type === 'delete' && (
 				<DeleteModal
 					wallet={modal.wallet}
+					origin={modal.origin}
 					onClose={() => setModal(null)}
 					onDeleted={() => {
 						setModal(null);
@@ -198,14 +234,15 @@ function NewWallet({ config, onDone, onSeed }) {
 
 	return (
 		<Card>
-			<div className="pills">
-				<button className={`pill ${tab === 'create' ? 'active' : ''}`} onClick={() => setTab('create')}>
-					Create wallet
-				</button>
-				<button className={`pill ${tab === 'import' ? 'active' : ''}`} onClick={() => setTab('import')}>
-					Import wallet
-				</button>
-			</div>
+			<Segmented
+				id="new-wallet"
+				value={tab}
+				onChange={setTab}
+				options={[
+					['create', 'Create wallet'],
+					['import', 'Import wallet']
+				]}
+			/>
 
 			<div className="row">
 				<Field label="Name">
@@ -272,62 +309,6 @@ function NewWallet({ config, onDone, onSeed }) {
 	);
 }
 
-function SettingsModal({ config, onClose, onSaved }) {
-	const toast = useToast();
-	const [network, setNetwork] = useState(config.defaultNetwork);
-	const [electrum, setElectrum] = useState(
-		config.defaultElectrum || { host: '', port: 50001, tls: false }
-	);
-	const [busy, setBusy] = useState(false);
-
-	const save = async () => {
-		setBusy(true);
-		try {
-			const patch = { defaultNetwork: network };
-			patch.defaultElectrum = electrum.host.trim()
-				? { host: electrum.host.trim(), port: parseInt(electrum.port, 10), tls: !!electrum.tls }
-				: null;
-			await manager.updateSettings(patch);
-			const c = await manager.config();
-			onSaved(c);
-		} catch (e) {
-			toast(e.message, 'error');
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	return (
-		<Modal title="Settings" onClose={onClose}>
-			<div className="info-note">
-				Defaults for new wallets (each wallet can override). No full node required, point at any
-				Electrum server, or use a preset if you run Electrs/Fulcrum here.
-			</div>
-			<Field label="Default network">
-				<select value={network} onChange={(e) => setNetwork(e.target.value)}>
-					{config.supportedNetworks.map((n) => (
-						<option key={n} value={n}>
-							{n}
-						</option>
-					))}
-				</select>
-			</Field>
-			<div className="field-label" style={{ marginBottom: 8 }}>
-				Default Electrum server
-			</div>
-			<ElectrumFields presets={config.electrumPresets} value={electrum} onChange={setElectrum} />
-			<div className="center-actions">
-				<Button variant="primary" busy={busy} onClick={save}>
-					Save settings
-				</Button>
-				<Button onClick={() => setElectrum({ host: '', port: 50001, tls: false })}>
-					Clear Electrum default
-				</Button>
-			</div>
-		</Modal>
-	);
-}
-
 function SeedModal({ name, mnemonic, onClose }) {
 	const toast = useToast();
 	const words = useMemo(() => mnemonic.split(' '), [mnemonic]);
@@ -337,14 +318,19 @@ function SeedModal({ name, mnemonic, onClose }) {
 				Write these words down in order and keep them offline. Anyone with this phrase can spend
 				your funds. This is the only time it is shown here.
 			</div>
-			<div className="seed-grid">
+			<m.div
+				className="seed-grid"
+				variants={staggerContainer}
+				initial="hidden"
+				animate="show"
+			>
 				{words.map((w, i) => (
-					<div key={i} className="seed-word">
+					<m.div key={i} variants={staggerItem} className="seed-word">
 						<span>{i + 1}</span>
 						{w}
-					</div>
+					</m.div>
 				))}
-			</div>
+			</m.div>
 			<div className="center-actions">
 				<Button
 					onClick={async () => {
@@ -362,12 +348,12 @@ function SeedModal({ name, mnemonic, onClose }) {
 	);
 }
 
-function DeleteModal({ wallet, onClose, onDeleted }) {
+function DeleteModal({ wallet, origin, onClose, onDeleted }) {
 	const toast = useToast();
 	const [purge, setPurge] = useState(false);
 	const [busy, setBusy] = useState(false);
 	return (
-		<Modal title={`Delete "${wallet.name}"`} onClose={onClose}>
+		<Modal title={`Delete "${wallet.name}"`} onClose={onClose} origin={origin}>
 			<div className="error-note">
 				Deleting removes this wallet from Beignet. If you also erase its data and have not backed
 				up the seed, any funds will be lost permanently.

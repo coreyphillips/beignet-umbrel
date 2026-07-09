@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, NavLink, useNavigate, useParams } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { AnimatePresence, m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useSSE } from '../hooks/useSSE.js';
 import { useToast } from '../components/Toast.jsx';
-import { Badge, Button, Field, Modal } from '../components/ui.jsx';
+import { AnimatedNumber, Badge, Button, Field, Modal } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
-import { fmtSats, shortId } from '../lib/format.js';
+import { shortId } from '../lib/format.js';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import ReceiveTab from './tabs/ReceiveTab.jsx';
 import SendTab from './tabs/SendTab.jsx';
@@ -36,24 +37,29 @@ const EVENT_LABELS = {
 export default function WalletPage() {
 	const { id, tab = 'overview' } = useParams();
 	const navigate = useNavigate();
+	const location = useLocation();
 	const toast = useToast();
 	const api = useMemo(() => walletApi(id), [id]);
 	const [tick, setTick] = useState(0);
 	const bump = useCallback(() => setTick((t) => t + 1), []);
 
-	const { data: rec, refresh: refreshRec } = usePoll(() => manager.getWallet(id), 5000, [id]);
+	const { data: polledRec, refresh: refreshRec } = usePoll(() => manager.getWallet(id), 5000, [id]);
+	// The list page hands the wallet summary over via navigation state, so the
+	// morphing header renders real content immediately instead of flashing.
+	const rec = polledRec || location.state?.wallet || null;
 	const running = rec?.status === 'running';
 	const [config, setConfig] = useState(null);
-	const [editing, setEditing] = useState(false);
+	const [editing, setEditing] = useState(null); // click origin or null
 	useEffect(() => {
 		manager.config().then(setConfig).catch(() => {});
 	}, []);
 
-	const { data: info } = usePoll(
+	const { data: polledInfo } = usePoll(
 		() => (running ? api.get('/info') : Promise.resolve(null)),
 		8000,
 		[id, running, tick]
 	);
+	const info = polledInfo || location.state?.info || null;
 	const { data: health } = usePoll(
 		() => (running ? api.get('/health') : Promise.resolve(null)),
 		8000,
@@ -73,36 +79,43 @@ export default function WalletPage() {
 				← All wallets
 			</Link>
 
-			<div className="wallet-title">
-				<h2>{rec?.name || 'Wallet'}</h2>
-				{rec && (
-					<Badge tone={running ? 'green' : rec.status === 'stopped' ? 'muted' : 'yellow'}>
-						<span className="dot" />
-						{rec.status}
-					</Badge>
-				)}
-				{rec && <Badge tone="blue">{rec.network}</Badge>}
-				{health && (
-					<Badge tone={health.electrumConnected ? 'green' : 'red'}>
-						{health.electrumConnected ? 'electrum ok' : 'electrum down'}
-					</Badge>
-				)}
-				<Button className="sm" onClick={() => setEditing(true)}>
-					Edit
-				</Button>
-			</div>
-			<div className="wallet-meta" style={{ marginBottom: 16 }}>
-				{info ? (
-					<>
-						{fmtSats(info.onchainBalanceSats)} on-chain · {fmtSats(info.lightningBalanceSats)}{' '}
-						lightning · node {shortId(info.nodeId)} · height {info.blockHeight}
-					</>
-				) : rec ? (
-					`electrum ${rec.electrum.host}:${rec.electrum.port}`
-				) : (
-					'Loading…'
-				)}
-			</div>
+			<m.div layoutId={`wallet-card-${id}`} className="whead">
+				<div className="wallet-title">
+					<m.div layoutId={`wallet-name-${id}`}>
+						<h2>{rec?.name || 'Wallet'}</h2>
+					</m.div>
+					{rec && (
+						<m.span layoutId={`wallet-status-${id}`}>
+							<Badge tone={running ? 'green' : rec.status === 'stopped' ? 'muted' : 'yellow'}>
+								<span className="dot" />
+								{rec.status}
+							</Badge>
+						</m.span>
+					)}
+					{rec && <Badge tone="blue">{rec.network}</Badge>}
+					{health && (
+						<Badge tone={health.electrumConnected ? 'green' : 'red'}>
+							{health.electrumConnected ? 'electrum ok' : 'electrum down'}
+						</Badge>
+					)}
+					<Button className="sm" onClick={(e) => setEditing({ x: e.clientX, y: e.clientY })}>
+						Edit
+					</Button>
+				</div>
+				<div className="wallet-meta">
+					{info ? (
+						<>
+							<AnimatedNumber value={info.onchainBalanceSats} suffix=" sats" /> on-chain ·{' '}
+							<AnimatedNumber value={info.lightningBalanceSats} suffix=" sats" /> lightning · node{' '}
+							{shortId(info.nodeId)} · height {info.blockHeight}
+						</>
+					) : rec?.electrum ? (
+						`electrum ${rec.electrum.host}:${rec.electrum.port}`
+					) : (
+						'Loading…'
+					)}
+				</div>
+			</m.div>
 
 			{!running ? (
 				<div className="card">
@@ -115,6 +128,7 @@ export default function WalletPage() {
 									try {
 										await manager.startWallet(id);
 										toast('Starting…', 'info');
+										refreshRec();
 									} catch (e) {
 										toast(e.message, 'error');
 									}
@@ -130,11 +144,14 @@ export default function WalletPage() {
 				<div className="wallet-layout">
 					<nav className="wnav">
 						{TABS.map(([key, label]) => (
-							<NavLink
-								key={key}
-								to={`/w/${id}/${key}`}
-								className={key === tab ? 'active' : ''}
-							>
+							<NavLink key={key} to={`/w/${id}/${key}`} className={key === tab ? 'active' : ''}>
+								{key === tab && (
+									<m.span
+										layoutId="wnav-indicator"
+										className="wnav-indicator"
+										transition={{ type: 'spring', stiffness: 500, damping: 40 }}
+									/>
+								)}
 								{label}
 							</NavLink>
 						))}
@@ -142,21 +159,30 @@ export default function WalletPage() {
 							Raw API ↗
 						</a>
 					</nav>
-					<div>
-						<ActiveTab id={id} api={api} info={info} health={health} rec={rec} tick={tick} bump={bump} />
-					</div>
+					<AnimatePresence mode="wait" initial={false}>
+						<m.div
+							key={tab}
+							initial={{ opacity: 0, y: 10 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={{ opacity: 0, y: -6 }}
+							transition={{ duration: 0.18, ease: 'easeOut' }}
+						>
+							<ActiveTab id={id} api={api} info={info} health={health} rec={rec} tick={tick} bump={bump} />
+						</m.div>
+					</AnimatePresence>
 				</div>
 			)}
 
 			{editing && rec && (
 				<EditWalletModal
 					rec={rec}
+					origin={editing}
 					presets={config?.electrumPresets || []}
 					torAvailable={!!config?.torAvailable}
 					onionAvailable={!!config?.onionAvailable}
-					onClose={() => setEditing(false)}
+					onClose={() => setEditing(null)}
 					onSaved={() => {
-						setEditing(false);
+						setEditing(null);
 						toast('Wallet updated', 'success');
 						refreshRec();
 						bump();
@@ -167,7 +193,7 @@ export default function WalletPage() {
 	);
 }
 
-function EditWalletModal({ rec, presets, torAvailable, onionAvailable, onClose, onSaved }) {
+function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, onClose, onSaved }) {
 	const toast = useToast();
 	const [name, setName] = useState(rec.name);
 	const [electrum, setElectrum] = useState({ ...rec.electrum });
@@ -196,7 +222,7 @@ function EditWalletModal({ rec, presets, torAvailable, onionAvailable, onClose, 
 	};
 
 	return (
-		<Modal title="Edit wallet" onClose={onClose}>
+		<Modal title="Edit wallet" onClose={onClose} origin={origin}>
 			<div className="info-note">
 				Changing the Electrum server restarts this wallet so it reconnects. The network
 				({rec.network}) and seed stay the same.

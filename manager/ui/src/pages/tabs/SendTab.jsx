@@ -1,24 +1,23 @@
 import { useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Button, Card, Field, Badge } from '../../components/ui.jsx';
+import { Button, Card, Field, Badge, Segmented } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 
 export default function SendTab({ api, info, bump }) {
 	const [mode, setMode] = useState('onchain');
 	return (
 		<div>
-			<div className="pills">
-				<button className={`pill ${mode === 'onchain' ? 'active' : ''}`} onClick={() => setMode('onchain')}>
-					On-chain
-				</button>
-				<button className={`pill ${mode === 'lightning' ? 'active' : ''}`} onClick={() => setMode('lightning')}>
-					Lightning
-				</button>
-				<button className={`pill ${mode === 'keysend' ? 'active' : ''}`} onClick={() => setMode('keysend')}>
-					Keysend
-				</button>
-			</div>
+			<Segmented
+				id="send-mode"
+				value={mode}
+				onChange={setMode}
+				options={[
+					['onchain', 'On-chain'],
+					['lightning', 'Lightning'],
+					['keysend', 'Keysend']
+				]}
+			/>
 			{mode === 'onchain' && <OnChain api={api} info={info} bump={bump} />}
 			{mode === 'lightning' && <Lightning api={api} bump={bump} />}
 			{mode === 'keysend' && <Keysend api={api} bump={bump} />}

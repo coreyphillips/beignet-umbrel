@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
-import { Badge, Card, CopyText } from '../../components/ui.jsx';
+import { Badge, Card, CopyText, Segmented } from '../../components/ui.jsx';
 import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 
 const STATUS_TONE = { COMPLETED: 'green', PENDING: 'yellow', FAILED: 'red' };
@@ -24,17 +24,16 @@ export default function ActivityTab({ id, api, info, tick }) {
 
 	return (
 		<div>
-			<div className="pills">
-				<button className={`pill ${tab === 'onchain' ? 'active' : ''}`} onClick={() => setTab('onchain')}>
-					On-chain
-				</button>
-				<button className={`pill ${tab === 'lightning' ? 'active' : ''}`} onClick={() => setTab('lightning')}>
-					Lightning
-				</button>
-				<button className={`pill ${tab === 'utxos' ? 'active' : ''}`} onClick={() => setTab('utxos')}>
-					Coins
-				</button>
-			</div>
+			<Segmented
+				id="activity-view"
+				value={tab}
+				onChange={setTab}
+				options={[
+					['onchain', 'On-chain'],
+					['lightning', 'Lightning'],
+					['utxos', 'Coins']
+				]}
+			/>
 
 			{tab === 'onchain' && (
 				<Card title="On-chain transactions">

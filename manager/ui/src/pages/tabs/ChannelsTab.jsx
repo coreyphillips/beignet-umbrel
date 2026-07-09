@@ -18,6 +18,8 @@ const STATE_TONE = {
 // beignet splice/open feerates are per-kiloweight. Users think in sat/vB.
 const SATVB_TO_PERKW = 250;
 
+const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
+
 export default function ChannelsTab({ id, api, tick, bump }) {
 	const toast = useToast();
 	const [modal, setModal] = useState(null);
@@ -38,7 +40,7 @@ export default function ChannelsTab({ id, api, tick, bump }) {
 		<div>
 			<Card
 				title="Channels"
-				actions={<Button variant="primary" className="sm" onClick={() => setModal({ type: 'open' })}>Open channel</Button>}
+				actions={<Button variant="primary" className="sm" onClick={(e) => setModal({ type: 'open', origin: clickOrigin(e) })}>Open channel</Button>}
 			>
 				{!channels || channels.length === 0 ? (
 					<div className="empty">No channels. Open one to start using Lightning.</div>
@@ -71,13 +73,13 @@ export default function ChannelsTab({ id, api, tick, bump }) {
 										</td>
 										<td>
 											<div className="wallet-actions">
-												<Button className="sm" onClick={() => setModal({ type: 'splice', dir: 'in', channel: c })}>
+												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
 													Splice in
 												</Button>
-												<Button className="sm" onClick={() => setModal({ type: 'splice', dir: 'out', channel: c })}>
+												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'out', channel: c, origin: clickOrigin(e) })}>
 													Splice out
 												</Button>
-												<Button className="sm" onClick={() => setModal({ type: 'close', channel: c })}>
+												<Button className="sm" onClick={(e) => setModal({ type: 'close', channel: c, origin: clickOrigin(e) })}>
 													Close
 												</Button>
 											</div>
@@ -91,19 +93,20 @@ export default function ChannelsTab({ id, api, tick, bump }) {
 			</Card>
 
 			{modal?.type === 'open' && (
-				<OpenChannelModal api={api} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
+				<OpenChannelModal api={api} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
 			)}
 			{modal?.type === 'splice' && (
 				<SpliceModal
 					api={api}
 					dir={modal.dir}
 					channel={modal.channel}
+					origin={modal.origin}
 					onClose={() => setModal(null)}
 					onDone={() => { setModal(null); refresh(); bump(); }}
 				/>
 			)}
 			{modal?.type === 'close' && (
-				<Modal title="Close channel" onClose={() => setModal(null)}>
+				<Modal title="Close channel" onClose={() => setModal(null)} origin={modal.origin}>
 					<p className="wallet-meta">
 						Cooperatively close the channel with <span className="mono">{shortId(modal.channel.peerPubkey)}</span>?
 						Your local balance ({fmtSats(modal.channel.localBalanceSats)}) returns on-chain.
@@ -129,7 +132,7 @@ export default function ChannelsTab({ id, api, tick, bump }) {
 	);
 }
 
-function OpenChannelModal({ api, onClose, onDone }) {
+function OpenChannelModal({ api, origin, onClose, onDone }) {
 	const toast = useToast();
 	const [uri, setUri] = useState('');
 	const [pubkey, setPubkey] = useState('');
@@ -171,7 +174,7 @@ function OpenChannelModal({ api, onClose, onDone }) {
 	};
 
 	return (
-		<Modal title="Open channel" onClose={onClose}>
+		<Modal title="Open channel" onClose={onClose} origin={origin}>
 			<Field label="Peer URI (pubkey@host:port)" hint="Or fill the fields below individually.">
 				<input value={uri} onChange={(e) => applyUri(e.target.value)} placeholder="02abc…@1.2.3.4:9735" />
 			</Field>
@@ -204,7 +207,7 @@ function OpenChannelModal({ api, onClose, onDone }) {
 	);
 }
 
-function SpliceModal({ api, dir, channel, onClose, onDone }) {
+function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 	const toast = useToast();
 	const [amount, setAmount] = useState('');
 	const [feeVb, setFeeVb] = useState('2');
@@ -231,7 +234,7 @@ function SpliceModal({ api, dir, channel, onClose, onDone }) {
 	};
 
 	return (
-		<Modal title={isIn ? 'Splice in (add funds)' : 'Splice out (remove funds)'} onClose={onClose}>
+		<Modal title={isIn ? 'Splice in (add funds)' : 'Splice out (remove funds)'} onClose={onClose} origin={origin}>
 			<div className="info-note">
 				{isIn
 					? 'Add on-chain funds into this channel, increasing its capacity and your outbound balance, without closing it.'

@@ -1,0 +1,43 @@
+/* Keyframes + reduced-motion kill switch. Framer Motion handles the morphs;
+   this file covers ambient drift, shimmer, and pulses driven by pure CSS. */
+
+@keyframes ambient-drift {
+	from {
+		transform: translate3d(0, 0, 0) scale(1);
+	}
+	to {
+		transform: translate3d(3%, -2%, 0) scale(1.06);
+	}
+}
+
+@keyframes shimmer {
+	to {
+		transform: translateX(100%);
+	}
+}
+
+@keyframes pulse-dot {
+	0%,
+	100% {
+		box-shadow: 0 0 4px currentColor;
+		opacity: 1;
+	}
+	50% {
+		box-shadow: 0 0 10px currentColor;
+		opacity: 0.75;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ambient::before,
+	.skeleton::after,
+	.badge.green .dot {
+		animation: none;
+	}
+
+	*,
+	*::before,
+	*::after {
+		transition-duration: 0.01ms !important;
+	}
+}
