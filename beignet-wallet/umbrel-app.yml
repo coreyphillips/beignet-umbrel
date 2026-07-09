@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.4.3"
+version: "0.4.4"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,8 +30,10 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Publishes the inbound Tor address as a persistent (detached) hidden service
-  so it stays reachable across app restarts and Tor control-connection blips.
+  Complete dashboard redesign: frosted glass look with light and dark themes,
+  smooth animated navigation where wallet cards morph into the detail view,
+  live balance count-ups, and consistent card sizing. Settings moved to the
+  header, and the app store listing now includes gallery screenshots.
 dependencies: []
 path: ""
 defaultUsername: ""
