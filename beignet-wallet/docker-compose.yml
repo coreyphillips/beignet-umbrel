@@ -7,15 +7,12 @@ services:
       APP_PORT: 3000
 
   manager:
-    image: ghcr.io/coreyphillips/beignet-app:0.4.1@sha256:7ccebcdb2cde21db6a49fad880bd7d584fb7d1d209b80c264ba580abb4b63286
+    image: ghcr.io/coreyphillips/beignet-app:0.4.2
     restart: on-failure
     init: true
     stop_grace_period: 1m
     volumes:
       - ${APP_DATA_DIR}/data:/data
-      # Read-only view of Umbrel's Tor data dir to read this app's onion
-      # hostname (created by the tor service below). Same pattern app_proxy uses.
-      - ${TOR_DATA_DIR}:/tordata:ro
     environment:
       PORT: "3000"
       DATA_DIR: /data
@@ -32,20 +29,9 @@ services:
       # Internal port range for the per-wallet beignet daemons:
       CHILD_PORT_BASE: "3101"
       CHILD_PORT_MAX: "3999"
-      # Umbrel Tor SOCKS proxy (per-wallet opt-in for outbound Lightning):
+      # Umbrel's Tor. The SOCKS proxy is for per-wallet outbound Lightning over
+      # Tor; the control port (29051) is used to publish an inbound hidden
+      # service via ADD_ONION on Umbrel's already-bootstrapped system Tor.
       TOR_PROXY_IP: "${TOR_PROXY_IP:-}"
       TOR_PROXY_PORT: "${TOR_PROXY_PORT:-}"
-      # Onion hostname for inbound Lightning (created by the tor service):
-      ONION_HOSTNAME_FILE: /tordata/app-beignet-wallet-p2p/hostname
-
-  # Dedicated Tor instance that publishes one hidden service mapping each
-  # wallet's listen port to an onion virtual port (see torrc).
-  tor:
-    image: getumbrel/tor:0.4.7.8@sha256:2ace83f22501f58857fa9b403009f595137fa2e7986c4fda79d82a8119072b6a
-    user: "1000:1000"
-    restart: on-failure
-    volumes:
-      - ${APP_DATA_DIR}/torrc:/etc/tor/torrc:ro
-      - ${TOR_DATA_DIR}:/data
-    environment:
-      HOME: "/tmp"
+      TOR_PASSWORD: "${TOR_PASSWORD:-}"

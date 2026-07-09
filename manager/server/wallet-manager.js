@@ -8,14 +8,16 @@ const bip39 = require('bip39');
 const { config, SUPPORTED_NETWORKS } = require('./config');
 const { Registry } = require('./registry');
 const { Settings } = require('./settings');
+const { TorControl } = require('./tor-control');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
 const MAX_LOG_LINES = 300;
 const KILL_GRACE_MS = 10000;
-// Lightning listen port = HTTP daemon port + this offset (see torrc mapping).
+// Lightning listen port = HTTP daemon port + this offset.
 const LISTEN_PORT_OFFSET = 6000;
-const ONION_V3_RE = /^[a-z2-7]{56}\.onion$/;
+// Onion virtual ports mapped for inbound (covers the first N wallets).
+const ANNOUNCE_PORT_COUNT = 30;
 
 function nowIso() {
 	return new Date().toISOString();
@@ -53,14 +55,30 @@ class WalletManager {
 		});
 		this.runtime = new Map();
 		this.onion = null;
+		this.torControl = null;
 	}
 
 	async init() {
 		this.settings.load();
 		this.registry.load();
-		// Give the tor sidecar a moment to publish the onion before boot so
-		// announce-enabled wallets advertise it from the start.
-		await this._waitForOnion(30000);
+		// Publish the inbound hidden service via Umbrel's system Tor before boot
+		// so announce-enabled wallets advertise the onion from the start.
+		if (config.torProxyIp && config.torPassword) {
+			const ports = Array.from(
+				{ length: ANNOUNCE_PORT_COUNT },
+				(_, i) => config.childPortBase + LISTEN_PORT_OFFSET + i
+			);
+			this.torControl = new TorControl({
+				host: config.torProxyIp,
+				port: config.torControlPort,
+				password: config.torPassword,
+				keyFile: path.join(config.dataDir, 'onion_key'),
+				ports,
+				log: (m) => process.stdout.write(`${m}\n`),
+				onPublished: (onion) => this._onOnion(onion)
+			});
+			this.onion = await this.torControl.start();
+		}
 		for (const rec of this.registry.list()) {
 			if (rec.running) {
 				this.startWallet(rec.id).catch((err) =>
@@ -68,43 +86,18 @@ class WalletManager {
 				);
 			}
 		}
-		// Safety net: if the onion appears later, pick it up and re-announce.
-		this._onionTimer = setInterval(() => this._refreshOnion(), 60000);
 	}
 
 	listenPort(rec) {
 		return rec.port + LISTEN_PORT_OFFSET;
 	}
 
-	_readOnion() {
-		if (!config.onionHostnameFile) return null;
-		try {
-			const value = fs.readFileSync(config.onionHostnameFile, 'utf8').trim().toLowerCase();
-			return ONION_V3_RE.test(value) ? value : null;
-		} catch (_) {
-			return null;
-		}
-	}
-
-	async _waitForOnion(timeoutMs) {
-		if (!config.onionHostnameFile) return;
-		const deadline = Date.now() + timeoutMs;
-		while (Date.now() < deadline) {
-			const onion = this._readOnion();
-			if (onion) {
-				this.onion = onion;
-				return;
-			}
-			await sleep(2000);
-		}
-	}
-
-	_refreshOnion() {
-		if (this.onion) return;
-		const onion = this._readOnion();
-		if (!onion) return;
+	// Called when the hidden service is (re)published; restart running
+	// announce-enabled wallets so they advertise the (possibly new) onion.
+	_onOnion(onion) {
+		const changed = this.onion !== onion;
 		this.onion = onion;
-		// Restart running announce-enabled wallets so they advertise the onion.
+		if (!changed) return;
 		for (const rec of this.registry.list()) {
 			if (rec.announce && rec.running && this.runtimeState(rec.id).proc) {
 				this.updateWallet(rec.id, {}).catch(() => {});
@@ -523,6 +516,7 @@ class WalletManager {
 	}
 
 	async shutdown() {
+		if (this.torControl) this.torControl.stop();
 		const pending = [];
 		for (const rt of this.runtime.values()) {
 			if (rt.proc) {

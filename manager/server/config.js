@@ -16,20 +16,21 @@ const SUPPORTED_NETWORKS = ['mainnet', 'testnet', 'regtest'];
 const injectedNetwork = process.env.DEFAULT_NETWORK || 'mainnet';
 const defaultNetwork = SUPPORTED_NETWORKS.includes(injectedNetwork) ? injectedNetwork : 'mainnet';
 
-// Umbrel injects its Tor SOCKS proxy. When present, wallets can opt into
-// routing Lightning peer connections through it (beignet BEIGNET_TOR_PROXY).
+// Umbrel injects its Tor. The SOCKS proxy (TOR_PROXY_IP:TOR_PROXY_PORT) is used
+// for per-wallet outbound Lightning over Tor. The control port (29051, same IP,
+// authed with TOR_PASSWORD) is used to publish an inbound hidden service.
+const torProxyIp = process.env.TOR_PROXY_IP || '';
 const torProxy =
-	process.env.TOR_PROXY_IP && process.env.TOR_PROXY_PORT
-		? `${process.env.TOR_PROXY_IP}:${process.env.TOR_PROXY_PORT}`
-		: '';
+	torProxyIp && process.env.TOR_PROXY_PORT ? `${torProxyIp}:${process.env.TOR_PROXY_PORT}` : '';
+const torControlPort = 29051;
 
 const config = {
 	port: parseInt(process.env.PORT || '3000', 10),
 	dataDir: process.env.DATA_DIR || '/data',
 	torProxy,
-	// File written by the tor sidecar containing this app's onion hostname,
-	// used to advertise inbound Lightning addresses.
-	onionHostnameFile: process.env.ONION_HOSTNAME_FILE || '',
+	torProxyIp,
+	torControlPort,
+	torPassword: process.env.TOR_PASSWORD || '',
 	defaultNetwork,
 	defaultElectrum: {
 		host: process.env.DEFAULT_ELECTRUM_HOST || '',
