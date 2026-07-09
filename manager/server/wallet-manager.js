@@ -283,6 +283,9 @@ class WalletManager {
 			BEIGNET_NETWORK: rec.network,
 			BEIGNET_DAEMON_HOST: '127.0.0.1',
 			BEIGNET_DAEMON_PORT: String(rec.port),
+			// Enable an inbound Lightning listen port so other nodes can connect.
+			// Derived from the (unique) HTTP port; container-internal.
+			BEIGNET_LISTEN_PORT: String(rec.port + 6000),
 			BEIGNET_ELECTRUM_HOST: rec.electrum.host,
 			BEIGNET_ELECTRUM_PORT: String(rec.electrum.port),
 			BEIGNET_ELECTRUM_TLS: rec.electrum.tls ? 'true' : 'false'

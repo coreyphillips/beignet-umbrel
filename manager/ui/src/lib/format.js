@@ -29,9 +29,30 @@ export function pct(n) {
 }
 
 export async function copy(text) {
+	// Umbrel serves apps over plain HTTP on the LAN, which is not a secure
+	// context, so navigator.clipboard is often unavailable. Fall back to a
+	// hidden textarea + execCommand.
 	try {
-		await navigator.clipboard.writeText(text);
-		return true;
+		if (navigator.clipboard && window.isSecureContext) {
+			await navigator.clipboard.writeText(text);
+			return true;
+		}
+	} catch (_) {
+		/* fall through */
+	}
+	try {
+		const ta = document.createElement('textarea');
+		ta.value = text;
+		ta.setAttribute('readonly', '');
+		ta.style.position = 'fixed';
+		ta.style.top = '-1000px';
+		ta.style.opacity = '0';
+		document.body.appendChild(ta);
+		ta.focus();
+		ta.select();
+		const ok = document.execCommand('copy');
+		document.body.removeChild(ta);
+		return ok;
 	} catch (_) {
 		return false;
 	}

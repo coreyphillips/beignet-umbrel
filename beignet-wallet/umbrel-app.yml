@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.3.2"
+version: "0.3.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,11 +30,10 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  You can now change a wallet's Electrum server after creating it (Edit on the
-  wallet page). Fixes wallet creation on nodes running testnet4/signet by
-  falling back to a supported network. Adds on-chain transaction history,
-  unspent outputs, and fee estimates with Fast/Normal/Slow presets (bundles
-  beignet 0.1.1).
+  The Peers tab now shows your node's pubkey and connection URI so you can
+  connect two wallets and open channels between them. Wallet rows show balance,
+  channels, and peers, and the list sits above the create form. Fixes copying
+  addresses and seeds when the app is served over plain HTTP.
 dependencies: []
 path: ""
 defaultUsername: ""

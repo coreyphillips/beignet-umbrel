@@ -1,12 +1,17 @@
 import { useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Badge, Button, Card, Field } from '../../components/ui.jsx';
+import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
 import { shortId } from '../../lib/format.js';
 
-export default function PeersTab({ id, api, tick, bump }) {
+export default function PeersTab({ id, api, info, tick, bump }) {
 	const toast = useToast();
 	const { data: peers, refresh } = usePoll(() => api.get('/peers').catch(() => []), 8000, [id, tick]);
+	const { data: nodeUri } = usePoll(
+		() => api.get('/node/uri?host=127.0.0.1').then((r) => r.uri).catch(() => null),
+		15000,
+		[id, tick]
+	);
 	const [uri, setUri] = useState('');
 	const [pubkey, setPubkey] = useState('');
 	const [host, setHost] = useState('');
@@ -52,6 +57,26 @@ export default function PeersTab({ id, api, tick, bump }) {
 
 	return (
 		<div>
+			<Card title="Your node">
+				<div className="field">
+					<span className="field-label">Node ID (pubkey)</span>
+					{info?.nodeId ? <CopyText value={info.nodeId} /> : <span className="wallet-meta">-</span>}
+				</div>
+				<div className="field">
+					<span className="field-label">Connection URI</span>
+					{nodeUri ? (
+						<CopyText value={nodeUri} />
+					) : (
+						<span className="wallet-meta">Starting listener… refresh in a moment.</span>
+					)}
+					<span className="field-hint">
+						The <span className="mono">127.0.0.1</span> address works for connecting wallets running
+						in this same Beignet app (e.g. two regtest nodes here). For nodes elsewhere, use a
+						reachable host.
+					</span>
+				</div>
+			</Card>
+
 			<Card title="Connect to a peer">
 				<Field label="Peer URI (pubkey@host:port)">
 					<input value={uri} onChange={(e) => applyUri(e.target.value)} placeholder="02abc…@1.2.3.4:9735" />

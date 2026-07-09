@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { manager } from '../api.js';
+import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useToast } from '../components/Toast.jsx';
 import { Button, Card, Modal, Field, Badge } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
+import { copy, fmtSats } from '../lib/format.js';
 
 function statusTone(s) {
 	if (s === 'running') return 'green';
@@ -16,7 +17,28 @@ export default function WalletsPage() {
 	const toast = useToast();
 	const navigate = useNavigate();
 	const [config, setConfig] = useState(null);
-	const { data: wallets, refresh } = usePoll(manager.listWallets, 3000, []);
+	const { data, refresh } = usePoll(
+		async () => {
+			const list = await manager.listWallets();
+			const infos = {};
+			await Promise.all(
+				list
+					.filter((w) => w.status === 'running')
+					.map(async (w) => {
+						try {
+							infos[w.id] = await walletApi(w.id).get('/info');
+						} catch (_) {
+							/* not ready */
+						}
+					})
+			);
+			return { list, infos };
+		},
+		4000,
+		[]
+	);
+	const wallets = data?.list;
+	const infos = data?.infos || {};
 	const [modal, setModal] = useState(null); // {type, ...}
 
 	useEffect(() => {
@@ -35,34 +57,27 @@ export default function WalletsPage() {
 		}
 	};
 
-	return (
-		<div className="container">
-			<div className="card-head" style={{ marginBottom: 14 }}>
-				<div className="topbar-right" style={{ fontSize: 13 }}>
-					Network: {config.defaultNetwork}
-					{config.defaultElectrum
-						? ` · Electrum: ${config.defaultElectrum.host}:${config.defaultElectrum.port}`
-						: ' · Electrum: not set'}
-				</div>
-				<Button onClick={() => setModal({ type: 'settings' })}>Settings</Button>
-			</div>
-
-			<NewWallet config={config} onDone={refresh} onSeed={(s) => setModal(s)} />
-
-			<Card
-				title="Wallets"
-				actions={<Button className="sm" onClick={refresh}>Refresh</Button>}
-			>
-				{!wallets || wallets.length === 0 ? (
-					<div className="empty">No wallets yet. Create or import one above.</div>
-				) : (
-					wallets.map((w) => (
+	const hasWallets = wallets && wallets.length > 0;
+	const walletsCard = (
+		<Card title="Wallets" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
+			{!hasWallets ? (
+				<div className="empty">No wallets yet. Create or import one below.</div>
+			) : (
+				wallets.map((w) => {
+					const info = infos[w.id];
+					return (
 						<div key={w.id} className="wallet" onClick={() => navigate(`/w/${w.id}`)}>
-							<div>
+							<div className="wallet-main">
 								<div className="wallet-name">{w.name}</div>
 								<div className="wallet-meta">
-									{w.network} · electrum {w.electrum.host}:{w.electrum.port}
+									{w.network} · {w.electrum.host}:{w.electrum.port}
 								</div>
+								{info && (
+									<div className="wallet-meta">
+										{fmtSats((info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0))} ·{' '}
+										{info.channelCount} channels · {info.peerCount} peers
+									</div>
+								)}
 							</div>
 							<div className="wallet-actions" onClick={(e) => e.stopPropagation()}>
 								<Badge tone={statusTone(w.status)}>
@@ -74,10 +89,7 @@ export default function WalletsPage() {
 										Open
 									</Button>
 								) : (
-									<Button
-										className="sm"
-										onClick={() => act(() => manager.startWallet(w.id))}
-									>
+									<Button className="sm" onClick={() => act(() => manager.startWallet(w.id))}>
 										Start
 									</Button>
 								)}
@@ -91,9 +103,27 @@ export default function WalletsPage() {
 								</Button>
 							</div>
 						</div>
-					))
-				)}
-			</Card>
+					);
+				})
+			)}
+		</Card>
+	);
+
+	return (
+		<div className="container">
+			<div className="card-head" style={{ marginBottom: 14 }}>
+				<div className="topbar-right" style={{ fontSize: 13 }}>
+					Network: {config.defaultNetwork}
+					{config.defaultElectrum
+						? ` · Electrum: ${config.defaultElectrum.host}:${config.defaultElectrum.port}`
+						: ' · Electrum: not set'}
+				</div>
+				<Button onClick={() => setModal({ type: 'settings' })}>Settings</Button>
+			</div>
+
+			{hasWallets && walletsCard}
+			<NewWallet config={config} onDone={refresh} onSeed={(s) => setModal(s)} />
+			{!hasWallets && walletsCard}
 
 			{modal?.type === 'settings' && (
 				<SettingsModal
@@ -303,8 +333,8 @@ function SeedModal({ name, mnemonic, onClose }) {
 			<div className="center-actions">
 				<Button
 					onClick={async () => {
-						await navigator.clipboard.writeText(mnemonic).catch(() => {});
-						toast('Seed copied', 'info');
+						const ok = await copy(mnemonic);
+						toast(ok ? 'Seed copied' : 'Copy failed', ok ? 'info' : 'error');
 					}}
 				>
 					Copy phrase
