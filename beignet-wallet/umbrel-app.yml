@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.4.2"
+version: "0.4.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,10 +30,8 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Fixes inbound Lightning over Tor. Instead of running its own Tor (which had to
-  bootstrap separately and often got stuck), the app now publishes its onion
-  through Umbrel's already-running Tor, so advertised addresses are reachable
-  right away. Removes the bundled Tor container.
+  Publishes the inbound Tor address as a persistent (detached) hidden service
+  so it stays reachable across app restarts and Tor control-connection blips.
 dependencies: []
 path: ""
 defaultUsername: ""
