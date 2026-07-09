@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useState } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 
 const ToastCtx = createContext(() => {});
 
@@ -15,11 +16,21 @@ export function ToastProvider({ children }) {
 		<ToastCtx.Provider value={push}>
 			{children}
 			<div className="toast-wrap">
-				{toasts.map((t) => (
-					<div key={t.id} className={`toast ${t.type}`}>
-						{t.message}
-					</div>
-				))}
+				<AnimatePresence>
+					{toasts.map((t) => (
+						<m.div
+							key={t.id}
+							layout
+							className={`toast ${t.type}`}
+							initial={{ opacity: 0, y: 16, scale: 0.95 }}
+							animate={{ opacity: 1, y: 0, scale: 1 }}
+							exit={{ opacity: 0, y: 8, scale: 0.95 }}
+							transition={{ type: 'spring', stiffness: 480, damping: 38 }}
+						>
+							{t.message}
+						</m.div>
+					))}
+				</AnimatePresence>
 			</div>
 		</ToastCtx.Provider>
 	);

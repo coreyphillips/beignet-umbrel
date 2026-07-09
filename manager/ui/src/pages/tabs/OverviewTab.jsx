@@ -1,5 +1,6 @@
+import { m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
-import { Badge, Card, Stat } from '../../components/ui.jsx';
+import { Badge, Card, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
 
 const CHECK_TONE = { PASS: 'green', WARN: 'yellow', FAIL: 'red' };
@@ -28,16 +29,29 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 
 	return (
 		<div>
-			<div className="grid cols-4" style={{ marginBottom: 18 }}>
-				<Stat label="On-chain" value={fmtSats(bal?.onchain ?? info?.onchainBalanceSats)} />
-				<Stat label="Lightning" value={fmtSats(bal?.lightning ?? info?.lightningBalanceSats)} />
-				<Stat label="Total" value={fmtSats(bal?.total)} />
-				<Stat
-					label="Channels"
-					value={info?.channelCount ?? '-'}
-					sub={`${info?.peerCount ?? 0} peers`}
-				/>
-			</div>
+			<m.div
+				className="grid cols-4"
+				style={{ marginBottom: 18 }}
+				variants={staggerContainer}
+				initial="hidden"
+				animate="show"
+			>
+				{[
+					<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
+					<Stat key="ln" label="Lightning" num={bal?.lightning ?? info?.lightningBalanceSats} suffix=" sats" />,
+					<Stat key="total" label="Total" num={bal?.total} suffix=" sats" />,
+					<Stat
+						key="ch"
+						label="Channels"
+						num={info?.channelCount}
+						sub={`${info?.peerCount ?? 0} peers`}
+					/>
+				].map((stat, i) => (
+					<m.div key={i} variants={staggerItem}>
+						{stat}
+					</m.div>
+				))}
+			</m.div>
 
 			<div className="grid cols-2">
 				<Card title="Node status">
@@ -82,9 +96,9 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 				<Card title="Fees">
 					{feeEst ? (
 						<div className="grid cols-3">
-							<Stat label="Fast" value={`${feeEst.fast}`} sub="sat/vB" />
-							<Stat label="Normal" value={`${feeEst.normal}`} sub="sat/vB" />
-							<Stat label="Slow" value={`${feeEst.slow}`} sub="sat/vB" />
+							<Stat label="Fast" num={feeEst.fast} sub="sat/vB" />
+							<Stat label="Normal" num={feeEst.normal} sub="sat/vB" />
+							<Stat label="Slow" num={feeEst.slow} sub="sat/vB" />
 						</div>
 					) : (
 						<div className="empty">Fee estimates not available yet.</div>

@@ -1,4 +1,15 @@
+// Demo mode: serve every request from an in-memory mock (src/mock/mockApi.js)
+// so the dashboard can be explored without a running manager/beignet backend.
+// Enabled via VITE_DEMO=1, a ?demo query param, or sessionStorage (which keeps
+// it on across client-side navigations that drop the query param).
+if (new URLSearchParams(window.location.search).has('demo')) {
+	sessionStorage.setItem('beignet-demo', '1');
+}
+export const DEMO =
+	import.meta.env.VITE_DEMO === '1' || sessionStorage.getItem('beignet-demo') === '1';
+
 async function request(path, { method = 'GET', body } = {}) {
+	if (DEMO) return (await import('./mock/mockApi.js')).mockRequest(path, { method, body });
 	const res = await fetch(path, {
 		method,
 		headers: body ? { 'Content-Type': 'application/json' } : undefined,
@@ -41,6 +52,6 @@ export function walletApi(id) {
 	return {
 		get: (path) => request(base + path),
 		post: (path, body) => request(base + path, { method: 'POST', body }),
-		eventsUrl: () => `${base}/events`
+		eventsUrl: () => (DEMO ? `demo:${id}` : `${base}/events`)
 	};
 }

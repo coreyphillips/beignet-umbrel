@@ -12,6 +12,18 @@ export function useSSE(url, onEvent) {
 
 	useEffect(() => {
 		if (!url) return () => {};
+		if (url.startsWith('demo:')) {
+			// Demo mode: the mock event bus stands in for the SSE stream.
+			let unsub = () => {};
+			let alive = true;
+			import('../mock/mockApi.js').then(({ mockEvents }) => {
+				if (alive) unsub = mockEvents.subscribe(url.slice(5), (name, data) => handler.current && handler.current(name, data));
+			});
+			return () => {
+				alive = false;
+				unsub();
+			};
+		}
 		const names = [
 			'payment:received',
 			'payment:sent',

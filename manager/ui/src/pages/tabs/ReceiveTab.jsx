@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.jsx';
@@ -66,14 +67,22 @@ export default function ReceiveTab({ id, api, tick }) {
 				<Button variant="primary" busy={busy} onClick={createInvoice}>
 					Create invoice
 				</Button>
-				{invoice && (
-					<div style={{ textAlign: 'center', marginTop: 16 }}>
-						<QR value={invoice.bolt11} />
-						<div style={{ marginTop: 12, textAlign: 'left' }}>
-							<CopyText value={invoice.bolt11} truncate />
-						</div>
-					</div>
-				)}
+				<AnimatePresence>
+					{invoice && (
+						<m.div
+							key={invoice.bolt11}
+							style={{ textAlign: 'center', marginTop: 16 }}
+							initial={{ opacity: 0, scale: 0.92, y: 8 }}
+							animate={{ opacity: 1, scale: 1, y: 0 }}
+							exit={{ opacity: 0, scale: 0.96 }}
+						>
+							<QR value={invoice.bolt11} />
+							<div style={{ marginTop: 12, textAlign: 'left' }}>
+								<CopyText value={invoice.bolt11} truncate />
+							</div>
+						</m.div>
+					)}
+				</AnimatePresence>
 			</Card>
 
 			<Card title="Recent invoices" className="grid-full" >
