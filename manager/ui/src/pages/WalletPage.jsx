@@ -143,7 +143,7 @@ export default function WalletPage() {
 						</a>
 					</nav>
 					<div>
-						<ActiveTab id={id} api={api} info={info} health={health} tick={tick} bump={bump} />
+						<ActiveTab id={id} api={api} info={info} health={health} rec={rec} tick={tick} bump={bump} />
 					</div>
 				</div>
 			)}
@@ -153,6 +153,7 @@ export default function WalletPage() {
 					rec={rec}
 					presets={config?.electrumPresets || []}
 					torAvailable={!!config?.torAvailable}
+					onionAvailable={!!config?.onionAvailable}
 					onClose={() => setEditing(false)}
 					onSaved={() => {
 						setEditing(false);
@@ -166,11 +167,12 @@ export default function WalletPage() {
 	);
 }
 
-function EditWalletModal({ rec, presets, torAvailable, onClose, onSaved }) {
+function EditWalletModal({ rec, presets, torAvailable, onionAvailable, onClose, onSaved }) {
 	const toast = useToast();
 	const [name, setName] = useState(rec.name);
 	const [electrum, setElectrum] = useState({ ...rec.electrum });
 	const [tor, setTor] = useState(!!rec.tor);
+	const [announce, setAnnounce] = useState(!!rec.announce);
 	const [busy, setBusy] = useState(false);
 
 	const save = async () => {
@@ -179,6 +181,7 @@ function EditWalletModal({ rec, presets, torAvailable, onClose, onSaved }) {
 			await manager.updateWallet(rec.id, {
 				name,
 				tor,
+				announce,
 				electrum: {
 					host: electrum.host.trim(),
 					port: parseInt(electrum.port, 10),
@@ -209,6 +212,12 @@ function EditWalletModal({ rec, presets, torAvailable, onClose, onSaved }) {
 				<label className="checkbox field">
 					<input type="checkbox" checked={tor} onChange={(e) => setTor(e.target.checked)} />
 					Route Lightning connections over Tor
+				</label>
+			)}
+			{onionAvailable && (
+				<label className="checkbox field">
+					<input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
+					Advertise a Tor address for inbound channels
 				</label>
 			)}
 			<div className="center-actions">

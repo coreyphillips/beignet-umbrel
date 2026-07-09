@@ -4,7 +4,7 @@ import { useToast } from '../../components/Toast.jsx';
 import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
 import { shortId } from '../../lib/format.js';
 
-export default function PeersTab({ id, api, info, tick, bump }) {
+export default function PeersTab({ id, api, info, rec, tick, bump }) {
 	const toast = useToast();
 	const { data: peers, refresh } = usePoll(() => api.get('/peers').catch(() => []), 8000, [id, tick]);
 	const { data: nodeUri } = usePoll(
@@ -63,7 +63,7 @@ export default function PeersTab({ id, api, info, tick, bump }) {
 					{info?.nodeId ? <CopyText value={info.nodeId} /> : <span className="wallet-meta">-</span>}
 				</div>
 				<div className="field">
-					<span className="field-label">Connection URI</span>
+					<span className="field-label">Local connection URI</span>
 					{nodeUri ? (
 						<CopyText value={nodeUri} />
 					) : (
@@ -71,10 +71,18 @@ export default function PeersTab({ id, api, info, tick, bump }) {
 					)}
 					<span className="field-hint">
 						The <span className="mono">127.0.0.1</span> address works for connecting wallets running
-						in this same Beignet app (e.g. two regtest nodes here). For nodes elsewhere, use a
-						reachable host.
+						in this same Beignet app (e.g. two regtest nodes here).
 					</span>
 				</div>
+				{rec?.onionAddress && info?.nodeId && (
+					<div className="field">
+						<span className="field-label">Tor connection URI (share for inbound channels)</span>
+						<CopyText value={`${info.nodeId}@${rec.onionAddress}`} />
+						<span className="field-hint">
+							Reachable over Tor. Give this to a peer so they can open a channel to you.
+						</span>
+					</div>
+				)}
 			</Card>
 
 			<Card title="Connect to a peer">

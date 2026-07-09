@@ -13,6 +13,9 @@ const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
 const MAX_LOG_LINES = 300;
 const KILL_GRACE_MS = 10000;
+// Lightning listen port = HTTP daemon port + this offset (see torrc mapping).
+const LISTEN_PORT_OFFSET = 6000;
+const ONION_V3_RE = /^[a-z2-7]{56}\.onion$/;
 
 function nowIso() {
 	return new Date().toISOString();
@@ -49,11 +52,15 @@ class WalletManager {
 			defaultElectrum: config.defaultElectrum.host ? { ...config.defaultElectrum } : null
 		});
 		this.runtime = new Map();
+		this.onion = null;
 	}
 
 	async init() {
 		this.settings.load();
 		this.registry.load();
+		// Give the tor sidecar a moment to publish the onion before boot so
+		// announce-enabled wallets advertise it from the start.
+		await this._waitForOnion(30000);
 		for (const rec of this.registry.list()) {
 			if (rec.running) {
 				this.startWallet(rec.id).catch((err) =>
@@ -61,6 +68,56 @@ class WalletManager {
 				);
 			}
 		}
+		// Safety net: if the onion appears later, pick it up and re-announce.
+		this._onionTimer = setInterval(() => this._refreshOnion(), 60000);
+	}
+
+	listenPort(rec) {
+		return rec.port + LISTEN_PORT_OFFSET;
+	}
+
+	_readOnion() {
+		if (!config.onionHostnameFile) return null;
+		try {
+			const value = fs.readFileSync(config.onionHostnameFile, 'utf8').trim().toLowerCase();
+			return ONION_V3_RE.test(value) ? value : null;
+		} catch (_) {
+			return null;
+		}
+	}
+
+	async _waitForOnion(timeoutMs) {
+		if (!config.onionHostnameFile) return;
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			const onion = this._readOnion();
+			if (onion) {
+				this.onion = onion;
+				return;
+			}
+			await sleep(2000);
+		}
+	}
+
+	_refreshOnion() {
+		if (this.onion) return;
+		const onion = this._readOnion();
+		if (!onion) return;
+		this.onion = onion;
+		// Restart running announce-enabled wallets so they advertise the onion.
+		for (const rec of this.registry.list()) {
+			if (rec.announce && rec.running && this.runtimeState(rec.id).proc) {
+				this.updateWallet(rec.id, {}).catch(() => {});
+			}
+		}
+	}
+
+	onionAvailable() {
+		return !!this.onion;
+	}
+
+	onionAddress(rec) {
+		return this.onion && rec.announce ? `${this.onion}:${this.listenPort(rec)}` : null;
 	}
 
 	runtimeState(id) {
@@ -193,13 +250,13 @@ class WalletManager {
 		return this.getSettings();
 	}
 
-	async createWallet({ name, network, electrum, wordCount, tor } = {}) {
+	async createWallet({ name, network, electrum, wordCount, tor, announce } = {}) {
 		const strength = Number(wordCount) === 12 ? 128 : 256;
 		const mnemonic = bip39.generateMnemonic(strength);
-		return this._provision({ name, network, electrum, mnemonic, tor });
+		return this._provision({ name, network, electrum, mnemonic, tor, announce });
 	}
 
-	async importWallet({ name, network, electrum, mnemonic, tor } = {}) {
+	async importWallet({ name, network, electrum, mnemonic, tor, announce } = {}) {
 		const normalized = String(mnemonic || '')
 			.trim()
 			.toLowerCase()
@@ -207,10 +264,10 @@ class WalletManager {
 		if (!bip39.validateMnemonic(normalized)) {
 			throw httpError(400, 'BAD_MNEMONIC', 'Invalid mnemonic phrase');
 		}
-		return this._provision({ name, network, electrum, mnemonic: normalized, tor });
+		return this._provision({ name, network, electrum, mnemonic: normalized, tor, announce });
 	}
 
-	async _provision({ name, network, electrum, mnemonic, tor }) {
+	async _provision({ name, network, electrum, mnemonic, tor, announce }) {
 		const net = this._validateNetwork(network);
 		const resolvedElectrum = this._resolveElectrum(electrum);
 		const id = crypto.randomUUID();
@@ -221,6 +278,7 @@ class WalletManager {
 			network: net,
 			electrum: resolvedElectrum,
 			tor: !!tor,
+			announce: !!announce,
 			port,
 			running: true,
 			createdAt: nowIso()
@@ -240,12 +298,13 @@ class WalletManager {
 		return { record: this.publicRecord(id), mnemonic };
 	}
 
-	async updateWallet(id, { name, electrum, tor } = {}) {
+	async updateWallet(id, { name, electrum, tor, announce } = {}) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
 		if (tor !== undefined) rec.tor = !!tor;
+		if (announce !== undefined) rec.announce = !!announce;
 		this.registry.upsert(rec);
 		// Restart a running daemon so it reconnects with the new Electrum config.
 		const rt = this.runtimeState(id);
@@ -286,8 +345,8 @@ class WalletManager {
 			BEIGNET_DAEMON_HOST: '127.0.0.1',
 			BEIGNET_DAEMON_PORT: String(rec.port),
 			// Enable an inbound Lightning listen port so other nodes can connect.
-			// Derived from the (unique) HTTP port; container-internal.
-			BEIGNET_LISTEN_PORT: String(rec.port + 6000),
+			// Derived from the (unique) HTTP port; matches the torrc mapping.
+			BEIGNET_LISTEN_PORT: String(this.listenPort(rec)),
 			BEIGNET_ELECTRUM_HOST: rec.electrum.host,
 			BEIGNET_ELECTRUM_PORT: String(rec.electrum.port),
 			BEIGNET_ELECTRUM_TLS: rec.electrum.tls ? 'true' : 'false'
@@ -296,6 +355,10 @@ class WalletManager {
 		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
 		// Route Lightning peer connections through Umbrel's Tor proxy when enabled.
 		if (rec.tor && config.torProxy) env.BEIGNET_TOR_PROXY = config.torProxy;
+		// Advertise the onion address so peers can open inbound channels.
+		if (rec.announce && this.onion) {
+			env.BEIGNET_ANNOUNCE_ADDRESSES = `${this.onion}:${this.listenPort(rec)}`;
+		}
 
 		const { cmd, args } = beignetSpawn();
 		rt.status = 'starting';
@@ -441,6 +504,8 @@ class WalletManager {
 			network: rec.network,
 			electrum: rec.electrum,
 			tor: !!rec.tor,
+			announce: !!rec.announce,
+			onionAddress: this.onionAddress(rec),
 			port: rec.port,
 			desiredRunning: !!rec.running,
 			status: rt.status,

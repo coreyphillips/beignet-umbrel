@@ -27,6 +27,9 @@ const config = {
 	port: parseInt(process.env.PORT || '3000', 10),
 	dataDir: process.env.DATA_DIR || '/data',
 	torProxy,
+	// File written by the tor sidecar containing this app's onion hostname,
+	// used to advertise inbound Lightning addresses.
+	onionHostnameFile: process.env.ONION_HOSTNAME_FILE || '',
 	defaultNetwork,
 	defaultElectrum: {
 		host: process.env.DEFAULT_ELECTRUM_HOST || '',

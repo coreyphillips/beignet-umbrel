@@ -170,6 +170,7 @@ function NewWallet({ config, onDone, onSeed }) {
 	const [custom, setCustom] = useState(!config.defaultElectrum);
 	const [electrum, setElectrum] = useState(emptyElectrum(config));
 	const [tor, setTor] = useState(false);
+	const [announce, setAnnounce] = useState(false);
 	const [busy, setBusy] = useState(false);
 
 	const submit = async () => {
@@ -179,10 +180,10 @@ function NewWallet({ config, onDone, onSeed }) {
 				? { host: electrum.host.trim(), port: parseInt(electrum.port, 10), tls: !!electrum.tls }
 				: undefined;
 			if (tab === 'create') {
-				const r = await manager.createWallet({ name, network, wordCount, electrum: elec, tor });
+				const r = await manager.createWallet({ name, network, wordCount, electrum: elec, tor, announce });
 				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
 			} else {
-				await manager.importWallet({ name, network, mnemonic, electrum: elec, tor });
+				await manager.importWallet({ name, network, mnemonic, electrum: elec, tor, announce });
 				toast('Wallet imported. It will sync in the background.', 'success');
 			}
 			setName('');
@@ -255,6 +256,12 @@ function NewWallet({ config, onDone, onSeed }) {
 				<label className="checkbox field" style={{ marginTop: 4 }}>
 					<input type="checkbox" checked={tor} onChange={(e) => setTor(e.target.checked)} />
 					Route Lightning connections over Tor
+				</label>
+			)}
+			{config.onionAvailable && (
+				<label className="checkbox field">
+					<input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
+					Advertise a Tor address for inbound channels
 				</label>
 			)}
 

@@ -85,7 +85,8 @@ async function main() {
 				hasDefaultElectrum: !!settings.defaultElectrum,
 				supportedNetworks: SUPPORTED_NETWORKS,
 				electrumPresets: ELECTRUM_PRESETS,
-				torAvailable: !!config.torProxy
+				torAvailable: !!config.torProxy,
+				onionAvailable: manager.onionAvailable()
 			}
 		});
 	});
