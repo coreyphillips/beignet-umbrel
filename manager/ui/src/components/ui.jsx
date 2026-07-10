@@ -78,17 +78,20 @@ export function Badge({ children, tone = 'muted' }) {
 
 /**
  * Segmented pill control with a morphing active indicator. `id` scopes the
- * shared layoutId so multiple groups can coexist. `options` is [key, label][].
+ * shared layoutId so multiple groups can coexist. `options` is
+ * [key, label, disabled?, hint?][]; `hint` is shown as a tooltip when disabled.
  */
 export function Segmented({ id, options, value, onChange }) {
 	return (
 		<div className="pills">
-			{options.map(([key, label]) => (
+			{options.map(([key, label, disabled, hint]) => (
 				<button
 					key={key}
 					type="button"
+					disabled={disabled}
+					title={disabled ? hint : undefined}
 					className={`pill ${value === key ? 'active' : ''}`}
-					onClick={() => onChange(key)}
+					onClick={() => !disabled && onChange(key)}
 				>
 					{value === key && (
 						<m.span

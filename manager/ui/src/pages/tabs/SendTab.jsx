@@ -1,11 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, Field, Badge, Segmented } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
+import { manager, walletApi } from '../../api.js';
 
-export default function SendTab({ api, info, bump }) {
+export default function SendTab({ id, api, info, rec, tick, bump }) {
 	const [mode, setMode] = useState('onchain');
+	const { data: channels } = usePoll(() => api.get('/channels').catch(() => null), 15000, [id, tick]);
+	const canLightning = channels
+		? channels.some((c) => c.state === 'NORMAL')
+		: (info?.channelCount ?? 0) > 0;
+
+	useEffect(() => {
+		if (!canLightning && mode !== 'onchain') setMode('onchain');
+	}, [canLightning, mode]);
+
 	return (
 		<div>
 			<Segmented
@@ -14,34 +24,85 @@ export default function SendTab({ api, info, bump }) {
 				onChange={setMode}
 				options={[
 					['onchain', 'On-chain'],
-					['lightning', 'Lightning'],
-					['keysend', 'Keysend']
+					['lightning', 'Lightning', !canLightning, 'Open a channel first'],
+					['keysend', 'Keysend', !canLightning, 'Open a channel first']
 				]}
 			/>
-			{mode === 'onchain' && <OnChain api={api} info={info} bump={bump} />}
+			{channels && !canLightning && (
+				<div className="info-note" style={{ marginBottom: 14 }}>
+					Lightning payments need an open channel. Open one in the Channels tab.
+				</div>
+			)}
+			{mode === 'onchain' && <OnChain id={id} api={api} info={info} rec={rec} bump={bump} />}
 			{mode === 'lightning' && <Lightning api={api} bump={bump} />}
 			{mode === 'keysend' && <Keysend api={api} bump={bump} />}
 		</div>
 	);
 }
 
-function OnChain({ api, info, bump }) {
+// P2WPKH size approximation: ~10.5 vB overhead + ~68 vB per input + ~31 vB per output.
+const vbytes = (nIn, nOut) => Math.ceil(10.5 + nIn * 68 + nOut * 31);
+
+function OnChain({ id, api, info, rec, bump }) {
 	const toast = useToast();
 	const [address, setAddress] = useState('');
 	const [amount, setAmount] = useState('');
 	const [feeRate, setFeeRate] = useState('');
+	const [dest, setDest] = useState('custom');
+	const [maxMode, setMaxMode] = useState(false);
+	const [fetchingAddr, setFetchingAddr] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [txid, setTxid] = useState('');
 	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
+	const { data: wallets } = usePoll(() => manager.listWallets().catch(() => []), 15000, []);
+	const { data: utxos } = usePoll(() => api.get('/utxos').catch(() => null), 30000, [id]);
+
+	const others = (wallets || []).filter(
+		(w) => w.id !== id && w.status === 'running' && w.network === rec?.network
+	);
+	const balance = info?.onchainBalanceSats;
+	const effRate = parseInt(feeRate, 10) || fees?.normal || null;
+	const sweepInputs = utxos?.length || 1;
+	const estFee = effRate ? vbytes(Math.max(1, Math.min(sweepInputs, 2)), 2) * effRate : null;
+	const estMaxFee = effRate ? vbytes(sweepInputs, 1) * effRate : null;
+	const amountNum = parseInt(amount, 10) || 0;
+	const overBalance =
+		!maxMode && amountNum > 0 && balance != null && estFee != null && amountNum + estFee > balance;
+	const nearMax =
+		!maxMode && !overBalance && amountNum > 0 && balance != null && estFee != null &&
+		amountNum >= balance - estFee * 2;
+
+	const onDest = async (val) => {
+		setDest(val);
+		if (val === 'custom') {
+			setAddress('');
+			return;
+		}
+		setFetchingAddr(true);
+		try {
+			const r = await walletApi(val).post('/address/new', {});
+			setAddress(r.address);
+		} catch (e) {
+			toast(`Could not get address: ${e.message}`, 'error');
+			setDest('custom');
+		} finally {
+			setFetchingAddr(false);
+		}
+	};
 
 	const send = async () => {
 		setBusy(true);
 		setTxid('');
 		try {
-			const body = { address: address.trim(), amountSats: parseInt(amount, 10) };
-			if (feeRate) body.satsPerVbyte = parseInt(feeRate, 10);
-			const r = await api.post('/send', body);
+			const base = { address: address.trim() };
+			if (feeRate) base.satsPerVbyte = parseInt(feeRate, 10);
+			const r = maxMode
+				? await api.post('/send-max', base)
+				: await api.post('/send', { ...base, amountSats: parseInt(amount, 10) });
 			setTxid(r.txid);
+			setMaxMode(false);
+			setAmount('');
+			if (dest !== 'custom') setDest('custom');
 			toast('Sent', 'success');
 			bump();
 		} catch (e) {
@@ -54,14 +115,55 @@ function OnChain({ api, info, bump }) {
 	return (
 		<Card title="Send on-chain">
 			<div className="wallet-meta" style={{ marginBottom: 12 }}>
-				Available: {fmtSats(info?.onchainBalanceSats)}
+				Available: {fmtSats(balance)}
 			</div>
+			{others.length > 0 && (
+				<Field label="Send to">
+					<select value={dest} onChange={(e) => onDest(e.target.value)}>
+						<option value="custom">Custom address</option>
+						{others.map((w) => (
+							<option key={w.id} value={w.id}>
+								{w.name} ({w.network})
+							</option>
+						))}
+					</select>
+				</Field>
+			)}
 			<Field label="Recipient address">
-				<input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="bc1…" />
+				<input
+					value={address}
+					onChange={(e) => {
+						setAddress(e.target.value);
+						if (dest !== 'custom') setDest('custom');
+					}}
+					placeholder={fetchingAddr ? 'Fetching address…' : 'bc1…'}
+				/>
 			</Field>
 			<div className="row">
-				<Field label="Amount (sats)">
-					<input value={amount} onChange={(e) => setAmount(e.target.value)} />
+				<Field
+					label="Amount (sats)"
+					hint={
+						maxMode
+							? estMaxFee != null && balance != null
+								? `~${fmtSats(Math.max(0, balance - estMaxFee))} after fees (exact amount computed by the wallet)`
+								: 'Entire balance minus network fee'
+							: undefined
+					}
+				>
+					<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+						<input
+							value={maxMode ? (balance != null ? String(balance) : '') : amount}
+							disabled={maxMode}
+							onChange={(e) => setAmount(e.target.value)}
+						/>
+						<button
+							type="button"
+							className={`btn sm ${maxMode ? 'primary' : ''}`}
+							onClick={() => setMaxMode((v) => !v)}
+						>
+							Max
+						</button>
+					</div>
 				</Field>
 				<Field label="Fee rate (sat/vB, optional)">
 					<input value={feeRate} onChange={(e) => setFeeRate(e.target.value)} placeholder="auto" />
@@ -80,8 +182,31 @@ function OnChain({ api, info, bump }) {
 					))}
 				</div>
 			)}
-			<Button variant="primary" busy={busy} onClick={send} disabled={!address || !amount}>
-				Send
+			{estFee != null && (
+				<div className="wallet-meta" style={{ marginBottom: 12 }}>
+					Estimated fee: ~{fmtSats(maxMode ? estMaxFee : estFee)} at {effRate} sat/vB (approximate)
+				</div>
+			)}
+			{overBalance && (
+				<div className="error-note" style={{ marginBottom: 12 }}>
+					Amount plus the estimated fee exceeds your balance.{' '}
+					<button type="button" className="btn sm" onClick={() => setMaxMode(true)}>
+						Send max instead
+					</button>
+				</div>
+			)}
+			{nearMax && (
+				<div className="info-note" style={{ marginBottom: 12 }}>
+					This is close to your full balance. Use Max to sweep everything without leaving dust behind.
+				</div>
+			)}
+			<Button
+				variant="primary"
+				busy={busy}
+				onClick={send}
+				disabled={!address || (!maxMode && amountNum <= 0) || overBalance || balance === 0 || fetchingAddr}
+			>
+				{maxMode ? 'Send max' : 'Send'}
 			</Button>
 			{txid && (
 				<div className="info-note" style={{ marginTop: 12 }}>
