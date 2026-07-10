@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.4.5"
+version: "0.4.6"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,11 +30,10 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Smarter sending: transfer between your own wallets with a new destination
-  picker, sweep your full balance with one click using Send Max (the fee is
-  computed exactly, so nothing is left behind as dust), and see an estimated
-  network fee with balance checks before you send. Lightning and Keysend
-  options now unlock once the wallet has an open channel.
+  Stuck transaction? Pending on-chain transactions now have a Bump fee button
+  in the Activity tab. Pick a new fee rate and the wallet replaces the
+  transaction (RBF) or boosts it with a child transaction (CPFP)
+  automatically, whichever the transaction supports.
 dependencies: []
 path: ""
 defaultUsername: ""

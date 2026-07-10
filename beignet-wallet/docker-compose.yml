@@ -7,7 +7,7 @@ services:
       APP_PORT: 3000
 
   manager:
-    image: ghcr.io/coreyphillips/beignet-app:0.4.5@sha256:9616f66bc25c1df1b3ede32fc6c8a7748a0a5502e01120b063398ad73c57d0b1
+    image: ghcr.io/coreyphillips/beignet-app:0.4.6@sha256:fae20f5beb3557af839beefea76d752009a00173a8d2ee08efd9c022f0967898
     restart: on-failure
     init: true
     stop_grace_period: 1m
