@@ -549,6 +549,40 @@ function walletRequest(id, path, method, body) {
 			st.utxos = [];
 			return { txid, hex: hex(400) };
 		}
+		case '/transactions/boostable': {
+			const pending = st.txs.filter((t) => !t.confirmed);
+			return {
+				rbf: pending.filter((t) => t.type === 'sent'),
+				cpfp: pending.filter((t) => t.type === 'received')
+			};
+		}
+		case '/tx/boost': {
+			const tx = st.txs.find((t) => t.txid === body.txid && !t.confirmed);
+			if (!tx) throw err(`Transaction ${body.txid} is not boostable`, 'NOT_BOOSTABLE');
+			const rate = body.satsPerVbyte || 10;
+			const newTxid = hex(64);
+			if (tx.type === 'sent') {
+				// RBF: replace the tx with a higher-fee version
+				const feeSats = Math.max((tx.feeSats || 0) + 200, Math.ceil(141 * rate));
+				tx.txid = newTxid;
+				tx.feeSats = feeSats;
+				tx.timestamp = Date.now();
+				return { txid: newTxid, hex: hex(400), boostType: 'rbf', feeSats, originalTxid: body.txid };
+			}
+			// CPFP: a child tx spends the incoming output at a higher fee
+			const feeSats = Math.ceil(141 * rate) + (tx.feeSats || 0);
+			st.txs.unshift({
+				txid: newTxid,
+				type: 'sent',
+				valueSats: -feeSats,
+				feeSats,
+				confirmed: false,
+				height: null,
+				timestamp: Date.now(),
+				confirmTimestamp: null
+			});
+			return { txid: newTxid, hex: hex(400), boostType: 'cpfp', feeSats, originalTxid: body.txid };
+		}
 		case '/channels':
 			return st.channels;
 		case '/channel/connect-and-open': {

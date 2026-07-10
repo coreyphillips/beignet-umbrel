@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
-import { Badge, Card, CopyText, Segmented } from '../../components/ui.jsx';
+import { useToast } from '../../components/Toast.jsx';
+import { Badge, Button, Card, CopyText, Field, Modal, Segmented } from '../../components/ui.jsx';
 import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 
 const STATUS_TONE = { COMPLETED: 'green', PENDING: 'yellow', FAILED: 'red' };
 
-export default function ActivityTab({ id, api, info, tick }) {
+export default function ActivityTab({ id, api, info, tick, bump }) {
 	const [tab, setTab] = useState('onchain');
+	const [bumping, setBumping] = useState(null);
 	const tipHeight = info?.blockHeight || 0;
 
 	const { data } = usePoll(
@@ -21,6 +23,15 @@ export default function ActivityTab({ id, api, info, tick }) {
 		8000,
 		[id, tick]
 	);
+	const { data: boostable } = usePoll(
+		() => api.get('/transactions/boostable').catch(() => null),
+		8000,
+		[id, tick]
+	);
+	// txid -> 'rbf' | 'cpfp' (rbf wins when a tx appears in both lists)
+	const boostMethod = {};
+	for (const t of boostable?.cpfp || []) boostMethod[t.txid] = 'cpfp';
+	for (const t of boostable?.rbf || []) boostMethod[t.txid] = 'rbf';
 
 	return (
 		<div>
@@ -50,6 +61,7 @@ export default function ActivityTab({ id, api, info, tick }) {
 										<th>Confirmations</th>
 										<th>Txid</th>
 										<th>When</th>
+										<th></th>
 									</tr>
 								</thead>
 								<tbody>
@@ -69,6 +81,17 @@ export default function ActivityTab({ id, api, info, tick }) {
 											</td>
 											<td className="mono" title={t.txid}>{shortId(t.txid)}</td>
 											<td className="wallet-meta">{fmtDate(t.confirmTimestamp || t.timestamp)}</td>
+											<td>
+												{!t.confirmed && boostMethod[t.txid] && (
+													<button
+														type="button"
+														className="btn sm"
+														onClick={() => setBumping({ tx: t, method: boostMethod[t.txid] })}
+													>
+														Bump fee
+													</button>
+												)}
+											</td>
 										</tr>
 									))}
 								</tbody>
@@ -153,6 +176,94 @@ export default function ActivityTab({ id, api, info, tick }) {
 					)}
 				</Card>
 			)}
+
+			{bumping && (
+				<BumpFeeModal
+					api={api}
+					tx={bumping.tx}
+					method={bumping.method}
+					onClose={() => setBumping(null)}
+					onDone={() => {
+						setBumping(null);
+						bump?.();
+					}}
+				/>
+			)}
 		</div>
+	);
+}
+
+function BumpFeeModal({ api, tx, method, onClose, onDone }) {
+	const toast = useToast();
+	const [feeRate, setFeeRate] = useState('');
+	const [busy, setBusy] = useState(false);
+	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
+
+	const boost = async () => {
+		setBusy(true);
+		try {
+			const body = { txid: tx.txid };
+			const rate = parseInt(feeRate, 10);
+			if (rate > 0) body.satsPerVbyte = rate;
+			const r = await api.post('/tx/boost', body);
+			toast(
+				`Fee bumped via ${r.boostType === 'cpfp' ? 'CPFP' : 'RBF'} · new fee ${fmtSats(r.feeSats)}`,
+				'success'
+			);
+			onDone();
+		} catch (e) {
+			toast(e.message, 'error');
+			setBusy(false);
+		}
+	};
+
+	return (
+		<Modal title="Bump transaction fee" onClose={onClose}>
+			<table style={{ marginBottom: 14 }}>
+				<tbody>
+					<tr>
+						<td className="wallet-meta">Transaction</td>
+						<td className="mono">{shortId(tx.txid)}</td>
+					</tr>
+					<tr>
+						<td className="wallet-meta">Amount</td>
+						<td>{fmtSats(Math.abs(tx.valueSats))}</td>
+					</tr>
+					<tr>
+						<td className="wallet-meta">Current fee</td>
+						<td>{tx.feeSats != null ? fmtSats(tx.feeSats) : 'unknown'}</td>
+					</tr>
+				</tbody>
+			</table>
+			<Field
+				label="New fee rate (sat/vB, optional)"
+				hint={
+					method === 'cpfp'
+						? 'This transaction cannot be replaced, so a child transaction will spend its output at a higher fee (CPFP).'
+						: 'The transaction will be replaced with a higher-fee version (RBF). Leave blank to let the wallet pick a rate.'
+				}
+			>
+				<input value={feeRate} onChange={(e) => setFeeRate(e.target.value)} placeholder="auto" />
+			</Field>
+			{fees && (
+				<div className="preset-row" style={{ marginBottom: 14 }}>
+					{[
+						['Fast', fees.fast],
+						['Normal', fees.normal],
+						['Slow', fees.slow]
+					].map(([label, rate]) => (
+						<button key={label} type="button" className="btn sm" onClick={() => setFeeRate(String(rate))}>
+							{label} · {rate} sat/vB
+						</button>
+					))}
+				</div>
+			)}
+			<div className="center-actions">
+				<Button onClick={onClose}>Cancel</Button>
+				<Button variant="primary" busy={busy} onClick={boost}>
+					Bump fee
+				</Button>
+			</div>
+		</Modal>
 	);
 }
