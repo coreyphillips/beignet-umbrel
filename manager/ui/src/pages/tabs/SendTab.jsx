@@ -95,7 +95,8 @@ function OnChain({ id, api, info, rec, bump }) {
 		setTxid('');
 		try {
 			const base = { address: address.trim() };
-			if (feeRate) base.satsPerVbyte = parseInt(feeRate, 10);
+			const rate = parseInt(feeRate, 10);
+			if (rate > 0) base.satsPerVbyte = rate;
 			const r = maxMode
 				? await api.post('/send-max', base)
 				: await api.post('/send', { ...base, amountSats: parseInt(amount, 10) });
