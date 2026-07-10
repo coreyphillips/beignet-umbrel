@@ -759,6 +759,15 @@ tbody tr:hover {
 	color: var(--text);
 }
 
+.pill:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.pill:disabled:hover {
+	color: var(--muted);
+}
+
 .pill.active {
 	color: var(--text);
 }

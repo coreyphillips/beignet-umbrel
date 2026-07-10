@@ -130,7 +130,7 @@ const store = {
 			id: 'demo-savings',
 			name: 'Savings',
 			network: 'mainnet',
-			status: 'stopped',
+			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
 			tor: false,
 			announce: false,
@@ -529,6 +529,25 @@ function walletRequest(id, path, method, body) {
 			});
 			if (st.utxos.length) st.utxos.shift();
 			return { txid };
+		}
+		case '/send-max': {
+			const balance = onchainBalance(id);
+			if (!balance) throw err('No spendable UTXOs', 'SEND_FAILED');
+			const rate = body.satsPerVbyte || 7;
+			const feeSats = Math.min(balance - 1, Math.ceil(10.5 + st.utxos.length * 68 + 31) * rate);
+			const txid = hex(64);
+			st.txs.unshift({
+				txid,
+				type: 'sent',
+				valueSats: -(balance - feeSats),
+				feeSats,
+				confirmed: false,
+				height: null,
+				timestamp: Date.now(),
+				confirmTimestamp: null
+			});
+			st.utxos = [];
+			return { txid, hex: hex(400) };
 		}
 		case '/channels':
 			return st.channels;
