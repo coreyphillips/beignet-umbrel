@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
@@ -14,6 +15,16 @@ const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
 const MAX_LOG_LINES = 300;
 const KILL_GRACE_MS = 10000;
+// The beignet daemon only subscribes to block headers on a successful
+// boot-time Electrum connection. If it boots while the server is down it
+// reconnects later but stays blind to new blocks, so channel funding
+// confirmations are never seen. Defer the spawn until the server accepts
+// connections, and restart a daemon whose chain view is stuck.
+const ELECTRUM_PROBE_TIMEOUT_MS = 3000;
+const ELECTRUM_WAIT_POLL_MS = 5000;
+const CHAIN_WATCH_POLL_MS = 30000;
+const CHAIN_STALL_POLLS = 3;
+const CHAIN_STALL_RESTART_COOLDOWN_MS = 5 * 60 * 1000;
 // Lightning listen port = HTTP daemon port + this offset.
 const LISTEN_PORT_OFFSET = 6000;
 // Onion virtual ports mapped for inbound (covers the first N wallets).
@@ -122,10 +133,32 @@ class WalletManager {
 				logs: [],
 				restartCount: 0,
 				stopping: false,
-				startedAt: null
+				spawning: false,
+				startedAt: null,
+				electrumWait: null,
+				chainWatch: null,
+				chainStallPolls: 0,
+				lastStallRestartAt: 0
 			});
 		}
 		return this.runtime.get(id);
+	}
+
+	_probeElectrum({ host, port }) {
+		return new Promise((resolve) => {
+			const socket = net.connect({ host, port });
+			let done = false;
+			const finish = (ok) => {
+				if (done) return;
+				done = true;
+				socket.destroy();
+				resolve(ok);
+			};
+			socket.setTimeout(ELECTRUM_PROBE_TIMEOUT_MS);
+			socket.once('connect', () => finish(true));
+			socket.once('timeout', () => finish(false));
+			socket.once('error', () => finish(false));
+		});
 	}
 
 	_log(id, line) {
@@ -315,8 +348,43 @@ class WalletManager {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		const rt = this.runtimeState(id);
-		if (rt.proc) return;
+		if (rt.proc || rt.spawning) return;
+		rt.spawning = true;
+		try {
+			await this._startWalletLocked(id, rec, rt);
+		} finally {
+			rt.spawning = false;
+		}
+	}
+
+	async _startWalletLocked(id, rec, rt) {
 		rt.stopping = false;
+		if (rt.electrumWait) {
+			clearTimeout(rt.electrumWait);
+			rt.electrumWait = null;
+		}
+
+		if (!(await this._probeElectrum(rec.electrum))) {
+			rt.status = 'waiting-electrum';
+			rt.healthy = false;
+			this._log(
+				id,
+				`electrum ${rec.electrum.host}:${rec.electrum.port} unreachable; waiting for it before starting`
+			);
+			if (!rec.running) {
+				rec.running = true;
+				this.registry.upsert(rec);
+			}
+			rt.electrumWait = setTimeout(() => {
+				rt.electrumWait = null;
+				const current = this.registry.get(id);
+				if (!current || !current.running || rt.stopping || rt.proc) return;
+				this.startWallet(id).catch((err) =>
+					this._log(id, `deferred start failed: ${err.message}`)
+				);
+			}, ELECTRUM_WAIT_POLL_MS);
+			return;
+		}
 
 		const p = this.paths(id);
 		// Remove any stale pid file so `beignet start` does not report ALREADY_RUNNING.
@@ -379,6 +447,10 @@ class WalletManager {
 			rt.proc = null;
 			rt.healthy = false;
 			rt.status = 'stopped';
+			if (rt.chainWatch) {
+				clearInterval(rt.chainWatch);
+				rt.chainWatch = null;
+			}
 			this._log(id, `exited code=${code} signal=${signal}`);
 			this._maybeRestart(id, rt);
 		});
@@ -388,7 +460,53 @@ class WalletManager {
 			this.registry.upsert(rec);
 		}
 
+		rt.chainStallPolls = 0;
+		rt.chainWatch = setInterval(() => {
+			this._checkChainStall(id).catch(() => {});
+		}, CHAIN_WATCH_POLL_MS);
+
 		this._pollHealth(id).catch(() => {});
+	}
+
+	// A daemon that reports an Electrum connection but a block height of zero
+	// has lost (or never made) its header subscription; nothing on-chain will
+	// ever confirm for it. A restart with Electrum reachable recovers it.
+	async _checkChainStall(id) {
+		const rec = this.registry.get(id);
+		const rt = this.runtimeState(id);
+		if (!rec || !rt.proc || rt.stopping) return;
+		let health = null;
+		try {
+			const res = await fetch(`http://127.0.0.1:${rec.port}/health`, {
+				signal: AbortSignal.timeout(5000)
+			});
+			if (res.ok) health = (await res.json()).result;
+		} catch (_) {
+			/* daemon unreachable; not a chain stall */
+		}
+		if (!health || health.electrumConnected !== true || health.blockHeight !== 0) {
+			rt.chainStallPolls = 0;
+			return;
+		}
+		rt.chainStallPolls += 1;
+		if (rt.chainStallPolls < CHAIN_STALL_POLLS) return;
+		if (Date.now() - rt.lastStallRestartAt < CHAIN_STALL_RESTART_COOLDOWN_MS) return;
+		rt.lastStallRestartAt = Date.now();
+		rt.chainStallPolls = 0;
+		this._log(
+			id,
+			'electrum connected but block height stuck at 0; restarting daemon to restore header subscription'
+		);
+		try {
+			rt.stopping = true;
+			await this._killProc(rt.proc);
+			rt.proc = null;
+			rt.stopping = false;
+			await this.startWallet(id);
+		} catch (err) {
+			rt.stopping = false;
+			this._log(id, `stall restart failed: ${err.message}`);
+		}
 	}
 
 	_maybeRestart(id, rt) {
@@ -439,6 +557,10 @@ class WalletManager {
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		const rt = this.runtimeState(id);
 		rt.stopping = true;
+		if (rt.electrumWait) {
+			clearTimeout(rt.electrumWait);
+			rt.electrumWait = null;
+		}
 		rec.running = false;
 		this.registry.upsert(rec);
 		if (rt.proc) {
@@ -519,6 +641,14 @@ class WalletManager {
 		if (this.torControl) this.torControl.stop();
 		const pending = [];
 		for (const rt of this.runtime.values()) {
+			if (rt.electrumWait) {
+				clearTimeout(rt.electrumWait);
+				rt.electrumWait = null;
+			}
+			if (rt.chainWatch) {
+				clearInterval(rt.chainWatch);
+				rt.chainWatch = null;
+			}
 			if (rt.proc) {
 				rt.stopping = true;
 				pending.push(this._killProc(rt.proc));

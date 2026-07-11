@@ -15,7 +15,7 @@ env:
   IMAGE: ghcr.io/coreyphillips/beignet-app
   # The beignet npm version bundled in the image. Decoupled from the app tag,
   # since the app and the beignet library version independently.
-  BEIGNET_VERSION: "0.3.0"
+  BEIGNET_VERSION: "0.5.0"
 
 jobs:
   build:
