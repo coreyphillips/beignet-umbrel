@@ -10,6 +10,7 @@ const { config, SUPPORTED_NETWORKS } = require('./config');
 const { Registry } = require('./registry');
 const { Settings } = require('./settings');
 const { TorControl } = require('./tor-control');
+const { probeSocksConnect } = require('./socks-probe');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -25,6 +26,12 @@ const ELECTRUM_WAIT_POLL_MS = 5000;
 const CHAIN_WATCH_POLL_MS = 30000;
 const CHAIN_STALL_POLLS = 3;
 const CHAIN_STALL_RESTART_COOLDOWN_MS = 5 * 60 * 1000;
+// Tor circuit health: a wallet with Tor enabled dials every peer through
+// Umbrel's SOCKS proxy, so if Tor cannot build circuits every connection
+// times out. Probe by connecting back to our own onion through the proxy.
+const TOR_CIRCUIT_CHECK_MS = 5 * 60 * 1000;
+const TOR_CIRCUIT_FIRST_CHECK_MS = 90 * 1000;
+const TOR_PROBE_TIMEOUT_MS = 30000;
 // Lightning listen port = HTTP daemon port + this offset.
 const LISTEN_PORT_OFFSET = 6000;
 // Onion virtual ports mapped for inbound (covers the first N wallets).
@@ -67,6 +74,10 @@ class WalletManager {
 		this.runtime = new Map();
 		this.onion = null;
 		this.torControl = null;
+		// null = unknown/not applicable, true/false = last probe result.
+		this.torCircuitOk = null;
+		this.torProbeTimer = null;
+		this.torProbeRunning = false;
 	}
 
 	async init() {
@@ -96,6 +107,49 @@ class WalletManager {
 					this._log(rec.id, `start on boot failed: ${err.message}`)
 				);
 			}
+		}
+		if (config.torProxy) {
+			setTimeout(() => {
+				this._checkTorCircuit().catch(() => {});
+			}, TOR_CIRCUIT_FIRST_CHECK_MS);
+			this.torProbeTimer = setInterval(() => {
+				this._checkTorCircuit().catch(() => {});
+			}, TOR_CIRCUIT_CHECK_MS);
+		}
+	}
+
+	// Connect back to our own onion through the Tor SOCKS proxy. Success
+	// requires working circuits, HSDir lookups, and a rendezvous, which is
+	// the same machinery Tor-enabled wallets need for outbound peers.
+	async _checkTorCircuit() {
+		if (!config.torProxy || !this.onion || this.torProbeRunning) return;
+		const target = this.registry
+			.list()
+			.find((rec) => rec.tor && rec.running && this.runtimeState(rec.id).healthy);
+		if (!target) {
+			this.torCircuitOk = null;
+			return;
+		}
+		this.torProbeRunning = true;
+		try {
+			const [proxyHost, proxyPort] = config.torProxy.split(':');
+			const ok = await probeSocksConnect({
+				proxyHost,
+				proxyPort: parseInt(proxyPort, 10),
+				host: this.onion,
+				port: this.listenPort(target),
+				timeoutMs: TOR_PROBE_TIMEOUT_MS
+			});
+			if (this.torCircuitOk !== ok) {
+				process.stdout.write(
+					ok
+						? 'tor circuit check: ok\n'
+						: 'tor circuit check: failing (Tor-enabled wallets cannot reach peers; they will report connection timeouts)\n'
+				);
+			}
+			this.torCircuitOk = ok;
+		} finally {
+			this.torProbeRunning = false;
 		}
 	}
 
@@ -621,6 +675,9 @@ class WalletManager {
 			tor: !!rec.tor,
 			announce: !!rec.announce,
 			onionAddress: this.onionAddress(rec),
+			// Only meaningful for Tor-enabled wallets: false means the last
+			// probe could not build a circuit, so peer connects will time out.
+			torCircuitOk: rec.tor ? this.torCircuitOk : null,
 			port: rec.port,
 			desiredRunning: !!rec.running,
 			status: rt.status,
@@ -639,6 +696,10 @@ class WalletManager {
 
 	async shutdown() {
 		if (this.torControl) this.torControl.stop();
+		if (this.torProbeTimer) {
+			clearInterval(this.torProbeTimer);
+			this.torProbeTimer = null;
+		}
 		const pending = [];
 		for (const rt of this.runtime.values()) {
 			if (rt.electrumWait) {

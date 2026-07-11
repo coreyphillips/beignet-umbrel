@@ -4,6 +4,7 @@ import { useToast } from '../../components/Toast.jsx';
 import { Badge, BalanceBar, Button, Card, Field, Modal } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { vbytes } from '../../lib/fees.js';
+import { withTorHint } from '../../lib/hints.js';
 
 const STATE_TONE = {
 	NORMAL: 'green',
@@ -21,7 +22,7 @@ const SATVB_TO_PERKW = 250;
 
 const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
 
-export default function ChannelsTab({ id, api, tick, bump }) {
+export default function ChannelsTab({ id, api, rec, tick, bump }) {
 	const toast = useToast();
 	const [modal, setModal] = useState(null);
 	const { data: channels, refresh } = usePoll(() => api.get('/channels').catch(() => []), 8000, [id, tick]);
@@ -94,7 +95,7 @@ export default function ChannelsTab({ id, api, tick, bump }) {
 			</Card>
 
 			{modal?.type === 'open' && (
-				<OpenChannelModal api={api} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
+				<OpenChannelModal api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
 			)}
 			{modal?.type === 'splice' && (
 				<SpliceModal
@@ -136,7 +137,7 @@ export default function ChannelsTab({ id, api, tick, bump }) {
 // Many routing nodes reject channels below this (LND's default minchansize).
 const COMMON_MIN_CHANNEL_SATS = 20000;
 
-function OpenChannelModal({ api, origin, onClose, onDone }) {
+function OpenChannelModal({ api, rec, origin, onClose, onDone }) {
 	const toast = useToast();
 	const [uri, setUri] = useState('');
 	const [pubkey, setPubkey] = useState('');
@@ -187,7 +188,7 @@ function OpenChannelModal({ api, origin, onClose, onDone }) {
 			toast('Channel opening', 'success');
 			onDone();
 		} catch (e) {
-			toast(e.message, 'error');
+			toast(withTorHint(rec, e.message), 'error');
 		} finally {
 			setBusy(false);
 		}
