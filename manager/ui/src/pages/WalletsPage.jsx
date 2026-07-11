@@ -20,7 +20,7 @@ import { copy, fmtSats } from '../lib/format.js';
 
 function statusTone(s) {
 	if (s === 'running') return 'green';
-	if (s === 'starting' || s === 'restarting') return 'yellow';
+	if (s === 'starting' || s === 'restarting' || s === 'waiting-electrum') return 'yellow';
 	return 'muted';
 }
 
