@@ -5,6 +5,7 @@ const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS } = require('./config');
 const { WalletManager } = require('./wallet-manager');
+const { createAccessGuard } = require('./access-control');
 
 function asyncHandler(fn) {
 	return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -24,6 +25,11 @@ async function main() {
 
 	const app = express();
 	app.disable('x-powered-by');
+
+	// Restrict the API to Umbrel's app_proxy (which fronts the browser with SSO)
+	// and loopback, so other apps on the shared network cannot reach the wallet
+	// control plane directly. Mounted first so it covers every route below.
+	app.use(createAccessGuard({ log: (m) => console.log(m) }));
 
 	// --- Reverse proxy to the per-wallet beignet daemons. Mounted BEFORE the
 	// JSON body parser so request bodies (e.g. POST /send) stream through intact.
