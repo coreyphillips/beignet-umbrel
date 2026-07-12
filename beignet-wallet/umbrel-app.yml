@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.4.7"
+version: "0.4.8"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,14 +30,16 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Channel opens now complete reliably. Wallets that started before their
-  Electrum server was reachable (common right after a reboot) could silently
-  stop tracking new blocks, leaving opened channels pending forever. Beignet
-  now waits for the Electrum server before starting a wallet and
-  automatically restarts any wallet whose chain view gets stuck.
+  Clearer fees and smarter Tor handling. Opening a channel now shows your
+  available balance, the estimated funding fee, and the total needed, and
+  stops you before an open that cannot be funded. Splicing gets live fee
+  presets instead of a hardcoded rate.
 
 
-  Also upgrades the bundled beignet engine to 0.5.0.
+  Wallets with Tor enabled now detect when Tor cannot build circuits (the
+  cause of every connection timing out) and show a banner explaining how to
+  fix it. The app also no longer hangs at "Starting..." when Tor is
+  unresponsive during install or boot.
 dependencies: []
 path: ""
 defaultUsername: ""
