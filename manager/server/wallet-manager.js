@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const net = require('net');
+const tls = require('tls');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
@@ -9,7 +10,7 @@ const bip39 = require('bip39');
 const { config, SUPPORTED_NETWORKS } = require('./config');
 const { Registry } = require('./registry');
 const { Settings } = require('./settings');
-const { TorControl } = require('./tor-control');
+const { TorControl, pickLocalIp } = require('./tor-control');
 const { probeSocksConnect } = require('./socks-probe');
 
 const HEALTH_TIMEOUT_MS = 45000;
@@ -123,21 +124,38 @@ class WalletManager {
 	// the same machinery Tor-enabled wallets need for outbound peers.
 	async _checkTorCircuit() {
 		if (!config.torProxy || !this.onion || this.torProbeRunning) return;
+		// Only a wallet whose listen port is actually onion-mapped can be probed;
+		// otherwise the self-connect would fail on the mapping, not on Tor.
 		const target = this.registry
 			.list()
-			.find((rec) => rec.tor && rec.running && this.runtimeState(rec.id).healthy);
+			.find(
+				(rec) =>
+					rec.tor &&
+					rec.running &&
+					this.runtimeState(rec.id).healthy &&
+					this._onionMapsPort(this.listenPort(rec))
+			);
 		if (!target) {
 			this.torCircuitOk = null;
 			return;
 		}
 		this.torProbeRunning = true;
 		try {
+			const targetIp = pickLocalIp();
+			const listenPort = this.listenPort(target);
+			// The probe's SOCKS round-trip only succeeds if the wallet's LN listener
+			// accepts the forwarded connection. If we cannot even reach that listener
+			// locally, the failure is the listener (e.g. not up yet), not Tor, so
+			// leave the previous verdict untouched rather than blaming Tor.
+			if (targetIp && !(await this._probeTcp(targetIp, listenPort))) {
+				return;
+			}
 			const [proxyHost, proxyPort] = config.torProxy.split(':');
 			const ok = await probeSocksConnect({
 				proxyHost,
 				proxyPort: parseInt(proxyPort, 10),
 				host: this.onion,
-				port: this.listenPort(target),
+				port: listenPort,
 				timeoutMs: TOR_PROBE_TIMEOUT_MS
 			});
 			if (this.torCircuitOk !== ok) {
@@ -151,6 +169,14 @@ class WalletManager {
 		} finally {
 			this.torProbeRunning = false;
 		}
+	}
+
+	// True when the published onion maps this wallet's LN listen port. The onion
+	// maps a fixed window of ANNOUNCE_PORT_COUNT ports from childPortBase; wallets
+	// allocated beyond it cannot be reached over the onion.
+	_onionMapsPort(listenPort) {
+		const base = config.childPortBase + LISTEN_PORT_OFFSET;
+		return listenPort >= base && listenPort < base + ANNOUNCE_PORT_COUNT;
 	}
 
 	listenPort(rec) {
@@ -175,7 +201,10 @@ class WalletManager {
 	}
 
 	onionAddress(rec) {
-		return this.onion && rec.announce ? `${this.onion}:${this.listenPort(rec)}` : null;
+		if (!this.onion || !rec.announce) return null;
+		const listenPort = this.listenPort(rec);
+		// Do not advertise an address the onion does not actually forward.
+		return this._onionMapsPort(listenPort) ? `${this.onion}:${listenPort}` : null;
 	}
 
 	runtimeState(id) {
@@ -198,7 +227,8 @@ class WalletManager {
 		return this.runtime.get(id);
 	}
 
-	_probeElectrum({ host, port }) {
+	// Resolves true once a TCP connection to host:port is established.
+	_probeTcp(host, port, timeoutMs = ELECTRUM_PROBE_TIMEOUT_MS) {
 		return new Promise((resolve) => {
 			const socket = net.connect({ host, port });
 			let done = false;
@@ -208,10 +238,64 @@ class WalletManager {
 				socket.destroy();
 				resolve(ok);
 			};
-			socket.setTimeout(ELECTRUM_PROBE_TIMEOUT_MS);
+			socket.setTimeout(timeoutMs);
 			socket.once('connect', () => finish(true));
 			socket.once('timeout', () => finish(false));
 			socket.once('error', () => finish(false));
+		});
+	}
+
+	_probeElectrum({ host, port }) {
+		return this._probeTcp(host, port);
+	}
+
+	// Queries an Electrum server for its current chain tip height. Resolves null
+	// if the tip cannot be determined. Honors TLS so it works with either preset.
+	_electrumTip({ host, port, tls: useTls }) {
+		return new Promise((resolve) => {
+			let done = false;
+			let buf = '';
+			let socket;
+			const finish = (val) => {
+				if (done) return;
+				done = true;
+				try {
+					socket.destroy();
+				} catch (_) {
+					/* already gone */
+				}
+				resolve(val);
+			};
+			try {
+				socket = useTls
+					? tls.connect({ host, port, rejectUnauthorized: false })
+					: net.connect({ host, port });
+			} catch (_) {
+				return resolve(null);
+			}
+			socket.setTimeout(ELECTRUM_PROBE_TIMEOUT_MS);
+			socket.once(useTls ? 'secureConnect' : 'connect', () => {
+				socket.write(
+					`${JSON.stringify({ id: 1, method: 'blockchain.headers.subscribe', params: [] })}\n`
+				);
+			});
+			socket.on('data', (chunk) => {
+				buf += chunk.toString('utf8');
+				const nl = buf.indexOf('\n');
+				if (nl === -1) return;
+				try {
+					const msg = JSON.parse(buf.slice(0, nl));
+					const height =
+						msg && msg.result && typeof msg.result.height === 'number'
+							? msg.result.height
+							: null;
+					finish(height);
+				} catch (_) {
+					finish(null);
+				}
+			});
+			socket.once('timeout', () => finish(null));
+			socket.once('error', () => finish(null));
 		});
 	}
 
@@ -470,8 +554,9 @@ class WalletManager {
 		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
 		// Route Lightning peer connections through Umbrel's Tor proxy when enabled.
 		if (rec.tor && config.torProxy) env.BEIGNET_TOR_PROXY = config.torProxy;
-		// Advertise the onion address so peers can open inbound channels.
-		if (rec.announce && this.onion) {
+		// Advertise the onion address so peers can open inbound channels, but only
+		// when the onion actually forwards this wallet's listen port.
+		if (rec.announce && this.onion && this._onionMapsPort(this.listenPort(rec))) {
 			env.BEIGNET_ANNOUNCE_ADDRESSES = `${this.onion}:${this.listenPort(rec)}`;
 		}
 
@@ -539,6 +624,22 @@ class WalletManager {
 			/* daemon unreachable; not a chain stall */
 		}
 		if (!health || health.electrumConnected !== true || health.blockHeight !== 0) {
+			rt.chainStallPolls = 0;
+			return;
+		}
+		// blockHeight 0 while Electrum is connected is only a lost subscription if
+		// the chain actually has blocks past genesis. On regtest (or any chain
+		// whose tip really is 0) it is legitimate, so confirm the server's tip
+		// before restarting; if the tip is unknown or 0, do not treat it as a
+		// stall (avoids a perpetual restart loop on a fresh regtest wallet).
+		const tip = await this._electrumTip(rec.electrum);
+		if (tip === null || tip <= 0) {
+			rt.chainStallPolls = 0;
+			return;
+		}
+		// The daemon may have stopped while awaiting the tip; re-check before using
+		// rt.proc so a concurrent stop cannot turn into a restart or a null kill.
+		if (!rt.proc || rt.stopping) {
 			rt.chainStallPolls = 0;
 			return;
 		}
