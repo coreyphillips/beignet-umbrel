@@ -38,6 +38,28 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 		}
 	};
 
+	// The daemon returns success as soon as open_channel is sent; if the peer
+	// then rejects the open (e.g. amount below its minimum) the pending channel
+	// silently disappears. Watch for the new channel and report the rejection.
+	const verifyOpen = async (channelId) => {
+		for (let i = 0; i < 4; i++) {
+			await new Promise((r) => setTimeout(r, 3000));
+			const list = await api.get('/channels').catch(() => null);
+			if (!list) return;
+			if (list.some((c) => c.channelId === channelId)) {
+				refresh();
+				return;
+			}
+		}
+		refresh();
+		toast(
+			'The peer accepted the connection but rejected the channel open. ' +
+				'This usually means the amount is below its minimum: large routing ' +
+				'nodes often require 400,000 sats or more.',
+			'error'
+		);
+	};
+
 	return (
 		<div>
 			<Card
@@ -95,7 +117,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 			</Card>
 
 			{modal?.type === 'open' && (
-				<OpenChannelModal api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
+				<OpenChannelModal api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={(channelId) => { setModal(null); refresh(); bump(); if (channelId) verifyOpen(channelId); }} />
 			)}
 			{modal?.type === 'splice' && (
 				<SpliceModal
@@ -184,9 +206,9 @@ function OpenChannelModal({ api, rec, origin, onClose, onDone }) {
 				amountSats: parseInt(amount, 10)
 			};
 			if (push) body.pushSats = parseInt(push, 10);
-			await api.post('/channel/connect-and-open', body);
+			const r = await api.post('/channel/connect-and-open', body);
 			toast('Channel opening', 'success');
-			onDone();
+			onDone(r?.channelId);
 		} catch (e) {
 			toast(withTorHint(rec, e.message), 'error');
 		} finally {
