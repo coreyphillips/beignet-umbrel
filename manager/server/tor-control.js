@@ -6,6 +6,12 @@ const os = require('os');
 
 const RECONNECT_MS = 15000;
 const CONNECT_TIMEOUT_MS = 8000;
+// A wedged Tor can accept the control connection and then never reply to
+// AUTHENTICATE/ADD_ONION. Without deadlines that would block start() forever,
+// and with it the whole manager (the app then hangs at "Starting..." on
+// install). Cap replies per command and the first publish attempt overall.
+const CONTROL_REPLY_TIMEOUT_MS = 10000;
+const FIRST_ATTEMPT_TIMEOUT_MS = 20000;
 
 // The manager's address on Umbrel's shared app network (10.21.x.x), which the
 // system Tor container (10.21.21.11) can reach for hidden-service forwarding.
@@ -42,9 +48,18 @@ class TorControl {
 
 	// Resolves with the onion (or null) after the first publish attempt; keeps
 	// reconnecting in the background and calls onPublished on (re)publish.
+	// Never blocks longer than FIRST_ATTEMPT_TIMEOUT_MS: the dashboard must
+	// come up even when Tor is unresponsive.
 	start() {
 		return new Promise((resolve) => {
-			this._resolveFirst = resolve;
+			const deadline = setTimeout(() => {
+				this.log('tor-control: first publish attempt timed out; continuing in background');
+				this._firstDone(null);
+			}, FIRST_ATTEMPT_TIMEOUT_MS);
+			this._resolveFirst = (onion) => {
+				clearTimeout(deadline);
+				resolve(onion);
+			};
 			this._connect();
 		});
 	}
@@ -78,7 +93,10 @@ class TorControl {
 		socket.setTimeout(CONNECT_TIMEOUT_MS, () => socket.destroy());
 
 		socket.once('connect', async () => {
-			socket.setTimeout(0);
+			// Reply deadline for the command phase; a Tor that goes silent here
+			// gets its socket destroyed, which resolves start() and schedules a
+			// background reconnect instead of hanging the manager.
+			socket.setTimeout(CONTROL_REPLY_TIMEOUT_MS, () => socket.destroy());
 			try {
 				await this._cmd(socket, `AUTHENTICATE "${this._escape(this.password)}"`);
 				const state = this._readState();
@@ -112,6 +130,9 @@ class TorControl {
 					}
 				}
 				this.onion = onion;
+				// Publish done; the connection now just sits idle to keep the onion
+				// association, so disable the inactivity deadline.
+				socket.setTimeout(0);
 				this.log(`tor-control: onion ready ${this.onion} -> ${targetIp}`);
 				this._firstDone(this.onion);
 				this.onPublished(this.onion);
