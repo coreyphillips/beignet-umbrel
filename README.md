@@ -81,6 +81,7 @@ CI builds and pushes multi-arch images to GHCR on any `v*` tag. After a release,
 
 - Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase; it is shown once at creation.
 - The manager and all wallet dashboards sit behind Umbrel's single sign-on.
+- The manager's API is restricted to Umbrel's `app_proxy` (which enforces that sign-on) and loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
 - The wallet daemons bind only to `127.0.0.1` inside the container and are never exposed to your network.
 
 ## License
