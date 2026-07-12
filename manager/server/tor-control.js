@@ -108,25 +108,44 @@ class TorControl {
 					// closes, so it survives manager restarts and connection blips
 					// (instead of being torn down and briefly unreachable).
 					const lines = await this._cmd(socket, `ADD_ONION ${keyArg} Flags=Detach ${portArgs}`);
-					let serviceId = null;
-					let privKey = null;
-					for (const line of lines) {
-						const s = line.match(/ServiceID=([a-z2-7]+)/i);
-						if (s) serviceId = s[1].toLowerCase();
-						const k = line.match(/PrivateKey=(\S+)/);
-						if (k) privKey = k[1];
-					}
+					const { serviceId, privKey } = this._parseAddOnion(lines);
 					if (!serviceId) throw new Error('no ServiceID in ADD_ONION response');
 					onion = `${serviceId}.onion`;
-					this._writeState(privKey || state.key, onion);
+					this._writeState(privKey || state.key, onion, targetIp);
 				} catch (addErr) {
 					// A detached onion from a previous run is still registered with
-					// Tor; adopt it rather than failing (no re-publish, no gap).
-					if (/collision|already/i.test(addErr.message) && state.address) {
+					// Tor. Its port map forwards to the target IP from that run; if
+					// this container's IP has since changed, that mapping is stale and
+					// inbound would silently break, so drop and re-add with the current
+					// target. Otherwise adopt it as-is (no re-publish, no gap).
+					if (!(/collision|already/i.test(addErr.message) && state.address)) throw addErr;
+					const serviceId = state.address.replace(/\.onion$/i, '');
+					if (state.target && state.target !== targetIp) {
+						this.log(
+							`tor-control: onion target changed ${state.target} -> ${targetIp}; republishing`
+						);
+						try {
+							await this._cmd(socket, `DEL_ONION ${serviceId}`);
+							const lines = await this._cmd(
+								socket,
+								`ADD_ONION ${keyArg} Flags=Detach ${portArgs}`
+							);
+							const parsed = this._parseAddOnion(lines);
+							if (!parsed.serviceId) throw new Error('no ServiceID in ADD_ONION response');
+							onion = `${parsed.serviceId}.onion`;
+							this._writeState(parsed.privKey || state.key, onion, targetIp);
+						} catch (reErr) {
+							// Re-publish failed; keep the stable identity so outbound and
+							// the known address survive, and retry on the next reconnect.
+							onion = state.address;
+							this.log(`tor-control: republish failed (${reErr.message}); adopting ${onion}`);
+							this._writeState(state.key, onion, state.target);
+						}
+					} else {
 						onion = state.address;
 						this.log(`tor-control: onion already published, adopting ${onion}`);
-					} else {
-						throw addErr;
+						// Record the current target for legacy state that predates it.
+						this._writeState(state.key, onion, state.target || targetIp);
 					}
 				}
 				this.onion = onion;
@@ -180,27 +199,47 @@ class TorControl {
 		return String(s).replace(/([\\"])/g, '\\$1');
 	}
 
-	// Persisted state is JSON { key, address }. Falls back to reading a legacy
-	// file that held just the raw key (pre-Detach), so upgrades keep the onion.
+	// Extracts the ServiceID and (on first publish) PrivateKey from an ADD_ONION
+	// reply's collected lines.
+	_parseAddOnion(lines) {
+		let serviceId = null;
+		let privKey = null;
+		for (const line of lines) {
+			const s = line.match(/ServiceID=([a-z2-7]+)/i);
+			if (s) serviceId = s[1].toLowerCase();
+			const k = line.match(/PrivateKey=(\S+)/);
+			if (k) privKey = k[1];
+		}
+		return { serviceId, privKey };
+	}
+
+	// Persisted state is JSON { key, address, target }, where target is the
+	// container IP the detached onion's port map forwards to (used to detect a
+	// changed IP on restart). Falls back to reading a legacy file that held just
+	// the raw key (pre-Detach), so upgrades keep the onion.
 	_readState() {
 		try {
 			const raw = fs.readFileSync(this.keyFile, 'utf8').trim();
-			if (!raw) return { key: null, address: null };
+			if (!raw) return { key: null, address: null, target: null };
 			try {
 				const parsed = JSON.parse(raw);
-				return { key: parsed.key || null, address: parsed.address || null };
+				return {
+					key: parsed.key || null,
+					address: parsed.address || null,
+					target: parsed.target || null
+				};
 			} catch (_) {
-				return { key: raw, address: null };
+				return { key: raw, address: null, target: null };
 			}
 		} catch (_) {
-			return { key: null, address: null };
+			return { key: null, address: null, target: null };
 		}
 	}
 
-	_writeState(key, address) {
+	_writeState(key, address, target) {
 		if (!key) return;
 		try {
-			fs.writeFileSync(this.keyFile, JSON.stringify({ key, address }), { mode: 0o600 });
+			fs.writeFileSync(this.keyFile, JSON.stringify({ key, address, target }), { mode: 0o600 });
 		} catch (err) {
 			this.log(`tor-control: could not persist onion state: ${err.message}`);
 		}
