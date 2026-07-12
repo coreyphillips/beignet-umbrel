@@ -142,6 +142,13 @@ export default function WalletPage() {
 				</div>
 			) : (
 				<div className="wallet-layout">
+					{rec?.tor && rec.torCircuitOk === false && (
+						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+							Tor on this Umbrel cannot build circuits right now, so this wallet's peer
+							connections (channel opens included) will time out. Restart Tor on your Umbrel,
+							or edit this wallet and turn Tor off to connect directly.
+						</div>
+					)}
 					<nav className="wnav">
 						{TABS.map(([key, label]) => (
 							<NavLink key={key} to={`/w/${id}/${key}`} className={key === tab ? 'active' : ''}>

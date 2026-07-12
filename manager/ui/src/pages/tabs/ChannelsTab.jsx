@@ -3,6 +3,8 @@ import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Badge, BalanceBar, Button, Card, Field, Modal } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
+import { vbytes } from '../../lib/fees.js';
+import { withTorHint } from '../../lib/hints.js';
 
 const STATE_TONE = {
 	NORMAL: 'green',
@@ -20,7 +22,7 @@ const SATVB_TO_PERKW = 250;
 
 const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
 
-export default function ChannelsTab({ id, api, tick, bump }) {
+export default function ChannelsTab({ id, api, rec, tick, bump }) {
 	const toast = useToast();
 	const [modal, setModal] = useState(null);
 	const { data: channels, refresh } = usePoll(() => api.get('/channels').catch(() => []), 8000, [id, tick]);
@@ -93,7 +95,7 @@ export default function ChannelsTab({ id, api, tick, bump }) {
 			</Card>
 
 			{modal?.type === 'open' && (
-				<OpenChannelModal api={api} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
+				<OpenChannelModal api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
 			)}
 			{modal?.type === 'splice' && (
 				<SpliceModal
@@ -132,7 +134,10 @@ export default function ChannelsTab({ id, api, tick, bump }) {
 	);
 }
 
-function OpenChannelModal({ api, origin, onClose, onDone }) {
+// Many routing nodes reject channels below this (LND's default minchansize).
+const COMMON_MIN_CHANNEL_SATS = 20000;
+
+function OpenChannelModal({ api, rec, origin, onClose, onDone }) {
 	const toast = useToast();
 	const [uri, setUri] = useState('');
 	const [pubkey, setPubkey] = useState('');
@@ -141,6 +146,22 @@ function OpenChannelModal({ api, origin, onClose, onDone }) {
 	const [amount, setAmount] = useState('');
 	const [push, setPush] = useState('');
 	const [busy, setBusy] = useState(false);
+	const { data: info } = usePoll(() => api.get('/info').catch(() => null), 30000, []);
+	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
+	const { data: utxos } = usePoll(() => api.get('/utxos').catch(() => null), 30000, []);
+
+	const balance = info?.onchainBalanceSats;
+	// The daemon picks the funding fee rate itself; show the current normal
+	// estimate so the user knows what comes out of the balance on top of the
+	// channel amount. Funding tx: channel output + change.
+	const estRate = fees?.normal || null;
+	const estFee = estRate ? vbytes(Math.max(1, Math.min(utxos?.length || 1, 2)), 2) * estRate : null;
+	const amountNum = parseInt(amount, 10) || 0;
+	const pushNum = parseInt(push, 10) || 0;
+	const overBalance =
+		amountNum > 0 && balance != null && estFee != null && amountNum + estFee > balance;
+	const belowCommonMin = amountNum > 0 && amountNum < COMMON_MIN_CHANNEL_SATS;
+	const pushTooBig = pushNum > 0 && amountNum > 0 && pushNum >= amountNum;
 
 	// Accept a pubkey@host:port URI and split it into fields.
 	const applyUri = (val) => {
@@ -167,7 +188,7 @@ function OpenChannelModal({ api, origin, onClose, onDone }) {
 			toast('Channel opening', 'success');
 			onDone();
 		} catch (e) {
-			toast(e.message, 'error');
+			toast(withTorHint(rec, e.message), 'error');
 		} finally {
 			setBusy(false);
 		}
@@ -175,6 +196,9 @@ function OpenChannelModal({ api, origin, onClose, onDone }) {
 
 	return (
 		<Modal title="Open channel" onClose={onClose} origin={origin}>
+			<div className="wallet-meta" style={{ marginBottom: 12 }}>
+				On-chain available: {fmtSats(balance)}
+			</div>
 			<Field label="Peer URI (pubkey@host:port)" hint="Or fill the fields below individually.">
 				<input value={uri} onChange={(e) => applyUri(e.target.value)} placeholder="02abc…@1.2.3.4:9735" />
 			</Field>
@@ -190,15 +214,48 @@ function OpenChannelModal({ api, origin, onClose, onDone }) {
 				</Field>
 			</div>
 			<div className="row">
-				<Field label="Channel amount (sats)">
+				<Field
+					label="Channel amount (sats)"
+					hint="Becomes your outbound capacity. The on-chain funding fee is paid on top, from the remaining balance."
+				>
 					<input value={amount} onChange={(e) => setAmount(e.target.value)} />
 				</Field>
-				<Field label="Push to peer (sats, optional)">
+				<Field
+					label="Push to peer (sats, optional)"
+					hint="Gifted to the peer from your side of the channel."
+				>
 					<input value={push} onChange={(e) => setPush(e.target.value)} placeholder="0" />
 				</Field>
 			</div>
+			{estFee != null && amountNum > 0 && !overBalance && (
+				<div className="wallet-meta" style={{ marginBottom: 12 }}>
+					Estimated funding fee: ~{fmtSats(estFee)} at {estRate} sat/vB (approximate; the wallet
+					sets the final rate when broadcasting). Total needed: ~{fmtSats(amountNum + estFee)}.
+				</div>
+			)}
+			{overBalance && (
+				<div className="error-note" style={{ marginBottom: 12 }}>
+					Channel amount plus the estimated funding fee (~{fmtSats(estFee)}) exceeds your on-chain
+					balance. Lower the amount to leave room for the fee.
+				</div>
+			)}
+			{pushTooBig && (
+				<div className="error-note" style={{ marginBottom: 12 }}>
+					Push amount must be smaller than the channel amount.
+				</div>
+			)}
+			{belowCommonMin && !overBalance && (
+				<div className="info-note" style={{ marginBottom: 12 }}>
+					Many nodes reject channels under {fmtSats(COMMON_MIN_CHANNEL_SATS)}.
+				</div>
+			)}
 			<div className="center-actions">
-				<Button variant="primary" busy={busy} onClick={open} disabled={!pubkey || !host || !amount}>
+				<Button
+					variant="primary"
+					busy={busy}
+					onClick={open}
+					disabled={!pubkey || !host || !amount || overBalance || pushTooBig}
+				>
 					Connect &amp; open
 				</Button>
 				<Button onClick={onClose}>Cancel</Button>
@@ -210,9 +267,21 @@ function OpenChannelModal({ api, origin, onClose, onDone }) {
 function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 	const toast = useToast();
 	const [amount, setAmount] = useState('');
-	const [feeVb, setFeeVb] = useState('2');
+	const [feeVb, setFeeVb] = useState('');
 	const [busy, setBusy] = useState(false);
 	const isIn = dir === 'in';
+	const { data: info } = usePoll(() => api.get('/info').catch(() => null), 30000, []);
+	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
+
+	const balance = info?.onchainBalanceSats;
+	const effRate = parseFloat(feeVb) || fees?.normal || null;
+	// Splice tx approximation: shared input + a wallet input/output either way.
+	const estFee = effRate ? vbytes(2, 2) * Math.ceil(effRate) : null;
+	const amountNum = parseInt(amount, 10) || 0;
+	const overBalance =
+		isIn && amountNum > 0 && balance != null && estFee != null && amountNum + estFee > balance;
+	const overLocal =
+		!isIn && amountNum > 0 && amountNum + (estFee || 0) > (channel.localBalanceSats || 0);
 
 	const submit = async () => {
 		setBusy(true);
@@ -220,7 +289,7 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 			const body = {
 				channelId: channel.channelId,
 				amountSats: parseInt(amount, 10),
-				feeratePerkw: Math.max(253, Math.round(parseFloat(feeVb) * SATVB_TO_PERKW))
+				feeratePerkw: Math.max(253, Math.round(effRate * SATVB_TO_PERKW))
 			};
 			const r = await api.post(isIn ? '/channel/splice-in' : '/channel/splice-out', body);
 			if (r && r.ok === false) throw new Error(r.error || 'Splice failed');
@@ -243,17 +312,57 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 			<div className="wallet-meta" style={{ marginBottom: 12 }}>
 				Channel <span className="mono">{shortId(channel.channelId)}</span> · capacity{' '}
 				{fmtSats(channel.capacitySats)} · local {fmtSats(channel.localBalanceSats)}
+				{isIn && balance != null && <> · on-chain available {fmtSats(balance)}</>}
 			</div>
 			<div className="row">
 				<Field label="Amount (sats)">
 					<input value={amount} onChange={(e) => setAmount(e.target.value)} />
 				</Field>
 				<Field label="Fee rate (sat/vB)">
-					<input value={feeVb} onChange={(e) => setFeeVb(e.target.value)} style={{ maxWidth: 120 }} />
+					<input
+						value={feeVb}
+						onChange={(e) => setFeeVb(e.target.value)}
+						placeholder={fees?.normal ? `auto (${fees.normal})` : 'auto'}
+						style={{ maxWidth: 120 }}
+					/>
 				</Field>
 			</div>
+			{fees && (
+				<div className="preset-row" style={{ marginBottom: 14 }}>
+					{[
+						['Fast', fees.fast],
+						['Normal', fees.normal],
+						['Slow', fees.slow]
+					].map(([label, rate]) => (
+						<button key={label} type="button" className="btn sm" onClick={() => setFeeVb(String(rate))}>
+							{label} · {rate} sat/vB
+						</button>
+					))}
+				</div>
+			)}
+			{estFee != null && amountNum > 0 && (
+				<div className="wallet-meta" style={{ marginBottom: 12 }}>
+					Estimated splice fee: ~{fmtSats(estFee)} at {Math.ceil(effRate)} sat/vB (approximate),
+					paid {isIn ? 'from your on-chain balance on top of the amount' : 'from the amount moved out'}.
+				</div>
+			)}
+			{overBalance && (
+				<div className="error-note" style={{ marginBottom: 12 }}>
+					Amount plus the estimated fee exceeds your on-chain balance.
+				</div>
+			)}
+			{overLocal && (
+				<div className="error-note" style={{ marginBottom: 12 }}>
+					Amount plus the estimated fee exceeds your local channel balance.
+				</div>
+			)}
 			<div className="center-actions">
-				<Button variant="primary" busy={busy} onClick={submit} disabled={!amount}>
+				<Button
+					variant="primary"
+					busy={busy}
+					onClick={submit}
+					disabled={!amount || !effRate || overBalance || overLocal}
+				>
 					{isIn ? 'Splice in' : 'Splice out'}
 				</Button>
 				<Button onClick={onClose}>Cancel</Button>

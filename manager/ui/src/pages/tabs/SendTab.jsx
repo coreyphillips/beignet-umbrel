@@ -3,6 +3,7 @@ import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, Field, Badge, Segmented } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
+import { vbytes } from '../../lib/fees.js';
 import { manager, walletApi } from '../../api.js';
 
 export default function SendTab({ id, api, info, rec, tick, bump }) {
@@ -39,9 +40,6 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 		</div>
 	);
 }
-
-// P2WPKH size approximation: ~10.5 vB overhead + ~68 vB per input + ~31 vB per output.
-const vbytes = (nIn, nOut) => Math.ceil(10.5 + nIn * 68 + nOut * 31);
 
 function OnChain({ id, api, info, rec, bump }) {
 	const toast = useToast();
