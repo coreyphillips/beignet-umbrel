@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.4.11"
+version: "0.4.12"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,14 +30,15 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Fixes an install that never finishes starting. The app pointed Umbrel's app
-  proxy at the wrong internal hostname for its own backend, so the proxy waited
-  forever for a service it could never find and the app stayed on "Starting".
+  Fixes the app getting stuck on "Starting" forever. Beignet was guessing at the
+  names Docker gave its own containers, and that guess is only correct on some
+  Umbrel versions: the name differs between Docker Compose v1 and v2. When the
+  guess was wrong, Umbrel's app proxy waited forever for a backend it could never
+  find. Beignet now pins its container names, so its web interface and its
+  bundled Tor daemon are found reliably on every Umbrel version.
 
 
-  Beignet also now reaches its own bundled Tor daemon by name, rather than a
-  shared name that could just as easily resolve to the Tor daemon belonging to
-  another app such as Bitcoin or Core Lightning.
+  If 0.4.11 left the app stuck on "Starting", this release repairs it.
 
 dependencies: []
 path: ""
