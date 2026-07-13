@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.4.10"
+version: "0.4.11"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,11 +30,14 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Hardening and reliability. The wallet control plane is now reachable only
-  through Umbrel's app proxy, so other apps on your device cannot drive it
-  directly. Tor connection diagnostics are more accurate, with fewer false
-  alarms while a wallet is still starting up, and a regtest wallet no longer
-  restarts in a loop before its first block is mined.
+  Fixes an install that never finishes starting. The app pointed Umbrel's app
+  proxy at the wrong internal hostname for its own backend, so the proxy waited
+  forever for a service it could never find and the app stayed on "Starting".
+
+
+  Beignet also now reaches its own bundled Tor daemon by name, rather than a
+  shared name that could just as easily resolve to the Tor daemon belonging to
+  another app such as Bitcoin or Core Lightning.
 
 dependencies: []
 path: ""
