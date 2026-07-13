@@ -853,6 +853,14 @@ class WalletManager {
 		return this.runtimeState(id).logs.slice();
 	}
 
+	// Append a line to a wallet's log ring from outside the supervisor, so a
+	// failure the manager sees on the wallet's behalf (a rejected daemon call,
+	// say) is visible in the dashboard's Logs tab alongside the daemon's own
+	// output, rather than only in the browser that happened to make the request.
+	recordLog(id, line) {
+		this._log(id, line);
+	}
+
 	// Recent node-level errors, newest last. `since` filters by timestamp so a
 	// caller watching a channel open can ask only for what happened after it
 	// started, rather than re-reading errors from an earlier attempt.

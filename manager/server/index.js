@@ -7,6 +7,10 @@ const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS } = require('./config');
 const { WalletManager } = require('./wallet-manager');
 const { createAccessGuard } = require('./access-control');
 
+// Cap on how much of a failed daemon response is buffered before logging it.
+// Error bodies are small; this only stops a large one from being held in memory.
+const MAX_LOGGED_BODY = 8192;
+
 function asyncHandler(fn) {
 	return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
@@ -49,6 +53,40 @@ async function main() {
 			} catch (_) {
 				/* token missing; daemon will reject */
 			}
+		},
+		// Record failed daemon calls in the wallet's log. The daemon answers a
+		// rejected action (a peer that will not complete the handshake, a channel
+		// it will not open) to the browser that asked and nowhere else, so the
+		// failure never reached the Logs tab and the tab looked empty at exactly
+		// the moment someone went looking. Only errors are recorded, so a working
+		// wallet does not fill its log with successful calls.
+		onProxyRes: (proxyRes, req) => {
+			const failed = proxyRes.statusCode >= 400;
+			// Non-GETs are the actions worth reporting; they can also fail with a
+			// 200 carrying {ok:false}, so their bodies are inspected either way.
+			if (!failed && req.method === 'GET') return;
+			if (!String(proxyRes.headers['content-type'] || '').includes('json')) return;
+			let body = '';
+			proxyRes.on('data', (chunk) => {
+				if (body.length < MAX_LOGGED_BODY) body += chunk.toString('utf8');
+			});
+			proxyRes.on('end', () => {
+				let parsed;
+				try {
+					parsed = JSON.parse(body);
+				} catch (_) {
+					return; // truncated or not JSON after all
+				}
+				if (!parsed || parsed.ok !== false) return;
+				const err = parsed.error || {};
+				const route = String(req.originalUrl || '').replace(/^\/wallets\/[^/]+\/api/, '');
+				manager.recordLog(
+					req.params.id,
+					`${req.method} ${route} failed [${err.code || proxyRes.statusCode}] ${
+						err.message || ''
+					}`.trim()
+				);
+			});
 		},
 		onError: (err, req, res) => {
 			if (!res.headersSent) {
