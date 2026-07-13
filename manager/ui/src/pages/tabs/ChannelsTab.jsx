@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Badge, BalanceBar, Button, Card, Field, Modal } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { vbytes } from '../../lib/fees.js';
-import { withTorHint } from '../../lib/hints.js';
+import { withPeerHint } from '../../lib/hints.js';
+import { watchChannelOpen } from '../../lib/channel-open.js';
 
 const STATE_TONE = {
 	NORMAL: 'green',
@@ -95,7 +96,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 			</Card>
 
 			{modal?.type === 'open' && (
-				<OpenChannelModal api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
+				<OpenChannelModal id={id} api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
 			)}
 			{modal?.type === 'splice' && (
 				<SpliceModal
@@ -137,7 +138,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 // Many routing nodes reject channels below this (LND's default minchansize).
 const COMMON_MIN_CHANNEL_SATS = 20000;
 
-function OpenChannelModal({ api, rec, origin, onClose, onDone }) {
+function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 	const toast = useToast();
 	const [uri, setUri] = useState('');
 	const [pubkey, setPubkey] = useState('');
@@ -146,6 +147,16 @@ function OpenChannelModal({ api, rec, origin, onClose, onDone }) {
 	const [amount, setAmount] = useState('');
 	const [push, setPush] = useState('');
 	const [busy, setBusy] = useState(false);
+	const [status, setStatus] = useState(null);
+	const [error, setError] = useState(null);
+	// Aborted on unmount so a watch in flight stops when the modal is closed,
+	// rather than polling on and reporting to a modal that is no longer there.
+	const abort = useRef(null);
+	useEffect(() => {
+		const controller = new AbortController();
+		abort.current = controller;
+		return () => controller.abort();
+	}, []);
 	const { data: info } = usePoll(() => api.get('/info').catch(() => null), 30000, []);
 	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
 	const { data: utxos } = usePoll(() => api.get('/utxos').catch(() => null), 30000, []);
@@ -176,21 +187,62 @@ function OpenChannelModal({ api, rec, origin, onClose, onDone }) {
 
 	const open = async () => {
 		setBusy(true);
+		setStatus('Connecting to the peer…');
+		setError(null);
+		const peerPubkey = pubkey.trim();
 		try {
 			const body = {
-				pubkey: pubkey.trim(),
+				pubkey: peerPubkey,
 				host: host.trim(),
 				port: parseInt(port, 10),
 				amountSats: parseInt(amount, 10)
 			};
 			if (push) body.pushSats = parseInt(push, 10);
-			await api.post('/channel/connect-and-open', body);
-			toast('Channel opening', 'success');
-			onDone();
+
+			// Snapshot the channels we already have with this peer. The open returns
+			// a *temporary* channel id that is swapped for a permanent one the moment
+			// funding is created, so the new channel has to be spotted by its peer,
+			// not by the id we get back. This must not be allowed to fail quietly: an
+			// empty snapshot would make a channel we already hold with this peer look
+			// like the one we just opened, and report a failed open as a success.
+			const before = await api.get('/channels');
+			const knownIds = new Set((before || []).map((c) => c.channelId));
+			const since = Date.now();
+
+			const res = await api.post('/channel/connect-and-open', body);
+
+			// A 200 here means only that open_channel was sent. The peer can still
+			// reject it, and the funding can still fail, so wait for a real outcome
+			// rather than reporting success now.
+			setStatus('Negotiating with the peer and funding the channel…');
+			const outcome = await watchChannelOpen({
+				api,
+				id,
+				peerPubkey,
+				tempChannelId: res?.channelId,
+				knownIds,
+				since,
+				signal: abort.current?.signal
+			});
+
+			if (outcome.status === 'abandoned') return;
+			if (outcome.status === 'funded') {
+				toast('Channel opened. Funding transaction broadcast.', 'success');
+				onDone();
+				return;
+			}
+			if (outcome.status === 'pending') {
+				toast(outcome.reason, 'info');
+				onDone();
+				return;
+			}
+			setError(outcome.reason);
 		} catch (e) {
-			toast(withTorHint(rec, e.message), 'error');
+			if (abort.current?.signal.aborted) return;
+			setError(withPeerHint(rec, e.message));
 		} finally {
 			setBusy(false);
+			setStatus(null);
 		}
 	};
 
@@ -249,6 +301,20 @@ function OpenChannelModal({ api, rec, origin, onClose, onDone }) {
 					Many nodes reject channels under {fmtSats(COMMON_MIN_CHANNEL_SATS)}.
 				</div>
 			)}
+			{status && (
+				<div className="info-note" style={{ marginBottom: 12 }}>
+					{status} This can take a minute. The channel is not open until the funding
+					transaction is broadcast.
+				</div>
+			)}
+			{error && (
+				<div className="error-note" style={{ marginBottom: 12 }}>
+					{error}
+					<div style={{ marginTop: 6, opacity: 0.85 }}>
+						The full daemon output is in the <strong>Logs</strong> tab.
+					</div>
+				</div>
+			)}
 			<div className="center-actions">
 				<Button
 					variant="primary"
@@ -258,7 +324,7 @@ function OpenChannelModal({ api, rec, origin, onClose, onDone }) {
 				>
 					Connect &amp; open
 				</Button>
-				<Button onClick={onClose}>Cancel</Button>
+				<Button onClick={onClose}>{error ? 'Close' : 'Cancel'}</Button>
 			</div>
 		</Modal>
 	);

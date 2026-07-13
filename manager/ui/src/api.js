@@ -43,7 +43,9 @@ export const manager = {
 	stopWallet: (id) => request(`/api/wallets/${id}/stop`, { method: 'POST' }),
 	deleteWallet: (id, purge) =>
 		request(`/api/wallets/${id}${purge ? '?purge=true' : ''}`, { method: 'DELETE' }),
-	logs: (id) => request(`/api/wallets/${id}/logs`)
+	logs: (id) => request(`/api/wallets/${id}/logs`),
+	errors: (id, since) =>
+		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`)
 };
 
 // Per-wallet beignet daemon API (proxied; bearer token injected server-side)

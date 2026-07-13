@@ -17,7 +17,10 @@ services:
     # v2 and umbrelOS 1.x (whose patchComposeFile only fills container_name in
     # when the app has not set one, so it defers to this).
     container_name: beignet-wallet_manager_1
-    image: ghcr.io/coreyphillips/beignet-app:0.4.10@sha256:ea82f17d7eff601a9b81ea345b52d2e466e2ded4c6a148579fd6919ff6b5c926
+    # Tag matches `version` in umbrel-app.yml: the release build publishes the
+    # image under the app version, so the two move together. Re-pin the digest
+    # from the published image once the v0.5.0 build lands.
+    image: ghcr.io/coreyphillips/beignet-app:0.5.0
     restart: on-failure
     init: true
     stop_grace_period: 1m

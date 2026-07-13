@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.4.12"
+version: "0.5.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,15 +30,30 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Fixes the app getting stuck on "Starting" forever. Beignet was guessing at the
-  names Docker gave its own containers, and that guess is only correct on some
-  Umbrel versions: the name differs between Docker Compose v1 and v2. When the
-  guess was wrong, Umbrel's app proxy waited forever for a backend it could never
-  find. Beignet now pins its container names, so its web interface and its
-  bundled Tor daemon are found reliably on every Umbrel version.
+  Fixes channel opens that appeared to work and then quietly failed.
 
 
-  If 0.4.11 left the app stuck on "Starting", this release repairs it.
+  Opening a channel reported success as soon as the request was sent, before the
+  peer had agreed to anything. If the peer then rejected the channel, or the
+  funding could not be built, the pending channel simply vanished from the list
+  and no on-chain funds ever moved. The reason was thrown away, so there was
+  nothing to go on.
+
+
+  Beignet now waits for the real outcome. A channel is only reported as open once
+  its funding transaction is broadcast, and a failure now tells you exactly what
+  the peer said, for example that the amount was below that node's minimum
+  channel size.
+
+
+  New Logs tab. Every wallet now shows its daemon's output and any node errors,
+  with copy and download, so nothing is swallowed.
+
+
+  Note that large custodial and exchange nodes commonly refuse connections from
+  nodes they have no channel with. Opening a channel to one of those by
+  connecting to it cannot work; the app now explains that instead of failing
+  silently.
 
 dependencies: []
 path: ""
