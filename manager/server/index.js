@@ -171,6 +171,18 @@ async function main() {
 		res.json({ ok: true, result: manager.logs(req.params.id) })
 	);
 
+	// Node-level errors captured from the daemon's event stream. These carry the
+	// reason a channel open failed, which is otherwise reported nowhere.
+	api.get('/wallets/:id/errors', (req, res) => {
+		const since = parseInt(req.query.since, 10);
+		res.json({
+			ok: true,
+			result: manager.nodeErrors(req.params.id, {
+				since: Number.isFinite(since) ? since : undefined
+			})
+		});
+	});
+
 	// Fetch the wallet daemon's OpenAPI spec and rewrite its server URL so the
 	// Swagger UI "Try it out" calls route back through this manager (with auth).
 	api.get(

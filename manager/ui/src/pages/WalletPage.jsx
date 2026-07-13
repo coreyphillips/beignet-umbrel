@@ -15,6 +15,7 @@ import ChannelsTab from './tabs/ChannelsTab.jsx';
 import PeersTab from './tabs/PeersTab.jsx';
 import ActivityTab from './tabs/ActivityTab.jsx';
 import OffersTab from './tabs/OffersTab.jsx';
+import LogsTab from './tabs/LogsTab.jsx';
 
 const TABS = [
 	['overview', 'Overview', OverviewTab],
@@ -23,7 +24,8 @@ const TABS = [
 	['channels', 'Channels', ChannelsTab],
 	['peers', 'Peers', PeersTab],
 	['activity', 'Activity', ActivityTab],
-	['offers', 'Offers', OffersTab]
+	['offers', 'Offers', OffersTab],
+	['logs', 'Logs', LogsTab]
 ];
 
 const EVENT_LABELS = {

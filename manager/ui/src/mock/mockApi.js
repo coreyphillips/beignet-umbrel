@@ -353,7 +353,8 @@ function managerRequest(path, method, body) {
 	if (!m) throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
 	const w = store.wallets.find((x) => x.id === m[1]);
 	if (!w) throw err('Wallet not found', 'NOT_FOUND');
-	const sub = m[2] || '';
+	// m[2] still carries any query string (e.g. "errors?since=123").
+	const [sub, subQuery] = (m[2] || '').split('?');
 
 	if (!sub) {
 		if (method === 'GET') return publicRecord(w);
@@ -382,8 +383,59 @@ function managerRequest(path, method, body) {
 		w.status = 'stopped';
 		return publicRecord(w);
 	}
-	if (sub === 'logs') return { lines: ['[demo] beignet daemon log output would appear here'] };
+	// Both return the same shapes as the real manager: a flat array of log lines,
+	// and a list of node errors captured off the daemon's event stream.
+	if (sub === 'logs') return demoLogLines(w).concat(errorLogLines(w.id));
+	if (sub === 'errors') {
+		// The real endpoint filters by timestamp, and a caller watching an open
+		// relies on it to ignore anything from an earlier attempt.
+		const since = parseInt(new URLSearchParams(subQuery || '').get('since'), 10);
+		const all = demoNodeErrors().concat(runtimeErrors[w.id] || []);
+		return Number.isFinite(since) ? all.filter((e) => e.timestamp >= since) : all;
+	}
 	throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
+}
+
+// Peers commonly refuse channels below a minimum. Demo opens under this are
+// rejected, so the failure path is reachable without a real peer.
+const DEMO_MIN_CHANNEL_SATS = 400000;
+
+// A previously failed channel open, so the Logs tab has something to show.
+const DEMO_ERROR_AT = Date.now() - 45000;
+
+const runtimeErrors = {};
+
+function recordError(id, entry) {
+	(runtimeErrors[id] = runtimeErrors[id] || []).push(entry);
+}
+
+function errorLogLines(id) {
+	return (runtimeErrors[id] || []).map(
+		(e) => `[${new Date(e.timestamp).toISOString()}] node error [${e.code}] ${e.message}`
+	);
+}
+
+function demoNodeErrors() {
+	return [
+		{
+			code: 'CHANNEL_ERROR',
+			message: 'Remote error: invalid funding_amount=100000 sat (min=400000 sat)',
+			channelId: '3f72ef8ddbb7c08cb9d8b945855aba6b99ccf15b156c80d1c2c2e1e1a0e12c58',
+			timestamp: DEMO_ERROR_AT
+		}
+	];
+}
+
+function demoLogLines(w) {
+	const at = (offset) => new Date(DEMO_ERROR_AT + offset).toISOString();
+	return [
+		`[${at(-60000)}] starting on 127.0.0.1:${w.port || 3101} (network ${w.network}, electrum ${w.electrum?.host || 'electrs'}:${w.electrum?.port || 50001} tls=false)`,
+		`[${at(-52000)}] Daemon listening on 127.0.0.1:${w.port || 3101}`,
+		`[${at(-50000)}] healthy`,
+		`[${at(-12000)}] Peer connected 03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f`,
+		`[${at(-8000)}] Opening channel 100000 sat`,
+		`[${at(0)}] node error [CHANNEL_ERROR] Remote error: invalid funding_amount=100000 sat (min=400000 sat)`
+	];
 }
 
 function walletRequest(id, path, method, body) {
@@ -586,20 +638,46 @@ function walletRequest(id, path, method, body) {
 		case '/channels':
 			return st.channels;
 		case '/channel/connect-and-open': {
+			// Faithful to the daemon: the open returns as soon as open_channel is
+			// sent, with the channel still pending under a *temporary* id. Whether
+			// it funds or fails is decided afterwards.
 			const c = {
 				channelId: hex(64),
 				peerPubkey: body.pubkey,
 				capacitySats: body.amountSats,
 				localBalanceSats: body.amountSats - (body.pushSats || 0),
 				remoteBalanceSats: body.pushSats || 0,
-				state: 'AWAITING_FUNDING_CONFIRMED',
+				state: 'SENT_OPEN',
 				isPrivate: false
 			};
 			st.channels.push(c);
+			const drop = () => {
+				st.channels = st.channels.filter((x) => x !== c);
+			};
+			if (body.amountSats < DEMO_MIN_CHANNEL_SATS) {
+				// The peer rejects it. The channel disappears and the reason arrives
+				// as a node error, which is what the real failure looks like.
+				setTimeout(() => {
+					drop();
+					recordError(id, {
+						code: 'CHANNEL_ERROR',
+						message: `Remote error: invalid funding_amount=${body.amountSats} sat (min=${DEMO_MIN_CHANNEL_SATS} sat)`,
+						channelId: c.channelId,
+						timestamp: Date.now()
+					});
+				}, 3000);
+				return c;
+			}
+			setTimeout(() => {
+				// Funding built and broadcast: only now have the on-chain funds moved.
+				c.state = 'AWAITING_FUNDING_CONFIRMED';
+				// The permanent channel id replaces the temporary one.
+				c.channelId = hex(64);
+			}, 3000);
 			setTimeout(() => {
 				c.state = 'NORMAL';
 				emit(id, 'channel:ready', {});
-			}, 8000);
+			}, 9000);
 			return c;
 		}
 		case '/channel/close':

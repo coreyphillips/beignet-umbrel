@@ -3,7 +3,7 @@ import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
 import { shortId } from '../../lib/format.js';
-import { withTorHint } from '../../lib/hints.js';
+import { withPeerHint } from '../../lib/hints.js';
 
 export default function PeersTab({ id, api, info, rec, tick, bump }) {
 	const toast = useToast();
@@ -40,7 +40,7 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 			refresh();
 			bump();
 		} catch (e) {
-			toast(withTorHint(rec, e.message), 'error');
+			toast(withPeerHint(rec, e.message), 'error');
 		} finally {
 			setBusy(false);
 		}

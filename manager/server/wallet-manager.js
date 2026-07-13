@@ -12,10 +12,15 @@ const { Registry } = require('./registry');
 const { Settings } = require('./settings');
 const { TorControl, pickLocalIp } = require('./tor-control');
 const { probeSocksConnect } = require('./socks-probe');
+const { subscribeToEvents } = require('./node-events');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
 const MAX_LOG_LINES = 300;
+// Node-level errors kept per wallet. These carry the reason a channel open
+// failed, which the daemon reports only as a transient `node:error` event, so
+// they are retained here for the dashboard to read back.
+const MAX_NODE_ERRORS = 100;
 const KILL_GRACE_MS = 10000;
 // The beignet daemon only subscribes to block headers on a successful
 // boot-time Electrum connection. If it boots while the server is down it
@@ -214,6 +219,8 @@ class WalletManager {
 				status: 'stopped',
 				healthy: false,
 				logs: [],
+				nodeErrors: [],
+				events: null,
 				restartCount: 0,
 				stopping: false,
 				spawning: false,
@@ -548,7 +555,12 @@ class WalletManager {
 			BEIGNET_LISTEN_PORT: String(this.listenPort(rec)),
 			BEIGNET_ELECTRUM_HOST: rec.electrum.host,
 			BEIGNET_ELECTRUM_PORT: String(rec.electrum.port),
-			BEIGNET_ELECTRUM_TLS: rec.electrum.tls ? 'true' : 'false'
+			BEIGNET_ELECTRUM_TLS: rec.electrum.tls ? 'true' : 'false',
+			// The daemon only builds a logger when a log level is set; without one
+			// it runs silent and its stdout carries nothing to show in the Logs
+			// tab. Overridable so a noisy wallet can be turned down (or up to
+			// debug when diagnosing a peer).
+			BEIGNET_LOG_LEVEL: process.env.BEIGNET_LOG_LEVEL || 'info'
 		};
 		if (process.env.TOR_PROXY_IP) env.TOR_PROXY_IP = process.env.TOR_PROXY_IP;
 		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
@@ -590,9 +602,12 @@ class WalletManager {
 				clearInterval(rt.chainWatch);
 				rt.chainWatch = null;
 			}
+			this._stopEvents(rt);
 			this._log(id, `exited code=${code} signal=${signal}`);
 			this._maybeRestart(id, rt);
 		});
+
+		this._startEvents(id, rec, rt);
 
 		if (!rec.running) {
 			rec.running = true;
@@ -605,6 +620,48 @@ class WalletManager {
 		}, CHAIN_WATCH_POLL_MS);
 
 		this._pollHealth(id).catch(() => {});
+	}
+
+	// Subscribe to the daemon's event stream. The reason a channel open failed
+	// (peer rejection, funding build/broadcast failure, disconnect mid-open) is
+	// only ever reported as a `node:error` event: it is not part of any resource
+	// and nothing can poll for it. Without this subscription the pending channel
+	// simply disappears from /channels and the reason is lost, which is exactly
+	// what made failed opens look like they had silently succeeded.
+	_startEvents(id, rec, rt) {
+		this._stopEvents(rt);
+		let token;
+		try {
+			token = this.token(id);
+		} catch (_) {
+			return; // no token yet; the daemon cannot be subscribed to
+		}
+		rt.events = subscribeToEvents({
+			port: rec.port,
+			token,
+			log: (m) => this._log(id, m),
+			onEvent: (name, data) => {
+				if (name !== 'node:error' || !data) return;
+				const entry = {
+					code: data.code || 'ERROR',
+					message: data.message || 'Unknown error',
+					channelId: data.channelId || null,
+					timestamp: data.timestamp || Date.now()
+				};
+				rt.nodeErrors.push(entry);
+				if (rt.nodeErrors.length > MAX_NODE_ERRORS) rt.nodeErrors.shift();
+				// Also put it in the log ring so it shows up in the dashboard's
+				// Logs tab alongside the daemon's own output.
+				this._log(id, `node error [${entry.code}] ${entry.message}`);
+			}
+		});
+	}
+
+	_stopEvents(rt) {
+		if (rt.events) {
+			rt.events.stop();
+			rt.events = null;
+		}
 	}
 
 	// A daemon that reports an Electrum connection but a block height of zero
@@ -718,6 +775,7 @@ class WalletManager {
 		}
 		rec.running = false;
 		this.registry.upsert(rec);
+		this._stopEvents(rt);
 		if (rt.proc) {
 			await this._killProc(rt.proc);
 			rt.proc = null;
@@ -795,6 +853,15 @@ class WalletManager {
 		return this.runtimeState(id).logs.slice();
 	}
 
+	// Recent node-level errors, newest last. `since` filters by timestamp so a
+	// caller watching a channel open can ask only for what happened after it
+	// started, rather than re-reading errors from an earlier attempt.
+	nodeErrors(id, { since } = {}) {
+		const errors = this.runtimeState(id).nodeErrors;
+		if (!since) return errors.slice();
+		return errors.filter((e) => e.timestamp >= since);
+	}
+
 	async shutdown() {
 		if (this.torControl) this.torControl.stop();
 		if (this.torProbeTimer) {
@@ -811,6 +878,7 @@ class WalletManager {
 				clearInterval(rt.chainWatch);
 				rt.chainWatch = null;
 			}
+			this._stopEvents(rt);
 			if (rt.proc) {
 				rt.stopping = true;
 				pending.push(this._killProc(rt.proc));

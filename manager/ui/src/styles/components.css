@@ -1079,3 +1079,50 @@ tbody tr:hover {
 		transparent 80%
 	);
 }
+
+/* ---------- Logs (terminal) ---------- */
+.log-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 12px;
+}
+
+.log-filter {
+	flex: 1 1 200px;
+	min-width: 0;
+}
+
+.log-body {
+	background: var(--bg-deep);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-sm);
+	padding: 12px 14px;
+	max-height: 460px;
+	overflow: auto;
+	font-family: var(--font-mono);
+	font-size: 12px;
+	line-height: 1.55;
+	/* Long daemon lines (stack traces, peer URIs) scroll rather than reflow, so
+	   the page itself never scrolls sideways. */
+	white-space: pre;
+}
+
+.log-line {
+	color: var(--muted);
+	/* Selecting a range and copying it should yield the raw lines. */
+	user-select: text;
+}
+
+.log-line.warn {
+	color: var(--yellow);
+}
+
+.log-line.error {
+	color: var(--red);
+}
+
+:root[data-theme='light'] .log-body {
+	background: rgba(20, 30, 60, 0.04);
+}
