@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.5.0"
+version: "0.5.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,30 +30,23 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Fixes channel opens that appeared to work and then quietly failed.
+  Better diagnosis when a peer will not connect, and failed actions now reach the
+  Logs tab.
 
 
-  Opening a channel reported success as soon as the request was sent, before the
-  peer had agreed to anything. If the peer then rejected the channel, or the
-  funding could not be built, the pending channel simply vanished from the list
-  and no on-chain funds ever moved. The reason was thrown away, so there was
-  nothing to go on.
+  A peer that accepts the connection and then hangs up during the handshake was
+  blamed on the peer refusing unknown nodes. That is only one of the reasons, and
+  usually not the right one. The most common cause is dialling the wrong port: an
+  app's web page on Umbrel is not a Lightning port, so connecting to it completes
+  the TCP connection and then fails. The app now says so, and points at the
+  Lightning peer port (9735 for Umbrel's Core Lightning and Lightning Node apps)
+  instead of guessing.
 
 
-  Beignet now waits for the real outcome. A channel is only reported as open once
-  its funding transaction is broadcast, and a failure now tells you exactly what
-  the peer said, for example that the amount was below that node's minimum
-  channel size.
-
-
-  New Logs tab. Every wallet now shows its daemon's output and any node errors,
-  with copy and download, so nothing is swallowed.
-
-
-  Note that large custodial and exchange nodes commonly refuse connections from
-  nodes they have no channel with. Opening a channel to one of those by
-  connecting to it cannot work; the app now explains that instead of failing
-  silently.
+  Failed actions now appear in the Logs tab. A rejected peer connection or channel
+  open was reported only to the browser that asked for it, so the Logs tab looked
+  empty at exactly the moment someone went looking. Every failed call to a wallet
+  is now recorded there.
 
 dependencies: []
 path: ""

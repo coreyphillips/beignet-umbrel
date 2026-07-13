@@ -40,7 +40,7 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 			refresh();
 			bump();
 		} catch (e) {
-			toast(withPeerHint(rec, e.message), 'error');
+			toast(withPeerHint(rec, e.message, { port }), 'error');
 		} finally {
 			setBusy(false);
 		}
