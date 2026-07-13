@@ -3,14 +3,20 @@ version: "3.7"
 services:
   app_proxy:
     environment:
-      # umbrelOS rewrites every service's container_name to <app-id>_<service>_1,
-      # so the manager is reachable as beignet-wallet_manager_1. The Compose v2
-      # hyphenated form (beignet-wallet-manager-1) does not exist: app_proxy would
-      # block forever in its wait-for-port loop and never bind the app's port.
+      # Matches the container_name pinned on the manager below. Never a derived
+      # name: legacy Umbrel does not set container_name, so the name it would get
+      # depends on the compose binary the node happens to have (v1 yields
+      # beignet-wallet_manager_1, v2 yields beignet-wallet-manager-1). app_proxy
+      # blocks forever in its wait-for-port loop if this does not resolve, and the
+      # app hangs at "Starting" with the rest of the stack looking healthy.
       APP_HOST: beignet-wallet_manager_1
       APP_PORT: 3000
 
   manager:
+    # Pinned rather than derived, so the name is identical on compose v1, compose
+    # v2 and umbrelOS 1.x (whose patchComposeFile only fills container_name in
+    # when the app has not set one, so it defers to this).
+    container_name: beignet-wallet_manager_1
     image: ghcr.io/coreyphillips/beignet-app:0.4.10@sha256:ea82f17d7eff601a9b81ea345b52d2e466e2ded4c6a148579fd6919ff6b5c926
     restart: on-failure
     init: true
@@ -50,6 +56,9 @@ services:
       - tor
 
   tor:
+    # Pinned for the same reason as the manager: TOR_PROXY_IP above addresses this
+    # container by name.
+    container_name: beignet-wallet_tor_1
     image: ghcr.io/getumbrel/tor:0.4.9.11@sha256:e382b8629c0dfef6ceb396b062622d4e4e955b19d6f16b883fd2c0723ad5671a
     user: "1000:1000"
     restart: on-failure
