@@ -3,7 +3,11 @@ version: "3.7"
 services:
   app_proxy:
     environment:
-      APP_HOST: beignet-wallet-manager-1
+      # umbrelOS rewrites every service's container_name to <app-id>_<service>_1,
+      # so the manager is reachable as beignet-wallet_manager_1. The Compose v2
+      # hyphenated form (beignet-wallet-manager-1) does not exist: app_proxy would
+      # block forever in its wait-for-port loop and never bind the app's port.
+      APP_HOST: beignet-wallet_manager_1
       APP_PORT: 3000
 
   manager:
@@ -35,7 +39,11 @@ services:
       # instead of umbrelOS's system tor_proxy so a broken system Tor
       # (getumbrel/umbrel#2189) cannot take the app's connectivity down with
       # it. The password matches the HashedControlPassword in torrc.template.
-      TOR_PROXY_IP: "tor"
+      # Addressed by container name, never the bare service alias "tor": every
+      # app sits on the shared umbrel_main_network and other apps (Bitcoin, Core
+      # Lightning) also define a "tor" service, so the bare alias round-robins
+      # across them and would send our control-port auth to the wrong daemon.
+      TOR_PROXY_IP: "beignet-wallet_tor_1"
       TOR_PROXY_PORT: "9050"
       TOR_PASSWORD: "beignetonionbrrr"
     depends_on:
