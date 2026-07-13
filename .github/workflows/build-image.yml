@@ -16,8 +16,10 @@ env:
   # The beignet npm version bundled in the image. Decoupled from the app tag,
   # since the app and the beignet library version independently.
   # 0.5.1 is the first release that reports why a channel open failed, rather
-  # than emitting the reason to nobody. The dashboard depends on it.
-  BEIGNET_VERSION: "0.5.1"
+  # than emitting the reason to nobody; 0.5.2 attaches the channel id to those
+  # reports, so a failure can be tied to the open it belongs to. The dashboard
+  # depends on both.
+  BEIGNET_VERSION: "0.5.2"
 
 jobs:
   build:

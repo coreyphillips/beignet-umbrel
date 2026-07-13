@@ -68,10 +68,10 @@ export async function watchChannelOpen({
 			seen = opened;
 			if (FUNDED_STATES.has(opened.state)) return { status: 'funded', channel: opened };
 		} else if (seen) {
-			// It was there and now it is gone: the open was torn down, so it did
-			// fail. Give the error stream a beat, then take the best reason going,
-			// including one that arrived without a channel id (older daemons do not
-			// attach one) rather than reporting a bare failure.
+			// It was there and now it is gone, so the open failed regardless of what
+			// the error stream says. Give it a beat to deliver the reason, then take
+			// the best one going, even unattributed, rather than reporting a bare
+			// failure with nothing to act on.
 			await new Promise((r) => setTimeout(r, POLL_MS));
 			const reason = await firstFailure({ id, tempChannelId, since, strict: false });
 			return {
@@ -102,13 +102,14 @@ const FUNDING_CODES = new Set(['AUTO_FUNDING_FAILED', 'FUNDING_BROADCAST_FAILED'
  * our backup blob, for instance, reports as CHANNEL_ERROR "Remote warning: ...")
  * and are not failures, so they are always skipped.
  *
- * An error that names a channel must name ours. An error that names none is
- * either a funding failure (those are raised before the channel has an id) or,
- * on a daemon predating beignet 0.5.2, any channel error at all, since older
- * builds relay no channel id. Under `strict` only the funding failures are
- * accepted, so a stray error cannot abort an open that is still healthy; once
- * the channel is known to be gone, the caller drops `strict` to recover the
- * reason from whatever the daemon gave us.
+ * An error that names a channel must name ours, so an unrelated channel failing
+ * mid-open cannot be mistaken for this one. Funding failures name none: they are
+ * raised before the channel has an id.
+ *
+ * Under `strict` only those funding failures are accepted unattributed, so a
+ * stray error cannot abort an open that is otherwise healthy. Once the channel is
+ * known to be gone the caller drops `strict`, because the open has certainly
+ * failed by then and a reason without an id still beats no reason at all.
  */
 async function firstFailure({ id, tempChannelId, since, strict = true }) {
 	const errors = await manager.errors(id, since).catch(() => []);
