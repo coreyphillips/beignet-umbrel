@@ -75,7 +75,25 @@ docker buildx build \
   -f docker/Dockerfile -t ghcr.io/coreyphillips/beignet-app:<tag> .
 ```
 
-CI builds and pushes multi-arch images to GHCR on any `v*` tag. After a release, pin the produced digest in `beignet-wallet/docker-compose.yml`.
+CI builds and pushes multi-arch images to GHCR on any `v*` tag.
+
+## Releasing
+
+umbrelOS installs this app straight from `main`, so the moment a commit lands there, every Umbrel that syncs the store tries to pull the image named in `docker-compose.yml`. Name an image that does not exist yet and the pull fails, the manager container is never created, and app_proxy waits forever on a backend that will never appear: the app hangs on **"Starting"** with nothing to explain why. The image is built from the tag, so it cannot exist until after the tag is pushed.
+
+Release in three steps, so `main` never advertises an image that is not there:
+
+1. **Merge the code.** Leave `version` in `umbrel-app.yml` and the image in `docker-compose.yml` alone. Nothing about what Umbrel installs has changed yet.
+2. **Tag it** (`git tag v0.7.0 && git push origin v0.7.0`) and let the build publish the image.
+3. **Bump, in one commit:** `version` in `umbrel-app.yml`, and the image tag *and digest* in `docker-compose.yml`. Take the digest from the published image:
+
+   ```sh
+   docker buildx imagetools inspect ghcr.io/coreyphillips/beignet-app:0.7.0 | grep Digest
+   ```
+
+That last commit is the only one that changes what Umbrel is told to install, and by then the image is real.
+
+The `check-release` workflow enforces this: it requires the compose image to be pinned to a digest, requires the tag to match the app version, and requires the digest to actually resolve in the registry. A digest cannot be known before the build, so a digest that resolves is proof the image exists. It blocks the merge, rather than reporting the breakage after users have already hit it.
 
 ## Security notes
 

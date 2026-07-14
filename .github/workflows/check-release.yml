@@ -1,0 +1,91 @@
+name: check-release
+
+# umbrelOS installs this app straight from `main`. The moment a commit lands
+# there, every Umbrel that syncs the store will try to pull the image named in
+# docker-compose.yml. If that image does not exist yet, the pull fails, the
+# manager container is never created, and app_proxy waits forever on a backend
+# that will never appear: the app hangs on "Starting" with no way to tell why.
+#
+# That is not hypothetical. v0.6.0 advertised its image fourteen minutes before
+# the build published it, and anyone who updated inside that window was stranded.
+#
+# The image is built from a git tag, so it can only exist after the tag is
+# pushed. Requiring the compose file to name it by digest closes the gap: a
+# digest cannot be known until the image is published, so a digest that resolves
+# is proof the image is there. This check enforces that, and blocks the merge
+# rather than reporting the breakage after users have already hit it.
+#
+# The release order it implies:
+#   1. merge the code, leaving `version` and the image alone
+#   2. tag it, and let the build publish the image
+#   3. open a second PR bumping `version` plus the image tag and digest together
+#
+# Step 3 is the only commit that changes what Umbrel is told to install, and it
+# cannot pass this check until the thing it points at is real.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'beignet-wallet/docker-compose.yml'
+      - 'beignet-wallet/umbrel-app.yml'
+  push:
+    branches: [main]
+
+jobs:
+  image-exists:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The image Umbrel is told to install must already exist
+        run: |
+          set -euo pipefail
+
+          COMPOSE=beignet-wallet/docker-compose.yml
+          MANIFEST=beignet-wallet/umbrel-app.yml
+
+          IMAGE=$(grep -oE 'ghcr\.io/[^[:space:]]+' "$COMPOSE" | grep beignet-app | head -1)
+          APP_VERSION=$(grep -oE '^version: *"[^"]+"' "$MANIFEST" | sed 's/.*"\(.*\)"/\1/')
+
+          echo "app version : $APP_VERSION"
+          echo "image       : $IMAGE"
+
+          # 1. Digest-pinned. This is what makes the whole check meaningful: a
+          #    digest cannot be invented ahead of the build.
+          case "$IMAGE" in
+            *@sha256:*) ;;
+            *)
+              echo "::error::$COMPOSE names the image without an @sha256: digest."
+              echo "::error::Pin it to the digest the release build published, so main cannot advertise an image that does not exist yet."
+              exit 1
+              ;;
+          esac
+
+          REPO=${IMAGE%@*}; REPO=${REPO%:*}
+          REPO=${REPO#ghcr.io/}
+          TAG=$(echo "$IMAGE" | sed -E 's|.*beignet-app:([^@]+)@.*|\1|')
+          DIGEST=${IMAGE#*@}
+
+          # 2. The tag must be the app version, or Umbrel shows one version and
+          #    installs another.
+          if [ "$TAG" != "$APP_VERSION" ]; then
+            echo "::error::Image tag ($TAG) does not match the app version ($APP_VERSION)."
+            exit 1
+          fi
+
+          # 3. The digest must actually resolve. This is the part that would have
+          #    caught v0.6.0.
+          TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${REPO}:pull&service=ghcr.io" | sed -E 's/.*"token":"([^"]+)".*/\1/')
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/${REPO}/manifests/${DIGEST}")
+
+          if [ "$CODE" != "200" ]; then
+            echo "::error::$IMAGE is not in the registry (HTTP $CODE)."
+            echo "::error::Tag the release and let the build publish it before pointing main at it."
+            exit 1
+          fi
+
+          echo "ok: the image exists, and it is what the manifest says it is."
