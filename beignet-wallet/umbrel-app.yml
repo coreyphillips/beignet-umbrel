@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.6.0"
+version: "0.6.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,29 +30,25 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Amount and fee sliders, a Max button, and fees that are the real number.
+  Activity items open now.
 
 
-  Typing a satoshi amount by hand was the only way to send or open a channel.
-  Both now have a slider and a Max button alongside the field. Max is worked out
-  from the live fee rate rather than frozen when you press it, so changing the fee
-  moves the amount with it and the total never exceeds your balance.
+  The lists were summaries with nothing behind them: a row could be read but not
+  opened, and a transaction id could be squinted at but not copied. Click any of
+  them and you get the rest, most of which the wallet already knew and simply
+  never showed you.
 
 
-  The fee is no longer an estimate. The wallet prices the transaction with the
-  same coin selection it will really use and reports what it will actually pay,
-  including which script the money is going to: paying a taproot address, or
-  funding a channel into its 2-of-2, costs more than an ordinary payment, and the
-  figure now says so.
+  An on-chain transaction shows the fee rate it paid, not just the fee, which is
+  what decides how long a pending one sits there. It shows the address the money
+  went to or arrived at. Both the transaction id and the address can be copied,
+  and there is a link out to mempool.space for the chain the wallet is actually
+  on. Nothing is ever fetched from an explorer: opening one tells mempool.space
+  which transaction you are looking at, so it is a link you choose to click.
 
 
-  Opening a channel lets you choose the funding fee rate, defaulting to fast. Max
-  is exact because of it: the whole balance goes into the channel except the fee,
-  with nothing held back for a guess.
-
-
-  This release also carries fixes from the beignet engine, where every sweep had
-  been quietly underpaying its fee and going out below the rate it was given.
+  A failed Lightning payment now tells you why it failed. The list said only
+  "FAILED", while the wallet had the reason all along.
 
 dependencies: []
 path: ""
