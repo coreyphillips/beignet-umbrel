@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Badge, BalanceBar, Button, Card, Field, Modal } from '../../components/ui.jsx';
+import { AmountField, Badge, BalanceBar, Button, Card, Field, FeeField, Modal } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
-import { vbytes } from '../../lib/fees.js';
+import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
+import { useQuote } from '../../hooks/useQuote.js';
 import { withPeerHint } from '../../lib/hints.js';
 import { watchChannelOpen } from '../../lib/channel-open.js';
 
@@ -145,6 +146,8 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 	const [host, setHost] = useState('');
 	const [port, setPort] = useState('9735');
 	const [amount, setAmount] = useState('');
+	const [maxAmount, setMaxAmount] = useState(false);
+	const [feeRate, setFeeRate] = useState('');
 	const [push, setPush] = useState('');
 	const [busy, setBusy] = useState(false);
 	const [status, setStatus] = useState(null);
@@ -162,15 +165,103 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 	const { data: utxos } = usePoll(() => api.get('/utxos').catch(() => null), 30000, []);
 
 	const balance = info?.onchainBalanceSats;
-	// The daemon picks the funding fee rate itself; show the current normal
-	// estimate so the user knows what comes out of the balance on top of the
-	// channel amount. Funding tx: channel output + change.
-	const estRate = fees?.normal || null;
-	const estFee = estRate ? vbytes(Math.max(1, Math.min(utxos?.length || 1, 2)), 2) * estRate : null;
-	const amountNum = parseInt(amount, 10) || 0;
+
+	// The funding rate is ours to set (beignet 0.5.3 takes satsPerVbyte on the
+	// open), so it no longer has to be guessed at and padded against. Default to
+	// fast: an open that sits unconfirmed for days is worse than one that overpaid
+	// a little, and the user can drag it down.
+	const effRate = parseInt(feeRate, 10) || fees?.fast || null;
+	const typed = parseInt(amount, 10) || 0;
+
+	// What the funding transaction really costs, from the wallet. `channelFunding`
+	// matters: a channel is funded into a 2-of-2 P2WSH, which is a bigger output
+	// than the P2WPKH an ordinary payment goes to, so it costs more to create.
+	const { quote } = useQuote(
+		api,
+		{
+			// A probe of 1 sat when nothing is typed yet: the ceiling of the amount
+			// slider is the balance less the fee, so there has to be a fee before
+			// there is a slider to type into. The wallet consolidates its UTXOs, so
+			// the fee does not turn on the amount, and this re-quotes as it changes.
+			amountSats: maxAmount ? undefined : typed || 1,
+			satsPerVbyte: effRate || undefined,
+			max: maxAmount,
+			channelFunding: true
+		},
+		balance > 0 && effRate > 0
+	);
+
+	const shownFee = quote?.feeSats ?? null;
+	const vsize = quote?.vsize ?? null;
+
+	// Max is the whole balance less the funding fee, worked out by the wallet at
+	// the rate we are about to name. Nothing is held back "just in case", because
+	// there is nothing left to guess at.
+	const sweepAmount = maxAmount ? quote?.maxSendSats ?? null : null;
+	const ordinaryMax =
+		balance != null && shownFee != null ? Math.max(0, balance - shownFee) : 0;
+
+	// The range must not collapse to nothing while the sweep's own figure is still
+	// in flight: a ceiling of zero hands back a zero, which reads as a deliberate
+	// amount and knocks Max off again. Hold the last one until the real one lands.
+	const maxChannel = maxAmount ? sweepAmount ?? ordinaryMax : ordinaryMax;
+
+	// Same rule as the send form: amount + fee never exceeds the balance, so the fee
+	// may only grow into what the amount leaves behind. Priced off the quote's own
+	// size, not an approximation of it.
+	const feeHeadroom =
+		balance == null || !vsize
+			? 0
+			: Math.floor(Math.max(0, balance - typed) / vsize);
+	const typedRate = parseInt(feeRate, 10) || 0;
+	const feeMax = Math.max(
+		1,
+		Math.min(
+			Math.max(fees?.fast ? fees.fast * FEE_CAP_MULTIPLE : 100, typedRate),
+			feeHeadroom || Infinity
+		)
+	);
+	// A rate the balance cannot cover alongside the amount is not accepted. Anything
+	// it can cover is, however large: the slider's ceiling is where the slider ends,
+	// not what the form permits, and typing past it grows the range rather than
+	// being refused.
+	const setFeeRateManually = (val) => {
+		const next = parseInt(val, 10) || 0;
+		if (feeHeadroom > 0 && next > feeHeadroom) return;
+		setFeeRate(val);
+	};
+
+	// Derived, never stored, so it tracks the fee estimate as that refreshes
+	// rather than freezing the number that was right when Max was pressed.
+	const shownAmount = maxAmount ? String(maxChannel) : amount;
+	// The open is funded at exactly this number, so it must be the wallet's own
+	// figure and not the placeholder held while that figure is on its way.
+	const amountNum = maxAmount ? sweepAmount ?? 0 : parseInt(amount, 10) || 0;
+
+	// An amount the balance cannot fund once the fee is taken is not accepted,
+	// rather than accepted and then complained about, so the form is never in a
+	// state that cannot be opened.
+	// Reaching the top of the range means "everything", which is what Max is, so
+	// arriving there presses it rather than leaving a number that Max would beat.
+	const setAmountManually = (val) => {
+		const next = parseInt(val, 10) || 0;
+		if (maxAmount) {
+			if (sweepAmount == null) return; // the sweep's figure is still coming
+			if (next >= sweepAmount) return; // still at the top
+			setMaxAmount(false);
+			setAmount(String(Math.min(next, ordinaryMax)));
+			return;
+		}
+		if (ordinaryMax > 0 && next >= ordinaryMax) {
+			setMaxAmount(true);
+			return;
+		}
+		setAmount(val);
+	};
+
 	const pushNum = parseInt(push, 10) || 0;
 	const overBalance =
-		amountNum > 0 && balance != null && estFee != null && amountNum + estFee > balance;
+		amountNum > 0 && balance != null && shownFee != null && amountNum + shownFee > balance;
 	const belowCommonMin = amountNum > 0 && amountNum < COMMON_MIN_CHANNEL_SATS;
 	const pushTooBig = pushNum > 0 && amountNum > 0 && pushNum >= amountNum;
 
@@ -195,8 +286,13 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 				pubkey: peerPubkey,
 				host: host.trim(),
 				port: parseInt(port, 10),
-				amountSats: parseInt(amount, 10)
+				// Max is derived from the live fee rate, so read the amount that is on
+				// screen right now rather than the text field, which Max never wrote.
+				amountSats: amountNum
 			};
+			// Fund at the rate the amount above was sized against. Without this the
+			// daemon picks its own, and a Max sized against ours would be short.
+			if (effRate) body.satsPerVbyte = effRate;
 			if (push) body.pushSats = parseInt(push, 10);
 
 			// Snapshot the channels we already have with this peer. The open returns
@@ -265,30 +361,61 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 					<input value={port} onChange={(e) => setPort(e.target.value)} style={{ maxWidth: 110 }} />
 				</Field>
 			</div>
-			<div className="row">
-				<Field
-					label="Channel amount (sats)"
-					hint="Becomes your outbound capacity. The on-chain funding fee is paid on top, from the remaining balance."
-				>
-					<input value={amount} onChange={(e) => setAmount(e.target.value)} />
-				</Field>
-				<Field
-					label="Push to peer (sats, optional)"
-					hint="Gifted to the peer from your side of the channel."
-				>
-					<input value={push} onChange={(e) => setPush(e.target.value)} placeholder="0" />
-				</Field>
-			</div>
-			{estFee != null && amountNum > 0 && !overBalance && (
-				<div className="wallet-meta" style={{ marginBottom: 12 }}>
-					Estimated funding fee: ~{fmtSats(estFee)} at {estRate} sat/vB (approximate; the wallet
-					sets the final rate when broadcasting). Total needed: ~{fmtSats(amountNum + estFee)}.
+			<AmountField
+				label="Channel amount (sats)"
+				value={shownAmount}
+				onChange={setAmountManually}
+				max={maxChannel}
+				isMax={maxAmount}
+				onMax={() => setMaxAmount((v) => !v)}
+				hint={
+					maxAmount && shownFee != null
+						? `Everything except the ${fmtSats(shownFee)} funding fee at ${effRate} sat/vB. Change the fee rate and this follows it.`
+						: 'Becomes your outbound capacity. The on-chain funding fee is paid on top, from the remaining balance.'
+				}
+			/>
+			<FeeField
+				label="Funding fee rate (sat/vB)"
+				value={feeRate}
+				onChange={setFeeRateManually}
+				rate={effRate}
+				max={feeMax}
+				hint={
+					maxAmount
+						? 'The rate the funding transaction is broadcast at. Raising it takes sats off the channel amount above.'
+						: 'The rate the funding transaction is broadcast at. Defaults to fast, so the channel does not sit unconfirmed.'
+				}
+			/>
+			{fees && (
+				<div className="preset-row" style={{ marginBottom: 14 }}>
+					{[
+						['Fast', fees.fast],
+						['Normal', fees.normal],
+						['Slow', fees.slow]
+					].map(([label, rate]) => (
+						<button
+							key={label}
+							type="button"
+							className="btn sm"
+							disabled={rate > feeMax}
+							title={rate > feeMax ? 'Lower the amount to afford this fee rate' : undefined}
+							onClick={() => setFeeRateManually(String(rate))}
+						>
+							{label} · {rate} sat/vB
+						</button>
+					))}
 				</div>
 			)}
-			{overBalance && (
-				<div className="error-note" style={{ marginBottom: 12 }}>
-					Channel amount plus the estimated funding fee (~{fmtSats(estFee)}) exceeds your on-chain
-					balance. Lower the amount to leave room for the fee.
+			<Field
+				label="Push to peer (sats, optional)"
+				hint="Gifted to the peer from your side of the channel."
+			>
+				<input value={push} onChange={(e) => setPush(e.target.value)} placeholder="0" />
+			</Field>
+			{shownFee != null && amountNum > 0 && (
+				<div className="wallet-meta" style={{ marginBottom: 12 }}>
+					Funding fee: {fmtSats(shownFee)} at {effRate} sat/vB over {vsize} vB. Total needed:{' '}
+					{fmtSats(amountNum + shownFee)}. This is what the transaction pays, not an estimate.
 				</div>
 			)}
 			{pushTooBig && (
@@ -296,7 +423,7 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 					Push amount must be smaller than the channel amount.
 				</div>
 			)}
-			{belowCommonMin && !overBalance && (
+			{belowCommonMin && (
 				<div className="info-note" style={{ marginBottom: 12 }}>
 					Many nodes reject channels under {fmtSats(COMMON_MIN_CHANNEL_SATS)}.
 				</div>
@@ -320,7 +447,7 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 					variant="primary"
 					busy={busy}
 					onClick={open}
-					disabled={!pubkey || !host || !amount || overBalance || pushTooBig}
+					disabled={!pubkey || !host || amountNum <= 0 || overBalance || pushTooBig}
 				>
 					Connect &amp; open
 				</Button>

@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.5.1"
+version: "0.6.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,23 +30,29 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Better diagnosis when a peer will not connect, and failed actions now reach the
-  Logs tab.
+  Amount and fee sliders, a Max button, and fees that are the real number.
 
 
-  A peer that accepts the connection and then hangs up during the handshake was
-  blamed on the peer refusing unknown nodes. That is only one of the reasons, and
-  usually not the right one. The most common cause is dialling the wrong port: an
-  app's web page on Umbrel is not a Lightning port, so connecting to it completes
-  the TCP connection and then fails. The app now says so, and points at the
-  Lightning peer port (9735 for Umbrel's Core Lightning and Lightning Node apps)
-  instead of guessing.
+  Typing a satoshi amount by hand was the only way to send or open a channel.
+  Both now have a slider and a Max button alongside the field. Max is worked out
+  from the live fee rate rather than frozen when you press it, so changing the fee
+  moves the amount with it and the total never exceeds your balance.
 
 
-  Failed actions now appear in the Logs tab. A rejected peer connection or channel
-  open was reported only to the browser that asked for it, so the Logs tab looked
-  empty at exactly the moment someone went looking. Every failed call to a wallet
-  is now recorded there.
+  The fee is no longer an estimate. The wallet prices the transaction with the
+  same coin selection it will really use and reports what it will actually pay,
+  including which script the money is going to: paying a taproot address, or
+  funding a channel into its 2-of-2, costs more than an ordinary payment, and the
+  figure now says so.
+
+
+  Opening a channel lets you choose the funding fee rate, defaulting to fast. Max
+  is exact because of it: the whole balance goes into the channel except the fee,
+  with nothing held back for a guess.
+
+
+  This release also carries fixes from the beignet engine, where every sweep had
+  been quietly underpaying its fee and going out below the rate it was given.
 
 dependencies: []
 path: ""

@@ -1126,3 +1126,75 @@ tbody tr:hover {
 :root[data-theme='light'] .log-body {
 	background: rgba(20, 30, 60, 0.04);
 }
+
+/* ---------- Amount field (input + slider + max) ---------- */
+.amount-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.amount-input {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.amount-slider {
+	/* The browser default is a full-width block with its own margins; strip them
+	   so it lines up with the input above it. */
+	-webkit-appearance: none;
+	appearance: none;
+	width: 100%;
+	margin: 12px 0 4px;
+	padding: 0;
+	height: 4px;
+	border: 0;
+	border-radius: var(--r-full);
+	background: var(--glass-inner-2);
+	cursor: pointer;
+}
+
+.amount-slider:disabled {
+	cursor: not-allowed;
+	opacity: 0.45;
+}
+
+.amount-slider::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 16px;
+	height: 16px;
+	border-radius: var(--r-full);
+	background: var(--accent);
+	border: 2px solid var(--bg-deep);
+	box-shadow: 0 0 0 1px var(--accent), 0 2px 8px var(--accent-glow);
+	transition: transform var(--dur-fast) var(--ease-out-expo);
+}
+
+.amount-slider::-webkit-slider-thumb:hover {
+	transform: scale(1.12);
+}
+
+.amount-slider::-moz-range-thumb {
+	width: 14px;
+	height: 14px;
+	border-radius: var(--r-full);
+	background: var(--accent);
+	border: 2px solid var(--bg-deep);
+	box-shadow: 0 0 0 1px var(--accent);
+	cursor: pointer;
+}
+
+.amount-slider::-moz-range-track {
+	height: 4px;
+	border-radius: var(--r-full);
+	background: var(--glass-inner-2);
+}
+
+.amount-scale {
+	display: flex;
+	justify-content: space-between;
+	font-size: 11px;
+	color: var(--faint);
+	font-variant-numeric: tabular-nums;
+}

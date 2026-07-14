@@ -507,6 +507,26 @@ function walletRequest(id, path, method, body) {
 			return { recommendation: 'NORMAL', estimatedOpenChannelCostSats: 2140 };
 		case '/fees/estimates':
 			return { fast: 18, normal: 7, slow: 2 };
+		case '/tx/quote': {
+			// The daemon prices this from real coin selection. Here it is modelled:
+			// every UTXO is spent (the wallet consolidates), a sweep needs no change
+			// output, and a channel is funded into a P2WSH, which is bigger than the
+			// P2WPKH an ordinary payment pays to.
+			const rate = body.satsPerVbyte || 7;
+			const nIn = st.utxos.length || 1;
+			const outVb = body.channelFunding ? 43 : 31;
+			const changeVb = body.max ? 0 : 31;
+			const vsize = Math.ceil(10.5 + nIn * 68 + outVb + changeVb);
+			const feeSats = vsize * rate;
+			const balance = onchainBalance(id);
+			return {
+				satsPerVbyte: rate,
+				feeSats,
+				vsize,
+				...(body.max ? { maxSendSats: Math.max(0, balance - feeSats) } : {}),
+				maxSatsPerVbyte: Math.floor(balance / 2 / vsize)
+			};
+		}
 		case '/address/new':
 			st.addressN += 1;
 			return { address: (w.network === 'mainnet' ? 'bc1q' : 'tb1q') + hex(38) };

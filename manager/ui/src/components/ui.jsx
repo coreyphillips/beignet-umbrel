@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { m, useMotionValue, useMotionValueEvent, useReducedMotion, useSpring } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
-import { copy } from '../lib/format.js';
+import { copy, fmtSats } from '../lib/format.js';
 import { useToast } from './Toast.jsx';
 
 export function Card({ title, actions, children, className = '' }) {
@@ -74,6 +74,118 @@ export function Field({ label, hint, children }) {
 
 export function Badge({ children, tone = 'muted' }) {
 	return <span className={`badge ${tone}`}>{children}</span>;
+}
+
+/**
+ * Fee rate entry: a field to type an exact sat/vB, and a slider for the rest.
+ *
+ * The slider is capped, never open-ended. A careless drag on an open-ended fee
+ * slider hands the balance to miners, so the ceiling is a few times the fast
+ * estimate, and the caller lowers it further when the balance cannot even cover
+ * the fee at that rate. `value` empty means the wallet picks the rate itself, so
+ * the slider tracks the estimate it would use until the user moves it.
+ */
+export function FeeField({ label, hint, value, onChange, rate, max }) {
+	const ceiling = Math.max(1, Math.floor(Number(max) || 1));
+	const current = Math.min(Math.max(1, parseInt(rate, 10) || 1), ceiling);
+
+	return (
+		<div className="field">
+			{label && <span className="field-label">{label}</span>}
+			<input
+				className="amount-input"
+				inputMode="numeric"
+				value={value}
+				placeholder="auto"
+				onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, ''))}
+			/>
+			<input
+				type="range"
+				className="amount-slider"
+				min={1}
+				max={ceiling}
+				step={1}
+				value={current}
+				onChange={(e) => onChange(e.target.value)}
+			/>
+			<div className="amount-scale">
+				<span>1 sat/vB</span>
+				<span>{current} sat/vB</span>
+				<span>{ceiling} sat/vB</span>
+			</div>
+			{hint && <span className="field-hint">{hint}</span>}
+		</div>
+	);
+}
+
+/**
+ * Sat amount entry: a field to type an exact number, a slider for everything
+ * else, and a Max button.
+ *
+ * `max` is the largest amount that can actually be spent, already net of the
+ * mining fee, so the slider cannot be dragged to a number the wallet will then
+ * reject. The fee moves with the fee rate, which means `max` moves too, so a
+ * caller holding Max re-derives the amount from it on every render rather than
+ * freezing whatever it was when the button was pressed.
+ *
+ * Not wrapped in <Field>: that renders a <label>, and a label holding two
+ * inputs would hand every click on it to the first one.
+ */
+export function AmountField({
+	label,
+	hint,
+	value,
+	onChange,
+	max,
+	isMax,
+	onMax,
+	disabled
+}) {
+	const ceiling = Number.isFinite(Number(max)) && Number(max) > 0 ? Math.floor(Number(max)) : 0;
+	const current = Math.min(parseInt(value, 10) || 0, ceiling);
+	const pct = ceiling > 0 ? Math.round((current / ceiling) * 100) : 0;
+	const usable = !disabled && ceiling > 0;
+
+	return (
+		<div className="field">
+			{label && <span className="field-label">{label}</span>}
+			<div className="amount-row">
+				<input
+					className="amount-input"
+					inputMode="numeric"
+					value={value}
+					disabled={disabled}
+					// Digits only: a stray character would silently parse to NaN and
+					// disable the submit button with nothing on screen to explain why.
+					onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, ''))}
+				/>
+				<button
+					type="button"
+					className={`btn sm ${isMax ? 'primary' : ''}`}
+					onClick={onMax}
+					disabled={!usable}
+				>
+					Max
+				</button>
+			</div>
+			<input
+				type="range"
+				className="amount-slider"
+				min={0}
+				max={ceiling}
+				step={1}
+				value={current}
+				disabled={!usable}
+				onChange={(e) => onChange(e.target.value)}
+			/>
+			<div className="amount-scale">
+				<span>0</span>
+				<span>{pct}%</span>
+				<span>{ceiling > 0 ? fmtSats(ceiling) : '-'}</span>
+			</div>
+			{hint && <span className="field-hint">{hint}</span>}
+		</div>
+	);
 }
 
 /**
