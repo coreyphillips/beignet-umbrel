@@ -233,6 +233,27 @@ export function BalanceBar({ local, remote }) {
 	);
 }
 
+/** The two overlapping sheets everyone recognises as "copy". */
+function CopyIcon() {
+	return (
+		<svg
+			className="copy-icon"
+			viewBox="0 0 16 16"
+			width="13"
+			height="13"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="1.4"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden
+		>
+			<rect x="5.5" y="5.5" width="8" height="9" rx="1.5" />
+			<path d="M10.5 5.5V3a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v6A1.5 1.5 0 0 0 4 10.5h1.5" />
+		</svg>
+	);
+}
+
 export function CopyText({ value, mono = true, truncate = false }) {
 	const toast = useToast();
 	return (
@@ -241,8 +262,32 @@ export function CopyText({ value, mono = true, truncate = false }) {
 			title="Copy"
 			onClick={async () => toast((await copy(value)) ? 'Copied' : 'Copy failed', 'info')}
 		>
-			{value}
+			<span className="copytext-value">{value}</span>
+			<CopyIcon />
 		</button>
+	);
+}
+
+/** A label and its value, for the detail views. */
+export function DetailRow({ label, children }) {
+	return (
+		<div className="detail-row">
+			<div className="detail-label">{label}</div>
+			<div className="detail-value">{children}</div>
+		</div>
+	);
+}
+
+/**
+ * A link out to a block explorer. Renders nothing when there is nowhere to go,
+ * which is the case on regtest: it is a chain only this machine can see.
+ */
+export function ExplorerLink({ url, children }) {
+	if (!url) return null;
+	return (
+		<a className="explorer-link" href={url} target="_blank" rel="noreferrer noopener">
+			{children} ↗
+		</a>
 	);
 }
 
