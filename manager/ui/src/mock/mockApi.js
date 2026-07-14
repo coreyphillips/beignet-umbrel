@@ -55,11 +55,15 @@ function makeTxs(count, heightBase) {
 	return Array.from({ length: count }, (_, i) => {
 		const received = rnd() > 0.42;
 		const confirmed = i > 1;
+		const feeSats = received ? null : between(120, 3200);
 		return {
 			txid: hex(64),
 			type: received ? 'received' : 'sent',
 			valueSats: between(4000, 900000) * (received ? 1 : -1),
-			feeSats: received ? null : between(120, 3200),
+			feeSats,
+			// The real endpoint returns these two and the list never showed them.
+			satsPerVbyte: received ? null : between(2, 40),
+			address: 'bc1q' + hex(38),
 			confirmed,
 			height: confirmed ? heightBase - i * between(2, 40) : null,
 			timestamp: now - i * between(3, 30) * 3600000,
@@ -79,6 +83,17 @@ function makePayments(count) {
 			amountSats: between(210, 250000),
 			feeSats: incoming ? null : between(0, 42),
 			status,
+			// A failed payment knows why, and the list only ever said "FAILED".
+			...(status === 'FAILED'
+				? {
+						failureCode: 15,
+						failureDescription:
+							'No route to the destination with enough liquidity. Try a smaller amount, or open a channel with more outbound.'
+				  }
+				: {}),
+			// Proof of payment, for the ones that went through.
+			...(status === 'COMPLETED' && !incoming ? { preimage: hex(64) } : {}),
+			...(status === 'COMPLETED' ? { route: { totalHops: between(2, 5) } } : {}),
 			createdAt,
 			completedAt: status === 'COMPLETED' ? createdAt + between(1, 9) * 1000 : null
 		};

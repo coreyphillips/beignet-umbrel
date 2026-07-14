@@ -1198,3 +1198,94 @@ tbody tr:hover {
 	color: var(--faint);
 	font-variant-numeric: tabular-nums;
 }
+
+/* ---------- Activity detail ---------- */
+.row-clickable {
+	cursor: pointer;
+	transition: background var(--dur-fast) ease;
+}
+
+.row-clickable:hover td {
+	background: var(--glass-inner);
+}
+
+.detail {
+	margin-bottom: 6px;
+}
+
+.detail-row {
+	display: flex;
+	gap: 16px;
+	align-items: baseline;
+	padding: 9px 0;
+	border-bottom: 1px solid var(--hairline);
+}
+
+.detail-row:last-child {
+	border-bottom: 0;
+}
+
+.detail-label {
+	flex: 0 0 128px;
+	font-size: 12px;
+	color: var(--faint);
+}
+
+.detail-value {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: 14px;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	/* A txid has no spaces to break on, so let it wrap anywhere rather than
+	   pushing the modal sideways. */
+	overflow-wrap: anywhere;
+}
+
+.detail-value .field-hint {
+	flex-basis: 100%;
+}
+
+.explorer-link {
+	font-size: 12px;
+	color: var(--accent);
+	text-decoration: none;
+	white-space: nowrap;
+}
+
+.explorer-link:hover {
+	text-decoration: underline;
+}
+
+/* The copy icon sits beside the value and only asserts itself on hover. */
+.copytext {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.copytext-value {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.copy-icon {
+	flex: 0 0 auto;
+	opacity: 0.45;
+	transition: opacity var(--dur-fast) ease;
+}
+
+.copytext:hover .copy-icon {
+	opacity: 1;
+}
+
+/* An address in a table cell: long, unbreakable, and not worth a horizontal
+   scrollbar. The full value is in the title and in the detail view. */
+.trunc-cell {
+	max-width: 260px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
