@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.6.1"
+version: "0.7.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,25 +30,36 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Activity items open now.
+  The engine upgrade. Every wallet here runs on beignet, and this release moves
+  all of them from beignet 0.5.3 to 0.5.4, a release large enough that it
+  arguably should have been called 0.6. Nothing about the dashboard changes;
+  a lot underneath it does.
 
 
-  The lists were summaries with nothing behind them: a row could be read but not
-  opened, and a transaction id could be squinted at but not copied. Click any of
-  them and you get the rest, most of which the wallet already knew and simply
-  never showed you.
+  Channel splicing matured. Resizing a channel now properly negotiates quiet
+  time with the peer before the funding transaction is rebuilt, a splice out
+  can pay to an address you choose, and the channel backup refreshes itself
+  the moment a splice completes rather than before it is real.
 
 
-  An on-chain transaction shows the fee rate it paid, not just the fee, which is
-  what decides how long a pending one sits there. It shows the address the money
-  went to or arrived at. Both the transaction id and the address can be copied,
-  and there is a link out to mempool.space for the chain the wallet is actually
-  on. Nothing is ever fetched from an explorer: opening one tells mempool.space
-  which transaction you are looking at, so it is a link you choose to click.
+  Channel closes got safer. The engine is better at recognizing and sweeping
+  what a closing channel leaves on chain, anchors and stuck payments included,
+  and at claiming the penalty when a peer broadcasts an old state.
 
 
-  A failed Lightning payment now tells you why it failed. The list said only
-  "FAILED", while the wallet had the reason all along.
+  Fee estimates for taproot inputs were simply wrong: they were weighed as if
+  the witness discount did not exist, so spending taproot coins looked more
+  expensive than it was. They are weighed correctly now, which the send screen
+  and fee sliders inherit for free.
+
+
+  BOLT12 offers are more robust, with replies carried over blinded paths and
+  failures reported as proper invoice errors instead of silence.
+
+
+  The daemon API is identical to 0.5.3, so existing wallets carry over
+  untouched and there is nothing to migrate. Your wallets simply restart on
+  the new engine.
 
 dependencies: []
 path: ""
