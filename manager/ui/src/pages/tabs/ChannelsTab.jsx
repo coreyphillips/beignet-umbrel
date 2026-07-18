@@ -460,6 +460,7 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 	const toast = useToast();
 	const [amount, setAmount] = useState('');
+	const [maxMode, setMaxMode] = useState(false);
 	const [feeVb, setFeeVb] = useState('');
 	const [busy, setBusy] = useState(false);
 	const isIn = dir === 'in';
@@ -470,18 +471,51 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 	const effRate = parseFloat(feeVb) || fees?.normal || null;
 	// Splice tx approximation: shared input + a wallet input/output either way.
 	const estFee = effRate ? vbytes(2, 2) * Math.ceil(effRate) : null;
-	const amountNum = parseInt(amount, 10) || 0;
+	// A splice-out may only spend local balance down to the channel reserve the
+	// peer set. The channel listing does not carry the exact figure, so hold
+	// back BOLT 2's customary reserve (1% of capacity, dust floor) rather than
+	// submit a splice the daemon will bounce.
+	const reserve = Math.max(354, Math.ceil((channel.capacitySats || 0) / 100));
+	const available = isIn
+		? balance ?? 0
+		: Math.max(0, (channel.localBalanceSats || 0) - reserve);
+	// Most that can be spliced at this fee rate, already net of the fee: the
+	// same contract as the Send view, so the ceiling moves with the fee rate
+	// and Max re-derives from it every render instead of freezing a number.
+	const ceiling = Math.max(0, available - (estFee || 0));
+	const shownAmount = maxMode ? String(ceiling) : amount;
+	const amountNum = maxMode ? ceiling : parseInt(amount, 10) || 0;
+
+	// Mirrors the Send view: dragging the slider to the top presses Max,
+	// coming back down releases it.
+	const setAmountManually = (val) => {
+		const next = parseInt(val, 10) || 0;
+		if (maxMode) {
+			if (next >= ceiling) return; // still at the top
+			setMaxMode(false);
+			setAmount(String(Math.min(next, ceiling)));
+			return;
+		}
+		if (ceiling > 0 && next >= ceiling) {
+			setMaxMode(true);
+			return;
+		}
+		setAmount(val);
+	};
+
 	const overBalance =
-		isIn && amountNum > 0 && balance != null && estFee != null && amountNum + estFee > balance;
+		isIn && !maxMode && amountNum > 0 && balance != null && estFee != null &&
+		amountNum + estFee > balance;
 	const overLocal =
-		!isIn && amountNum > 0 && amountNum + (estFee || 0) > (channel.localBalanceSats || 0);
+		!isIn && !maxMode && amountNum > 0 && estFee != null &&
+		amountNum + estFee > available;
 
 	const submit = async () => {
 		setBusy(true);
 		try {
 			const body = {
 				channelId: channel.channelId,
-				amountSats: parseInt(amount, 10),
+				amountSats: amountNum,
 				feeratePerkw: Math.max(253, Math.round(effRate * SATVB_TO_PERKW))
 			};
 			const r = await api.post(isIn ? '/channel/splice-in' : '/channel/splice-out', body);
@@ -507,19 +541,27 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 				{fmtSats(channel.capacitySats)} · local {fmtSats(channel.localBalanceSats)}
 				{isIn && balance != null && <> · on-chain available {fmtSats(balance)}</>}
 			</div>
-			<div className="row">
-				<Field label="Amount (sats)">
-					<input value={amount} onChange={(e) => setAmount(e.target.value)} />
-				</Field>
-				<Field label="Fee rate (sat/vB)">
-					<input
-						value={feeVb}
-						onChange={(e) => setFeeVb(e.target.value)}
-						placeholder={fees?.normal ? `auto (${fees.normal})` : 'auto'}
-						style={{ maxWidth: 120 }}
-					/>
-				</Field>
-			</div>
+			<AmountField
+				label="Amount (sats)"
+				value={shownAmount}
+				onChange={setAmountManually}
+				max={ceiling}
+				isMax={maxMode}
+				onMax={() => setMaxMode((v) => !v)}
+				hint={
+					isIn
+						? 'The slider stops at the most you can splice in at this fee rate, so it leaves room for the fee.'
+						: 'The slider stops at the most this channel can spare: it leaves room for the fee and the ~1% channel reserve, which cannot be withdrawn without closing.'
+				}
+			/>
+			<Field label="Fee rate (sat/vB)">
+				<input
+					value={feeVb}
+					onChange={(e) => setFeeVb(e.target.value)}
+					placeholder={fees?.normal ? `auto (${fees.normal})` : 'auto'}
+					style={{ maxWidth: 120 }}
+				/>
+			</Field>
 			{fees && (
 				<div className="preset-row" style={{ marginBottom: 14 }}>
 					{[
@@ -546,7 +588,8 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 			)}
 			{overLocal && (
 				<div className="error-note" style={{ marginBottom: 12 }}>
-					Amount plus the estimated fee exceeds your local channel balance.
+					Amount plus the estimated fee exceeds what this channel can spare
+					(local balance minus the ~1% channel reserve).
 				</div>
 			)}
 			<div className="center-actions">
@@ -554,7 +597,7 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 					variant="primary"
 					busy={busy}
 					onClick={submit}
-					disabled={!amount || !effRate || overBalance || overLocal}
+					disabled={!amountNum || !effRate || overBalance || overLocal}
 				>
 					{isIn ? 'Splice in' : 'Splice out'}
 				</Button>
