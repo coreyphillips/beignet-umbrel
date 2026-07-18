@@ -27,7 +27,10 @@ env:
   # 0.5.5 stops /health reporting "degraded" while a channel open, splice or
   # cooperative close is in progress; only established-but-broken channels
   # (or no peers for operational ones) degrade the wallet now.
-  BEIGNET_VERSION: "0.5.5"
+  # 0.5.6 routes over our own channels when the gossip copy is missing our
+  # channel_update, so paying a directly-connected peer over an announced
+  # channel no longer fails with NO_ROUTE.
+  BEIGNET_VERSION: "0.5.6"
 
 jobs:
   build:
