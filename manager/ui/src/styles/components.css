@@ -571,6 +571,12 @@ tbody tr:hover {
 
 .copytext.trunc {
 	max-width: 260px;
+}
+
+/* The button is a flex row (value + icon), and text-overflow on a flex
+   container does not ellipsize its children: the value just overflows its
+   shrunken box and runs under the icon. Truncate the value span itself. */
+.copytext.trunc .copytext-value {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
