@@ -19,7 +19,12 @@ env:
   # nobody; 0.5.2 attaches the channel id, so a failure can be tied to the open
   # it belongs to; 0.5.3 takes the funding fee rate on the open and prices an
   # on-chain transaction exactly (POST /tx/quote). The dashboard needs all three.
-  BEIGNET_VERSION: "0.5.3"
+  # 0.5.4 is a large engine upgrade (channel splicing with quiescence, safer
+  # sweep/justice handling, BOLT12 blinded reply paths, correct P2TR input
+  # weights) with a byte-identical daemon surface: CLI, env config, HTTP routes
+  # and openapi.json are unchanged from 0.5.3, verified by diffing the two
+  # published tarballs, so the manager and UI need no changes.
+  BEIGNET_VERSION: "0.5.4"
 
 jobs:
   build:
