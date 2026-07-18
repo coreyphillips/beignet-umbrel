@@ -24,7 +24,10 @@ env:
   # weights) with a byte-identical daemon surface: CLI, env config, HTTP routes
   # and openapi.json are unchanged from 0.5.3, verified by diffing the two
   # published tarballs, so the manager and UI need no changes.
-  BEIGNET_VERSION: "0.5.4"
+  # 0.5.5 stops /health reporting "degraded" while a channel open, splice or
+  # cooperative close is in progress; only established-but-broken channels
+  # (or no peers for operational ones) degrade the wallet now.
+  BEIGNET_VERSION: "0.5.5"
 
 jobs:
   build:
