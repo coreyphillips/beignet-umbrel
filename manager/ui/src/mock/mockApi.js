@@ -672,6 +672,68 @@ function walletRequest(id, path, method, body) {
 		}
 		case '/channels':
 			return st.channels;
+		case '/channel/diagnostics': {
+			const cid = new URLSearchParams(query).get('channelId');
+			const c = st.channels.find((x) => x.channelId === cid);
+			if (!c) throw err('Channel not found', 'NOT_FOUND');
+			const normal = c.state === 'NORMAL';
+			const scid = '0c800000010000';
+			const issues = [];
+			if (!normal) issues.push(`NOT_NORMAL: Channel state is ${c.state}. Routing hints require NORMAL state.`);
+			if (c.remoteBalanceSats === 0) issues.push('NO_INBOUND: Remote balance is 0. You cannot receive payments on this channel.');
+			return {
+				channelId: c.channelId,
+				peerPubkey: c.peerPubkey,
+				state: c.state,
+				preReestablishState: null,
+				isPeerConnected: normal,
+				announceChannel: !c.isPrivate,
+				announcementSigsSent: normal && !c.isPrivate,
+				announcementSigsReceived: normal && !c.isPrivate,
+				scidAlias: null,
+				remoteScidAlias: null,
+				shortChannelId: normal ? scid + '00' : null,
+				effectiveScid: normal ? scid + '00' : null,
+				willGenerateRoutingHint: normal,
+				localBalanceSats: c.localBalanceSats,
+				remoteBalanceSats: c.remoteBalanceSats,
+				issues
+			};
+		}
+		case '/channel/health': {
+			const cid = new URLSearchParams(query).get('channelId');
+			const c = st.channels.find((x) => x.channelId === cid);
+			if (!c) throw err('Channel not found', 'NOT_FOUND');
+			const total = c.localBalanceSats + c.remoteBalanceSats || 1;
+			const localPct = Math.round((c.localBalanceSats / total) * 100);
+			const warnings = [];
+			if (localPct < 10) warnings.push('LOW_OUTBOUND_LIQUIDITY');
+			if (localPct > 90) warnings.push('LOW_INBOUND_LIQUIDITY');
+			return {
+				channelId: c.channelId,
+				state: c.state,
+				localBalancePct: localPct,
+				remoteBalancePct: 100 - localPct,
+				htlcCount: c.state === 'NORMAL' ? 1 : 0,
+				maxHtlcs: 483,
+				capacitySats: c.capacitySats,
+				warnings
+			};
+		}
+		case '/channel/policy': {
+			const cid = new URLSearchParams(query).get('channelId');
+			const c = st.channels.find((x) => x.channelId === cid);
+			if (!c) throw err('Channel not found', 'NOT_FOUND');
+			return {
+				channelId: c.channelId,
+				feeBaseMsat: 1000,
+				feeProportionalMillionths: 100,
+				cltvExpiryDelta: 80,
+				htlcMinimumMsat: '1000',
+				htlcMaximumMsat: String(c.capacitySats * 1000),
+				source: 'node-default'
+			};
+		}
 		case '/channel/connect-and-open': {
 			// Faithful to the daemon: the open returns as soon as open_channel is
 			// sent, with the channel still pending under a *temporary* id. Whether

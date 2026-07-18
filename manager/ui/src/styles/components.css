@@ -601,6 +601,14 @@ tbody tr:hover {
 	align-items: start;
 }
 
+/* Grid items default to min-width auto, which lets unbreakable content (a
+   white-space: pre log line, a long URI) set the column's minimum and blow the
+   whole page out sideways. Pin the minimum so wide content scrolls inside its
+   own box (.log-body etc.) instead of stretching the layout. */
+.wallet-layout > * {
+	min-width: 0;
+}
+
 @media (max-width: 820px) {
 	.wallet-layout {
 		grid-template-columns: 1fr;
@@ -1131,6 +1139,42 @@ tbody tr:hover {
 
 :root[data-theme='light'] .log-body {
 	background: rgba(20, 30, 60, 0.04);
+}
+
+/* ---------- Console (API terminal) ---------- */
+.console-body {
+	min-height: 260px;
+	cursor: text;
+	/* Responses are JSON: wrap them rather than force sideways scrolling. */
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.console-cmd {
+	color: var(--text);
+	font-weight: 600;
+}
+
+.console-intro .log-line {
+	color: var(--muted);
+}
+
+.console-input-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.console-prompt {
+	color: var(--accent-2);
+	font-weight: 700;
+}
+
+.console-input {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
 }
 
 /* ---------- Amount field (input + slider + max) ---------- */

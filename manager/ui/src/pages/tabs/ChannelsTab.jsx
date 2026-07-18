@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { AmountField, Badge, BalanceBar, Button, Card, Field, FeeField, Modal } from '../../components/ui.jsx';
+import { AmountField, Badge, BalanceBar, Button, Card, CopyText, DetailRow, Field, FeeField, Modal } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
@@ -62,7 +62,11 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 							</thead>
 							<tbody>
 								{channels.map((c) => (
-									<tr key={c.channelId}>
+									<tr
+										key={c.channelId}
+										className="row-clickable"
+										onClick={(e) => setModal({ type: 'detail', channel: c, origin: clickOrigin(e) })}
+									>
 										<td className="mono" title={c.peerPubkey}>{shortId(c.peerPubkey)}</td>
 										<td>{fmtSats(c.capacitySats)}</td>
 										<td>
@@ -75,7 +79,8 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 											<Badge tone={STATE_TONE[c.state] || 'muted'}>{c.state}</Badge>
 											{c.isPrivate && <Badge tone="muted">private</Badge>}
 										</td>
-										<td>
+										{/* The buttons act on the channel; only the rest of the row opens it. */}
+										<td onClick={(e) => e.stopPropagation()}>
 											<div className="wallet-actions">
 												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
 													Splice in
@@ -98,6 +103,14 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 
 			{modal?.type === 'open' && (
 				<OpenChannelModal id={id} api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
+			)}
+			{modal?.type === 'detail' && (
+				<ChannelDetailModal
+					api={api}
+					channel={modal.channel}
+					origin={modal.origin}
+					onClose={() => setModal(null)}
+				/>
 			)}
 			{modal?.type === 'splice' && (
 				<SpliceModal
@@ -602,6 +615,116 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 					{isIn ? 'Splice in' : 'Splice out'}
 				</Button>
 				<Button onClick={onClose}>Cancel</Button>
+			</div>
+		</Modal>
+	);
+}
+
+/** 8-byte SCID hex → the human block x tx x output form. */
+function fmtScid(scidHex) {
+	if (!scidHex || scidHex.length !== 16) return scidHex || null;
+	const block = parseInt(scidHex.slice(0, 6), 16);
+	const tx = parseInt(scidHex.slice(6, 12), 16);
+	const vout = parseInt(scidHex.slice(12, 16), 16);
+	return `${block}x${tx}x${vout}`;
+}
+
+function ChannelDetailModal({ api, channel, origin, onClose }) {
+	const [diag, setDiag] = useState(null);
+	const [health, setHealth] = useState(null);
+	const [policy, setPolicy] = useState(null);
+
+	useEffect(() => {
+		let alive = true;
+		const qs = `?channelId=${channel.channelId}`;
+		// Three independent lookups; each may 404 on older daemons or a channel
+		// that vanished between the list and the click, and the modal shows
+		// whatever it does get.
+		api.get(`/channel/diagnostics${qs}`).then((d) => alive && setDiag(d)).catch(() => {});
+		api.get(`/channel/health${qs}`).then((d) => alive && setHealth(d)).catch(() => {});
+		api.get(`/channel/policy${qs}`).then((d) => alive && setPolicy(d)).catch(() => {});
+		return () => {
+			alive = false;
+		};
+	}, [api, channel.channelId]);
+
+	const local = diag?.localBalanceSats ?? channel.localBalanceSats;
+	const remote = diag?.remoteBalanceSats ?? channel.remoteBalanceSats;
+	const state = diag?.state || channel.state;
+	const scid = fmtScid(diag?.effectiveScid);
+	const announcing =
+		diag?.announceChannel &&
+		!(diag.announcementSigsSent && diag.announcementSigsReceived);
+
+	return (
+		<Modal title="Channel" onClose={onClose} origin={origin} wide>
+			<div className="detail">
+				<DetailRow label="State">
+					<Badge tone={STATE_TONE[state] || 'muted'}>{state}</Badge>
+					{diag && (
+						<Badge tone={diag.isPeerConnected ? 'green' : 'red'}>
+							{diag.isPeerConnected ? 'peer connected' : 'peer offline'}
+						</Badge>
+					)}
+				</DetailRow>
+				<DetailRow label="Peer">
+					<CopyText value={channel.peerPubkey} truncate />
+				</DetailRow>
+				<DetailRow label="Channel id">
+					<CopyText value={channel.channelId} truncate />
+				</DetailRow>
+				<DetailRow label="Balance">
+					<BalanceBar local={local} remote={remote} />
+					<div className="wallet-meta" style={{ marginTop: 4 }}>
+						{fmtSats(local)} local / {fmtSats(remote)} remote of{' '}
+						{fmtSats(channel.capacitySats)} capacity
+					</div>
+				</DetailRow>
+				{scid && (
+					<DetailRow label="Short channel id">
+						<span className="mono" title={diag.effectiveScid}>
+							{scid}
+						</span>
+					</DetailRow>
+				)}
+				{diag && (
+					<DetailRow label="Visibility">
+						{diag.announceChannel
+							? announcing
+								? 'public, announcement in progress'
+								: 'public, announced'
+							: 'private (payments to you need routing hints, which invoices include)'}
+					</DetailRow>
+				)}
+				{health && (
+					<DetailRow label="In-flight payments">
+						{health.htlcCount} of {health.maxHtlcs} HTLC slots in use
+					</DetailRow>
+				)}
+				{policy && (
+					<DetailRow label="Routing policy">
+						{policy.feeBaseMsat} msat + {policy.feeProportionalMillionths} ppm,
+						cltv delta {policy.cltvExpiryDelta}
+					</DetailRow>
+				)}
+				{diag?.issues?.length > 0 && (
+					<DetailRow label="Issues">
+						{diag.issues.map((issue, i) => (
+							<div className="error-note" key={i} style={{ marginBottom: 6 }}>
+								{issue}
+							</div>
+						))}
+					</DetailRow>
+				)}
+				{diag?.issues?.length === 0 && health?.warnings?.length > 0 && (
+					<DetailRow label="Warnings">
+						{health.warnings.map((wrn, i) => (
+							<div className="wallet-meta" key={i}>
+								{wrn}
+							</div>
+						))}
+					</DetailRow>
+				)}
 			</div>
 		</Modal>
 	);

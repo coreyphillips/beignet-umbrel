@@ -16,6 +16,7 @@ import PeersTab from './tabs/PeersTab.jsx';
 import ActivityTab from './tabs/ActivityTab.jsx';
 import OffersTab from './tabs/OffersTab.jsx';
 import LogsTab from './tabs/LogsTab.jsx';
+import ConsoleTab from './tabs/ConsoleTab.jsx';
 
 const TABS = [
 	['overview', 'Overview', OverviewTab],
@@ -25,7 +26,8 @@ const TABS = [
 	['peers', 'Peers', PeersTab],
 	['activity', 'Activity', ActivityTab],
 	['offers', 'Offers', OffersTab],
-	['logs', 'Logs', LogsTab]
+	['logs', 'Logs', LogsTab],
+	['console', 'Console', ConsoleTab]
 ];
 
 const EVENT_LABELS = {
