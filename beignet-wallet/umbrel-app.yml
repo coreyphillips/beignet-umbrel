@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.7.0"
+version: "0.7.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,36 +30,48 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  The engine upgrade. Every wallet here runs on beignet, and this release moves
-  all of them from beignet 0.5.3 to 0.5.4, a release large enough that it
-  arguably should have been called 0.6. Nothing about the dashboard changes;
-  a lot underneath it does.
+  A round of fixes and features straight from real use.
 
 
-  Channel splicing matured. Resizing a channel now properly negotiates quiet
-  time with the peer before the funding transaction is rebuilt, a splice out
-  can pay to an address you choose, and the channel backup refreshes itself
-  the moment a splice completes rather than before it is real.
+  Paying the node on the other end of your own channel could fail with "no
+  route", which is absurd: the route is one hop long and you own it. Once the
+  channel got announced, the wallet trusted the public gossip copy of it, and
+  when that copy was missing the wallet's own signed update the channel became
+  untraversable. The wallet now stands its own knowledge of its own channels
+  in whenever the gossip copy is unusable.
 
 
-  Channel closes got safer. The engine is better at recognizing and sweeping
-  what a closing channel leaves on chain, anchors and stuck payments included,
-  and at claiming the penalty when a peer broadcasts an old state.
+  Opening a channel no longer scares you. While a fresh channel waited out its
+  funding confirmations the status said "degraded", which is the dashboard's
+  word for something is wrong. Nothing was wrong. Degraded is now reserved for
+  channels that are actually broken or operational channels with no peer to
+  use them; an open, a splice or a cooperative close in progress will not trip
+  it.
 
 
-  Fee estimates for taproot inputs were simply wrong: they were weighed as if
-  the witness discount did not exist, so spending taproot coins looked more
-  expensive than it was. They are weighed correctly now, which the send screen
-  and fee sliders inherit for free.
+  Channels open now. Click a channel row and you get what the daemon already
+  knew: peer connectivity, the short channel id, announcement status, HTLC
+  slots in use, the routing policy, and the daemon's own diagnosis of anything
+  wrong.
 
 
-  BOLT12 offers are more robust, with replies carried over blinded paths and
-  failures reported as proper invoice errors instead of silence.
+  Splicing got the Send treatment: the same slider and Max button, with the
+  ceiling moving with your fee rate. A splice out also holds back the roughly
+  one percent channel reserve your peer requires, so the daemon no longer
+  rejects an amount the dashboard happily offered you.
 
 
-  The daemon API is identical to 0.5.3, so existing wallets carry over
-  untouched and there is nothing to migrate. Your wallets simply restart on
-  the new engine.
+  New Console tab: a terminal for the wallet daemon's own API. GET /health,
+  POST /invoice/create, all 129 routes, through the same sign-on protected
+  connection as every button in the dashboard, with history on the arrow keys.
+
+
+  Also fixed: long log lines stretched the whole page sideways instead of
+  scrolling inside the log box, and the Lightning invoice string under the QR
+  code ran beneath the copy icon instead of trimming itself.
+
+
+  Ships beignet 0.5.6.
 
 dependencies: []
 path: ""
