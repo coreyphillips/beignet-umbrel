@@ -476,26 +476,52 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 	const [maxMode, setMaxMode] = useState(false);
 	const [feeVb, setFeeVb] = useState('');
 	const [busy, setBusy] = useState(false);
+	const [quote, setQuote] = useState(null);
 	const isIn = dir === 'in';
 	const { data: info } = usePoll(() => api.get('/info').catch(() => null), 30000, []);
 	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
 
 	const balance = info?.onchainBalanceSats;
 	const effRate = parseFloat(feeVb) || fees?.normal || null;
-	// Splice tx approximation: shared input + a wallet input/output either way.
-	const estFee = effRate ? vbytes(2, 2) * Math.ceil(effRate) : null;
-	// A splice-out may only spend local balance down to the channel reserve the
-	// peer set. The channel listing does not carry the exact figure, so hold
-	// back BOLT 2's customary reserve (1% of capacity, dust floor) rather than
-	// submit a splice the daemon will bounce.
-	const reserve = Math.max(354, Math.ceil((channel.capacitySats || 0) / 100));
-	const available = isIn
+	const feeratePerkw = effRate ? Math.max(253, Math.round(effRate * SATVB_TO_PERKW)) : null;
+
+	// The daemon prices its own splices (beignet 0.5.7+): which UTXOs a
+	// splice-in may spend, the exact tx weight, and for splice-out the reserve
+	// the peer actually set. Ask it rather than reconstruct that arithmetic
+	// here; the local approximation below stays as the fallback for daemons
+	// without the endpoint.
+	useEffect(() => {
+		if (!feeratePerkw) return undefined;
+		let alive = true;
+		const t = setTimeout(() => {
+			api.post('/channel/splice-quote', {
+				channelId: channel.channelId,
+				direction: dir,
+				feeratePerkw
+			})
+				.then((q) => alive && setQuote(q))
+				.catch(() => alive && setQuote(null));
+		}, 250);
+		return () => {
+			alive = false;
+			clearTimeout(t);
+		};
+	}, [api, channel.channelId, dir, feeratePerkw]);
+
+	// Fallback approximation: shared input + a wallet input/output either way,
+	// and BOLT 2's customary reserve (1% of capacity, dust floor) for the
+	// splice-out floor the channel listing does not carry.
+	const estFee = quote ? quote.feeSats : effRate ? vbytes(2, 2) * Math.ceil(effRate) : null;
+	const reserve = quote?.reserveSats ?? Math.max(354, Math.ceil((channel.capacitySats || 0) / 100));
+	const available = quote
+		? quote.spendableSats
+		: isIn
 		? balance ?? 0
 		: Math.max(0, (channel.localBalanceSats || 0) - reserve);
 	// Most that can be spliced at this fee rate, already net of the fee: the
 	// same contract as the Send view, so the ceiling moves with the fee rate
 	// and Max re-derives from it every render instead of freezing a number.
-	const ceiling = Math.max(0, available - (estFee || 0));
+	const ceiling = quote ? quote.maxAmountSats : Math.max(0, available - (estFee || 0));
 	const shownAmount = maxMode ? String(ceiling) : amount;
 	const amountNum = maxMode ? ceiling : parseInt(amount, 10) || 0;
 
@@ -517,8 +543,8 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 	};
 
 	const overBalance =
-		isIn && !maxMode && amountNum > 0 && balance != null && estFee != null &&
-		amountNum + estFee > balance;
+		isIn && !maxMode && amountNum > 0 && estFee != null && available > 0 &&
+		amountNum + estFee > available;
 	const overLocal =
 		!isIn && !maxMode && amountNum > 0 && estFee != null &&
 		amountNum + estFee > available;
@@ -529,7 +555,7 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 			const body = {
 				channelId: channel.channelId,
 				amountSats: amountNum,
-				feeratePerkw: Math.max(253, Math.round(effRate * SATVB_TO_PERKW))
+				feeratePerkw
 			};
 			const r = await api.post(isIn ? '/channel/splice-in' : '/channel/splice-out', body);
 			if (r && r.ok === false) throw new Error(r.error || 'Splice failed');
@@ -563,7 +589,11 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 				onMax={() => setMaxMode((v) => !v)}
 				hint={
 					isIn
-						? 'The slider stops at the most you can splice in at this fee rate, so it leaves room for the fee.'
+						? quote
+							? 'The slider stops at the most the wallet can actually fund at this fee rate, priced by the wallet itself from its spendable coins.'
+							: 'The slider stops at the most you can splice in at this fee rate, so it leaves room for the fee.'
+						: quote
+						? `The slider stops at the most this channel can spare: it leaves room for the fee and the channel reserve (${fmtSats(reserve)}), which cannot be withdrawn without closing.`
 						: 'The slider stops at the most this channel can spare: it leaves room for the fee and the ~1% channel reserve, which cannot be withdrawn without closing.'
 				}
 			/>
@@ -590,7 +620,8 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 			)}
 			{estFee != null && amountNum > 0 && (
 				<div className="wallet-meta" style={{ marginBottom: 12 }}>
-					Estimated splice fee: ~{fmtSats(estFee)} at {Math.ceil(effRate)} sat/vB (approximate),
+					{quote ? 'Splice fee' : 'Estimated splice fee'}: {quote ? '' : '~'}
+					{fmtSats(estFee)} at {Math.ceil(effRate)} sat/vB{quote ? '' : ' (approximate)'},
 					paid {isIn ? 'from your on-chain balance on top of the amount' : 'from the amount moved out'}.
 				</div>
 			)}

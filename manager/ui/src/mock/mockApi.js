@@ -734,6 +734,34 @@ function walletRequest(id, path, method, body) {
 				source: 'node-default'
 			};
 		}
+		case '/channel/splice-quote': {
+			const c = st.channels.find((x) => x.channelId === body.channelId);
+			if (!c) throw err('Channel not found', 'NOT_FOUND');
+			const perkw = body.feeratePerkw || 253;
+			if (body.direction === 'out') {
+				// Mirrors the daemon: local balance net of the peer-set reserve,
+				// fee for a splice tx with no wallet inputs.
+				const reserveSats = Math.max(354, Math.ceil(c.capacitySats / 100));
+				const feeSats = Math.ceil((700 * perkw) / 1000);
+				const spendableSats = Math.max(0, c.localBalanceSats - reserveSats);
+				return {
+					direction: 'out',
+					feeSats,
+					spendableSats,
+					maxAmountSats: Math.max(0, spendableSats - feeSats),
+					reserveSats
+				};
+			}
+			const spendableSats = onchainBalance(w.id);
+			const feeSats = Math.ceil((1000 * perkw) / 1000);
+			return {
+				direction: 'in',
+				feeSats,
+				spendableSats,
+				maxAmountSats: Math.max(0, spendableSats - feeSats),
+				inputCount: 3
+			};
+		}
 		case '/channel/connect-and-open': {
 			// Faithful to the daemon: the open returns as soon as open_channel is
 			// sent, with the channel still pending under a *temporary* id. Whether
