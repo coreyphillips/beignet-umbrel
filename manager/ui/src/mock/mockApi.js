@@ -46,6 +46,9 @@ function makeChannels(specs) {
 			localBalanceSats,
 			remoteBalanceSats: capacitySats - localBalanceSats,
 			state,
+			// beignet 0.6.0: NORMAL channels carry HTLCs; mid-splice channels
+			// only when the pay-through flags are set on them explicitly.
+			htlcUsable: state === 'NORMAL',
 			isPrivate: !!isPrivate
 		};
 	});
@@ -207,8 +210,11 @@ store.state['demo-testnet'] = walletState({
 			[137295, 96, 'SPLICING']
 		]);
 		// Mid-splice the live balance stays pre-splice; the daemon reports the
-		// settle-to figure separately (the mainnet numbers this mirrors).
+		// settle-to figure separately (the mainnet numbers this mirrors), and
+		// with 0.6.0 the channel pays through its splice.
 		chans[1].pendingSpliceLocalBalanceSats = 211746;
+		chans[1].htlcUsable = true;
+		chans[1].payThroughSplice = true;
 		return chans;
 	})(),
 	txs: makeTxs(6, 3411502),
@@ -229,18 +235,33 @@ function onchainBalance(id) {
 	return store.state[id].utxos.reduce((a, u) => a + u.valueSats, 0);
 }
 function lightningBalance(id) {
-	// Faithful to the daemon: only channels whose funds are live on Lightning
-	// count; a channel mid-open or mid-splice is excluded.
-	return store.state[id].channels
-		.filter((c) => c.state === 'NORMAL' || c.state === 'AWAITING_REESTABLISH')
-		.reduce((a, c) => a + c.localBalanceSats, 0);
+	// Faithful to beignet 0.6.0: live channels count in full; a channel paying
+	// through its splice counts at the conservative side of its two fundings.
+	return store.state[id].channels.reduce((a, c) => {
+		if (c.state === 'NORMAL' || c.state === 'AWAITING_REESTABLISH')
+			return a + c.localBalanceSats;
+		if (c.state === 'SPLICING' && c.payThroughSplice)
+			return (
+				a +
+				Math.min(
+					c.localBalanceSats,
+					c.pendingSpliceLocalBalanceSats ?? c.localBalanceSats
+				)
+			);
+		return a;
+	}, 0);
 }
 function splicingBalance(id) {
-	// Faithful to the daemon: the settle-to balance when known, since the live
-	// figure stays pre-splice until the lock.
+	// Faithful to beignet 0.6.0: the in-transit remainder for pay-through
+	// splices, the whole settle-to balance for parked ones.
 	return store.state[id].channels
 		.filter((c) => c.state === 'SPLICING')
-		.reduce((a, c) => a + (c.pendingSpliceLocalBalanceSats ?? c.localBalanceSats), 0);
+		.reduce((a, c) => {
+			const pending = c.pendingSpliceLocalBalanceSats ?? c.localBalanceSats;
+			if (c.payThroughSplice)
+				return a + Math.max(0, pending - c.localBalanceSats);
+			return a + pending;
+		}, 0);
 }
 
 // ---------- Event bus (demo replacement for the SSE stream) ----------

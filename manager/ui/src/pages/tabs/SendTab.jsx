@@ -10,16 +10,20 @@ import { manager, walletApi } from '../../api.js';
 export default function SendTab({ id, api, info, rec, tick, bump }) {
 	const [mode, setMode] = useState('onchain');
 	const { data: channels } = usePoll(() => api.get('/channels').catch(() => null), 15000, [id, tick]);
-	// A channel mid-splice is not usable yet (the daemon rejects HTLCs until
-	// splice_locked), but "open a channel first" would be the wrong message:
-	// there IS a channel, it is just confirming its splice.
+	// beignet 0.6.0 pays during splices: the daemon marks each channel with
+	// htlcUsable, true for NORMAL and for a channel mid-splice that carries
+	// payments through its confirmation window. Older daemons lack the flag,
+	// so NORMAL remains the fallback. splicingOnly covers the rare parked
+	// splice (e.g. taproot), where "open a channel first" would still be the
+	// wrong message.
+	const usable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
 	const splicingOnly = channels
 		? channels.length > 0 &&
-		  !channels.some((c) => c.state === 'NORMAL') &&
+		  !channels.some(usable) &&
 		  channels.some((c) => c.state === 'SPLICING')
 		: false;
 	const canLightning = channels
-		? channels.some((c) => c.state === 'NORMAL')
+		? channels.some(usable)
 		: (info?.channelCount ?? 0) > 0;
 
 	useEffect(() => {

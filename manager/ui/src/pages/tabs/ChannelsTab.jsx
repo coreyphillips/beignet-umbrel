@@ -10,6 +10,7 @@ import { watchChannelOpen } from '../../lib/channel-open.js';
 
 const STATE_TONE = {
 	NORMAL: 'green',
+	SPLICING: 'yellow',
 	AWAITING_CHANNEL_READY: 'yellow',
 	AWAITING_FUNDING_CONFIRMED: 'yellow',
 	AWAITING_REESTABLISH: 'yellow',

@@ -32,9 +32,8 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 		<div>
 			{splicing > 0 && (
 				<div className="info-note" style={{ marginBottom: 14 }}>
-					A splice is confirming: {fmtSats(splicing)} are locked in the channel
-					and will rejoin your Lightning balance when the splice transaction
-					confirms and locks. Nothing to do but wait for blocks.
+					A splice is confirming: {fmtSats(splicing)} rejoin your Lightning
+					balance when it locks. Payments keep working in the meantime.
 				</div>
 			)}
 			<m.div
