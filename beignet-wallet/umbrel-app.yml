@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.7.4"
+version: "0.8.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,30 +30,35 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A splice no longer empties your wallet on screen.
+  Your wallet pays during splices now.
 
 
-  While a splice waited for its confirmations, the dashboard showed a wallet
-  with nothing in it: the on-chain balance had (correctly) gone into the
-  splice, and the funds in the channel vanished from every figure until the
-  splice locked. Worse, the numbers that were shown were the pre-splice ones,
-  so sats you had just spliced in were nowhere at all.
+  Until today, a splice put the channel to sleep: no sending, no receiving,
+  nothing to do but watch confirmations tick by. That was never what the
+  protocol demanded, only what remained to be built. It is built. While a
+  splice waits for its confirmations, the channel keeps working: you can pay,
+  be paid, and the moment the splice locks, the new capacity simply joins in.
+  Every payment made during the window is protected on both the old and the
+  new channel funding, whichever the chain settles on, and if your node or
+  the connection drops mid-payment, the exchange picks up where it left off
+  on reconnect.
 
 
-  The wallet now accounts for a splice in progress as its own line: the
-  Overview says a splice is confirming and how much is locked, the amount sits
-  under the Lightning stat until it rejoins the balance proper, and the
-  channel detail shows exactly what the channel settles to when the splice
-  locks. The Send tab also stopped telling you to "open a channel first" when
-  your channel was merely mid-splice; it now says so, and that payments resume
-  when the splice confirms.
+  The dashboard follows suit: the Send tab treats a channel mid-splice as the
+  working channel it now is, the Overview note says payments keep flowing
+  rather than counselling patience, and balances stay honest through the
+  whole window, disconnections included.
 
 
-  Payments during the splice itself are the next, much larger piece of work;
-  this release makes the waiting honest.
+  This was tested the way it will be used: against a real Core Lightning
+  node, with real payments crossing a channel whose splice sat unconfirmed in
+  the mempool, in both directions, through a disconnect, and out the other
+  side of the lock.
 
 
-  Ships beignet 0.5.8.
+  Ships beignet 0.6.0. One footnote: channels using the experimental taproot
+  type still pause during splices for now; ordinary channels, like the ones
+  this app opens, do not.
 
 dependencies: []
 path: ""
