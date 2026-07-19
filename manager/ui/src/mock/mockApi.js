@@ -199,7 +199,12 @@ store.state['demo-savings'] = walletState({
 });
 store.state['demo-testnet'] = walletState({
 	blockHeight: 3411502,
-	channels: makeChannels([[500000, 50, 'NORMAL']]),
+	// One channel mid-splice, so the splice-in-progress states are visitable
+	// in the playground wallet.
+	channels: makeChannels([
+		[500000, 50, 'NORMAL'],
+		[137295, 96, 'SPLICING']
+	]),
 	txs: makeTxs(6, 3411502),
 	payments: makePayments(7),
 	utxos: makeUtxos(2, 3411502),
@@ -218,7 +223,16 @@ function onchainBalance(id) {
 	return store.state[id].utxos.reduce((a, u) => a + u.valueSats, 0);
 }
 function lightningBalance(id) {
-	return store.state[id].channels.reduce((a, c) => a + c.localBalanceSats, 0);
+	// Faithful to the daemon: only channels whose funds are live on Lightning
+	// count; a channel mid-open or mid-splice is excluded.
+	return store.state[id].channels
+		.filter((c) => c.state === 'NORMAL' || c.state === 'AWAITING_REESTABLISH')
+		.reduce((a, c) => a + c.localBalanceSats, 0);
+}
+function splicingBalance(id) {
+	return store.state[id].channels
+		.filter((c) => c.state === 'SPLICING')
+		.reduce((a, c) => a + c.localBalanceSats, 0);
 }
 
 // ---------- Event bus (demo replacement for the SSE stream) ----------
@@ -468,6 +482,7 @@ function walletRequest(id, path, method, body) {
 				onchainBalanceSats: onchainBalance(id),
 				lightningBalanceSats: lightningBalance(id),
 				pendingCloseBalanceSats: 0,
+				splicingBalanceSats: splicingBalance(id),
 				channelCount: st.channels.length,
 				peerCount: st.peers.length,
 				listening: true
@@ -482,7 +497,12 @@ function walletRequest(id, path, method, body) {
 		case '/balance': {
 			const onchain = onchainBalance(id);
 			const lightning = lightningBalance(id);
-			return { onchain, lightning, total: onchain + lightning };
+			return {
+				onchain,
+				lightning,
+				total: onchain + lightning,
+				splicingSats: splicingBalance(id)
+			};
 		}
 		case '/readiness':
 			return {

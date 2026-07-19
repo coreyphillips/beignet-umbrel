@@ -10,6 +10,14 @@ import { manager, walletApi } from '../../api.js';
 export default function SendTab({ id, api, info, rec, tick, bump }) {
 	const [mode, setMode] = useState('onchain');
 	const { data: channels } = usePoll(() => api.get('/channels').catch(() => null), 15000, [id, tick]);
+	// A channel mid-splice is not usable yet (the daemon rejects HTLCs until
+	// splice_locked), but "open a channel first" would be the wrong message:
+	// there IS a channel, it is just confirming its splice.
+	const splicingOnly = channels
+		? channels.length > 0 &&
+		  !channels.some((c) => c.state === 'NORMAL') &&
+		  channels.some((c) => c.state === 'SPLICING')
+		: false;
 	const canLightning = channels
 		? channels.some((c) => c.state === 'NORMAL')
 		: (info?.channelCount ?? 0) > 0;
@@ -26,13 +34,15 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 				onChange={setMode}
 				options={[
 					['onchain', 'On-chain'],
-					['lightning', 'Lightning', !canLightning, 'Open a channel first'],
-					['keysend', 'Keysend', !canLightning, 'Open a channel first']
+					['lightning', 'Lightning', !canLightning, splicingOnly ? 'A splice is confirming' : 'Open a channel first'],
+					['keysend', 'Keysend', !canLightning, splicingOnly ? 'A splice is confirming' : 'Open a channel first']
 				]}
 			/>
 			{channels && !canLightning && (
 				<div className="info-note" style={{ marginBottom: 14 }}>
-					Lightning payments need an open channel. Open one in the Channels tab.
+					{splicingOnly
+						? 'Your channel is mid-splice. Its funds are safe, and Lightning payments resume when the splice transaction confirms and locks.'
+						: 'Lightning payments need an open channel. Open one in the Channels tab.'}
 				</div>
 			)}
 			{mode === 'onchain' && <OnChain id={id} api={api} info={info} rec={rec} bump={bump} />}

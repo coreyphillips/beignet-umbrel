@@ -26,9 +26,17 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 	const fees = data?.fees;
 	const feeEst = data?.feeEst;
 	const readiness = data?.readiness;
+	const splicing = bal?.splicingSats ?? info?.splicingBalanceSats ?? 0;
 
 	return (
 		<div>
+			{splicing > 0 && (
+				<div className="info-note" style={{ marginBottom: 14 }}>
+					A splice is confirming: {fmtSats(splicing)} are locked in the channel
+					and will rejoin your Lightning balance when the splice transaction
+					confirms and locks. Nothing to do but wait for blocks.
+				</div>
+			)}
 			<m.div
 				className="grid cols-4"
 				style={{ marginBottom: 18 }}
@@ -38,7 +46,13 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 			>
 				{[
 					<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
-					<Stat key="ln" label="Lightning" num={bal?.lightning ?? info?.lightningBalanceSats} suffix=" sats" />,
+					<Stat
+						key="ln"
+						label="Lightning"
+						num={bal?.lightning ?? info?.lightningBalanceSats}
+						suffix=" sats"
+						sub={splicing > 0 ? `+ ${fmtSats(splicing)} splicing` : undefined}
+					/>,
 					<Stat key="total" label="Total" num={bal?.total} suffix=" sats" />,
 					<Stat
 						key="ch"
@@ -63,6 +77,7 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 							<Row k="Listening" v={info?.listening ? 'yes' : 'no'} />
 							<Row k="Graph" v={health ? `${health.graphNodes} nodes / ${health.graphChannels} channels` : '-'} />
 							<Row k="Pending close" v={fmtSats(info?.pendingCloseBalanceSats)} />
+						{splicing > 0 && <Row k="Splicing" v={fmtSats(splicing)} />}
 						</tbody>
 					</table>
 				</Card>
