@@ -37,7 +37,12 @@ env:
   # holding the POST-splice settle-to balance (the live channel balance stays
   # pre-splice until splice_locked), and channel listings carry
   # pendingSpliceLocalBalanceSats, so a wallet mid-splice never reads as empty.
-  BEIGNET_VERSION: "0.5.8"
+  # 0.6.0 pays during splices: HTLC traffic flows straight through a splice's
+  # confirmation window (ECDSA channels), mirrored onto both fundings, with
+  # routing/forwarding/balances aware of the window and a unilateral exit on
+  # whichever funding confirms. Verified live against real CLN on regtest
+  # (11/11 splice-matrix interop, including four pay-during-splice cases).
+  BEIGNET_VERSION: "0.6.0"
 
 jobs:
   build:
