@@ -33,7 +33,11 @@ env:
   # 0.5.7 prices splices (POST /channel/splice-quote): the daemon quotes the
   # fee and the largest fundable amount, so the dashboard's Max offers an
   # amount the coin selection will actually fund.
-  BEIGNET_VERSION: "0.5.7"
+  # 0.5.8 accounts for splicing funds: getInfo/balance gain a splicing bucket
+  # holding the POST-splice settle-to balance (the live channel balance stays
+  # pre-splice until splice_locked), and channel listings carry
+  # pendingSpliceLocalBalanceSats, so a wallet mid-splice never reads as empty.
+  BEIGNET_VERSION: "0.5.8"
 
 jobs:
   build:
