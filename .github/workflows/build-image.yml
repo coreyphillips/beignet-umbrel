@@ -30,7 +30,10 @@ env:
   # 0.5.6 routes over our own channels when the gossip copy is missing our
   # channel_update, so paying a directly-connected peer over an announced
   # channel no longer fails with NO_ROUTE.
-  BEIGNET_VERSION: "0.5.6"
+  # 0.5.7 prices splices (POST /channel/splice-quote): the daemon quotes the
+  # fee and the largest fundable amount, so the dashboard's Max offers an
+  # amount the coin selection will actually fund.
+  BEIGNET_VERSION: "0.5.7"
 
 jobs:
   build:
