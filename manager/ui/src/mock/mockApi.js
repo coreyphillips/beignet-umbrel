@@ -201,10 +201,16 @@ store.state['demo-testnet'] = walletState({
 	blockHeight: 3411502,
 	// One channel mid-splice, so the splice-in-progress states are visitable
 	// in the playground wallet.
-	channels: makeChannels([
-		[500000, 50, 'NORMAL'],
-		[137295, 96, 'SPLICING']
-	]),
+	channels: (() => {
+		const chans = makeChannels([
+			[500000, 50, 'NORMAL'],
+			[137295, 96, 'SPLICING']
+		]);
+		// Mid-splice the live balance stays pre-splice; the daemon reports the
+		// settle-to figure separately (the mainnet numbers this mirrors).
+		chans[1].pendingSpliceLocalBalanceSats = 211746;
+		return chans;
+	})(),
 	txs: makeTxs(6, 3411502),
 	payments: makePayments(7),
 	utxos: makeUtxos(2, 3411502),
@@ -230,9 +236,11 @@ function lightningBalance(id) {
 		.reduce((a, c) => a + c.localBalanceSats, 0);
 }
 function splicingBalance(id) {
+	// Faithful to the daemon: the settle-to balance when known, since the live
+	// figure stays pre-splice until the lock.
 	return store.state[id].channels
 		.filter((c) => c.state === 'SPLICING')
-		.reduce((a, c) => a + c.localBalanceSats, 0);
+		.reduce((a, c) => a + (c.pendingSpliceLocalBalanceSats ?? c.localBalanceSats), 0);
 }
 
 // ---------- Event bus (demo replacement for the SSE stream) ----------

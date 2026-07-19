@@ -710,6 +710,14 @@ function ChannelDetailModal({ api, channel, origin, onClose }) {
 						{fmtSats(local)} local / {fmtSats(remote)} remote of{' '}
 						{fmtSats(channel.capacitySats)} capacity
 					</div>
+					{/* Mid-splice the live figures stay pre-splice until the lock;
+					    the daemon reports what the channel settles to. */}
+					{channel.pendingSpliceLocalBalanceSats != null && (
+						<div className="wallet-meta" style={{ marginTop: 4 }}>
+							Settles to {fmtSats(channel.pendingSpliceLocalBalanceSats)} local
+							when the splice locks.
+						</div>
+					)}
 				</DetailRow>
 				{scid && (
 					<DetailRow label="Short channel id">
