@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.7.3"
+version: "0.7.4"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,20 +30,30 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Max now means max.
+  A splice no longer empties your wallet on screen.
 
 
-  Pressing Max on a splice-in could offer an amount the wallet then refused to
-  fund, short by a hundred sats or so. The dashboard was computing the maximum
-  from your total balance and a fee it estimated itself, while the wallet
-  selects specific coins and prices the transaction exactly. The wallet now
-  quotes its own splices: the fee and the largest fundable amount come from
-  the same code that will build the transaction, so what Max offers is what
-  goes through. The splice-out ceiling also uses the channel reserve your peer
-  actually set, instead of assuming the customary one percent.
+  While a splice waited for its confirmations, the dashboard showed a wallet
+  with nothing in it: the on-chain balance had (correctly) gone into the
+  splice, and the funds in the channel vanished from every figure until the
+  splice locked. Worse, the numbers that were shown were the pre-splice ones,
+  so sats you had just spliced in were nowhere at all.
 
 
-  Ships beignet 0.5.7.
+  The wallet now accounts for a splice in progress as its own line: the
+  Overview says a splice is confirming and how much is locked, the amount sits
+  under the Lightning stat until it rejoins the balance proper, and the
+  channel detail shows exactly what the channel settles to when the splice
+  locks. The Send tab also stopped telling you to "open a channel first" when
+  your channel was merely mid-splice; it now says so, and that payments resume
+  when the splice confirms.
+
+
+  Payments during the splice itself are the next, much larger piece of work;
+  this release makes the waiting honest.
+
+
+  Ships beignet 0.5.8.
 
 dependencies: []
 path: ""
