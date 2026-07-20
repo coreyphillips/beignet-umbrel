@@ -245,16 +245,21 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 				Electrum server
 			</div>
 			<ElectrumFields presets={presets} value={electrum} onChange={setElectrum} />
+			{(torAvailable || onionAvailable) && (
+				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+					Tor
+				</div>
+			)}
 			{torAvailable && (
 				<label className="checkbox field">
 					<input type="checkbox" checked={tor} onChange={(e) => setTor(e.target.checked)} />
-					Route Lightning connections over Tor
+					Outbound: connect to peers over Tor
 				</label>
 			)}
 			{onionAvailable && (
 				<label className="checkbox field">
 					<input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
-					Advertise a Tor address for inbound channels
+					Inbound: publish a Tor address so peers can open channels to you
 				</label>
 			)}
 			<div className="center-actions">
