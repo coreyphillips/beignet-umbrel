@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.3"
+version: "0.8.4"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,24 +30,24 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  The Overview now tells you how to reach your node.
+  The Peers tab now leads with who you are connected to.
 
 
-  Where the mainnet readiness card used to sit, scoring the node out of 100
-  against a checklist that never quite said what to do about it, there is now
-  the thing you actually hand to a peer: your node's address. Pick local
-  network, clearnet or Tor, and copy it. The local address follows whatever
-  you use to open the dashboard, Tor uses your wallet's onion, and clearnet
-  takes a public host you type once and the app remembers.
+  Connect to a peer moves below the connected list, because seeing your peers
+  is the thing you come back for and connecting is the thing you do once. Each
+  peer now shows its alias, read from the gossip graph, above its pubkey, and
+  a node that never announced one simply reads as unknown rather than a wall
+  of hex. The pubkey itself is a copy button now, so handing a peer's key to
+  someone is one click instead of a careful drag.
 
 
-  The liquidity card lost its paragraphs of advice and kept the numbers they
-  were talking about: what you can send, and what you can receive, in sats,
-  where you can see them.
+  The two Tor options finally say which way they point. One is outbound,
+  connecting to peers over Tor; the other is inbound, publishing a Tor address
+  so peers can open channels to you. Same two switches, grouped under a Tor
+  heading, no more guessing which one is which.
 
 
-  The node id in the wallet header also copies when clicked now, all 66
-  characters of it, rather than sitting there truncated and unhelpful.
+  Still beignet 0.6.2. All dashboard.
 
 
   Still beignet 0.6.2. This one is all dashboard.
