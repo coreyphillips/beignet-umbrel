@@ -148,9 +148,10 @@ export default function WalletPage() {
 				<div className="wallet-layout">
 					{rec?.tor && rec.torCircuitOk === false && (
 						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
-							Tor on this Umbrel cannot build circuits right now, so this wallet's peer
-							connections (channel opens included) will time out. Restart Tor on your Umbrel,
-							or edit this wallet and turn Tor off to connect directly.
+							Tor on this Umbrel cannot build circuits right now. Peers reached over Tor,
+							onion addresses and, while Tor is on, public ones, will time out. Peers on
+							your own network still connect directly and are unaffected. Restart Tor on
+							your Umbrel, or edit this wallet to turn Tor off and route every peer directly.
 						</div>
 					)}
 					<nav className="wnav">
