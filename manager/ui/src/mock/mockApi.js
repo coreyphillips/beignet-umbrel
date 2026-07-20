@@ -163,6 +163,16 @@ const store = {
 			tor: false,
 			announce: false,
 			createdAt: now - 12 * DAY
+		},
+		{
+			id: 'demo-fresh',
+			name: 'Fresh channel',
+			network: 'mainnet',
+			status: 'running',
+			electrum: { host: 'umbrel.local', port: 50001, tls: false },
+			tor: false,
+			announce: false,
+			createdAt: now - 2 * 3600000
 		}
 	],
 	state: {}
@@ -225,6 +235,19 @@ store.state['demo-testnet'] = walletState({
 	invoices: makeInvoices(3),
 	offers: [],
 	peers: [{ pubkey: pubkey(), host: '127.0.0.1', port: 9737, state: 'connected', alias: 'endurance' }]
+});
+// A newly opened channel funded mostly on the peer's side: the local balance
+// (12,000) sits below the 20,000 reserve, so nothing is sendable yet and the
+// Liquidity card shows the reserve-to-unlock state.
+store.state['demo-fresh'] = walletState({
+	blockHeight: 908214,
+	channels: makeChannels([[2000000, 0.6, 'NORMAL']]),
+	txs: makeTxs(3, 908214),
+	payments: [],
+	utxos: makeUtxos(1, 908214),
+	invoices: [],
+	offers: [],
+	peers: [{ pubkey: pubkey(), host: '203.0.113.8', port: 9735, state: 'connected', alias: 'ACINQ' }]
 });
 
 const nodeIds = {};
@@ -560,18 +583,31 @@ function walletRequest(id, path, method, body) {
 				]
 			};
 		case '/liquidity': {
+			const normal = st.channels.filter((c) => c.state === 'NORMAL');
 			const totalLocalBalanceSats = lightningBalance(id);
 			const totalCapacitySats = st.channels.reduce((a, c) => a + c.capacitySats, 0);
 			const totalRemoteBalanceSats = totalCapacitySats - totalLocalBalanceSats;
 			const outboundLiquidityPct = totalCapacitySats
 				? Math.round((totalLocalBalanceSats / totalCapacitySats) * 100)
 				: 0;
+			// BOLT channel reserve: ~1% of capacity per channel, held on each side
+			// and unspendable. What you can actually send is the local balance above
+			// it, summed over routable channels, which is what the daemon's canSend
+			// reports. Below the reserve, sendable is zero even with a balance.
+			const chReserve = (c) => Math.max(546, Math.round(c.capacitySats * 0.01));
+			const reserveSats = normal.reduce((a, c) => a + chReserve(c), 0);
+			const sendableSats = normal.reduce(
+				(a, c) => a + Math.max(0, c.localBalanceSats - chReserve(c)),
+				0
+			);
 			return {
 				channelCount: st.channels.length,
-				activeChannelCount: st.channels.filter((c) => c.state === 'NORMAL').length,
+				activeChannelCount: normal.length,
 				totalLocalBalanceSats,
 				totalRemoteBalanceSats,
 				totalCapacitySats,
+				reserveSats,
+				sendableSats,
 				outboundLiquidityPct,
 				inboundLiquidityPct: totalCapacitySats ? 100 - outboundLiquidityPct : 0,
 				recommendations:
