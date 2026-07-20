@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.1"
+version: "0.8.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,26 +30,25 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Splices now survive anything.
+  The Send tab now knows what the wallet knows.
 
 
-  Last release taught your wallet to pay during splices. This one makes the
-  whole affair indestructible: restart the app mid-splice, mid-payment, even
-  mid-handshake, and everything picks up exactly where it left off. The
-  wallet no longer needs anything it kept in memory; every piece of the
-  splice that matters is written down the moment it matters, so a restart at
-  the worst possible instant changes nothing.
+  Pay-during-splice shipped two releases ago, and the wallet engine has been
+  happily settling payments through splice windows ever since. The dashboard,
+  however, was never told: the one flag that says "this channel works right
+  now" was computed and then dropped before it reached the screen, so the
+  Send tab kept a mid-splice channel politely disabled while the engine
+  underneath would have paid without complaint. The flag now makes the trip,
+  and the Send tab lights up mid-splice the way it always should have.
 
 
-  The same is true of the emergency exits. If your channel partner vanishes
-  while a splice confirms, the wallet can always close the channel on
-  whichever version of it actually made it onto the chain, with exact
-  signatures kept for exactly that purpose. Cases that used to end in a
-  cautious "refusing to proceed" now simply recover.
+  The channel detail view also stops scolding a working channel: a channel
+  paying through its splice no longer reports itself as a problem, and its
+  diagnostics tell the truth about invoices routing to it just fine.
 
 
-  Ships beignet 0.6.1. No visible changes; this is the release you will
-  never notice working, which is the point.
+  Ships beignet 0.6.2. Found within minutes of real testing on a real
+  Umbrel, which is what real testing is for.
 
 dependencies: []
 path: ""
