@@ -1,21 +1,20 @@
+import { useState } from 'react';
 import { m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
-import { Badge, Card, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
+import { Badge, Button, Card, CopyText, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
 
-const CHECK_TONE = { PASS: 'green', WARN: 'yellow', FAIL: 'red' };
-
-export default function OverviewTab({ id, api, info, health, tick }) {
+export default function OverviewTab({ id, api, info, health, rec, tick }) {
 	const { data } = usePoll(
 		async () => {
-			const [balance, readiness, liquidity, fees, feeEst] = await Promise.all([
+			const [balance, nodeUri, liquidity, fees, feeEst] = await Promise.all([
 				api.get('/balance').catch(() => null),
-				api.get('/readiness').catch(() => null),
+				api.get('/node/uri?host=127.0.0.1').then((r) => r.uri).catch(() => null),
 				api.get('/liquidity').catch(() => null),
 				api.get('/fees').catch(() => null),
 				api.get('/fees/estimates').catch(() => null)
 			]);
-			return { balance, readiness, liquidity, fees, feeEst };
+			return { balance, nodeUri, liquidity, fees, feeEst };
 		},
 		10000,
 		[id, tick]
@@ -25,7 +24,6 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 	const liq = data?.liquidity;
 	const fees = data?.fees;
 	const feeEst = data?.feeEst;
-	const readiness = data?.readiness;
 	const splicing = bal?.splicingSats ?? info?.splicingBalanceSats ?? 0;
 
 	return (
@@ -89,18 +87,27 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 								<div className="in" style={{ width: `${liq.inboundLiquidityPct}%` }} />
 							</div>
 							<div className="liq-legend">
-								<span>◆ Outbound {pct(liq.outboundLiquidityPct)} · {fmtSats(liq.totalLocalBalanceSats)}</span>
-								<span>Inbound {pct(liq.inboundLiquidityPct)} · {fmtSats(liq.totalRemoteBalanceSats)} ◆</span>
+								<span>◆ Outbound {pct(liq.outboundLiquidityPct)}</span>
+								<span>Inbound {pct(liq.inboundLiquidityPct)} ◆</span>
+							</div>
+							<div className="grid cols-2" style={{ marginTop: 12 }}>
+								<Stat
+									label="Can send"
+									num={liq.totalLocalBalanceSats}
+									suffix=" sats"
+									sub="outbound"
+								/>
+								<Stat
+									label="Can receive"
+									num={liq.totalRemoteBalanceSats}
+									suffix=" sats"
+									sub="inbound"
+								/>
 							</div>
 							<div className="wallet-meta" style={{ marginTop: 10 }}>
 								{liq.activeChannelCount}/{liq.channelCount} channels active · capacity{' '}
 								{fmtSats(liq.totalCapacitySats)}
 							</div>
-							{liq.recommendations?.map((r, i) => (
-								<div key={i} className="info-note" style={{ marginTop: 10 }}>
-									{r.reason}
-								</div>
-							))}
 						</>
 					) : (
 						<div className="empty">No channels yet. Open one from the Channels tab.</div>
@@ -124,28 +131,82 @@ export default function OverviewTab({ id, api, info, health, tick }) {
 					)}
 				</Card>
 
-				<Card title="Mainnet readiness">
-					{readiness ? (
-						<>
-							<div className="wallet-title" style={{ marginBottom: 10 }}>
-								<div className="stat-value">{readiness.score}/100</div>
-								<Badge tone={readiness.ready ? 'green' : 'yellow'}>
-									{readiness.ready ? 'ready' : 'not ready'}
-								</Badge>
-							</div>
-							{readiness.checks?.slice(0, 6).map((c, i) => (
-								<div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-									<Badge tone={CHECK_TONE[c.status] || 'muted'}>{c.status}</Badge>
-									<span className="wallet-meta">{c.message || c.name}</span>
-								</div>
-							))}
-						</>
-					) : (
-						<div className="empty">Readiness report unavailable.</div>
-					)}
-				</Card>
+				<ConnectCard id={id} info={info} rec={rec} nodeUri={data?.nodeUri} />
 			</div>
 		</div>
+	);
+}
+
+/**
+ * The three ways a peer can reach this node, one at a time so the card stays a
+ * single line of address instead of a wall of them.
+ *
+ * The listen port comes from the daemon's own URI rather than a hardcoded 9735,
+ * because wallets here are assigned ports out of a range. The clearnet host is
+ * typed by the user and remembered: only they know their public address, and
+ * looking it up would mean calling an outside service from their node.
+ */
+function ConnectCard({ id, info, rec, nodeUri }) {
+	const [mode, setMode] = useState('local');
+	const storeKey = `beignet.clearnetHost.${id}`;
+	const [clearnetHost, setClearnetHost] = useState(() => localStorage.getItem(storeKey) || '');
+
+	const port = nodeUri?.split(':').pop() || '';
+	const lanHost = window.location.hostname;
+	const clearnet = clearnetHost.trim();
+
+	const options = [
+		{ key: 'local', label: 'Local network' },
+		{ key: 'clearnet', label: 'Clearnet' },
+		{ key: 'tor', label: 'Tor' }
+	];
+
+	let uri = null;
+	let hint = null;
+	if (mode === 'local') {
+		uri = info?.nodeId && port ? `${info.nodeId}@${lanHost}:${port}` : null;
+		hint = `Reachable from other machines on your home network, at the address you use to open this dashboard.`;
+	} else if (mode === 'clearnet') {
+		uri = info?.nodeId && port && clearnet ? `${info.nodeId}@${clearnet}:${port}` : null;
+		hint = `Your public IP or domain. Port ${port || '(unknown)'} must be forwarded to your Umbrel for peers to reach you.`;
+	} else {
+		uri = info?.nodeId && rec?.onionAddress ? `${info.nodeId}@${rec.onionAddress}` : null;
+		hint = rec?.onionAddress
+			? 'Reachable over Tor with no port forwarding. Share this to receive inbound channels.'
+			: 'Tor announcing is off for this wallet. Turn it on with Edit above.';
+	}
+
+	return (
+		<Card title="Connect to this node">
+			<div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+				{options.map((o) => (
+					<Button
+						key={o.key}
+						className="sm"
+						style={{ flex: 1 }}
+						variant={o.key === mode ? 'primary' : 'ghost'}
+						onClick={() => setMode(o.key)}
+					>
+						{o.label}
+					</Button>
+				))}
+			</div>
+			{mode === 'clearnet' && (
+				<input
+					value={clearnetHost}
+					placeholder="node.example.com or 203.0.113.4"
+					style={{ marginBottom: 10 }}
+					onChange={(e) => {
+						setClearnetHost(e.target.value);
+						localStorage.setItem(storeKey, e.target.value);
+					}}
+				/>
+			)}
+			{uri ? <CopyText value={uri} /> : <div className="empty">Not available yet.</div>}
+			<span className="field-hint" style={{ display: 'block', marginTop: 8 }}>
+				{hint}
+			</span>
+		</Card>
 	);
 }
 

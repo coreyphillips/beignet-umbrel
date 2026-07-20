@@ -5,7 +5,7 @@ import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useSSE } from '../hooks/useSSE.js';
 import { useToast } from '../components/Toast.jsx';
-import { AnimatedNumber, Badge, Button, Field, Modal } from '../components/ui.jsx';
+import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import { shortId } from '../lib/format.js';
 import OverviewTab from './tabs/OverviewTab.jsx';
@@ -111,7 +111,7 @@ export default function WalletPage() {
 						<>
 							<AnimatedNumber value={info.onchainBalanceSats} suffix=" sats" /> on-chain ·{' '}
 							<AnimatedNumber value={info.lightningBalanceSats} suffix=" sats" /> lightning · node{' '}
-							{shortId(info.nodeId)} · height {info.blockHeight}
+							<CopyText value={info.nodeId} label={shortId(info.nodeId)} /> · height {info.blockHeight}
 						</>
 					) : rec?.electrum ? (
 						`electrum ${rec.electrum.host}:${rec.electrum.port}`
