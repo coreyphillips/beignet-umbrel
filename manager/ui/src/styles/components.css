@@ -1339,3 +1339,23 @@ tbody tr:hover {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+/* ---------- Peer identity cell ---------- */
+/* Alias over the copyable pubkey, so the human-readable name leads and the key
+   is one click away underneath. */
+.peer-id {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.peer-alias {
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.peer-alias.muted {
+	color: var(--muted);
+	font-weight: 400;
+	font-style: italic;
+}

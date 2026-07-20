@@ -185,8 +185,10 @@ store.state['demo-main'] = walletState({
 		{ offerId: hex(64), description: 'Monthly dues', amountSats: 21000, encoded: 'lno1' + hex(120) }
 	],
 	peers: [
-		{ pubkey: pubkey(), host: '84.21.100.4', port: 9735, state: 'connected' },
-		{ pubkey: pubkey(), host: 'ln.acinq.co', port: 9735, state: 'connected' },
+		{ pubkey: pubkey(), host: '84.21.100.4', port: 9735, state: 'connected', alias: 'WalletOfSatoshi.com' },
+		{ pubkey: pubkey(), host: 'ln.acinq.co', port: 9735, state: 'connected', alias: 'ACINQ' },
+		// No alias: a node that has not announced itself to the gossip graph, so
+		// the peers table falls back to just the pubkey.
 		{ pubkey: pubkey(), host: '192.168.4.20', port: 9736, state: 'connected' }
 	]
 });
@@ -222,7 +224,7 @@ store.state['demo-testnet'] = walletState({
 	utxos: makeUtxos(2, 3411502),
 	invoices: makeInvoices(3),
 	offers: [],
-	peers: [{ pubkey: pubkey(), host: '127.0.0.1', port: 9737, state: 'connected' }]
+	peers: [{ pubkey: pubkey(), host: '127.0.0.1', port: 9737, state: 'connected', alias: 'endurance' }]
 });
 
 const nodeIds = {};
@@ -324,8 +326,12 @@ function err(message, code = 'DEMO') {
 }
 
 function publicRecord(w) {
-	// The manager never returns seeds; mirror its record shape.
+	// The manager never returns seeds; mirror its record shape. It also only
+	// reports an onion while announce is on (onionAddress() returns null
+	// otherwise), so gate it the same way here: turning announce off drops the
+	// advertised Tor address, and anything keyed on it disappears with it.
 	const { ...rec } = w;
+	rec.onionAddress = w.announce ? (w.onionAddress ?? null) : null;
 	return rec;
 }
 
@@ -896,6 +902,15 @@ function walletRequest(id, path, method, body) {
 		case '/node/uri': {
 			const host = new URLSearchParams(query || '').get('host') || '127.0.0.1';
 			return { uri: `${nodeId(id)}@${host}:9735` };
+		}
+		case '/graph/node': {
+			// The daemon resolves the alias from the gossip graph and 404s when
+			// the node never announced one. Here the peer carries its own alias,
+			// so a miss (or an alias-less peer) is the same not-found path.
+			const pk = new URLSearchParams(query || '').get('pubkey');
+			const peer = st.peers.find((p) => p.pubkey === pk);
+			if (!peer || !peer.alias) throw err('Node not found in graph', 'NOT_FOUND');
+			return { pubkey: pk, alias: peer.alias, color: '3399ff', channelCount: 24 };
 		}
 		case '/transactions':
 			return st.txs;
