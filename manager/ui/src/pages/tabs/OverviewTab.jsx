@@ -26,6 +26,33 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 	const feeEst = data?.feeEst;
 	const splicing = bal?.splicingSats ?? info?.splicingBalanceSats ?? 0;
 
+	// What you can actually send is the balance above the channel reserve; below
+	// it, nothing is sendable and the balance is still filling the reserve. Fall
+	// back to the raw local balance when the daemon does not report the reserve.
+	const sendable = liq?.sendableSats ?? liq?.totalLocalBalanceSats ?? 0;
+	const belowReserve =
+		liq && sendable === 0 && liq.activeChannelCount > 0 && liq.reserveSats > 0;
+	const reservePct = belowReserve
+		? Math.min(100, Math.round((liq.totalLocalBalanceSats / liq.reserveSats) * 100))
+		: 0;
+
+	// The liquidity bar splits capacity into what you can send (sendable), the
+	// slice of your balance locked as reserve, and what you can receive. Basing
+	// outbound on sendable rather than the raw local balance keeps the bar honest:
+	// below the reserve, outbound reads zero. Falls back to the daemon's own
+	// percentages when it does not report the reserve.
+	const cap = liq?.totalCapacitySats || 0;
+	const hasReserveData = liq?.sendableSats != null && cap > 0;
+	const outBarPct = hasReserveData
+		? (sendable / cap) * 100
+		: liq?.outboundLiquidityPct ?? 0;
+	const reserveBarPct = hasReserveData
+		? (Math.max(0, liq.totalLocalBalanceSats - sendable) / cap) * 100
+		: 0;
+	const inBarPct = hasReserveData
+		? (liq.totalRemoteBalanceSats / cap) * 100
+		: liq?.inboundLiquidityPct ?? 0;
+
 	return (
 		<div>
 			{splicing > 0 && (
@@ -83,20 +110,22 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 					{liq && liq.channelCount > 0 ? (
 						<>
 							<div className="liq">
-								<div className="out" style={{ width: `${liq.outboundLiquidityPct}%` }} />
-								<div className="in" style={{ width: `${liq.inboundLiquidityPct}%` }} />
+								<div className="out" style={{ width: `${outBarPct}%` }} />
+								{reserveBarPct > 0 && (
+									<div
+										className="reserve-seg"
+										style={{ width: `${reserveBarPct}%` }}
+										title="Locked as channel reserve"
+									/>
+								)}
+								<div className="in" style={{ width: `${inBarPct}%` }} />
 							</div>
 							<div className="liq-legend">
-								<span>◆ Outbound {pct(liq.outboundLiquidityPct)}</span>
-								<span>Inbound {pct(liq.inboundLiquidityPct)} ◆</span>
+								<span>◆ Outbound {pct(outBarPct)}</span>
+								<span>Inbound {pct(inBarPct)} ◆</span>
 							</div>
 							<div className="grid cols-2" style={{ marginTop: 12 }}>
-								<Stat
-									label="Can send"
-									num={liq.totalLocalBalanceSats}
-									suffix=" sats"
-									sub="outbound"
-								/>
+								<Stat label="Can send" num={sendable} suffix=" sats" sub="outbound" />
 								<Stat
 									label="Can receive"
 									num={liq.totalRemoteBalanceSats}
@@ -104,6 +133,20 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 									sub="inbound"
 								/>
 							</div>
+							{belowReserve && (
+								<div className="reserve-note">
+									<div className="reserve-head">
+										Fill the channel reserve before you can send
+									</div>
+									<div className="reserve-bar">
+										<div className="reserve-fill" style={{ width: `${reservePct}%` }} />
+									</div>
+									<div className="reserve-legend">
+										<span>{fmtSats(liq.totalLocalBalanceSats)} balance</span>
+										<span>{fmtSats(liq.reserveSats)} reserve</span>
+									</div>
+								</div>
+							)}
 							<div className="wallet-meta" style={{ marginTop: 10 }}>
 								{liq.activeChannelCount}/{liq.channelCount} channels active · capacity{' '}
 								{fmtSats(liq.totalCapacitySats)}

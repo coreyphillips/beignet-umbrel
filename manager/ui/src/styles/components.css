@@ -539,6 +539,15 @@ tbody tr:hover {
 	transition: width 600ms var(--ease-out-expo);
 }
 
+/* The slice of your own balance locked as channel reserve: between the
+   spendable outbound gold and the inbound blue, a faded gold that reads as
+   "your side, but not spendable". Usually a thin sliver; the whole outbound
+   segment when you are still below the reserve. */
+.liq .reserve-seg {
+	background: rgba(247, 147, 26, 0.28);
+	transition: width 600ms var(--ease-out-expo);
+}
+
 .liq-legend {
 	display: flex;
 	justify-content: space-between;
@@ -1358,4 +1367,42 @@ tbody tr:hover {
 	color: var(--muted);
 	font-weight: 400;
 	font-style: italic;
+}
+
+/* ---------- Channel reserve (below-reserve state on the Liquidity card) ---------- */
+/* A thin progress bar showing the local balance filling toward the reserve that
+   must be covered before any sats are sendable. Deliberately quieter than the
+   main .liq bar: it is a "not yet" state, not a headline number. */
+.reserve-note {
+	margin-top: 12px;
+}
+
+.reserve-head {
+	font-size: 12px;
+	color: var(--muted);
+	margin-bottom: 6px;
+}
+
+.reserve-bar {
+	height: 6px;
+	border-radius: var(--r-full);
+	overflow: hidden;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+}
+
+.reserve-fill {
+	height: 100%;
+	border-radius: var(--r-full);
+	background: linear-gradient(90deg, var(--accent), var(--accent-2));
+	transition: width 600ms var(--ease-out-expo);
+}
+
+.reserve-legend {
+	display: flex;
+	justify-content: space-between;
+	color: var(--muted);
+	font-size: 12px;
+	margin-top: 6px;
+	font-variant-numeric: tabular-nums;
 }
