@@ -50,7 +50,7 @@ export default function ReceiveTab({ id, api, tick }) {
 				<div style={{ textAlign: 'center' }}>
 					<QR value={address} />
 				</div>
-				<div style={{ marginTop: 12 }}>
+				<div style={{ marginTop: 12, textAlign: 'center' }}>
 					<CopyText value={address} />
 				</div>
 			</Card>
@@ -77,7 +77,7 @@ export default function ReceiveTab({ id, api, tick }) {
 							exit={{ opacity: 0, scale: 0.96 }}
 						>
 							<QR value={invoice.bolt11} />
-							<div style={{ marginTop: 12, textAlign: 'left' }}>
+							<div style={{ marginTop: 12 }}>
 								<CopyText value={invoice.bolt11} truncate />
 							</div>
 						</m.div>

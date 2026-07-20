@@ -486,6 +486,13 @@ function demoNodeErrors() {
 			message: 'Remote error: invalid funding_amount=100000 sat (min=400000 sat)',
 			channelId: '3f72ef8ddbb7c08cb9d8b945855aba6b99ccf15b156c80d1c2c2e1e1a0e12c58',
 			timestamp: DEMO_ERROR_AT
+		},
+		{
+			// A payment that could not be sent because our side of the channel is
+			// below the amount plus the reserve. Not a channel rejection.
+			code: 'CHANNEL_ERROR',
+			message: 'Insufficient balance for HTLC',
+			timestamp: DEMO_ERROR_AT + 5000
 		}
 	];
 }

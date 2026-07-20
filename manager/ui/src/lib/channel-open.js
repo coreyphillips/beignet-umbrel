@@ -130,5 +130,18 @@ export function formatNodeError(err) {
 	if (err.code === 'FUNDING_BROADCAST_FAILED') {
 		return `The funding transaction could not be broadcast: ${msg}.`;
 	}
+	// "Insufficient balance for HTLC" is a payment failure, not a channel
+	// rejection: the HTLC cannot be added because our side of the channel is
+	// below the amount plus the reserve every channel keeps back. The generic
+	// wording below reads as a failed open, which this is not, so say what is
+	// actually wrong and what to do about it.
+	if (/insufficient/i.test(msg) && /htlc/i.test(msg)) {
+		return (
+			'Not enough spendable balance in the channel to send this. Every channel ' +
+			'keeps a small reserve on your side that cannot be spent, so the most you ' +
+			'can send is a little below your channel balance. Try a smaller amount, or ' +
+			'add local balance to the channel (splice in, or receive a payment into it).'
+		);
+	}
 	return `The peer rejected the channel: ${msg}`;
 }
