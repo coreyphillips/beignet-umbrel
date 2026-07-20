@@ -7,7 +7,21 @@ import { withPeerHint } from '../../lib/hints.js';
 
 export default function PeersTab({ id, api, info, rec, tick, bump }) {
 	const toast = useToast();
-	const { data: peers, refresh } = usePoll(() => api.get('/peers').catch(() => []), 8000, [id, tick]);
+	const { data: peers, refresh } = usePoll(
+		async () => {
+			const list = await api.get('/peers').catch(() => []);
+			// The peer list has no alias; the gossip graph does. Ask it per peer
+			// and fall back to null when the node never announced one (a 404).
+			return Promise.all(
+				list.map(async (p) => {
+					const node = await api.get(`/graph/node?pubkey=${p.pubkey}`).catch(() => null);
+					return { ...p, alias: node?.alias || null };
+				})
+			);
+		},
+		8000,
+		[id, tick]
+	);
 	const { data: nodeUri } = usePoll(
 		() => api.get('/node/uri?host=127.0.0.1').then((r) => r.uri).catch(() => null),
 		15000,
@@ -86,6 +100,50 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 				)}
 			</Card>
 
+			<Card title="Connected peers" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
+				{!peers || peers.length === 0 ? (
+					<div className="empty">No peers connected.</div>
+				) : (
+					<div className="table-wrap">
+						<table>
+							<thead>
+								<tr>
+									<th>Peer</th>
+									<th>Address</th>
+									<th>State</th>
+									<th />
+								</tr>
+							</thead>
+							<tbody>
+								{peers.map((p) => (
+									<tr key={p.pubkey}>
+										<td>
+											<div className="peer-id">
+												{p.alias ? (
+													<span className="peer-alias">{p.alias}</span>
+												) : (
+													<span className="peer-alias muted">unknown node</span>
+												)}
+												<CopyText value={p.pubkey} label={shortId(p.pubkey)} truncate />
+											</div>
+										</td>
+										<td className="mono">{p.host}:{p.port}</td>
+										<td>
+											<Badge tone={p.state === 'connected' ? 'green' : 'yellow'}>{p.state}</Badge>
+										</td>
+										<td>
+											<Button className="sm" onClick={() => disconnect(p.pubkey)}>
+												Disconnect
+											</Button>
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				)}
+			</Card>
+
 			<Card title="Connect to a peer">
 				<Field label="Peer URI (pubkey@host:port)">
 					<input value={uri} onChange={(e) => applyUri(e.target.value)} placeholder="02abc…@1.2.3.4:9735" />
@@ -104,41 +162,6 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 				<Button variant="primary" busy={busy} onClick={connect} disabled={!pubkey || !host}>
 					Connect
 				</Button>
-			</Card>
-
-			<Card title="Connected peers" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
-				{!peers || peers.length === 0 ? (
-					<div className="empty">No peers connected.</div>
-				) : (
-					<div className="table-wrap">
-						<table>
-							<thead>
-								<tr>
-									<th>Pubkey</th>
-									<th>Address</th>
-									<th>State</th>
-									<th />
-								</tr>
-							</thead>
-							<tbody>
-								{peers.map((p) => (
-									<tr key={p.pubkey}>
-										<td className="mono" title={p.pubkey}>{shortId(p.pubkey)}</td>
-										<td className="mono">{p.host}:{p.port}</td>
-										<td>
-											<Badge tone={p.state === 'connected' ? 'green' : 'yellow'}>{p.state}</Badge>
-										</td>
-										<td>
-											<Button className="sm" onClick={() => disconnect(p.pubkey)}>
-												Disconnect
-											</Button>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				)}
 			</Card>
 		</div>
 	);
