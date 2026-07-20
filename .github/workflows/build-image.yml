@@ -42,7 +42,11 @@ env:
   # routing/forwarding/balances aware of the window and a unilateral exit on
   # whichever funding confirms. Verified live against real CLN on regtest
   # (11/11 splice-matrix interop, including four pay-during-splice cases).
-  BEIGNET_VERSION: "0.6.0"
+  # 0.6.1 makes splices restart-proof: after the point of no return, recovery
+  # and unilateral exit depend only on persisted material (session-free
+  # adoption, batch re-signing, exact sig parameters stored with the sigs),
+  # and taproot splices refuse cleanly on the wire instead of wedging.
+  BEIGNET_VERSION: "0.6.1"
 
 jobs:
   build:
