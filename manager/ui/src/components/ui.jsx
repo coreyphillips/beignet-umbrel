@@ -254,7 +254,12 @@ function CopyIcon() {
 	);
 }
 
-export function CopyText({ value, mono = true, truncate = false }) {
+/**
+ * `label` shows something shorter than what gets copied, for places where the
+ * full value would not fit (the wallet header shows a short node id but still
+ * needs to hand over all 66 characters).
+ */
+export function CopyText({ value, label, mono = true, truncate = false }) {
 	const toast = useToast();
 	return (
 		<button
@@ -262,7 +267,7 @@ export function CopyText({ value, mono = true, truncate = false }) {
 			title="Copy"
 			onClick={async () => toast((await copy(value)) ? 'Copied' : 'Copy failed', 'info')}
 		>
-			<span className="copytext-value">{value}</span>
+			<span className="copytext-value">{label ?? value}</span>
 			<CopyIcon />
 		</button>
 	);
