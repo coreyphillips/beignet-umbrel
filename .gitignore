@@ -5,3 +5,4 @@ dist/
 .env
 manager/public/
 data/
+.idea/
