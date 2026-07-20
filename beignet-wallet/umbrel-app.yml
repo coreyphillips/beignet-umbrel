@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.2"
+version: "0.8.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,25 +30,27 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  The Send tab now knows what the wallet knows.
+  The Overview now tells you how to reach your node.
 
 
-  Pay-during-splice shipped two releases ago, and the wallet engine has been
-  happily settling payments through splice windows ever since. The dashboard,
-  however, was never told: the one flag that says "this channel works right
-  now" was computed and then dropped before it reached the screen, so the
-  Send tab kept a mid-splice channel politely disabled while the engine
-  underneath would have paid without complaint. The flag now makes the trip,
-  and the Send tab lights up mid-splice the way it always should have.
+  Where the mainnet readiness card used to sit, scoring the node out of 100
+  against a checklist that never quite said what to do about it, there is now
+  the thing you actually hand to a peer: your node's address. Pick local
+  network, clearnet or Tor, and copy it. The local address follows whatever
+  you use to open the dashboard, Tor uses your wallet's onion, and clearnet
+  takes a public host you type once and the app remembers.
 
 
-  The channel detail view also stops scolding a working channel: a channel
-  paying through its splice no longer reports itself as a problem, and its
-  diagnostics tell the truth about invoices routing to it just fine.
+  The liquidity card lost its paragraphs of advice and kept the numbers they
+  were talking about: what you can send, and what you can receive, in sats,
+  where you can see them.
 
 
-  Ships beignet 0.6.2. Found within minutes of real testing on a real
-  Umbrel, which is what real testing is for.
+  The node id in the wallet header also copies when clicked now, all 66
+  characters of it, rather than sitting there truncated and unhelpful.
+
+
+  Still beignet 0.6.2. This one is all dashboard.
 
 dependencies: []
 path: ""
