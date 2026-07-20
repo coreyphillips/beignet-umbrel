@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.5"
+version: "0.8.6"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,26 +30,27 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Turning on Tor no longer knocks out a channel to a peer on your own network.
+  A few rough edges smoothed over on the dashboard.
 
 
-  Enabling Tor sent every outbound connection through it, and Tor refuses to
-  reach private and local addresses. A node that already had a channel to a
-  peer on its LAN would fail to reconnect the moment Tor came on, with the logs
-  filling up with "Socks5 proxy rejected connection" and the node reporting
-  sync degraded until Tor was switched back off. Now the routing is chosen per
-  peer: onion addresses go through Tor, addresses on your own network go direct
-  because Tor could never reach them anyway, and public peers still go through
-  Tor for the privacy that turning it on is meant to buy.
+  The address and invoice strings under the Receive tab QR codes now sit
+  centered beneath their code instead of hanging off to the left.
 
 
-  Opening a channel can also target one of your own nodes now. The Open channel
-  window gains a Connect to picker, the same one the Send tab has, so you can
-  choose another of your running wallets instead of copying its pubkey and port
-  across by hand.
+  A payment that fails because your side of a channel is below the amount plus
+  the reserve every channel holds back used to report as "the peer rejected the
+  channel", which was wrong on both counts. It now says what actually happened:
+  not enough spendable balance, and that the reserve keeps your sendable amount
+  a little under your channel balance.
 
 
-  Ships beignet 0.6.3.
+  The banner shown when your Umbrel's Tor cannot build circuits no longer warns
+  that every peer connection will fail. Since the last release routes peers on
+  your own network directly, only Tor-reached peers are affected, and the banner
+  now says so.
+
+
+  Still beignet 0.6.3. All dashboard.
 
 
   Still beignet 0.6.2. This one is all dashboard.
