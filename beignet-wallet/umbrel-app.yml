@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.6"
+version: "0.8.7"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,27 +30,21 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A few rough edges smoothed over on the dashboard.
+  The Liquidity card now tells the truth about what you can send.
 
 
-  The address and invoice strings under the Receive tab QR codes now sit
-  centered beneath their code instead of hanging off to the left.
+  "Can send" used to show your channel balance, but every channel holds back a
+  small reserve on your side that cannot be spent, so the number was always a
+  little high, and a freshly opened channel funded on the peer's side showed a
+  sendable balance it did not actually have. Can send now shows what can really
+  go out, which reads zero while your balance is still below the reserve. In
+  that state the card adds a small bar of your balance filling toward the
+  reserve, with both amounts listed, so it is clear how much further there is to
+  go. The outbound bar follows the same figure and draws the locked reserve as
+  its own muted sliver rather than counting it as spendable.
 
 
-  A payment that fails because your side of a channel is below the amount plus
-  the reserve every channel holds back used to report as "the peer rejected the
-  channel", which was wrong on both counts. It now says what actually happened:
-  not enough spendable balance, and that the reserve keeps your sendable amount
-  a little under your channel balance.
-
-
-  The banner shown when your Umbrel's Tor cannot build circuits no longer warns
-  that every peer connection will fail. Since the last release routes peers on
-  your own network directly, only Tor-reached peers are affected, and the banner
-  now says so.
-
-
-  Still beignet 0.6.3. All dashboard.
+  Ships beignet 0.6.4, which is what surfaces the reserve and sendable figures.
 
 
   Still beignet 0.6.2. This one is all dashboard.
