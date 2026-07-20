@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.0"
+version: "0.8.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,35 +30,26 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Your wallet pays during splices now.
+  Splices now survive anything.
 
 
-  Until today, a splice put the channel to sleep: no sending, no receiving,
-  nothing to do but watch confirmations tick by. That was never what the
-  protocol demanded, only what remained to be built. It is built. While a
-  splice waits for its confirmations, the channel keeps working: you can pay,
-  be paid, and the moment the splice locks, the new capacity simply joins in.
-  Every payment made during the window is protected on both the old and the
-  new channel funding, whichever the chain settles on, and if your node or
-  the connection drops mid-payment, the exchange picks up where it left off
-  on reconnect.
+  Last release taught your wallet to pay during splices. This one makes the
+  whole affair indestructible: restart the app mid-splice, mid-payment, even
+  mid-handshake, and everything picks up exactly where it left off. The
+  wallet no longer needs anything it kept in memory; every piece of the
+  splice that matters is written down the moment it matters, so a restart at
+  the worst possible instant changes nothing.
 
 
-  The dashboard follows suit: the Send tab treats a channel mid-splice as the
-  working channel it now is, the Overview note says payments keep flowing
-  rather than counselling patience, and balances stay honest through the
-  whole window, disconnections included.
+  The same is true of the emergency exits. If your channel partner vanishes
+  while a splice confirms, the wallet can always close the channel on
+  whichever version of it actually made it onto the chain, with exact
+  signatures kept for exactly that purpose. Cases that used to end in a
+  cautious "refusing to proceed" now simply recover.
 
 
-  This was tested the way it will be used: against a real Core Lightning
-  node, with real payments crossing a channel whose splice sat unconfirmed in
-  the mempool, in both directions, through a disconnect, and out the other
-  side of the lock.
-
-
-  Ships beignet 0.6.0. One footnote: channels using the experimental taproot
-  type still pause during splices for now; ordinary channels, like the ones
-  this app opens, do not.
+  Ships beignet 0.6.1. No visible changes; this is the release you will
+  never notice working, which is the point.
 
 dependencies: []
 path: ""
