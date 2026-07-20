@@ -289,16 +289,21 @@ function NewWallet({ config, onDone, onSeed }) {
 				<ElectrumFields presets={config.electrumPresets} value={electrum} onChange={setElectrum} />
 			)}
 
+			{(config.torAvailable || config.onionAvailable) && (
+				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+					Tor
+				</div>
+			)}
 			{config.torAvailable && (
-				<label className="checkbox field" style={{ marginTop: 4 }}>
+				<label className="checkbox field">
 					<input type="checkbox" checked={tor} onChange={(e) => setTor(e.target.checked)} />
-					Route Lightning connections over Tor
+					Outbound: connect to peers over Tor
 				</label>
 			)}
 			{config.onionAvailable && (
 				<label className="checkbox field">
 					<input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
-					Advertise a Tor address for inbound channels
+					Inbound: publish a Tor address so peers can open channels to you
 				</label>
 			)}
 
