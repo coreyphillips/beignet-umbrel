@@ -7,6 +7,7 @@ import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { withPeerHint } from '../../lib/hints.js';
 import { watchChannelOpen } from '../../lib/channel-open.js';
+import { manager, walletApi } from '../../api.js';
 
 const STATE_TONE = {
 	NORMAL: 'green',
@@ -159,6 +160,10 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 	const [pubkey, setPubkey] = useState('');
 	const [host, setHost] = useState('');
 	const [port, setPort] = useState('9735');
+	// 'custom' or another wallet's id: opening a channel to one of your own nodes
+	// is the same as connecting to any peer, so the picker just fills the fields.
+	const [peerSel, setPeerSel] = useState('custom');
+	const [resolvingPeer, setResolvingPeer] = useState(false);
 	const [amount, setAmount] = useState('');
 	const [maxAmount, setMaxAmount] = useState(false);
 	const [feeRate, setFeeRate] = useState('');
@@ -177,6 +182,14 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 	const { data: info } = usePoll(() => api.get('/info').catch(() => null), 30000, []);
 	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
 	const { data: utxos } = usePoll(() => api.get('/utxos').catch(() => null), 30000, []);
+	const { data: wallets } = usePoll(() => manager.listWallets().catch(() => []), 15000, []);
+
+	// Your other running nodes on the same network: channel candidates you can
+	// pick instead of pasting a URI. Same-app nodes reach each other on the
+	// loopback listener, so the Tor state of either does not matter here.
+	const others = (wallets || []).filter(
+		(w) => w.id !== id && w.status === 'running' && w.network === rec?.network
+	);
 
 	const balance = info?.onchainBalanceSats;
 
@@ -290,6 +303,32 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 		}
 	};
 
+	// Picking one of your own nodes fills the peer fields from its loopback URI,
+	// the same address the Peers tab hands out for same-app connections. The node
+	// has to be listening for that URI to exist; if it is not up yet, say so
+	// rather than silently leaving the form blank.
+	const onPeer = async (val) => {
+		setPeerSel(val);
+		if (val === 'custom') return;
+		setResolvingPeer(true);
+		try {
+			const r = await walletApi(val).get('/node/uri?host=127.0.0.1');
+			if (!r?.uri) throw new Error('node is not listening yet');
+			applyUri(r.uri);
+		} catch (e) {
+			toast(`Could not reach that node: ${e.message}`, 'error');
+			setPeerSel('custom');
+		} finally {
+			setResolvingPeer(false);
+		}
+	};
+
+	// Any hand edit of the peer fields means the choice is no longer that node.
+	const editPeerField = (setter) => (val) => {
+		if (peerSel !== 'custom') setPeerSel('custom');
+		setter(val);
+	};
+
 	const open = async () => {
 		setBusy(true);
 		setStatus('Connecting to the peer…');
@@ -361,18 +400,33 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 			<div className="wallet-meta" style={{ marginBottom: 12 }}>
 				On-chain available: {fmtSats(balance)}
 			</div>
-			<Field label="Peer URI (pubkey@host:port)" hint="Or fill the fields below individually.">
-				<input value={uri} onChange={(e) => applyUri(e.target.value)} placeholder="02abc…@1.2.3.4:9735" />
+			{others.length > 0 && (
+				<Field label="Connect to">
+					<select value={peerSel} onChange={(e) => onPeer(e.target.value)}>
+						<option value="custom">Custom peer</option>
+						{others.map((w) => (
+							<option key={w.id} value={w.id}>
+								{w.name} ({w.network})
+							</option>
+						))}
+					</select>
+				</Field>
+			)}
+			<Field
+				label="Peer URI (pubkey@host:port)"
+				hint={resolvingPeer ? 'Resolving that node…' : 'Or fill the fields below individually.'}
+			>
+				<input value={uri} onChange={(e) => editPeerField(applyUri)(e.target.value)} placeholder="02abc…@1.2.3.4:9735" />
 			</Field>
 			<Field label="Node pubkey">
-				<input value={pubkey} onChange={(e) => setPubkey(e.target.value)} placeholder="02…" />
+				<input value={pubkey} onChange={(e) => editPeerField(setPubkey)(e.target.value)} placeholder="02…" />
 			</Field>
 			<div className="row">
 				<Field label="Host">
-					<input value={host} onChange={(e) => setHost(e.target.value)} />
+					<input value={host} onChange={(e) => editPeerField(setHost)(e.target.value)} />
 				</Field>
 				<Field label="Port">
-					<input value={port} onChange={(e) => setPort(e.target.value)} style={{ maxWidth: 110 }} />
+					<input value={port} onChange={(e) => editPeerField(setPort)(e.target.value)} style={{ maxWidth: 110 }} />
 				</Field>
 			</div>
 			<AmountField
