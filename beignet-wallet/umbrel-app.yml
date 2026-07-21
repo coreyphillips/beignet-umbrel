@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.7"
+version: "0.8.8"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,21 +30,20 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  The Liquidity card now tells the truth about what you can send.
+  Opening a channel with your whole balance works again.
 
 
-  "Can send" used to show your channel balance, but every channel holds back a
-  small reserve on your side that cannot be spent, so the number was always a
-  little high, and a freshly opened channel funded on the peer's side showed a
-  sendable balance it did not actually have. Can send now shows what can really
-  go out, which reads zero while your balance is still below the reserve. In
-  that state the card adds a small bar of your balance filling toward the
-  reserve, with both amounts listed, so it is clear how much further there is to
-  go. The outbound bar follows the same figure and draws the locked reserve as
-  its own muted sliver rather than counting it as spendable.
+  Pressing Max on a channel open used to fail with "New total amount exceeds
+  the available balance," and left a half-open channel behind. The amount was
+  worked out as a clean sweep of your balance, but the channel was then funded
+  as if it were an ordinary payment, which needs room for a change output that
+  a full sweep does not leave. Now a Max open really sweeps: the whole balance
+  goes into the channel with nothing held back, and there is no leftover fee it
+  cannot cover.
 
 
-  Ships beignet 0.6.4, which is what surfaces the reserve and sendable figures.
+  Ships beignet 0.6.5, which adds the sweeping funding path. If a Max open ever
+  left a channel stranded, restarting the app clears it.
 
 
   Still beignet 0.6.2. This one is all dashboard.
