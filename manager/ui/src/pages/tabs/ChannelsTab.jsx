@@ -347,6 +347,11 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 			// daemon picks its own, and a Max sized against ours would be short.
 			if (effRate) body.satsPerVbyte = effRate;
 			if (push) body.pushSats = parseInt(push, 10);
+			// Sweep the whole balance into the channel. amountSats stays as the
+			// committed funding amount; max tells the daemon to fund it by sweeping
+			// (no change output) so the exact max does not overflow its own fee.
+			// Ignored by daemons older than the one that added it.
+			if (maxAmount) body.max = true;
 
 			// Snapshot the channels we already have with this peer. The open returns
 			// a *temporary* channel id that is swapped for a permanent one the moment
