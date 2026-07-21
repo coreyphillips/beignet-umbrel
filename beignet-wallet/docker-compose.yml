@@ -19,9 +19,9 @@ services:
     container_name: beignet-wallet_manager_1
     # Tag matches `version` in umbrel-app.yml: the release build publishes the
     # image under the app version, so the two move together. The digest pins the
-    # exact multi-arch index the v0.8.9 build published, and proves it exists:
+    # exact multi-arch index the v0.8.10 build published, and proves it exists:
     # main must never name an image that has not been built (see check-release).
-    image: ghcr.io/coreyphillips/beignet-app:0.8.9@sha256:033ee1c6f32b0336e9b5b29114599c60d0acde5b1b6026c0ee874bbf447a3e2d
+    image: ghcr.io/coreyphillips/beignet-app:0.8.10@sha256:cdb1c5224d6373b9202e038e77b3571f04693fe1142c8eea14738c14715af138
     restart: on-failure
     init: true
     stop_grace_period: 1m
