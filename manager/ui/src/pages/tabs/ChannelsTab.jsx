@@ -29,7 +29,22 @@ const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
 export default function ChannelsTab({ id, api, rec, tick, bump }) {
 	const toast = useToast();
 	const [modal, setModal] = useState(null);
-	const { data: channels, refresh } = usePoll(() => api.get('/channels').catch(() => []), 8000, [id, tick]);
+	const { data: channels, refresh } = usePoll(
+		async () => {
+			const list = await api.get('/channels').catch(() => []);
+			// The channel list carries no alias; resolve each peer's from the gossip
+			// graph, the same lookup the Peers tab uses, and fall back to null on a
+			// miss (an unannounced peer).
+			return Promise.all(
+				list.map(async (c) => {
+					const node = await api.get(`/graph/node?pubkey=${c.peerPubkey}`).catch(() => null);
+					return { ...c, alias: node?.alias || null };
+				})
+			);
+		},
+		8000,
+		[id, tick]
+	);
 
 	const doAction = async (fn, ok) => {
 		try {
@@ -69,7 +84,16 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 										className="row-clickable"
 										onClick={(e) => setModal({ type: 'detail', channel: c, origin: clickOrigin(e) })}
 									>
-										<td className="mono" title={c.peerPubkey}>{shortId(c.peerPubkey)}</td>
+										<td>
+											<div className="peer-id">
+												{c.alias ? (
+													<span className="peer-alias">{c.alias}</span>
+												) : (
+													<span className="peer-alias muted">unknown node</span>
+												)}
+												<span className="mono" title={c.peerPubkey}>{shortId(c.peerPubkey)}</span>
+											</div>
+										</td>
 										<td>{fmtSats(c.capacitySats)}</td>
 										<td>
 											<BalanceBar local={c.localBalanceSats} remote={c.remoteBalanceSats} />

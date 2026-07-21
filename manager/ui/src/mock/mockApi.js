@@ -37,11 +37,14 @@ const now = Date.now();
 const DAY = 86400000;
 
 function makeChannels(specs) {
-	return specs.map(([capacitySats, localPct, state, isPrivate]) => {
+	return specs.map(([capacitySats, localPct, state, isPrivate, alias]) => {
 		const localBalanceSats = Math.round((capacitySats * localPct) / 100);
 		return {
 			channelId: hex(64),
 			peerPubkey: pubkey(),
+			// Not returned by the daemon; the mock keeps it so /graph/node can
+			// resolve the channel peer's alias, mirroring the gossip lookup.
+			alias: alias || null,
 			capacitySats,
 			localBalanceSats,
 			remoteBalanceSats: capacitySats - localBalanceSats,
@@ -181,9 +184,10 @@ const store = {
 store.state['demo-main'] = walletState({
 	blockHeight: 908214,
 	channels: makeChannels([
-		[2000000, 62, 'NORMAL'],
-		[5000000, 38, 'NORMAL'],
-		[1200000, 81, 'AWAITING_FUNDING_CONFIRMED'],
+		[2000000, 62, 'NORMAL', false, 'ACINQ'],
+		[5000000, 38, 'NORMAL', false, 'WalletOfSatoshi.com'],
+		[1200000, 81, 'AWAITING_FUNDING_CONFIRMED', false, 'Bitrefill'],
+		// No alias: an unannounced peer, so the list falls back to the pubkey.
 		[750000, 22, 'NORMAL', true]
 	]),
 	txs: makeTxs(25, 908214),
@@ -952,8 +956,10 @@ function walletRequest(id, path, method, body) {
 			// so a miss (or an alias-less peer) is the same not-found path.
 			const pk = new URLSearchParams(query || '').get('pubkey');
 			const peer = st.peers.find((p) => p.pubkey === pk);
-			if (!peer || !peer.alias) throw err('Node not found in graph', 'NOT_FOUND');
-			return { pubkey: pk, alias: peer.alias, color: '3399ff', channelCount: 24 };
+			const chan = st.channels.find((c) => c.peerPubkey === pk);
+			const alias = peer?.alias || chan?.alias;
+			if (!alias) throw err('Node not found in graph', 'NOT_FOUND');
+			return { pubkey: pk, alias, color: '3399ff', channelCount: 24 };
 		}
 		case '/transactions':
 			return st.txs;
