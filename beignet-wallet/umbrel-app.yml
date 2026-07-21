@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.8"
+version: "0.8.9"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,20 +30,27 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Opening a channel with your whole balance works again.
+  Bigger channels, steadier connections, and larger payments.
 
 
-  Pressing Max on a channel open used to fail with "New total amount exceeds
-  the available balance," and left a half-open channel behind. The amount was
-  worked out as a clean sweep of your balance, but the channel was then funded
-  as if it were an ordinary payment, which needs room for a change output that
-  a full sweep does not leave. Now a Max open really sweeps: the whole balance
-  goes into the channel with nothing held back, and there is no leftover fee it
-  cannot cover.
+  Large channels are now on by default, so you can open a channel bigger than
+  the old ~0.167 BTC limit to any peer that supports them, which every major
+  node does. Together with the sweeping Max open from the last release, funding
+  a channel with your whole balance now works no matter the size.
 
 
-  Ships beignet 0.6.5, which adds the sweeping funding path. If a Max open ever
-  left a channel stranded, restarting the app clears it.
+  Connections hold together better. When a peer's side of a connection drops
+  without your node noticing, usually a Tor circuit collapsing, it re-dials
+  right away; your node used to still be holding the dead socket and turn the
+  fresh connection away. Now the stale one is replaced, so the peer reconnects
+  instead of being locked out until a timeout expires.
+
+
+  Single payments are no longer capped at 500,000 sats in flight. The limit now
+  scales with the channel, so a larger payment can go out in one shot.
+
+
+  Ships beignet 0.6.6.
 
 
   Still beignet 0.6.2. This one is all dashboard.
