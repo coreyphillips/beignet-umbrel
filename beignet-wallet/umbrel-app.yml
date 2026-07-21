@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.11"
+version: "0.8.12"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,18 +30,19 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Payments can route through your node again.
+  A failed payment now tells you why.
 
 
-  When a payment passes through your node on its way somewhere else, your node
-  has to hand it off over the right channel, which it finds by the channel id
-  carried in the payment. It was only recognising a channel by its temporary
-  aliases, not by its permanent id, so a payment that named the permanent one
-  was turned away as if the channel did not exist, even though it did. Now both
-  are recognised, so your node forwards those payments instead of failing them.
+  When a payment could not even leave your node, most often because the peer
+  was unreachable while Tor was struggling, all you used to see was that it
+  failed, with no reason attached. It looked like something had gone wrong
+  reading the result rather than the plain truth that the peer could not be
+  reached. Those payments now carry a reason, shown on the send result and in
+  the Activity tab, so a local problem reads as a local problem instead of a
+  blank failure.
 
 
-  Ships beignet 0.6.8.
+  Ships beignet 0.6.9.
 
 
   Still beignet 0.6.2. This one is all dashboard.
