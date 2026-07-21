@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.10"
+version: "0.8.11"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,19 +30,18 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A channel that a peer opened to you now reconnects on its own.
+  Payments can route through your node again.
 
 
-  When another node opens a channel to you, it dials in from a random port, so
-  your node never had an address to dial back. If that connection dropped, and
-  over Tor it drops often, the channel went quiet and stayed that way until
-  someone reconnected the peer by hand. Now your node looks up the peer's
-  published address and dials back itself, so the channel comes back on its own.
-  This is most noticeable for channels opened to you over Tor, where the other
-  side can be slow to retry.
+  When a payment passes through your node on its way somewhere else, your node
+  has to hand it off over the right channel, which it finds by the channel id
+  carried in the payment. It was only recognising a channel by its temporary
+  aliases, not by its permanent id, so a payment that named the permanent one
+  was turned away as if the channel did not exist, even though it did. Now both
+  are recognised, so your node forwards those payments instead of failing them.
 
 
-  Ships beignet 0.6.7.
+  Ships beignet 0.6.8.
 
 
   Still beignet 0.6.2. This one is all dashboard.
