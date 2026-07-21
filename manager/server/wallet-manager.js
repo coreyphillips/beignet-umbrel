@@ -548,6 +548,11 @@ class WalletManager {
 			BEIGNET_MNEMONIC: mnemonic,
 			BEIGNET_API_TOKEN: token,
 			BEIGNET_NETWORK: rec.network,
+			// The wallet's name doubles as the Lightning node alias in the
+			// node_announcement. The daemon truncates values over the BOLT 7
+			// 32-byte limit itself, so no validation is needed here. A rename
+			// propagates because updateWallet restarts a running daemon.
+			BEIGNET_ALIAS: rec.name,
 			BEIGNET_DAEMON_HOST: '127.0.0.1',
 			BEIGNET_DAEMON_PORT: String(rec.port),
 			// Enable an inbound Lightning listen port so other nodes can connect.
