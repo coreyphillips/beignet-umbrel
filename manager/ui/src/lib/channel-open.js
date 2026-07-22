@@ -121,14 +121,42 @@ async function firstFailure({ id, tempChannelId, since, strict = true }) {
 	return hit ? formatNodeError(hit) : null;
 }
 
-/** Turn a raw node error into something a person can act on. */
+/**
+ * Turn a raw node error into something a person can act on.
+ *
+ * These errors come from two different places and only one of them is the peer.
+ * `CHANNEL_ERROR` covers both the daemon's own state guards and text a peer sent
+ * us in a BOLT error, and `AUTO_RECONNECT_FAILED` is purely local. Blaming the
+ * peer for all of them, as the old catch-all did, tells the user the wrong thing
+ * about whose fault a failure is and what they can do about it.
+ */
 export function formatNodeError(err) {
-	const msg = String(err.message || '').replace(/^Remote error:\s*/i, '');
+	const raw = String(err.message || '');
+	const msg = raw.replace(/^Remote error:\s*/i, '');
+
 	if (err.code === 'AUTO_FUNDING_FAILED') {
 		return `Could not fund the channel: ${msg}. No on-chain funds were spent.`;
 	}
 	if (err.code === 'FUNDING_BROADCAST_FAILED') {
 		return `The funding transaction could not be broadcast: ${msg}.`;
+	}
+	// Purely local, and about a peer rather than a channel: we could not open a
+	// connection. No channel is named and none is harmed.
+	if (err.code === 'AUTO_RECONNECT_FAILED') {
+		return (
+			`Could not reach the peer: ${msg}. It is offline, or not reachable from ` +
+			'here. Any channel you have with it is unharmed and picks up again once ' +
+			'the peer is back.'
+		);
+	}
+	// Tested against the raw message, before the prefix is stripped, and ahead of
+	// every message-matching branch below: that prefix is the only thing marking
+	// these words as the peer's rather than ours, so nothing else may claim them.
+	if (/^Remote error:/i.test(raw)) {
+		return (
+			`The peer refused to continue and gave this reason: "${msg}". Those are ` +
+			"the peer's words, not ours."
+		);
 	}
 	// "Insufficient balance for HTLC" is a payment failure, not a channel
 	// rejection: the HTLC cannot be added because our side of the channel is
@@ -143,5 +171,17 @@ export function formatNodeError(err) {
 			'add local balance to the channel (splice in, or receive a payment into it).'
 		);
 	}
-	return `The peer rejected the channel: ${msg}`;
+	// Our own state guards, refusing to act on a channel that is no longer
+	// usable. Nothing about this resolves on its own, so say so.
+	if (
+		/channel in \w+ state/i.test(msg) ||
+		/wrong state/i.test(msg) ||
+		/HTLC \d+ not found/i.test(msg)
+	) {
+		return (
+			'This channel has stopped working and can no longer carry payments. ' +
+			'Closing it returns the funds to your on-chain balance.'
+		);
+	}
+	return `The wallet reported a problem: ${msg}`;
 }

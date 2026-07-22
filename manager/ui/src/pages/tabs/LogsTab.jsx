@@ -66,15 +66,17 @@ export default function LogsTab({ id, tick }) {
 		URL.revokeObjectURL(url);
 	};
 
-	const recentErrors = (errors || []).slice(-5).reverse();
+	// A node that is unhappy repeats itself, so a short window fills with the
+	// same two or three lines and pushes the one that explains why off the card.
+	const recentErrors = (errors || []).slice(-15).reverse();
 
 	return (
 		<div>
 			{recentErrors.length > 0 && (
 				<Card title="Recent node errors">
 					<div className="wallet-meta" style={{ marginBottom: 10 }}>
-						Errors reported by the wallet daemon, newest first. A failed channel open
-						reports its reason here.
+						Errors reported by the wallet daemon, newest first. Some come from the
+						wallet itself and some are what a peer told us; each one says which.
 					</div>
 					{recentErrors.map((e, i) => (
 						<div className="error-note" key={`${e.timestamp}-${i}`} style={{ marginBottom: 8 }}>

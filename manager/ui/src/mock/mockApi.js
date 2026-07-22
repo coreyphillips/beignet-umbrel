@@ -520,6 +520,20 @@ function demoNodeErrors() {
 			code: 'CHANNEL_ERROR',
 			message: 'Insufficient balance for HTLC',
 			timestamp: DEMO_ERROR_AT + 5000
+		},
+		{
+			// Purely local: we could not open a connection to the peer. Names no
+			// channel, and harms none.
+			code: 'AUTO_RECONNECT_FAILED',
+			message: 'Failed to reconnect 02e9a5bc...: Connection timeout',
+			timestamp: DEMO_ERROR_AT + 10000
+		},
+		{
+			// One of our own state guards, not the peer speaking.
+			code: 'CHANNEL_ERROR',
+			message: 'Cannot add HTLC: channel in ERRORED state',
+			channelId: '55034b97024579c8afe98d7642515761b68418899d49692d8a2c168332bc9f5b',
+			timestamp: DEMO_ERROR_AT + 15000
 		}
 	];
 }
