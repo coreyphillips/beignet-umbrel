@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.8.12"
+version: "0.9.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,22 +30,31 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A failed payment now tells you why.
+  Channel opens work against modern routing nodes, the Liquidity card stays
+  honest during splices, and a dropped peer is visible and fixable.
 
 
-  When a payment could not even leave your node, most often because the peer
-  was unreachable while Tor was struggling, all you used to see was that it
-  failed, with no reason attached. It looked like something had gone wrong
-  reading the result rather than the plain truth that the peer could not be
-  reached. Those payments now carry a reason, shown on the send result and in
-  the Activity tab, so a local problem reads as a local problem instead of a
-  blank failure.
+  Opening a channel to a peer running dual funding (Core Lightning today, and a
+  growing share of the network) used to be rejected during negotiation with a
+  cryptic error. Opens now speak the v2 protocol those peers require and fund
+  themselves from your on-chain balance exactly like before.
 
 
-  Ships beignet 0.6.9.
+  Splicing a channel used to zero the Liquidity card for the whole splice, even
+  though sats stayed sendable throughout. The card now counts a splicing
+  channel at the conservative side of its balances, so what you see matches
+  what you can spend.
 
 
-  Still beignet 0.6.2. This one is all dashboard.
+  A channel whose peer connection dropped now shows a "peer offline" badge in
+  the channels list, with a one-click Reconnect that resolves the peer's
+  address for you. Payment retries actually retry after temporary failures,
+  a recipient one block ahead of your node no longer fails a payment for good,
+  and a failed channel open cleans up after itself instead of leaving a stuck
+  entry in the list.
+
+
+  Ships beignet 0.7.0.
 
 dependencies: []
 path: ""
