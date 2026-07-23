@@ -621,7 +621,12 @@ function walletRequest(id, path, method, body) {
 				]
 			};
 		case '/liquidity': {
-			const normal = st.channels.filter((c) => c.state === 'NORMAL');
+			// Routable means NORMAL or paying through its splice (htlcUsable),
+			// matching the daemon: filtering on NORMAL alone zeroed the card for
+			// the whole splice window despite sats being sendable throughout.
+			const routable = st.channels.filter(
+				(c) => c.state === 'NORMAL' || c.htlcUsable
+			);
 			const totalLocalBalanceSats = lightningBalance(id);
 			const totalCapacitySats = st.channels.reduce((a, c) => a + c.capacitySats, 0);
 			const totalRemoteBalanceSats = totalCapacitySats - totalLocalBalanceSats;
@@ -632,15 +637,21 @@ function walletRequest(id, path, method, body) {
 			// and unspendable. What you can actually send is the local balance above
 			// it, summed over routable channels, which is what the daemon's canSend
 			// reports. Below the reserve, sendable is zero even with a balance.
+			// Mid-splice the spendable side is the conservative min of the live and
+			// settle-to balances, the same ceiling the daemon's addHtlc enforces.
 			const chReserve = (c) => Math.max(546, Math.round(c.capacitySats * 0.01));
-			const reserveSats = normal.reduce((a, c) => a + chReserve(c), 0);
-			const sendableSats = normal.reduce(
-				(a, c) => a + Math.max(0, c.localBalanceSats - chReserve(c)),
+			const spendable = (c) =>
+				c.pendingSpliceLocalBalanceSats != null
+					? Math.min(c.localBalanceSats, c.pendingSpliceLocalBalanceSats)
+					: c.localBalanceSats;
+			const reserveSats = routable.reduce((a, c) => a + chReserve(c), 0);
+			const sendableSats = routable.reduce(
+				(a, c) => a + Math.max(0, spendable(c) - chReserve(c)),
 				0
 			);
 			return {
 				channelCount: st.channels.length,
-				activeChannelCount: normal.length,
+				activeChannelCount: routable.length,
 				totalLocalBalanceSats,
 				totalRemoteBalanceSats,
 				totalCapacitySats,
