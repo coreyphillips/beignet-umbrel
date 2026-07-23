@@ -188,7 +188,12 @@ store.state['demo-main'] = walletState({
 		[5000000, 38, 'NORMAL', false, 'WalletOfSatoshi.com'],
 		[1200000, 81, 'AWAITING_FUNDING_CONFIRMED', false, 'Bitrefill'],
 		// No alias: an unannounced peer, so the list falls back to the pubkey.
-		[750000, 22, 'NORMAL', true]
+		[750000, 22, 'NORMAL', true],
+		// Closed history, so the channels view's Closed tab is visitable: a
+		// cooperative close and a force close (the latter waiting out its CSV
+		// delay). Neither counts toward balances or liquidity.
+		[1500000, 30, 'CLOSED', false, 'Sparky'],
+		[650000, 45, 'FORCE_CLOSED', false, 'endurance']
 	]),
 	txs: makeTxs(25, 908214),
 	payments: makePayments(40),

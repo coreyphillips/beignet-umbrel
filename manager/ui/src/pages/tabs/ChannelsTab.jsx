@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { AmountField, Badge, BalanceBar, Button, Card, CopyText, DetailRow, Field, FeeField, Modal } from '../../components/ui.jsx';
+import { AmountField, Badge, BalanceBar, Button, Card, CopyText, DetailRow, Field, FeeField, Modal, Segmented } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
@@ -29,6 +29,7 @@ const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
 export default function ChannelsTab({ id, api, rec, tick, bump }) {
 	const toast = useToast();
 	const [modal, setModal] = useState(null);
+	const [view, setView] = useState('open');
 	const { data: channels, refresh } = usePoll(
 		async () => {
 			const list = await api.get('/channels').catch(() => []);
@@ -88,79 +89,118 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 			refreshPeers();
 		}, 'Reconnected to the peer.');
 
+	// A closed channel is history, not workload: it has no actions, cannot
+	// route, and every one that lingers pushes a live channel further down the
+	// list. Split the views like the Activity tab does.
+	const CLOSED_STATES = new Set(['CLOSED', 'FORCE_CLOSED']);
+	const openChannels = (channels || []).filter((c) => !CLOSED_STATES.has(c.state));
+	const closedChannels = (channels || []).filter((c) => CLOSED_STATES.has(c.state));
+	const shown = view === 'closed' ? closedChannels : openChannels;
+
+	const renderRows = (list, { withActions }) => (
+		<div className="table-wrap">
+			<table>
+				<thead>
+					<tr>
+						<th>Peer</th>
+						<th>Capacity</th>
+						<th style={{ width: 180 }}>Local / Remote</th>
+						<th>State</th>
+						<th />
+					</tr>
+				</thead>
+				<tbody>
+					{list.map((c) => (
+						<tr
+							key={c.channelId}
+							className="row-clickable"
+							onClick={(e) => setModal({ type: 'detail', channel: c, origin: clickOrigin(e) })}
+						>
+							<td>
+								<div className="peer-id">
+									{c.alias ? (
+										<span className="peer-alias">{c.alias}</span>
+									) : (
+										<span className="peer-alias muted">unknown node</span>
+									)}
+									<span className="mono" title={c.peerPubkey}>{shortId(c.peerPubkey)}</span>
+								</div>
+							</td>
+							<td>{fmtSats(c.capacitySats)}</td>
+							<td>
+								<BalanceBar local={c.localBalanceSats} remote={c.remoteBalanceSats} />
+								<div className="wallet-meta" style={{ marginTop: 4 }}>
+									{fmtSats(c.localBalanceSats)} / {fmtSats(c.remoteBalanceSats)}
+								</div>
+							</td>
+							<td>
+								<Badge tone={STATE_TONE[c.state] || 'muted'}>{c.state}</Badge>
+								{c.isPrivate && <Badge tone="muted">private</Badge>}
+								{peerOffline(c) && <Badge tone="red">peer offline</Badge>}
+							</td>
+							{/* The buttons act on the channel; only the rest of the row opens
+							    it. Closed channels have nothing left to act on. */}
+							<td onClick={(e) => e.stopPropagation()}>
+								{withActions && (
+									<div className="wallet-actions">
+										{peerOffline(c) && (
+											<Button className="sm" onClick={() => reconnectPeer(c.peerPubkey)}>
+												Reconnect
+											</Button>
+										)}
+										<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
+											Splice in
+										</Button>
+										<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'out', channel: c, origin: clickOrigin(e) })}>
+											Splice out
+										</Button>
+										<Button className="sm" onClick={(e) => setModal({ type: 'close', channel: c, origin: clickOrigin(e) })}>
+											Close
+										</Button>
+									</div>
+								)}
+							</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+		</div>
+	);
+
 	return (
 		<div>
+			<Segmented
+				id="channels-view"
+				value={view}
+				onChange={setView}
+				options={[
+					['open', `Open (${openChannels.length})`],
+					['closed', `Closed (${closedChannels.length})`]
+				]}
+			/>
+
 			<Card
-				title="Channels"
-				actions={<Button variant="primary" className="sm" onClick={(e) => setModal({ type: 'open', origin: clickOrigin(e) })}>Open channel</Button>}
+				title={view === 'closed' ? 'Closed channels' : 'Channels'}
+				actions={
+					view === 'open' ? (
+						<Button variant="primary" className="sm" onClick={(e) => setModal({ type: 'open', origin: clickOrigin(e) })}>Open channel</Button>
+					) : undefined
+				}
 			>
-				{!channels || channels.length === 0 ? (
-					<div className="empty">No channels. Open one to start using Lightning.</div>
-				) : (
-					<div className="table-wrap">
-						<table>
-							<thead>
-								<tr>
-									<th>Peer</th>
-									<th>Capacity</th>
-									<th style={{ width: 180 }}>Local / Remote</th>
-									<th>State</th>
-									<th />
-								</tr>
-							</thead>
-							<tbody>
-								{channels.map((c) => (
-									<tr
-										key={c.channelId}
-										className="row-clickable"
-										onClick={(e) => setModal({ type: 'detail', channel: c, origin: clickOrigin(e) })}
-									>
-										<td>
-											<div className="peer-id">
-												{c.alias ? (
-													<span className="peer-alias">{c.alias}</span>
-												) : (
-													<span className="peer-alias muted">unknown node</span>
-												)}
-												<span className="mono" title={c.peerPubkey}>{shortId(c.peerPubkey)}</span>
-											</div>
-										</td>
-										<td>{fmtSats(c.capacitySats)}</td>
-										<td>
-											<BalanceBar local={c.localBalanceSats} remote={c.remoteBalanceSats} />
-											<div className="wallet-meta" style={{ marginTop: 4 }}>
-												{fmtSats(c.localBalanceSats)} / {fmtSats(c.remoteBalanceSats)}
-											</div>
-										</td>
-										<td>
-											<Badge tone={STATE_TONE[c.state] || 'muted'}>{c.state}</Badge>
-											{c.isPrivate && <Badge tone="muted">private</Badge>}
-											{peerOffline(c) && <Badge tone="red">peer offline</Badge>}
-										</td>
-										{/* The buttons act on the channel; only the rest of the row opens it. */}
-										<td onClick={(e) => e.stopPropagation()}>
-											<div className="wallet-actions">
-												{peerOffline(c) && (
-													<Button className="sm" onClick={() => reconnectPeer(c.peerPubkey)}>
-														Reconnect
-													</Button>
-												)}
-												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
-													Splice in
-												</Button>
-												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'out', channel: c, origin: clickOrigin(e) })}>
-													Splice out
-												</Button>
-												<Button className="sm" onClick={(e) => setModal({ type: 'close', channel: c, origin: clickOrigin(e) })}>
-													Close
-												</Button>
-											</div>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
+				{view === 'closed' && closedChannels.length > 0 && (
+					<div className="wallet-meta" style={{ marginBottom: 10 }}>
+						Funds from a close return to your on-chain balance: right away for a
+						cooperative close, after the security delay for a force close.
 					</div>
+				)}
+				{shown.length === 0 ? (
+					<div className="empty">
+						{view === 'closed'
+							? 'No closed channels.'
+							: 'No channels. Open one to start using Lightning.'}
+					</div>
+				) : (
+					renderRows(shown, { withActions: view === 'open' })
 				)}
 			</Card>
 
