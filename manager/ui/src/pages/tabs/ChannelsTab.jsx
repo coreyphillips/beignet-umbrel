@@ -265,6 +265,12 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 	// is the same as connecting to any peer, so the picker just fills the fields.
 	const [peerSel, setPeerSel] = useState('custom');
 	const [resolvingPeer, setResolvingPeer] = useState(false);
+	// Trusted channel between your own nodes: zero-conf, usable the moment it
+	// is funded with no confirmation wait. Only offered when the peer is one of
+	// your own wallets, because accepting unconfirmed funding assumes the peer
+	// cannot double-spend you: it is you. Reserves and everything else stay
+	// standard.
+	const [trusted, setTrusted] = useState(true);
 	const [amount, setAmount] = useState('');
 	const [maxAmount, setMaxAmount] = useState(false);
 	const [feeRate, setFeeRate] = useState('');
@@ -454,6 +460,19 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 			// Ignored by daemons older than the one that added it.
 			if (maxAmount) body.max = true;
 
+			// A trusted open needs both daemons to trust the other BEFORE
+			// open_channel arrives: ours learns it from the trusted flag on the
+			// open, the sibling has to be told directly or it rejects the
+			// zero-conf proposal. Registering trust is what makes the channel
+			// usable immediately, so a failure here fails the open rather than
+			// quietly falling back to a normal one.
+			if (peerSel !== 'custom' && trusted) {
+				const myPubkey = info?.nodeId || (await api.get('/info'))?.nodeId;
+				if (!myPubkey) throw new Error('Could not read our own node id');
+				await walletApi(peerSel).post('/trusted-peer/add', { pubkey: myPubkey });
+				body.trusted = true;
+			}
+
 			// Snapshot the channels we already have with this peer. The open returns
 			// a *temporary* channel id that is swapped for a permanent one the moment
 			// funding is created, so the new channel has to be spotted by its peer,
@@ -517,6 +536,25 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 						))}
 					</select>
 				</Field>
+			)}
+			{peerSel !== 'custom' && (
+				<>
+					<label className="checkbox field">
+						<input
+							type="checkbox"
+							checked={trusted}
+							onChange={(e) => setTrusted(e.target.checked)}
+						/>
+						Trusted channel: zero-conf
+					</label>
+					{trusted && (
+						<div className="wallet-meta" style={{ marginBottom: 12 }}>
+							Usable the moment it is funded, no confirmation wait. Safe
+							because the peer is your own node. Hand-editing the peer fields
+							turns this off.
+						</div>
+					)}
+				</>
 			)}
 			<Field
 				label="Peer URI (pubkey@host:port)"

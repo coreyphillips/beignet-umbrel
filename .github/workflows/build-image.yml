@@ -83,7 +83,18 @@ env:
   # dashboard rendered as an unknown offline peer with a broken Reconnect.
   # Daemon surface: /channel/open additionally accepts max and satsPerVbyte
   # (parity with connect-and-open); everything else unchanged.
-  BEIGNET_VERSION: "0.7.2"
+  # 0.7.3 adds trusted zero-conf channel opens for the dashboard's own-node
+  # picker: connect-and-open accepts trusted, which puts the zero_conf channel
+  # type on the wire (previously the bit was never set, so zero-conf never
+  # actually negotiated), keeps the standard v1/v2 routing (dual-fund peers
+  # ride open_channel2), and both peers fast-track channel_ready so the
+  # channel is usable before the funding confirms. Reserves and everything
+  # else stay standard BOLT 2. The acceptor must hold the opener in its
+  # trusted set (POST /trusted-peer/add, which already existed) or it rejects
+  # the proposal. Also fixes a pathfinding bug where an invoice hint naming an
+  # announced channel could kill that exact route. Daemon surface:
+  # connect-and-open additionally accepts trusted; everything else unchanged.
+  BEIGNET_VERSION: "0.7.3"
 
 jobs:
   build:
