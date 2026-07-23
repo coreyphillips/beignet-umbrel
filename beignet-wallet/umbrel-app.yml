@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.9.1"
+version: "0.9.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,32 +30,31 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Fixes from a day of hard real-world testing, and a tidier channels list.
+  Opening channels between your own Beignet wallets now works properly.
 
 
-  When a peer closed a channel to you cooperatively, the returned funds went
-  to an address your wallet did not watch, and only reappeared after a wallet
-  restart. Close payouts now land directly in your on-chain balance.
+  A channel opened from one Beignet wallet to another silently stalled
+  partway through negotiation: the receiving side never finished its half
+  of the handshake, so the channel sat in DUAL_FUNDING_V2 forever and
+  showed an unknown, offline peer. No funds were ever at risk, since the
+  stall happened before any transaction was signed, and any stuck entry
+  clears when the app restarts. Both sides now complete the open and the
+  channel confirms and activates like any other.
 
 
-  Channels opened on older versions carried an invisible 500,000 sat
-  per-payment ceiling for life, so a large payment could fail as "no route"
-  with plenty of balance in the channel. The ceiling now reflects what the
-  channel can actually carry, and existing channels correct themselves
-  automatically.
+  The Max button works for these opens too. It previously failed with
+  "max funding is not yet supported on a dual-funded (v2) open". Max now
+  sweeps the whole balance into the channel with no change output. The
+  final channel size can differ from the form's preview by a few sats,
+  since the funding fee for this kind of open is priced slightly
+  differently; the channel that opens shows the exact amount.
 
 
-  Sending an amount at the exact edge of what a channel could afford might
-  force-close the channel outright. Senders now keep a small safety margin,
-  the same protection other Lightning implementations use, so an
-  edge-of-balance payment fails politely instead of costing you the channel.
+  Channels still opening also now show their real peer instead of
+  "unknown node", so the Reconnect button works during an open.
 
 
-  The channels list is now split into Open and Closed tabs, so finished
-  channels keep their history without burying the live ones.
-
-
-  Ships beignet 0.7.1.
+  Ships beignet 0.7.2.
 
 dependencies: []
 path: ""
