@@ -49,7 +49,18 @@ env:
   # 0.6.2 puts htlcUsable/payThroughSplice on the /channels wire (the CLI
   # serializer dropped them, re-parking mid-splice channels in the Send tab
   # while the daemon paid fine) and makes channel diagnostics splice-aware.
-  BEIGNET_VERSION: "0.6.9"
+  # 0.7.0 makes channel opens work against dual-fund peers (openChannel routes
+  # to the v2 protocol those peers require and auto-funds the interactive tx
+  # from the wallet), fixes payment retry (retries never dispatched; a payee
+  # one block ahead failed permanently; one inbound HTLC could re-forward on
+  # every commitment round), counts pay-through-splice channels in /liquidity
+  # (the card zeroed for the whole splice window), tears down opens whose
+  # funding fails instead of stranding SENT_OPEN ghosts, adds a forwarding
+  # opt-out (--no-forwarding / BEIGNET_FORWARDING_ENABLED; default stays ON so
+  # umbrel nodes keep routing) with per-forward daemon logging, and carries the
+  # BOLT 4 payloads on forwarding failures. Daemon surface is additive only:
+  # existing routes, env and config unchanged.
+  BEIGNET_VERSION: "0.7.0"
 
 jobs:
   build:
