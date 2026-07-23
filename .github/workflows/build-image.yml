@@ -60,7 +60,19 @@ env:
   # umbrel nodes keep routing) with per-forward daemon logging, and carries the
   # BOLT 4 payloads on forwarding failures. Daemon surface is additive only:
   # existing routes, env and config unchanged.
-  BEIGNET_VERSION: "0.7.0"
+  # 0.7.1 fixes three field findings from 0.7.0 testing: a REMOTE-initiated
+  # cooperative close paid P2WPKH(funding_pubkey) — invisible to the wallet
+  # until the startup recovery sweep — because the constructor never handed the
+  # wallet sweep script to the channel manager; advertised htlc_maximum_msat /
+  # htlc_minimum_msat derived from OUR config side (channels opened under the
+  # old 500k in-flight default advertised a 500k per-HTLC ceiling for life,
+  # refusing 1M sats on a 4M channel), now remote-derived and self-healing on
+  # the next update refresh; and a payment offered at the sender's exact
+  # spendable ceiling could force-close a healthy channel over sats-scale
+  # margin disagreement — senders now keep an LND-style fee-spike buffer (2x
+  # rate, spare HTLC slot, anchor outputs counted) and receivers price
+  # affordability at the live commitment feerate. Daemon surface unchanged.
+  BEIGNET_VERSION: "0.7.1"
 
 jobs:
   build:
