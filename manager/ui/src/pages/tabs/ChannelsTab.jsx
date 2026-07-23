@@ -46,6 +46,28 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 		[id, tick]
 	);
 
+	// A channel whose peer session has dropped cannot route, and nothing on the
+	// row said so: payments just failed with "no route found". The daemon lists
+	// a channel's peer in /peers only while the connection is up, so the rows
+	// badge against that, and offer a reconnect.
+	const { data: peers, refresh: refreshPeers } = usePoll(
+		() => api.get('/peers').catch(() => null),
+		8000,
+		[id, tick]
+	);
+	const connectedPeers = new Set(
+		(peers || [])
+			.filter((p) => p.state === 'connected' || p.state === 'ready')
+			.map((p) => p.pubkey)
+	);
+	// Never badge before the first /peers answer arrives: an empty set would
+	// flash every channel offline on first paint.
+	const peerOffline = (c) =>
+		peers != null &&
+		c.state !== 'CLOSED' &&
+		c.state !== 'FORCE_CLOSED' &&
+		!connectedPeers.has(c.peerPubkey);
+
 	const doAction = async (fn, ok) => {
 		try {
 			await fn();
@@ -56,6 +78,15 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 			toast(e.message, 'error');
 		}
 	};
+
+	// The daemon resolves the peer's address itself (stored announced addresses,
+	// then the gossip graph) when none is given, so one click is enough. If it
+	// knows no address, the error says so and that IS the diagnosis.
+	const reconnectPeer = (pubkey) =>
+		doAction(async () => {
+			await api.post('/peer/connect', { pubkey });
+			refreshPeers();
+		}, 'Reconnected to the peer.');
 
 	return (
 		<div>
@@ -104,10 +135,16 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 										<td>
 											<Badge tone={STATE_TONE[c.state] || 'muted'}>{c.state}</Badge>
 											{c.isPrivate && <Badge tone="muted">private</Badge>}
+											{peerOffline(c) && <Badge tone="red">peer offline</Badge>}
 										</td>
 										{/* The buttons act on the channel; only the rest of the row opens it. */}
 										<td onClick={(e) => e.stopPropagation()}>
 											<div className="wallet-actions">
+												{peerOffline(c) && (
+													<Button className="sm" onClick={() => reconnectPeer(c.peerPubkey)}>
+														Reconnect
+													</Button>
+												)}
 												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
 													Splice in
 												</Button>
@@ -745,9 +782,14 @@ function fmtScid(scidHex) {
 }
 
 function ChannelDetailModal({ api, channel, origin, onClose }) {
+	const toast = useToast();
 	const [diag, setDiag] = useState(null);
 	const [health, setHealth] = useState(null);
 	const [policy, setPolicy] = useState(null);
+	const [reconnecting, setReconnecting] = useState(false);
+	// Bumped after a reconnect so the diagnostics (and the connected badge)
+	// re-fetch instead of showing the pre-reconnect answer.
+	const [diagTick, setDiagTick] = useState(0);
 
 	useEffect(() => {
 		let alive = true;
@@ -761,7 +803,23 @@ function ChannelDetailModal({ api, channel, origin, onClose }) {
 		return () => {
 			alive = false;
 		};
-	}, [api, channel.channelId]);
+	}, [api, channel.channelId, diagTick]);
+
+	const reconnect = async () => {
+		setReconnecting(true);
+		try {
+			// No address given: the daemon resolves it from stored announced
+			// addresses or the gossip graph. If it knows none, the error here
+			// says so, and that IS the diagnosis.
+			await api.post('/peer/connect', { pubkey: channel.peerPubkey });
+			toast('Reconnected to the peer.', 'success');
+			setDiagTick((t) => t + 1);
+		} catch (e) {
+			toast(e.message, 'error');
+		} finally {
+			setReconnecting(false);
+		}
+	};
 
 	const local = diag?.localBalanceSats ?? channel.localBalanceSats;
 	const remote = diag?.remoteBalanceSats ?? channel.remoteBalanceSats;
@@ -780,6 +838,11 @@ function ChannelDetailModal({ api, channel, origin, onClose }) {
 						<Badge tone={diag.isPeerConnected ? 'green' : 'red'}>
 							{diag.isPeerConnected ? 'peer connected' : 'peer offline'}
 						</Badge>
+					)}
+					{diag && !diag.isPeerConnected && (
+						<Button className="sm" onClick={reconnect} disabled={reconnecting}>
+							{reconnecting ? 'Reconnecting…' : 'Reconnect'}
+						</Button>
 					)}
 				</DetailRow>
 				<DetailRow label="Peer">

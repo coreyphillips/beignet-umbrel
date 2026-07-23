@@ -254,6 +254,26 @@ store.state['demo-fresh'] = walletState({
 	peers: [{ pubkey: pubkey(), host: '203.0.113.8', port: 9735, state: 'connected', alias: 'ACINQ' }]
 });
 
+// The daemon lists a channel's peer in /peers while the connection is up; the
+// channels table uses that to badge channels whose peer has dropped. Link each
+// wallet's channel peers into its peers list so demo channels read as healthy,
+// leaving `offlineIndex` out to demo the offline badge and Reconnect action.
+function linkChannelPeers(st, { offlineIndex } = {}) {
+	st.channels.forEach((c, i) => {
+		if (i === offlineIndex) return;
+		st.peers.push({
+			pubkey: c.peerPubkey,
+			host: `10.1.0.${i + 2}`,
+			port: 9735,
+			state: 'connected',
+			...(c.alias ? { alias: c.alias } : {})
+		});
+	});
+}
+linkChannelPeers(store.state['demo-main'], { offlineIndex: 1 });
+linkChannelPeers(store.state['demo-testnet']);
+linkChannelPeers(store.state['demo-fresh']);
+
 const nodeIds = {};
 function nodeId(id) {
 	if (!nodeIds[id]) nodeIds[id] = pubkey();
@@ -797,12 +817,16 @@ function walletRequest(id, path, method, body) {
 			const issues = [];
 			if (!normal) issues.push(`NOT_NORMAL: Channel state is ${c.state}. Routing hints require NORMAL state.`);
 			if (c.remoteBalanceSats === 0) issues.push('NO_INBOUND: Remote balance is 0. You cannot receive payments on this channel.');
+			// Faithful to the daemon: connected means the peer session is up, which
+			// the mock tracks through the peers list (see linkChannelPeers), not
+			// through the channel state.
+			const peerConnected = st.peers.some((p) => p.pubkey === c.peerPubkey);
 			return {
 				channelId: c.channelId,
 				peerPubkey: c.peerPubkey,
 				state: c.state,
 				preReestablishState: null,
-				isPeerConnected: normal,
+				isPeerConnected: peerConnected,
 				announceChannel: !c.isPrivate,
 				announcementSigsSent: normal && !c.isPrivate,
 				announcementSigsReceived: normal && !c.isPrivate,
