@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.9.0"
+version: "0.9.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,31 +30,32 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Channel opens work against modern routing nodes, the Liquidity card stays
-  honest during splices, and a dropped peer is visible and fixable.
+  Fixes from a day of hard real-world testing, and a tidier channels list.
 
 
-  Opening a channel to a peer running dual funding (Core Lightning today, and a
-  growing share of the network) used to be rejected during negotiation with a
-  cryptic error. Opens now speak the v2 protocol those peers require and fund
-  themselves from your on-chain balance exactly like before.
+  When a peer closed a channel to you cooperatively, the returned funds went
+  to an address your wallet did not watch, and only reappeared after a wallet
+  restart. Close payouts now land directly in your on-chain balance.
 
 
-  Splicing a channel used to zero the Liquidity card for the whole splice, even
-  though sats stayed sendable throughout. The card now counts a splicing
-  channel at the conservative side of its balances, so what you see matches
-  what you can spend.
+  Channels opened on older versions carried an invisible 500,000 sat
+  per-payment ceiling for life, so a large payment could fail as "no route"
+  with plenty of balance in the channel. The ceiling now reflects what the
+  channel can actually carry, and existing channels correct themselves
+  automatically.
 
 
-  A channel whose peer connection dropped now shows a "peer offline" badge in
-  the channels list, with a one-click Reconnect that resolves the peer's
-  address for you. Payment retries actually retry after temporary failures,
-  a recipient one block ahead of your node no longer fails a payment for good,
-  and a failed channel open cleans up after itself instead of leaving a stuck
-  entry in the list.
+  Sending an amount at the exact edge of what a channel could afford might
+  force-close the channel outright. Senders now keep a small safety margin,
+  the same protection other Lightning implementations use, so an
+  edge-of-balance payment fails politely instead of costing you the channel.
 
 
-  Ships beignet 0.7.0.
+  The channels list is now split into Open and Closed tabs, so finished
+  channels keep their history without burying the live ones.
+
+
+  Ships beignet 0.7.1.
 
 dependencies: []
 path: ""
