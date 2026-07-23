@@ -72,7 +72,18 @@ env:
   # margin disagreement — senders now keep an LND-style fee-spike buffer (2x
   # rate, spare HTLC slot, anchor outputs counted) and receivers price
   # affordability at the live commitment feerate. Daemon surface unchanged.
-  BEIGNET_VERSION: "0.7.1"
+  # 0.7.2 makes beignet-to-beignet channel opens actually work: a plain
+  # acceptor of a dual-funded (v2) open never took its interactive-tx turns,
+  # so every beignet-to-beignet open deadlocked in DUAL_FUNDING_V2 (CLN
+  # acceptors reply on their own, which is why interop never caught it). Max
+  # funding is now supported on v2 opens too: the engine quotes the whole
+  # balance minus the interactive-tx fee with the same weight formula the
+  # channel uses, so the funding tx sweeps with no change output. Also fixes
+  # mid-negotiation v2 channels listing an empty peerPubkey, which the
+  # dashboard rendered as an unknown offline peer with a broken Reconnect.
+  # Daemon surface: /channel/open additionally accepts max and satsPerVbyte
+  # (parity with connect-and-open); everything else unchanged.
+  BEIGNET_VERSION: "0.7.2"
 
 jobs:
   build:
