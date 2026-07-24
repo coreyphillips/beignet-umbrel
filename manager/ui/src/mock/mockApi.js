@@ -955,12 +955,21 @@ function walletRequest(id, path, method, body) {
 				// The permanent channel id replaces the temporary one.
 				c.channelId = hex(64);
 			}, 3000);
-			setTimeout(() => {
-				c.state = 'NORMAL';
-				emit(id, 'channel:ready', {});
-			}, 9000);
+			// A trusted (zero-conf) open is usable the moment the funding is
+			// broadcast; a normal one waits out the demo's confirmation delay.
+			setTimeout(
+				() => {
+					c.state = 'NORMAL';
+					emit(id, 'channel:ready', {});
+				},
+				body.trusted ? 3200 : 9000
+			);
 			return c;
 		}
+		case '/trusted-peer/add':
+			// The daemon records the pubkey in its zero-conf trusted set; the demo
+			// only needs the call to succeed so a trusted open can proceed.
+			return { ok: true };
 		case '/channel/close':
 		case '/channel/forceclose': {
 			const c = st.channels.find((x) => x.channelId === body.channelId);
