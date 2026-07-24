@@ -153,7 +153,18 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 		setRequest(null);
 	};
 
+	// The box is rewritten to the plain address the moment a paste is understood,
+	// which runs this effect a second time over a string that has nothing left to
+	// say: no scheme, no parameters, no repairs to report. What was read out of
+	// the original paste is still the answer for the address now in the box, so
+	// the echo of our own rewrite is skipped rather than allowed to erase it.
+	// Without this every warning about the paste is cleared before it is painted.
+	const rewritten = useRef(null);
+
 	useEffect(() => {
+		const echo = rewritten.current;
+		rewritten.current = null;
+		if (echo !== null && echo === value) return;
 		// Whatever is in the box now is what the form is about, so a request read
 		// out of a previous paste stops applying here, before anything else, and
 		// its amount and its message go with it.
@@ -186,11 +197,21 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 				? { tone: 'info', text: parsed.warnings.map((w) => w.message).join(' ') }
 				: null
 		);
+		// The box is made to hold the address the parser settled on, whatever
+		// arrived. That is the string this form reasons about, the string the notes
+		// above describe, and the string that goes to the daemon, and the three
+		// being one string is the whole point: a note saying the full stop was
+		// dropped, over a field that still holds it, is a note about money that is
+		// not true. Doing it for every reading rather than for requests alone also
+		// strips the scheme and the parameters, which the daemon's send has no
+		// place for and reports as a fee error deep inside transaction building.
+		if (value !== parsed.address) {
+			rewritten.current = parsed.address;
+			onChange(parsed.address);
+		}
 		if (!parsed.isRequest) {
-			// The scheme and parameters are stripped off as soon as a request is
-			// read, so what is in the box afterwards is a bare address and lands
-			// here. A request goes on applying while that address is still the one
-			// it named, and stops the moment it is not.
+			// A request goes on applying while the box still holds the address it
+			// named, and stops the moment it does not.
 			if (request && request.address !== parsed.address) dropRequest();
 			return;
 		}
@@ -207,10 +228,6 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 		// the last request belongs to the last payee, not to this one.
 		setMaxMode(false);
 		setAmount(parsed.amountSats != null ? String(parsed.amountSats) : '');
-		// Strip the scheme and the parameters: the daemon's send takes an address
-		// and nothing else, and a URI reaches it as a fee-flavoured error deep
-		// inside transaction building.
-		if (value !== parsed.address) onChange(parsed.address);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [parsed]);
 
@@ -223,7 +240,10 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 	const { quote } = useQuote(
 		api,
 		{
-			address: address.trim() || undefined,
+			// The address the parser settled on, never the raw box: a half typed
+			// string is not a destination to price, and the price turns on the
+			// destination's script type.
+			address: parsed.kind === 'onchain' ? parsed.address : undefined,
 			// A probe of 1 sat when nothing is typed yet: the ceiling of the amount
 			// slider is the balance less the fee, so there has to be a fee before
 			// there is a slider to type into. The wallet consolidates its UTXOs, so
@@ -381,7 +401,11 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 		setBusy(true);
 		setTxid('');
 		try {
-			const base = { address: address.trim() };
+			// What was read, not what was typed. The box is kept canonical above, so
+			// the two agree; posting the parsed address is what makes that a
+			// guarantee rather than an arrangement, since this is the last place the
+			// two could ever part company.
+			const base = { address: parsed.address };
 			const rate = parseInt(feeRate, 10);
 			if (rate > 0) base.satsPerVbyte = rate;
 			const r = maxMode

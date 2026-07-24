@@ -257,6 +257,23 @@ test('a request with nothing attached is just the address', () => {
 	assert.equal(buildBip21({ address: '' }), '');
 });
 
+test('everything this writes, this reads back', () => {
+	// The two halves of this file have to agree on what an amount is, or the
+	// wallet can mint a request its own send form refuses. The amount box is
+	// digits-only and unbounded, so the ceiling is the reachable edge.
+	for (const amountSats of [0, 1, 546, 2100000000000000, 99000000000000000, -5, NaN]) {
+		const uri = buildBip21({ address: ADDR, amountSats });
+		const back = parsePayment(uri, { network: 'mainnet' });
+		assert.equal(back.kind, 'onchain', `${amountSats} sats`);
+		assert.equal(back.address, ADDR);
+	}
+	assert.equal(
+		parsePayment(buildBip21({ address: ADDR, amountSats: 99000000000000000 }), { network: 'mainnet' })
+			.amountSats,
+		2100000000000000
+	);
+});
+
 test('a request carries the amount in bitcoin, and the text escaped', () => {
 	assert.equal(buildBip21({ address: ADDR, amountSats: 10000 }), `bitcoin:${ADDR}?amount=0.0001`);
 	assert.equal(buildBip21({ address: ADDR, amountSats: 1 }), `bitcoin:${ADDR}?amount=0.00000001`);
@@ -339,15 +356,56 @@ test('an amount that cannot be read stops the payment, it is not dropped', () =>
 		const r = parsePayment(`bitcoin:${ADDR}?amount=${bad}`, { network: 'mainnet' });
 		assert.equal(r.kind, 'invalid', `amount=${bad}`);
 	}
-	// Two amounts is not a preference to resolve.
+	// Two amounts that disagree is not a preference to resolve.
 	assert.equal(parsePayment(`bitcoin:${ADDR}?amount=1&amount=2`, { network: 'mainnet' }).code, 'DUPLICATE_AMOUNT');
-	// A second question mark makes the amount unseparable from what follows it.
+	// A question mark inside a field does not separate anything: '&' splits the
+	// fields and the first '=' splits one, so a stray one lands in a value and is
+	// judged there. Here it makes the amount unreadable, which is what is said.
 	assert.equal(
 		parsePayment(`bitcoin:${ADDR}?amount=1?label=x`, { network: 'mainnet' }).code,
-		'BIP21_MALFORMED_QUERY'
+		'AMOUNT_NOT_DECIMAL'
 	);
 	// Capitals on a field this wallet knows would otherwise be ignored silently.
 	assert.equal(parsePayment(`bitcoin:${ADDR}?AMOUNT=0.1`, { network: 'mainnet' }).code, 'PARAM_CASE_MISMATCH');
+});
+
+test('the same amount written twice is not two amounts', () => {
+	// BIP21 has no rule against a repeat, and an encoder that writes one is
+	// clumsy rather than contradictory. Refusing with "names two different
+	// amounts" would tell the payer something false about the request they were
+	// handed, and "ask for a new one" is what they would act on.
+	const same = parsePayment(`bitcoin:${ADDR}?amount=0.001&amount=0.001`, { network: 'mainnet' });
+	assert.equal(same.kind, 'onchain');
+	assert.equal(same.amountSats, 100000);
+	assert.ok(same.warnings.some((w) => w.code === 'DUPLICATE_PARAM'));
+	// Written differently, meaning the same thing, is still one amount.
+	assert.equal(parsePayment(`bitcoin:${ADDR}?amount=1&amount=1.00000000`, { network: 'mainnet' }).amountSats, 100000000);
+	// And a genuine disagreement is still refused.
+	assert.equal(
+		parsePayment(`bitcoin:${ADDR}?amount=0.001&amount=0.002`, { network: 'mainnet' }).code,
+		'DUPLICATE_AMOUNT'
+	);
+	// An unreadable amount is refused for being unreadable, not for repeating.
+	assert.equal(
+		parsePayment(`bitcoin:${ADDR}?amount=abc&amount=abc`, { network: 'mainnet' }).code,
+		'AMOUNT_NOT_DECIMAL'
+	);
+});
+
+test('a question mark is a legal character in a label or a message', () => {
+	// BIP21 builds label and message out of RFC 3986 query characters less '='
+	// and '&', and '?' is one of them. "Lunch?" is an ordinary thing for a payee
+	// to write, nothing requires them to escape it, and refusing the request is
+	// the direction that blocks a payment that should have gone through.
+	const asked = parsePayment(`bitcoin:${ADDR}?amount=0.0001&message=Lunch?`, { network: 'mainnet' });
+	assert.equal(asked.kind, 'onchain');
+	assert.equal(asked.message, 'Lunch?');
+	assert.equal(asked.amountSats, 10000);
+
+	const both = parsePayment(`bitcoin:${ADDR}?label=Who?&message=Invoice %2314?`, { network: 'mainnet' });
+	assert.equal(both.kind, 'onchain');
+	assert.equal(both.label, 'Who?');
+	assert.equal(both.message, 'Invoice #14?');
 });
 
 test('an amount of zero means the payer chooses', () => {
