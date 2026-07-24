@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { AmountField, Button, Card, Field, FeeField, Badge, Segmented } from '../../components/ui.jsx';
@@ -16,14 +16,29 @@ import { manager, walletApi } from '../../api.js';
 // NORMAL remains the fallback.
 const usable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
 
+const EMPTY_ONCHAIN = { input: '', request: null, amount: '', feeRate: '', maxMode: false };
+
 export default function SendTab({ id, api, info, rec, tick, bump }) {
 	const [mode, setMode] = useState('onchain');
-	// Both input boxes live here rather than in the cards below, because what is
-	// pasted into one of them regularly belongs to the other. A Lightning invoice
+	// The whole of the on-chain form lives here rather than in the card below,
+	// because the card is unmounted every time the rail pill is touched, and what
+	// is pasted into one box regularly belongs to the other. A Lightning invoice
 	// in the on-chain box is not a mistake to correct, it is a payment on the
 	// other rail, and moving it there is the whole of the correction.
-	const [onchainInput, setOnchainInput] = useState('');
+	//
+	// Only the box was lifted before, and the URI it held had already been
+	// stripped to a bare address, so a trip through the Lightning pill and back
+	// came home to the payee's address with their figure, their message and the
+	// request note silently gone. That reads as a ready-to-send payment to the
+	// right person for the wrong amount, which is worse than an empty form.
+	const [onchain, setOnchain] = useState(EMPTY_ONCHAIN);
+	const patchOnchain = useCallback((next) => setOnchain((o) => ({ ...o, ...next })), []);
 	const [lnInput, setLnInput] = useState('');
+	// What the destination card is handed when the form moves a string to the rail
+	// it belongs on: a line saying why it moved, the payee's figure when the
+	// invoice itself names none, and a fresh identity each time so the card knows
+	// to take the caret.
+	const [arrival, setArrival] = useState(null);
 	const { data: channels } = usePoll(() => api.get('/channels').catch(() => null), 15000, [id, tick]);
 	// splicingOnly covers the rare parked splice (e.g. taproot), where "open a
 	// channel first" would still be the wrong message.
@@ -44,25 +59,58 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 	// value rather than a thrown error: with no channel open there is nowhere for
 	// an invoice to go, and the card that took the paste is the one that has to
 	// say so.
-	const toLightning = (text) => {
-		if (!canLightning) return false;
-		setLnInput(text);
-		setOnchainInput('');
-		setMode('lightning');
-		return true;
-	};
-	const toOnchain = (text) => {
-		setOnchainInput(text);
-		setLnInput('');
-		setMode('onchain');
-	};
+	//
+	// Moving a string to where it belongs is the flow this form exists for, and it
+	// used to be the one moment the form said nothing: the card silently became
+	// the other card, the pill moved, the text turned up in a different input, and
+	// focus was not moved to the destination but lost outright, so the next Tab
+	// restarted at the top of the page. Every hand-off now arrives with a line
+	// saying why, and the caret follows the text.
+	//
+	// `amountSats` is the payee's own figure off a unified request, for the case
+	// where the request names an amount and the invoice it carries does not, which
+	// is the ordinary shape of a unified QR. Dropping it here left the payer to
+	// remember a number the form had just been told, having gone to the trouble of
+	// refusing outright when the two disagree.
+	const toLightning = useCallback(
+		(text, { amountSats = null, note = null } = {}) => {
+			// A BOLT12 offer has no invoice to hand over. Calling this with one used
+			// to pass undefined straight through: the textarea's value became
+			// undefined and the on-chain box was wiped, losing a payable request to a
+			// button click.
+			if (!text) return false;
+			if (!canLightning) return false;
+			setLnInput(text);
+			setArrival({ rail: 'lightning', note, amountSats, invoice: text });
+			patchOnchain({ input: '' });
+			setMode('lightning');
+			return true;
+		},
+		[canLightning, patchOnchain]
+	);
+	const toOnchain = useCallback(
+		(text, { note = null } = {}) => {
+			if (!text) return false;
+			patchOnchain({ ...EMPTY_ONCHAIN, input: text });
+			setArrival({ rail: 'onchain', note, amountSats: null });
+			setLnInput('');
+			setMode('onchain');
+			return true;
+		},
+		[patchOnchain]
+	);
 
 	return (
 		<div>
 			<Segmented
 				id="send-mode"
 				value={mode}
-				onChange={setMode}
+				// Choosing a rail is not being handed one, so the line explaining the
+				// last hand-off is retired here rather than shown again on arrival.
+				onChange={(next) => {
+					setArrival(null);
+					setMode(next);
+				}}
 				options={[
 					['onchain', 'On-chain'],
 					['lightning', 'Lightning', !canLightning, splicingOnly ? 'A splice is confirming' : 'Open a channel first'],
@@ -83,8 +131,9 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 					info={info}
 					rec={rec}
 					bump={bump}
-					value={onchainInput}
-					onChange={setOnchainInput}
+					state={onchain}
+					patch={patchOnchain}
+					arrival={arrival?.rail === 'onchain' ? arrival : null}
 					onLightning={toLightning}
 					canLightning={canLightning}
 				/>
@@ -97,6 +146,7 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 					bump={bump}
 					value={lnInput}
 					onChange={setLnInput}
+					arrival={arrival?.rail === 'lightning' ? arrival : null}
 					onOnchain={toOnchain}
 				/>
 			)}
@@ -105,21 +155,28 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 	);
 }
 
-function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLightning }) {
+function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning, canLightning }) {
 	const toast = useToast();
+	// Everything the form has to survive a trip through the rail pill, held by the
+	// parent. `request` is what was read out of a pasted payment request, kept so
+	// the form can show the payee's own numbers back to them and hold itself to
+	// them.
+	const { input: value, request, amount, feeRate, maxMode } = state;
 	const address = value;
-	const [amount, setAmount] = useState('');
-	const [feeRate, setFeeRate] = useState('');
+	const setAmount = (v) => patch({ amount: v });
+	const setFeeRate = (v) => patch({ feeRate: v });
+	const setMaxMode = (v) => patch({ maxMode: v });
+	const setRequest = (v) => patch({ request: v });
+	const onChange = (v) => patch({ input: v });
 	const [dest, setDest] = useState('custom');
-	const [maxMode, setMaxMode] = useState(false);
 	const [focused, setFocused] = useState(false);
 	const [fetchingAddr, setFetchingAddr] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [txid, setTxid] = useState('');
-	// What was read out of a pasted payment request, kept so the form can show
-	// the payee's own numbers back to them and hold itself to them.
-	const [request, setRequest] = useState(null);
 	const [note, setNote] = useState(null);
+	// The line the hand-off left, and the field the caret is owed.
+	const [arrived, setArrived] = useState(arrival?.note ?? null);
+	const inputRef = useRef(null);
 	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
 	const { data: wallets } = usePoll(() => manager.listWallets().catch(() => []), 15000, []);
 	const { data: utxos } = usePoll(() => api.get('/utxos').catch(() => null), 30000, [id]);
@@ -141,10 +198,12 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 	// The two ways a payee's amount stops binding this form, which are not the
 	// same thing and must not be treated as one.
 	//
-	// The user takes the amount over by typing or dragging: the figure stands,
-	// it is simply theirs now, so only the request's claim on it is released.
+	// The user takes the amount over by typing or dragging: the figure stands, it
+	// is simply theirs now, so only the request's claim on it is released. The
+	// payee's figure is kept rather than erased, because the moment the two part
+	// company is the moment it is worth saying what was asked for.
 	const releaseAmount = () => {
-		if (request?.amountSats != null) setRequest({ ...request, amountSats: null });
+		if (request && !request.amountTaken) setRequest({ ...request, amountTaken: true });
 	};
 	// The request itself goes away, because the box no longer holds the address
 	// it named. Then its amount goes with it. Leaving the number behind is what
@@ -153,7 +212,7 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 	// fallback below that only arms on amounts it thinks the user typed. An
 	// orphaned figure moves from one to the other without anyone touching it.
 	const dropRequest = () => {
-		if (request?.amountSats != null) setAmount('');
+		if (request && !request.amountTaken && request.amountSats != null) setAmount('');
 		setRequest(null);
 	};
 
@@ -179,15 +238,20 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 		// what the payee asked for. The request is held until the box holds a
 		// different address, or nothing at all.
 		if (parsed.kind === 'empty' || parsed.kind === 'bolt11' || parsed.kind === 'bolt12') dropRequest();
-		if (parsed.kind === 'bolt11' || parsed.kind === 'bolt12') {
-			const text = parsed.kind === 'bolt11' ? parsed.invoice : parsed.offer;
-			if (onLightning(text)) return;
+		if (parsed.kind === 'bolt12') {
+			// An offer is paid from the Offers tab, and it is said here, once, where
+			// the paste landed. Sending it to the Lightning card first only to be
+			// told the same thing again is two redirects for one paste, and the box
+			// keeps the offer so it can be copied out of.
 			setNote({
-				tone: 'error',
-				text: 'That is a Lightning invoice, and this wallet has no channel to pay it with yet.'
+				tone: 'info',
+				text: 'That is a BOLT12 offer rather than an address. Pay it from the Offers tab, which reads offers the same way this box reads addresses.'
 			});
 			return;
 		}
+		// An invoice belongs on the other rail, and the hand-off has a second
+		// trigger of its own, so it lives in its own effect below.
+		if (parsed.kind === 'bolt11') return;
 		if (parsed.kind === 'invalid') {
 			// The refusal is rendered straight from the parse rather than stored,
 			// because it has to be held back while the field is still being typed
@@ -226,6 +290,7 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 		setRequest({
 			address: parsed.address,
 			amountSats: parsed.amountSats,
+			amountTaken: false,
 			message: parsed.message || parsed.label,
 			lightning: parsed.lightning
 		});
@@ -238,6 +303,42 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 		setAmount(parsed.amountSats != null ? String(parsed.amountSats) : '');
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [parsed]);
+
+	// Handing an invoice to the rail it belongs on.
+	//
+	// Separate from the reading above because it has a second trigger. On a wallet
+	// with no usable channel the invoice sits here under "no channel to pay it
+	// with yet", and that refusal was true when it was made: a splice locks, or an
+	// open confirms, the fifteen second poll picks it up, the Lightning pill
+	// enables, and nothing moves the invoice. The refusal is left standing as a
+	// fact and the payer has to work out for themselves that re-pasting will do
+	// it. `onLightning` changes identity with `canLightning`, so listing it here
+	// is what makes a change in channel state re-run the hand-off.
+	useEffect(() => {
+		if (parsed.kind !== 'bolt11') return;
+		if (
+			onLightning(parsed.invoice, {
+				note: 'That is a Lightning invoice, so it was moved here from the on-chain form.'
+			})
+		) {
+			return;
+		}
+		setNote({
+			tone: 'error',
+			text: 'That is a Lightning invoice, and this wallet has no channel to pay it with yet. It stays here, and moves across on its own once a channel is usable.'
+		});
+	}, [parsed, onLightning]);
+
+	// The hand-off that brought us here has a line to say and a caret to place.
+	// Without this the text simply appeared in a different form under a different
+	// title with nothing said, which reads as the page having glitched, and
+	// document.activeElement was BODY: focus was not moved to the destination, it
+	// was lost, so the next Tab restarted at the top of the page.
+	useEffect(() => {
+		if (!arrival) return;
+		setArrived(arrival.note);
+		inputRef.current?.focus();
+	}, [arrival]);
 
 	// What this transaction really costs, from the wallet, which is the only place
 	// that knows. The fee turns on which UTXOs coin selection picks, on their
@@ -360,11 +461,21 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 	// The balance alone settles it before the quote lands, and the quote sharpens
 	// it once it has: waiting for a fee to say "this is more than you have" would
 	// leave the button live in the meantime.
-	const requestedAmount = request?.amountSats ?? null;
+	// The payee's figure while it still binds. Once the user has chosen their own
+	// it is theirs, and the request's is kept only to be shown back to them.
+	const requestedAmount = request && !request.amountTaken ? request.amountSats ?? null : null;
 	const requestTooLarge =
 		requestedAmount != null &&
 		balance != null &&
 		(requestedAmount > balance || (feeSats != null && requestedAmount > ordinaryMax));
+
+	// Lowering the fee rate is only a remedy while the shortfall is smaller than
+	// the fee, and the smallest fee this transaction can pay is its own size at
+	// one sat per vbyte. Offering the slider to someone short a hundred and forty
+	// five million sats, against a fee line reading three thousand, costs them a
+	// detour to learn nothing.
+	const feeCouldClose =
+		requestTooLarge && vsize != null && balance != null && requestedAmount <= balance - vsize;
 
 	// A balance that drops, or a fee that climbs, can still strand an amount that
 	// was affordable when it was entered. Rather than leave the form unsendable,
@@ -460,9 +571,11 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 				}
 			>
 				<input
+					ref={inputRef}
 					value={address}
 					onChange={(e) => {
 						onChange(e.target.value);
+						setArrived(null);
 						if (dest !== 'custom') setDest('custom');
 					}}
 					onFocus={() => setFocused(true)}
@@ -470,19 +583,64 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 					placeholder={fetchingAddr ? 'Fetching address…' : 'bc1… or bitcoin:bc1…?amount=…'}
 				/>
 			</Field>
-			{parsed.kind === 'invalid' && mayRefuse && <div className="error-note">{parsed.message}</div>}
-			{note && <div className={note.tone === 'error' ? 'error-note' : 'info-note'}>{note.text}</div>}
+			{arrived && (
+				<div className="info-note" role="status">
+					{arrived}
+				</div>
+			)}
+			{parsed.kind === 'invalid' && mayRefuse && (
+				<div className="error-note" role="alert">
+					{parsed.message}
+				</div>
+			)}
+			{note && (
+				<div
+					className={note.tone === 'error' ? 'error-note' : 'info-note'}
+					role={note.tone === 'error' ? 'alert' : 'status'}
+				>
+					{note.text}
+				</div>
+			)}
 			{/* While the box holds something unreadable, that is the only thing worth
 			    saying about it. The request is still held, and says its piece again
 			    as soon as the address is back. */}
 			{request && parsed.kind === 'onchain' && (
-				<div className="info-note">
+				<div className="info-note" role="status">
 					Read from a payment request
 					{request.amountSats != null ? `, which asks for ${fmtSats(request.amountSats)}` : ''}.
-					{request.lightning && canLightning ? ' It also carries a Lightning invoice.' : ''}
-					{request.lightning && canLightning && (
+					{/* The one moment worth saying the payee's figure out loud is the
+					    moment you are about to pay something else, and that used to be
+					    exactly when it disappeared, leaving a note with no content. */}
+					{request.amountTaken && request.amountSats != null
+						? ' You have changed the amount.'
+						: ''}
+					{request.lightning && canLightning
+						? request.lightning.kind === 'bolt12'
+							? ' It also carries a BOLT12 offer, which is paid from the Offers tab.'
+							: ' It also carries a Lightning invoice.'
+						: ''}
+					{request.lightning?.kind === 'bolt11' && canLightning && (
 						<div className="center-actions">
-							<Button className="sm" onClick={() => onLightning(request.lightning.invoice)}>
+							<Button
+								className="sm"
+								onClick={() =>
+									onLightning(request.lightning.invoice, {
+										// The BIP21 amount binds both rails, which is why a request
+										// whose two halves disagree is refused outright. Having gone
+										// to that trouble, dropping the figure here whenever the
+										// invoice is amountless, the ordinary shape of a unified QR,
+										// left the payer to remember it.
+										amountSats:
+											request.lightning.amountSats == null ? request.amountSats : null,
+										note:
+											request.lightning.amountSats == null && request.amountSats != null
+												? `That request also carried a Lightning invoice, so it was moved here. The invoice names no amount, so the ${fmtSats(
+														request.amountSats
+												  )} the request asked for has been filled in below.`
+												: 'That request also carried a Lightning invoice, so it was moved here.'
+									})
+								}
+							>
 								Pay over Lightning instead
 							</Button>
 						</div>
@@ -490,12 +648,18 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 				</div>
 			)}
 			{request?.message && (
-				<Field
-					label="Message"
-					hint="From the payment request. It is for your records, and does not travel with the transaction."
-				>
-					<input value={request.message} readOnly />
-				</Field>
+				<div className="field">
+					<span className="field-label">Message</span>
+					{/* Static text rather than a readonly input. As an input it took
+					    focus and turned its border orange like an active field, invited
+					    an edit and then refused it, with nothing to tell it apart from
+					    the editable fields above and below. */}
+					<div className="static-value">{request.message}</div>
+					<span className="field-hint">
+						From the payment request. It is for your records, and does not travel with the
+						transaction.
+					</span>
+				</div>
 			)}
 			<AmountField
 				label="Amount (sats)"
@@ -517,10 +681,12 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 				}
 			/>
 			{requestTooLarge && parsed.kind === 'onchain' && (
-				<div className="error-note">
+				<div className="error-note" role="alert">
 					This request asks for {fmtSats(requestedAmount)}, which is more than this wallet can send.{' '}
 					{feeSats != null
-						? `The most it can send at this fee rate is ${fmtSats(ordinaryMax)}, with the fee coming out of the rest. Ask for a smaller amount, or lower the fee rate.`
+						? `The most it can send at this fee rate is ${fmtSats(ordinaryMax)}, with the fee coming out of the rest. Ask for a smaller amount${
+								feeCouldClose ? ', or lower the fee rate' : ''
+						  }.`
 						: `It holds ${fmtSats(balance)}. Ask for a smaller amount.`}
 				</div>
 			)}
@@ -600,7 +766,7 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 // enough that a pasted one answers before the eye leaves the field.
 const DECODE_DEBOUNCE_MS = 300;
 
-function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
+function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bump }) {
 	const toast = useToast();
 	const [decoded, setDecoded] = useState(null);
 	const [estimate, setEstimate] = useState(null);
@@ -611,10 +777,19 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 	const [result, setResult] = useState(null);
 	const [now, setNow] = useState(() => Date.now());
 	const [focused, setFocused] = useState(false);
+	const [arrived, setArrived] = useState(arrival?.note ?? null);
 	// Only the newest decode may write its answer: a slow one must not overwrite
 	// a fresher one that landed first.
 	const latest = useRef(0);
 	const latestEstimate = useRef(0);
+	const inputRef = useRef(null);
+	// An amount handed over with the invoice is the payee's own figure off the
+	// request that carried it, not a leftover from a previous payee, so the
+	// clearing in the decode effect below leaves it alone. Keyed to the invoice it
+	// arrived with rather than consumed on first use: the effect that reads it is
+	// run twice on mount under StrictMode, and anything a second identical run
+	// could undo is a thing that works in production and not in development.
+	const handover = arrival?.amountSats != null ? arrival : null;
 
 	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
 	const invoice = parsed.kind === 'bolt11' ? parsed.invoice : null;
@@ -622,9 +797,18 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 
 	// An on-chain address in the invoice box belongs on the other rail.
 	useEffect(() => {
-		if (parsed.kind === 'onchain') onOnchain(value);
+		if (parsed.kind === 'onchain') {
+			onOnchain(value, { note: 'That is an on-chain address, so it was moved here from the Lightning form.' });
+		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [parsed]);
+
+	// The hand-off that brought us here has a line to say and a caret to place.
+	useEffect(() => {
+		if (!arrival) return;
+		setArrived(arrival.note);
+		inputRef.current?.focus();
+	}, [arrival]);
 
 	// Tidy what was pasted down to the invoice itself: the lightning: scheme and
 	// the capitals a QR code arrives in are not part of it.
@@ -660,7 +844,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 		// sends a figure chosen for someone else.
 		setDecoded(null);
 		setEstimate(null);
-		setAmount('');
+		setAmount(handover?.invoice === invoice ? String(handover.amountSats) : '');
 		setDecoding(true);
 		setError(null);
 		setResult(null);
@@ -682,7 +866,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 				});
 		}, DECODE_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [api, invoice]);
+	}, [api, invoice, handover]);
 
 	// An invoice with no amount in it leaves the amount to the payer, so it has to
 	// be asked for before anything can be estimated or paid.
@@ -771,27 +955,51 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 		<Card title="Pay a Lightning invoice">
 			<Field label="BOLT11 invoice">
 				<textarea
+					ref={inputRef}
 					rows={3}
 					value={value}
-					onChange={(e) => onChange(e.target.value)}
+					onChange={(e) => {
+						onChange(e.target.value);
+						setArrived(null);
+					}}
 					onFocus={() => setFocused(true)}
 					onBlur={() => setFocused(false)}
 					placeholder="lnbc…"
 				/>
 			</Field>
-			{parsed.kind === 'invalid' && mayRefuse && <div className="error-note">{parsed.message}</div>}
+			{arrived && (
+				<div className="info-note" role="status">
+					{arrived}
+				</div>
+			)}
+			{parsed.kind === 'invalid' && mayRefuse && (
+				<div className="error-note" role="alert">
+					{parsed.message}
+				</div>
+			)}
 			{parsed.kind === 'bolt12' && (
-				<div className="info-note">
+				<div className="info-note" role="status">
 					That is a BOLT12 offer rather than an invoice. Pay it from the Offers tab.
 				</div>
 			)}
-			{error && <div className="error-note">{error}</div>}
-			{/* Not `decoding && !decoded`: the panel is emptied the moment the invoice
-			    changes, and the one moment the reader most needs to be told "this is
-			    not your invoice yet" was exactly the moment that gate said nothing. */}
-			{decoding && <div className="wallet-meta">Reading the invoice…</div>}
-			{decoded && (
-				<>
+			{error && (
+				<div className="error-note" role="alert">
+					{error}
+				</div>
+			)}
+			{/* Everything the daemon reads out of the invoice appears here without a
+			    click, which left a screen reader nothing to hang the result on: the
+			    table, the reading line and the refusals all arrived silently while
+			    focus stayed in the textarea. Announced politely, so a reader is told
+			    what they are about to pay rather than having to go looking. */}
+			<div role="status" aria-live="polite">
+				{/* Not `decoding && !decoded`: the panel is emptied the moment the
+				    invoice changes, and the one moment the reader most needs to be told
+				    "this is not your invoice yet" was exactly the moment that gate said
+				    nothing. */}
+				{decoding && <div className="wallet-meta">Reading the invoice…</div>}
+				{decoded && (
+					<>
 					<table style={{ marginTop: 4 }}>
 						<tbody>
 							<tr>
@@ -846,12 +1054,13 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 						</div>
 					)}
 					{expired && (
-						<div className="error-note">
+						<div className="error-note" role="alert">
 							This invoice has expired, so it can no longer be paid. Ask for a new one.
 						</div>
 					)}
-				</>
-			)}
+					</>
+				)}
+			</div>
 			<div className="center-actions">
 				<Button
 					variant="primary"
@@ -864,7 +1073,11 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 				{value && <Button onClick={clear}>Clear</Button>}
 			</div>
 			{result && (
-				<div className={result.status === 'COMPLETED' ? 'info-note' : 'error-note'} style={{ marginTop: 12 }}>
+				<div
+					className={result.status === 'COMPLETED' ? 'info-note' : 'error-note'}
+					role={result.status === 'COMPLETED' ? 'status' : 'alert'}
+					style={{ marginTop: 12 }}
+				>
 					Payment {result.status}
 					{result.feeSats != null ? ` · fee ${fmtSats(result.feeSats)}` : ''}
 					{result.failureDescription ? ` · ${result.failureDescription}` : ''}
