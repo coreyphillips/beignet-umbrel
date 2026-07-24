@@ -55,8 +55,6 @@ const MESSAGES = {
 	AMOUNT_SUB_SATOSHI:
 		'The amount in this payment request is smaller than one satoshi, which cannot be paid on-chain.',
 	AMOUNT_OVER_MAX_MONEY: 'The amount in this payment request is larger than every bitcoin that will ever exist.',
-	BIP21_MALFORMED_QUERY:
-		'This payment request has a second question mark in it, so its amount and message cannot be told apart. Ask for it again.',
 	BIP21_NO_PAYABLE_TARGET: 'This payment request has nothing in it to pay.',
 	DUPLICATE_AMOUNT:
 		'This payment request names two different amounts. Ask for a new one rather than guessing which is meant.',
@@ -404,7 +402,10 @@ export function parseBolt11Hrp(invoice) {
 export function buildBip21({ address, amountSats, label, message } = {}) {
 	if (!address) return '';
 	const params = [];
-	const sats = Math.floor(Number(amountSats) || 0);
+	// The same ceiling btcStringToSats enforces on the way in. Without it the two
+	// halves of this file disagree about what an amount is, and a request written
+	// here comes back AMOUNT_OVER_MAX_MONEY when read here.
+	const sats = Math.min(Math.floor(Number(amountSats) || 0), Number(MAX_MONEY_SATS));
 	// An amount of zero is not an amount. Emitting `amount=0` would tell the
 	// payer's wallet to send nothing, which no one means by leaving it blank.
 	if (sats > 0) params.push(`amount=${satsToBtcString(sats)}`);
@@ -560,16 +561,22 @@ function parseBip21(text, warnings, opts) {
 		body = body.slice(0, hash);
 		warn(warnings, 'FRAGMENT_STRIPPED');
 	}
+	// The first question mark opens the query, and every one after it belongs to
+	// whatever field it lands in. BIP21 builds label and message out of RFC 3986
+	// query characters less '=' and '&', and '?' is one of them, so "Lunch?" is
+	// an ordinary thing for a payee to write and nothing has to escape it. The
+	// splits below do the separating: '&' between fields, the first '=' within
+	// one, which leaves a stray '?' inside an amount to be refused by the amount
+	// itself rather than by the shape of the string.
 	const mark = body.indexOf('?');
 	const addressPart = mark === -1 ? body : body.slice(0, mark);
 	const query = mark === -1 ? '' : body.slice(mark + 1);
-	// A second question mark means the string was assembled wrongly, and the
-	// amount is no longer separable from whatever followed it. There is money in
-	// that field, so it is refused rather than read optimistically.
-	if (query.includes('?')) return refuse('BIP21_MALFORMED_QUERY');
 
 	const params = new Map();
-	const duplicated = new Set();
+	// The repeats themselves, not just which keys repeated: whether two amounts
+	// are a contradiction or one clumsy encoder writing the same figure twice
+	// cannot be answered without them.
+	const duplicated = new Map();
 	for (const pair of query.split('&')) {
 		if (!pair) continue;
 		const eq = pair.indexOf('=');
@@ -588,7 +595,7 @@ function parseBip21(text, warnings, opts) {
 		// that was written.
 		if (eq === -1 && !KNOWN_PARAMS.has(key.toLowerCase())) warn(warnings, 'TEXT_PARAM_TRUNCATED');
 		if (params.has(key)) {
-			duplicated.add(key);
+			duplicated.set(key, (duplicated.get(key) || []).concat(value));
 			continue; // first one wins
 		}
 		params.set(key, value);
@@ -615,7 +622,22 @@ function parseBip21(text, warnings, opts) {
 		}
 	}
 
-	if (duplicated.has('amount')) return refuse('DUPLICATE_AMOUNT');
+	// Two amounts that name the same figure are a badly built string, not a
+	// contradiction, and telling the payer their request "names two different
+	// amounts" would be false about the one thing they cannot check themselves.
+	// Two that genuinely differ leave no way to tell which was meant, so those
+	// are still refused.
+	if (duplicated.has('amount')) {
+		const first = btcStringToSats(params.get('amount'));
+		// An amount that cannot be read at all is refused below, on its own terms.
+		if (first.ok) {
+			const agree = duplicated.get('amount').every((other) => {
+				const parsed = btcStringToSats(other);
+				return parsed.ok && parsed.sats === first.sats;
+			});
+			if (!agree) return refuse('DUPLICATE_AMOUNT');
+		}
+	}
 	if (duplicated.size > 0) warn(warnings, 'DUPLICATE_PARAM');
 
 	let amountSats = null;
