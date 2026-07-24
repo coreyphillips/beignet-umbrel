@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.9.3"
+version: "0.9.4"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,29 +30,53 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Instant channels between your own wallets.
+  The send form only ever says what is true.
 
 
-  Picking one of your own wallets in the Open channel drop-down now
-  offers a trusted zero-conf open, on by default: the channel is usable
-  the moment its funding transaction broadcasts, with no confirmation
-  wait. Each daemon only accepts these opens from peers it has been told
-  to trust, and the dashboard arranges that between your wallets for
-  you; hand-editing the peer fields turns the option off.
+  Paste an address with a full stop stuck to it, or in capitals off a QR
+  code, and the wallet used to tell you it had cleaned the string up and
+  then send the string it had not cleaned. What is in the recipient box,
+  what the notes describe, and what reaches the daemon are now one
+  string. A payment request's own notes survive being read, so a message
+  that arrived cut short, or an amount of zero that left the box blank,
+  now say so instead of being wiped before you can read them.
 
 
-  Trusted channels stay private permanently. Their negotiated channel
-  type is never announced to the network, so they are not available for
-  general public routing. Splices on them also activate immediately
-  instead of waiting for the splice transaction to confirm.
+  A question mark in a message no longer refuses the whole request, and
+  a request that names the same amount twice is no longer described as
+  naming two different ones.
 
 
-  Also fixes a routing bug where a payment could fail with "no route
-  found" on exactly the channel the invoice was pointing at, once that
-  channel had been announced to the network.
+  The Lightning card only ever describes the invoice in the box. Pasting
+  a second invoice over the first no longer leaves the first one's
+  amount, payee and expiry on screen while the second is read, and an
+  amount you chose for one payee is never carried over to another. An
+  expired invoice is no longer offered a routing estimate it cannot use,
+  and a red "this fails its own checksum" no longer appears while you
+  are still typing.
 
 
-  Ships beignet 0.7.3.
+  Moving a payment to the rail it belongs on now says so, puts the caret
+  in the field it moved to, and carries the payee's amount with it. A
+  request handed to Lightning keeps its figure, a BOLT12 offer is named
+  as an offer and sent once to the Offers tab rather than twice, and
+  switching the rail pill and back no longer comes home to the right
+  address with the amount and message silently gone. An invoice refused
+  for want of a channel now moves across on its own when a channel
+  becomes usable.
+
+
+  The Offers tab reads what it is handed, the same as every other paste
+  box. Receive can hand out one request that a payer settles either on
+  chain or over Lightning. Screen readers are told what the form has
+  read, and the amount fields have names.
+
+
+  Ships beignet 0.7.4, which is about channel funding surviving the ways
+  it used to be lost: a funding transaction that fails to broadcast is
+  retried until it confirms, two channel opens started close together
+  can no longer spend the same coin, and a taproot UTXO can fund a
+  channel.
 
 dependencies: []
 path: ""
