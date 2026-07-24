@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { m, useMotionValue, useMotionValueEvent, useReducedMotion, useSpring } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import { copy, fmtSats } from '../lib/format.js';
@@ -88,11 +88,20 @@ export function Badge({ children, tone = 'muted' }) {
 export function FeeField({ label, hint, value, onChange, rate, max }) {
 	const ceiling = Math.max(1, Math.floor(Number(max) || 1));
 	const current = Math.min(Math.max(1, parseInt(rate, 10) || 1), ceiling);
+	// Two controls for one value, so the label names the one that is typed into
+	// and the slider carries its own. Without either, a screen reader reaching
+	// these hears "edit text" with nothing to say what it wants or in what unit.
+	const id = useId();
 
 	return (
 		<div className="field">
-			{label && <span className="field-label">{label}</span>}
+			{label && (
+				<label className="field-label" htmlFor={id}>
+					{label}
+				</label>
+			)}
 			<input
+				id={id}
 				className="amount-input"
 				inputMode="numeric"
 				value={value}
@@ -102,6 +111,7 @@ export function FeeField({ label, hint, value, onChange, rate, max }) {
 			<input
 				type="range"
 				className="amount-slider"
+				aria-label={label ? `${label} slider` : 'Fee rate slider'}
 				min={1}
 				max={ceiling}
 				step={1}
@@ -128,8 +138,10 @@ export function FeeField({ label, hint, value, onChange, rate, max }) {
  * caller holding Max re-derives the amount from it on every render rather than
  * freezing whatever it was when the button was pressed.
  *
- * Not wrapped in <Field>: that renders a <label>, and a label holding two
- * inputs would hand every click on it to the first one.
+ * Not wrapped in <Field>: that renders a <label> around its children, and a
+ * label holding two inputs would hand every click on it to the first one. The
+ * label here points at the field it names instead, which gets the same click
+ * behaviour without claiming the button and the slider as well.
  */
 export function AmountField({
 	label,
@@ -145,12 +157,18 @@ export function AmountField({
 	const current = Math.min(parseInt(value, 10) || 0, ceiling);
 	const pct = ceiling > 0 ? Math.round((current / ceiling) * 100) : 0;
 	const usable = !disabled && ceiling > 0;
+	const id = useId();
 
 	return (
 		<div className="field">
-			{label && <span className="field-label">{label}</span>}
+			{label && (
+				<label className="field-label" htmlFor={id}>
+					{label}
+				</label>
+			)}
 			<div className="amount-row">
 				<input
+					id={id}
 					className="amount-input"
 					inputMode="numeric"
 					value={value}
@@ -164,6 +182,7 @@ export function AmountField({
 					className={`btn sm ${isMax ? 'primary' : ''}`}
 					onClick={onMax}
 					disabled={!usable}
+					aria-pressed={!!isMax}
 				>
 					Max
 				</button>
@@ -171,6 +190,7 @@ export function AmountField({
 			<input
 				type="range"
 				className="amount-slider"
+				aria-label={label ? `${label} slider` : 'Amount slider'}
 				min={0}
 				max={ceiling}
 				step={1}
@@ -378,7 +398,13 @@ export function Empty({ children }) {
 
 export function ErrorNote({ error }) {
 	if (!error) return null;
-	return <div className="error-note">{error.message || String(error)}</div>;
+	// A refusal, announced as soon as it appears: it is the reason the thing the
+	// reader was doing has stopped.
+	return (
+		<div className="error-note" role="alert">
+			{error.message || String(error)}
+		</div>
+	);
 }
 
 export const staggerContainer = {

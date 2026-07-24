@@ -332,6 +332,19 @@
 	font-size: 12px;
 }
 
+/* A value the form is showing back rather than asking for. Aligned with the
+   inputs around it so it reads as part of the same form, and visibly not one of
+   them: no border to invite a click, no focus ring to promise an edit. */
+.static-value {
+	padding: 10px 12px;
+	font-size: 14px;
+	color: var(--text);
+	background: var(--glass-inner);
+	border: 1px dashed var(--glass-border);
+	border-radius: var(--r-sm);
+	word-break: break-word;
+}
+
 input,
 select,
 textarea {
