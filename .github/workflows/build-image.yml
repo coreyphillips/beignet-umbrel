@@ -97,7 +97,24 @@ env:
   # proposal. Also fixes a pathfinding bug where an invoice hint naming an
   # announced channel could kill that exact route. Daemon surface:
   # connect-and-open additionally accepts trusted; everything else unchanged.
-  BEIGNET_VERSION: "0.7.3"
+  # 0.7.4 is about channel funding surviving the ways it used to be lost. A
+  # funding transaction that failed to broadcast is now retained and retried
+  # until it confirms, rather than leaving a channel waiting on a transaction
+  # no one has. Concurrent opens pledge their inputs and the selection is
+  # serialised, so two fundings started close together can no longer pick the
+  # same coin and double-spend each other. P2TR wallet inputs are signed on
+  # the funding paths (BIP 341 prevouts), so a taproot UTXO can fund a
+  # channel. A watchdog watches for a funding that never appears and voids the
+  # channel rather than stranding it, and a request_funds of zero sats is
+  # treated as no lease rather than a lease of nothing. Daemon surface: one
+  # new route, POST /channel/funding-quote, which prices a funding against the
+  # peer actually being opened to (v1 or v2 weights, rather than the v1 sweep
+  # arithmetic the dashboard's Max preview reconstructs today, which is a few
+  # sats out against a dual-fund peer). Nothing else changed: no env vars, no
+  # CLI changes, and every existing route is byte-identical, verified by
+  # diffing the published 0.7.3 and 0.7.4 tarballs' dist/cli. The manager and
+  # the dashboard need no changes; adopting funding-quote is a follow-up.
+  BEIGNET_VERSION: "0.7.4"
 
 jobs:
   build:
