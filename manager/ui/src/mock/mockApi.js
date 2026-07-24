@@ -47,8 +47,19 @@ function derivedHex(seed, length) {
 	return out.slice(0, length);
 }
 
-const SEGWIT_HRP = { mainnet: 'bc', testnet: 'tb', regtest: 'bcrt' };
-const BOLT11_HRP = { mainnet: 'lnbc', testnet: 'lntb', regtest: 'lnbcrt' };
+// signet shares testnet's address prefix, and is here because parseBolt11Hrp
+// can hand back 'signet' from an lntbs invoice. Without it the lookup missed and
+// fell through to mainnet, so a signet invoice decoded as network 'bc'.
+const SEGWIT_HRP = { mainnet: 'bc', testnet: 'tb', signet: 'tb', regtest: 'bcrt' };
+const BOLT11_HRP = { mainnet: 'lnbc', testnet: 'lntb', signet: 'lntbs', regtest: 'lnbcrt' };
+
+// beignet 0.6.0 carries HTLCs on NORMAL channels and on a channel paying through
+// its splice, which is the same rule the Send tab and /liquidity below use.
+const htlcUsable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
+
+const SECOND = 1000;
+/** Seconds since the epoch, which is what a BOLT11 timestamp is counted in. */
+const inSeconds = (ms) => Math.floor(ms / SECOND);
 
 // The dashboard checks a pasted address against its own checksum before it will
 // put it in a send form, so the demo has to hand out addresses that pass one.
@@ -66,20 +77,55 @@ function demoInvoice(network = 'mainnet', amountSats = null) {
 	return bech32Encode(hrp, Array.from({ length: 220 }, () => Math.floor(rnd() * 32)));
 }
 
-/** The invoice behind a string, if one of the demo wallets minted it. */
+/**
+ * The invoice behind a string, if one of the demo wallets minted it, and which
+ * wallet that was. The payee matters: the daemon warns about an invoice only
+ * when it is your own node's, because that is the case where the reader is also
+ * the one who can do something about it.
+ */
 function mintedInvoice(bolt11) {
 	if (!bolt11) return null;
-	for (const state of Object.values(store.state)) {
+	for (const [walletId, state] of Object.entries(store.state)) {
 		const hit = state.invoices.find((inv) => inv.bolt11 === bolt11);
-		if (hit) return hit;
+		if (hit) return { invoice: hit, walletId };
 	}
 	return null;
+}
+
+/**
+ * An invoice as the daemon reports it, status derived rather than stored.
+ *
+ * The daemon works status out on every read: PAID when an incoming payment for
+ * the hash completed, EXPIRED once createdAt plus expiry has passed, PENDING
+ * otherwise. Storing it meant the mock never emitted EXPIRED at all, and the
+ * deliberately three-day-old seeded invoice was labelled PAID.
+ *
+ * createdAt is seconds, which is what a BOLT11 timestamp is and what the daemon
+ * carries. The mock held milliseconds and divided them back down in decode,
+ * which was self-consistent and wrong against the real thing: an "expires in"
+ * column would have read correctly here and shown 1970 on an Umbrel.
+ */
+function invoiceInfo(inv) {
+	const status = inv.paid
+		? 'PAID'
+		: inSeconds(Date.now()) > inv.createdAt + inv.expiry
+		? 'EXPIRED'
+		: 'PENDING';
+	return {
+		bolt11: inv.bolt11,
+		paymentHash: inv.paymentHash,
+		amountSats: inv.amountSats,
+		description: inv.description,
+		expiry: inv.expiry,
+		createdAt: inv.createdAt,
+		status
+	};
 }
 
 /** What paying this invoice would move, the payer's own figure included. */
 function invoiceAmount(bolt11, given) {
 	const minted = mintedInvoice(String(bolt11 || '').trim());
-	if (minted?.amountSats) return minted.amountSats;
+	if (minted?.invoice.amountSats) return minted.invoice.amountSats;
 	if (!minted) {
 		const hrp = parseBolt11Hrp(String(bolt11 || '').trim());
 		if (hrp.ok && hrp.amountMsat != null) return Number(hrp.amountMsat / 1000n);
@@ -126,7 +172,10 @@ function makeChannels(specs) {
 	});
 }
 
-function makeTxs(count, heightBase) {
+// The wallet's own chain, not mainnet. Without it the testnet playground's
+// history and coins carried bc1… addresses, which is a chain the wallet showing
+// them cannot spend on.
+function makeTxs(count, heightBase, network = 'mainnet') {
 	return Array.from({ length: count }, (_, i) => {
 		const received = rnd() > 0.42;
 		const confirmed = i > 1;
@@ -138,7 +187,7 @@ function makeTxs(count, heightBase) {
 			feeSats,
 			// The real endpoint returns these two and the list never showed them.
 			satsPerVbyte: received ? null : between(2, 40),
-			address: demoAddress(),
+			address: demoAddress(network),
 			confirmed,
 			height: confirmed ? heightBase - i * between(2, 40) : null,
 			timestamp: now - i * between(3, 30) * 3600000,
@@ -175,15 +224,34 @@ function makePayments(count) {
 	});
 }
 
-function makeUtxos(count, heightBase) {
+function makeUtxos(count, heightBase, network = 'mainnet') {
 	return Array.from({ length: count }, (_, i) => ({
 		txid: hex(64),
 		vout: Math.floor(rnd() * 3),
-		address: demoAddress(),
+		address: demoAddress(network),
 		valueSats: between(20000, 1200000),
 		height: i === 0 ? null : heightBase - between(10, 4000)
 	}));
 }
+
+const INVOICE_EXPIRY_SECONDS = 3600;
+
+// How old each seeded invoice is, in minutes, and whether it was paid. Between
+// them these reach every status the table can show, now that status is derived
+// from the age rather than stored: inside the hour and unpaid is PENDING, past
+// it is EXPIRED, and paid stays PAID whatever the age. Ages are written out
+// rather than derived from the index so a change to one does not silently empty
+// a whole status of its examples.
+const INVOICE_SHAPES = [
+	[1, false], // just minted
+	[20, false], // still open, and the one that names no amount
+	[3 * 24 * 60, false], // three days old
+	[5, true],
+	[45, false],
+	[90, true], // paid before it ran out
+	[150, false],
+	[10, false]
+];
 
 function makeInvoices(count, network = 'mainnet') {
 	const descs = ['Coffee', 'Podcast boost', 'Invoice #1042', 'Consulting', 'Tip jar', ''];
@@ -193,15 +261,18 @@ function makeInvoices(count, network = 'mainnet') {
 		// expired. All three are copyable out of the invoices table, so all three
 		// are reachable in the demo.
 		const amountSats = i === 1 ? null : rnd() > 0.3 ? between(500, 120000) : null;
-		const createdAt = now - (i === 2 ? 3 * DAY : i * 1800000);
+		const [minutesOld, paid] = INVOICE_SHAPES[i % INVOICE_SHAPES.length];
 		return {
 			paymentHash: hex(64),
 			bolt11: demoInvoice(network, amountSats),
 			amountSats,
 			description: pick(descs),
-			createdAt,
-			expiry: 3600,
-			status: i < 3 ? 'PAID' : 'PENDING'
+			createdAt: inSeconds(now - minutesOld * 60 * SECOND),
+			expiry: INVOICE_EXPIRY_SECONDS,
+			// Not a status. That is worked out on every read, so the three day old
+			// one reports EXPIRED on its own rather than being labelled PAID by an
+			// index, and an invoice left on screen crosses over as it ages.
+			paid
 		};
 	});
 }
@@ -318,9 +389,9 @@ store.state['demo-testnet'] = walletState({
 		chans[1].payThroughSplice = true;
 		return chans;
 	})(),
-	txs: makeTxs(6, 3411502),
+	txs: makeTxs(6, 3411502, 'testnet'),
 	payments: makePayments(7),
-	utxos: makeUtxos(2, 3411502),
+	utxos: makeUtxos(2, 3411502, 'testnet'),
 	invoices: makeInvoices(3, 'testnet'),
 	offers: [],
 	peers: [{ pubkey: pubkey(), host: '127.0.0.1', port: 9737, state: 'connected', alias: 'endurance' }]
@@ -535,9 +606,9 @@ function managerRequest(path, method, body) {
 		store.state[id] = walletState({
 			blockHeight: 908214,
 			channels: [],
-			txs: makeTxs(4, 908214),
+			txs: makeTxs(4, 908214, w.network),
 			payments: [],
-			utxos: makeUtxos(2, 908214),
+			utxos: makeUtxos(2, 908214, w.network),
 			invoices: [],
 			offers: [],
 			peers: []
@@ -653,6 +724,62 @@ function demoLogLines(w) {
 		`[${at(-8000)}] Opening channel 100000 sat`,
 		`[${at(0)}] node error [CHANNEL_ERROR] Remote error: invalid funding_amount=100000 sat (min=400000 sat)`
 	];
+}
+
+/**
+ * A Lightning payment, and the money it says it moved.
+ *
+ * Returns a PaymentInfo either way, as the safe endpoints do: the failure is a
+ * value rather than a throw, and the caller reads its status.
+ *
+ * The demo does not split a payment over several channels, so one usable channel
+ * has to carry the amount and the fee. When none can, the payment fails, which
+ * is the honest answer: recording it COMPLETED and leaving every balance alone,
+ * as this did, is the mock telling the dashboard money moved when none did.
+ */
+function payOverLightning(st, id, { amountSats, bolt11, noAmount }) {
+	const minted = bolt11 ? mintedInvoice(bolt11) : null;
+	const paymentHash = minted?.invoice.paymentHash || hex(64);
+	const failed = (failureDescription) => ({
+		paymentHash,
+		amountSats,
+		status: 'FAILED',
+		direction: 'OUTGOING',
+		failureCode: 15,
+		failureDescription,
+		createdAt: Date.now()
+	});
+	if (!amountSats) return failed(noAmount);
+
+	const feeSats = between(0, 25);
+	const channel = st.channels.find(
+		(c) => htlcUsable(c) && c.localBalanceSats >= amountSats + feeSats
+	);
+	if (!channel) {
+		return failed(
+			'No route to the destination with enough liquidity. Try a smaller amount, or open a channel with more outbound.'
+		);
+	}
+	channel.localBalanceSats -= amountSats + feeSats;
+	channel.remoteBalanceSats += amountSats + feeSats;
+	// Paying an invoice one of the demo wallets minted settles it there.
+	if (minted) minted.invoice.paid = true;
+
+	const at = Date.now();
+	const payment = {
+		paymentHash,
+		preimage: hex(64),
+		amountSats,
+		feeSats,
+		status: 'COMPLETED',
+		direction: 'OUTGOING',
+		route: { totalHops: between(1, 4) },
+		createdAt: at,
+		completedAt: at
+	};
+	st.payments.unshift(payment);
+	setTimeout(() => emit(id, 'payment:sent', { amountSats }), 400);
+	return payment;
 }
 
 function walletRequest(id, path, method, body) {
@@ -784,15 +911,15 @@ function walletRequest(id, path, method, body) {
 				bolt11: demoInvoice(w.network, amountSats),
 				amountSats,
 				description: body.description || '',
-				createdAt: Date.now(),
-				expiry: 3600,
-				status: 'PENDING'
+				createdAt: inSeconds(Date.now()),
+				expiry: INVOICE_EXPIRY_SECONDS,
+				paid: false
 			};
 			st.invoices.unshift(inv);
-			return inv;
+			return invoiceInfo(inv);
 		}
 		case '/invoices':
-			return st.invoices;
+			return st.invoices.map(invoiceInfo);
 		case '/invoice/decode': {
 			// The daemon reads the invoice it is given. So does this: the same
 			// string must decode to the same thing every time, and an invoice one
@@ -807,69 +934,100 @@ function walletRequest(id, path, method, body) {
 				throw err('Not a BOLT11 invoice');
 			}
 			const minted = mintedInvoice(bolt11);
+			const inv = minted?.invoice;
 			const decoded = {
 				network: SEGWIT_HRP[hrp.network] || 'bc',
-				timestamp: Math.floor((minted?.createdAt ?? now) / 1000),
-				paymentHash: minted?.paymentHash || derivedHex(bolt11, 64),
-				expiry: minted?.expiry ?? 3600,
+				timestamp: inv?.createdAt ?? inSeconds(now),
+				paymentHash: inv?.paymentHash || derivedHex(bolt11, 64),
+				expiry: inv?.expiry ?? INVOICE_EXPIRY_SECONDS,
 				minFinalCltvExpiry: 18,
-				payeeNodeKey: `02${derivedHex(`payee:${bolt11}`, 64)}`
+				// An invoice one of these wallets minted has that wallet as its payee,
+				// which is what makes the warnings below reachable at all.
+				payeeNodeKey: minted ? nodeId(minted.walletId) : `02${derivedHex(`payee:${bolt11}`, 64)}`
 			};
-			const amountSats = minted
-				? minted.amountSats
+			const amountSats = inv
+				? inv.amountSats
 				: hrp.amountMsat == null
 				? null
 				: Number(hrp.amountMsat / 1000n);
 			// An invoice with no amount omits the field outright, as the daemon does.
 			if (amountSats != null) decoded.amountSats = amountSats;
-			const description = minted ? minted.description : 'Demo invoice';
+			const description = inv ? inv.description : 'Demo invoice';
 			if (description) decoded.description = description;
+			// A private channel in a state that can route is what the daemon turns
+			// into a routing hint (see willGenerateRoutingHint in the diagnostics
+			// below), and an invoice with none is one a stranger cannot pay.
+			if (minted) {
+				const mintedState = store.state[minted.walletId];
+				const hints = mintedState.channels.filter((c) => c.isPrivate && htlcUsable(c));
+				if (hints.length > 0) {
+					decoded.routingHints = hints.map((c) => [
+						{
+							pubkey: c.peerPubkey,
+							shortChannelId: derivedHex(c.channelId, 16),
+							feeBaseMsat: 1000,
+							feeProportionalMillionths: 100,
+							cltvExpiryDelta: 80
+						}
+					]);
+				}
+				// Word for word what beignet emits, so the dashboard's translation of
+				// these strings is exercised rather than assumed.
+				const warnings = [];
+				if (!decoded.routingHints?.length) {
+					warnings.push(
+						'NO_ROUTING_HINTS: Invoice has no routing hints. Payers without a direct channel in their gossip graph will not find a route.'
+					);
+				}
+				if (mintedState.peers.length === 0) {
+					warnings.push(
+						'NO_PEERS: No peers connected. Channel partner may mark channel as inactive and refuse to route.'
+					);
+				}
+				if (warnings.length > 0) decoded.warnings = warnings;
+			}
 			return decoded;
 		}
 		case '/payment/estimate': {
 			const amountSats = invoiceAmount(body.bolt11, body.amountSats);
 			// Nothing can be routed until there is an amount to route.
 			if (!amountSats) throw err('Unable to estimate payment (no route or invalid invoice)', 'NO_ROUTE');
-			return { estimatedFeeSats: between(1, 30), successProbabilityPct: between(88, 99), hopCount: between(1, 4) };
+			const hopCount = between(1, 4);
+			const successProbabilityPct = between(88, 99);
+			// The whole of PaymentEstimate, graded the way the daemon grades it. The
+			// three missing fields were not read by anything today, which is what
+			// made them a trap for whatever reads them next.
+			return {
+				estimatedFeeSats: between(1, 30),
+				successProbabilityPct,
+				hopCount,
+				estimatedTimeMs: hopCount * 2000,
+				routeQuality:
+					hopCount > 4 || successProbabilityPct < 50
+						? 'LOW'
+						: hopCount > 2 || successProbabilityPct < 75
+						? 'MEDIUM'
+						: 'HIGH',
+				alternativeAvailable: st.channels.filter(htlcUsable).length > 1
+			};
 		}
-		case '/invoice/pay-safe': {
-			const amountSats = invoiceAmount(body.bolt11, body.amountSats);
-			if (!amountSats) throw err('This invoice names no amount, so one has to be given');
-			const feeSats = between(0, 25);
-			// Paying an invoice one of the demo wallets minted settles it there.
-			const minted = mintedInvoice(String(body.bolt11 || '').trim());
-			if (minted) minted.status = 'PAID';
-			st.payments.unshift({
-				paymentHash: hex(64),
-				direction: 'OUTGOING',
-				amountSats,
-				feeSats,
-				status: 'COMPLETED',
-				createdAt: Date.now(),
-				completedAt: Date.now()
+		// The two endpoints that never throw. That is the whole difference between
+		// /invoice/pay and /invoice/pay-safe: the safe one catches everything and
+		// returns HTTP success carrying a PaymentInfo whose status is FAILED, with
+		// the reason in failureDescription. Throwing here made the branch the Send
+		// tab renders for a failed payment unreachable in demo, so the one place a
+		// reviewer would go to see how a failure reads never showed one.
+		case '/invoice/pay-safe':
+			return payOverLightning(st, id, {
+				amountSats: invoiceAmount(body.bolt11, body.amountSats),
+				bolt11: String(body.bolt11 || '').trim(),
+				noAmount: 'This invoice names no amount, so one has to be given with the payment.'
 			});
-			const ch = st.channels.find((c) => c.state === 'NORMAL' && c.localBalanceSats > amountSats);
-			if (ch) {
-				ch.localBalanceSats -= amountSats + feeSats;
-				ch.remoteBalanceSats += amountSats + feeSats;
-			}
-			setTimeout(() => emit(id, 'payment:sent', { amountSats }), 400);
-			return { status: 'COMPLETED', feeSats };
-		}
-		case '/keysend/safe': {
-			const amountSats = body.amountSats || 0;
-			st.payments.unshift({
-				paymentHash: hex(64),
-				direction: 'OUTGOING',
-				amountSats,
-				feeSats: between(0, 10),
-				status: 'COMPLETED',
-				createdAt: Date.now(),
-				completedAt: Date.now()
+		case '/keysend/safe':
+			return payOverLightning(st, id, {
+				amountSats: Math.floor(Number(body.amountSats) || 0),
+				noAmount: 'A keysend has to name an amount.'
 			});
-			setTimeout(() => emit(id, 'payment:sent', { amountSats }), 400);
-			return { status: 'COMPLETED' };
-		}
 		case '/send': {
 			// The daemon refuses a destination it cannot build an output for, which
 			// is what catches a URI that reached it with its scheme still attached.
