@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.9.2"
+version: "0.9.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,31 +30,29 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Opening channels between your own Beignet wallets now works properly.
+  Instant channels between your own wallets.
 
 
-  A channel opened from one Beignet wallet to another silently stalled
-  partway through negotiation: the receiving side never finished its half
-  of the handshake, so the channel sat in DUAL_FUNDING_V2 forever and
-  showed an unknown, offline peer. No funds were ever at risk, since the
-  stall happened before any transaction was signed, and any stuck entry
-  clears when the app restarts. Both sides now complete the open and the
-  channel confirms and activates like any other.
+  Picking one of your own wallets in the Open channel drop-down now
+  offers a trusted zero-conf open, on by default: the channel is usable
+  the moment its funding transaction broadcasts, with no confirmation
+  wait. Each daemon only accepts these opens from peers it has been told
+  to trust, and the dashboard arranges that between your wallets for
+  you; hand-editing the peer fields turns the option off.
 
 
-  The Max button works for these opens too. It previously failed with
-  "max funding is not yet supported on a dual-funded (v2) open". Max now
-  sweeps the whole balance into the channel with no change output. The
-  final channel size can differ from the form's preview by a few sats,
-  since the funding fee for this kind of open is priced slightly
-  differently; the channel that opens shows the exact amount.
+  Trusted channels stay private permanently. Their negotiated channel
+  type is never announced to the network, so they are not available for
+  general public routing. Splices on them also activate immediately
+  instead of waiting for the splice transaction to confirm.
 
 
-  Channels still opening also now show their real peer instead of
-  "unknown node", so the Reconnect button works during an open.
+  Also fixes a routing bug where a payment could fail with "no route
+  found" on exactly the channel the invoice was pointing at, once that
+  channel had been announced to the network.
 
 
-  Ships beignet 0.7.2.
+  Ships beignet 0.7.3.
 
 dependencies: []
 path: ""
