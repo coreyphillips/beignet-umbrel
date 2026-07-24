@@ -90,6 +90,8 @@ const MESSAGES = {
 	BOLT11_SUB_MSAT: 'This Lightning invoice asks for less than a millisatoshi, which cannot be paid.',
 	BOLT11_CHECKSUM:
 		'This invoice fails its own checksum, so it is incomplete or was mistyped. Copy the whole of it again.',
+	BOLT11_TRUNCATED:
+		'This invoice is too short to be a whole one, so the end of it is missing. Copy the whole of it again.',
 	LNURL_UNSUPPORTED: 'That is an LNURL. This wallet pays invoices and offers, not LNURL.',
 	BOLT12_REQUEST_UNSUPPORTED:
 		'That is a BOLT12 invoice request, not something you can pay. Ask for an offer (it starts with lno1) instead.',
@@ -352,6 +354,11 @@ const BOLT11_PREFIXES = [
 const MSAT_PER_BTC = 100000000000n;
 const MULTIPLIER = { '': 1n, m: 1000n, u: 1000000n, n: 1000000000n, p: 1000000000000n };
 
+// The two fields BOLT11 requires of every invoice, in bech32 characters: a
+// 35-bit timestamp at the front and a 520-bit signature at the back, five bits
+// to the character. Everything between them is optional, so this is the floor.
+const BOLT11_MIN_DATA = 35 / 5 + 520 / 5;
+
 /**
  * Read the human readable part of a BOLT11 invoice: which chain it is for, and
  * how much it asks for.
@@ -503,6 +510,13 @@ function parseLightning(token, warnings, opts) {
 	// past 700 and is not malformed for that.
 	const checksum = bech32Decode(tight, { maxLength: MAX_INPUT });
 	if (!checksum.ok || checksum.encoding !== 'bech32') return refuse('BOLT11_CHECKSUM');
+	// A checksum alone does not make an invoice. BOLT11's data part is a 35-bit
+	// timestamp and a 520-bit signature with the tagged fields between them, so a
+	// string shorter than the two of them together has had the end cut off, and a
+	// truncation that lands on a valid checksum is exactly the case the checksum
+	// cannot catch. The specification's own "String is too short" vector is one:
+	// 103 characters of data where 111 is the floor.
+	if (checksum.data.length < BOLT11_MIN_DATA) return refuse('BOLT11_TRUNCATED');
 	if (tight !== tight.toLowerCase()) warn(warnings, 'CASE_FOLDED_FROM_QR');
 	const invoice = tight.toLowerCase();
 	const wanted = opts.network;
@@ -777,9 +791,11 @@ function attempt(text, warnings, opts) {
 
 /* -------------------------------------------------------------- half typed */
 
-// No BOLT11 invoice comes in under this: it carries a payment hash, a payment
-// secret and a signature before anything optional, and a real one runs past 200.
-const SHORTEST_INVOICE = 100;
+// The shortest string that could be a whole invoice: the shortest prefix, the
+// separator, the timestamp and signature every invoice must carry, and the
+// checksum. A real one runs past 200, since a payment hash and a payment secret
+// are required tagged fields on top of this.
+const SHORTEST_INVOICE = 'lnbc'.length + 1 + BOLT11_MIN_DATA + 6;
 // The base58 form bottoms out here, and it is also the floor for anything whose
 // prefix says nothing about how long it should be.
 const SHORTEST_BASE58_ADDRESS = 26;

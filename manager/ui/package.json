@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/*.test.js"
+    "test": "node --import ./test/setup.mjs --test 'src/**/*.test.js'"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
@@ -19,6 +19,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "4.3.4",
+    "esbuild": "^0.21.5",
+    "jsdom": "^29.1.1",
     "vite": "5.4.11"
   }
 }

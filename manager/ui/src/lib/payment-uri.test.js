@@ -446,6 +446,109 @@ test('a Lightning invoice is recognised wherever it arrives', () => {
 	assert.equal(parsePayment(invoice, { network: 'regtest' }).code, 'WRONG_NETWORK');
 });
 
+/*
+ * BOLT11's own example invoices, copied from the specification's Examples
+ * section. Every other invoice in this file is built by bech32Encode and then
+ * handed to parsePayment, which is a round trip through one polymod: it proves
+ * the two agree and nothing else. These are the external anchor, the same role
+ * the BIP173 and BIP350 vectors play for addresses above.
+ *
+ * All of them are signed with priv_key
+ * e126f68f7eafcc8b74f54d269fe206be715000f94dac067d1c04a8ca3b2db734, per the
+ * specification.
+ */
+const BOLT11_VECTORS = {
+	// "Please make a donation of any amount"
+	donation:
+		'lnbc1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq9qrsgq357wnc5r2ueh7ck6q93dj32dlqnls087fxdwk8qakdyafkq3yap9us6v52vjjsrvywa6rt52cm9r9zqt8r2t7mlcwspyetp5h2tztugp9lfyql',
+	// "Please send $3 for a cup of coffee to the same peer, within one minute"
+	coffee:
+		'lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpu9qrsgquk0rl77nj30yxdy8j9vdx85fkpmdla2087ne0xh8nhedh8w27kyke0lp53ut353s06fv3qfegext0eh0ymjpf39tuven09sam30g4vgpfna3rh',
+	// "Now send $24 for an entire list of things (hashed)"
+	list: 'lnbc20m1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqs9qrsgq7ea976txfraylvgzuxs8kgcw23ezlrszfnh8r6qtfpr6cxga50aj6txm9rxrydzd06dfeawfk6swupvz4erwnyutnjq7x39ymw6j38gp7ynn44',
+	// "The same, on testnet, with a fallback address"
+	testnet:
+		'lntb20m1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygshp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqfpp3x9et2e20v6pu37c5d9vax37wxq72un989qrsgqdj545axuxtnfemtpwkc45hx9d2ft7x04mt8q7y6t0k2dge9e7h8kpy9p34ytyslj3yu569aalz2xdk8xkd7ltxqld94u8h2esmsmacgpghe9k8',
+	// "Please send 0.00967878534 BTC ... amount in pico-BTC"
+	pico: 'lnbc9678785340p1pwmna7lpp5gc3xfm08u9qy06djf8dfflhugl6p7lgza6dsjxq454gxhj9t7a0sd8dgfkx7cmtwd68yetpd5s9xar0wfjn5gpc8qhrsdfq24f5ggrxdaezqsnvda3kkum5wfjkzmfqf3jkgem9wgsyuctwdus9xgrcyqcjcgpzgfskx6eqf9hzqnteypzxz7fzypfhg6trddjhygrcyqezcgpzfysywmm5ypxxjemgw3hxjmn8yptk7untd9hxwg3q2d6xjcmtv4ezq7pqxgsxzmnyyqcjqmt0wfjjq6t5v4khxsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygsxqyjw5qcqp2rzjq0gxwkzc8w6323m55m4jyxcjwmy7stt9hwkwe2qxmy8zpsgg7jcuwz87fcqqeuqqqyqqqqlgqqqqn3qq9q9qrsgqrvgkpnmps664wgkp43l22qsgdw4ve24aca4nymnxddlnp8vh9v2sdxlu5ywdxefsfvm0fq3sesf08uf6q9a2ke0hc9j6z6wlxg5z5kqpu2v9wz',
+
+	// From the specification's Invalid Invoices section, with its own headings.
+	badChecksum:
+		'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpquwpc4curk03c9wlrswe78q4eyqc7d8d0xqzpuyk0sg5g70me25alkluzd2x62aysf2pyy8edtjeevuv4p2d5p76r4zkmneet7uvyakky2zr4cusd45tftc9c5fh0nnqpnl2jfll544esqchsrnt',
+	mixedCase:
+		'LNBC2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpquwpc4curk03c9wlrswe78q4eyqc7d8d0xqzpuyk0sg5g70me25alkluzd2x62aysf2pyy8edtjeevuv4p2d5p76r4zkmneet7uvyakky2zr4cusd45tftc9c5fh0nnqpnl2jfll544esqchsrny',
+	tooShort:
+		'lnbc1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6na6hlh',
+	badMultiplier:
+		'lnbc2500x1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgqrrzc4cvfue4zp3hggxp47ag7xnrlr8vgcmkjxk3j5jqethnumgkpqp23z9jclu3v0a7e0aruz366e9wqdykw6dxhdzcjjhldxq0w6wgqcnu43j',
+	subMillisatoshi:
+		'lnbc2500000001p1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgq0lzc236j96a95uv0m3umg28gclm5lqxtqqwk32uuk4k6673k6n5kfvx3d2h8s295fad45fdhmusm8sjudfhlf6dcsxmfvkeywmjdkxcp99202x',
+	unrecoverableSignature:
+		'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgqwgt7mcn5yqw3yx0w94pswkpq6j9uh6xfqqqtsk4tnarugeektd4hg5975x9am52rz4qskukxdmjemg92vvqz8nvmsye63r5ykel43pgz7zq0g2'
+};
+
+test('the specification\'s own invoices are read as the specification describes them', () => {
+	const donation = parsePayment(BOLT11_VECTORS.donation, { network: 'mainnet' });
+	assert.equal(donation.kind, 'bolt11');
+	assert.equal(donation.network, 'mainnet');
+	assert.equal(donation.amountSats, null, 'any amount, which is not zero');
+	assert.equal(donation.invoice, BOLT11_VECTORS.donation);
+
+	assert.equal(parsePayment(BOLT11_VECTORS.coffee, { network: 'mainnet' }).amountSats, 250000);
+	assert.equal(parsePayment(BOLT11_VECTORS.list, { network: 'mainnet' }).amountSats, 2000000);
+
+	const testnet = parsePayment(BOLT11_VECTORS.testnet, { network: 'testnet' });
+	assert.equal(testnet.kind, 'bolt11');
+	assert.equal(testnet.network, 'testnet');
+	assert.equal(testnet.amountSats, 2000000);
+	// And it cannot be paid from a mainnet wallet, which is the check that stops
+	// coins going somewhere they cannot be spent.
+	assert.equal(parsePayment(BOLT11_VECTORS.testnet, { network: 'mainnet' }).code, 'WRONG_NETWORK');
+
+	// 9678785340 pico-BTC is 967,878.534 satoshis, and a satoshi is the unit the
+	// form deals in, so the fraction of one is dropped rather than rounded up.
+	assert.equal(parsePayment(BOLT11_VECTORS.pico, { network: 'mainnet' }).amountSats, 967878);
+
+	// The scheme, the capitals of a QR code and the wrapping of a chat window all
+	// come off a real invoice the same way they come off a made up one.
+	const scanned = parsePayment(`LIGHTNING:${BOLT11_VECTORS.coffee.toUpperCase()}`, {
+		network: 'mainnet'
+	});
+	assert.equal(scanned.kind, 'bolt11');
+	assert.equal(scanned.invoice, BOLT11_VECTORS.coffee);
+});
+
+test("the specification's invalid invoices are refused, each for its own reason", () => {
+	const cases = [
+		['badChecksum', 'BOLT11_CHECKSUM'],
+		['mixedCase', 'BOLT11_MIXED_CASE'],
+		// Its bech32 checksum is valid: the string was cut short in a way that
+		// happens to check out, which is precisely what a checksum cannot catch.
+		// Only the length says so, and 103 characters of data is under the 111 a
+		// timestamp and a signature take.
+		['tooShort', 'BOLT11_TRUNCATED'],
+		['badMultiplier', 'BOLT11_BAD_AMOUNT'],
+		['subMillisatoshi', 'BOLT11_SUB_MSAT']
+	];
+	for (const [name, code] of cases) {
+		const r = parsePayment(BOLT11_VECTORS[name], { network: 'mainnet' });
+		assert.equal(r.kind, 'invalid', name);
+		assert.equal(r.code, code, name);
+		assert.ok(r.message.endsWith('.'), `${name} needs a sentence`);
+	}
+});
+
+test('an invoice whose signature is bad is the daemon\'s to refuse, not this file\'s', () => {
+	// The specification lists this one under invalid invoices, and it is: the
+	// signature does not recover a pubkey. Nothing here can tell, and nothing here
+	// pretends to. The parser routes and the daemon decides, so this reaches the
+	// daemon looking payable and comes back refused, which is the intended
+	// division rather than a gap in it.
+	const r = parsePayment(BOLT11_VECTORS.unrecoverableSignature, { network: 'mainnet' });
+	assert.equal(r.kind, 'bolt11');
+	assert.equal(r.amountSats, 250000);
+});
+
 test('an invoice that fails its checksum never reaches the daemon', () => {
 	const invoice = invoiceFor('lnbc2500u');
 	// One character changed, and one cut short by a line wrap.
