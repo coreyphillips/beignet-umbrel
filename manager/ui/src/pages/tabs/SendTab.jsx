@@ -4,8 +4,10 @@ import { useToast } from '../../components/Toast.jsx';
 import { AmountField, Button, Card, Field, FeeField, Badge, Segmented } from '../../components/ui.jsx';
 import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
+import { formatInvoiceWarning } from '../../lib/hints.js';
 import { parsePayment } from '../../lib/payment-uri.js';
 import { useQuote } from '../../hooks/useQuote.js';
+import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 import { manager, walletApi } from '../../api.js';
 
 // beignet 0.6.0 pays during splices: the daemon marks each channel with
@@ -110,6 +112,7 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 	const [feeRate, setFeeRate] = useState('');
 	const [dest, setDest] = useState('custom');
 	const [maxMode, setMaxMode] = useState(false);
+	const [focused, setFocused] = useState(false);
 	const [fetchingAddr, setFetchingAddr] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [txid, setTxid] = useState('');
@@ -133,6 +136,7 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 	// other rail. Reading it costs nothing and happens on every change rather
 	// than on paste alone, so typing and pasting behave identically.
 	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
+	const mayRefuse = useSettledRefusal(value, focused);
 
 	// The two ways a payee's amount stops binding this form, which are not the
 	// same thing and must not be treated as one.
@@ -185,7 +189,11 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 			return;
 		}
 		if (parsed.kind === 'invalid') {
-			setNote({ tone: 'error', text: parsed.message });
+			// The refusal is rendered straight from the parse rather than stored,
+			// because it has to be held back while the field is still being typed
+			// into, and a note in state cannot be un-said. The request is kept: half
+			// an address is what a field holds while it is being edited.
+			setNote(null);
 			return;
 		}
 		if (parsed.kind !== 'onchain') {
@@ -457,9 +465,12 @@ function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLi
 						onChange(e.target.value);
 						if (dest !== 'custom') setDest('custom');
 					}}
+					onFocus={() => setFocused(true)}
+					onBlur={() => setFocused(false)}
 					placeholder={fetchingAddr ? 'Fetching address…' : 'bc1… or bitcoin:bc1…?amount=…'}
 				/>
 			</Field>
+			{parsed.kind === 'invalid' && mayRefuse && <div className="error-note">{parsed.message}</div>}
 			{note && <div className={note.tone === 'error' ? 'error-note' : 'info-note'}>{note.text}</div>}
 			{/* While the box holds something unreadable, that is the only thing worth
 			    saying about it. The request is still held, and says its piece again
@@ -599,6 +610,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 	const [busy, setBusy] = useState(false);
 	const [result, setResult] = useState(null);
 	const [now, setNow] = useState(() => Date.now());
+	const [focused, setFocused] = useState(false);
 	// Only the newest decode may write its answer: a slow one must not overwrite
 	// a fresher one that landed first.
 	const latest = useRef(0);
@@ -606,6 +618,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 
 	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
 	const invoice = parsed.kind === 'bolt11' ? parsed.invoice : null;
+	const mayRefuse = useSettledRefusal(value, focused);
 
 	// An on-chain address in the invoice box belongs on the other rail.
 	useEffect(() => {
@@ -628,11 +641,26 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 			latest.current += 1;
 			setDecoded(null);
 			setEstimate(null);
+			setAmount('');
 			setError(null);
 			setDecoding(false);
 			return () => {};
 		}
 		const id = ++latest.current;
+		// The panel empties the moment the invoice changes, because everything in
+		// it belongs to the invoice that has just left. Leaving the previous
+		// amount, description, payee and expiry standing under a box that holds a
+		// different invoice describes a payment nobody is about to make, and the
+		// removal of the Decode button was the promise that what is on screen is
+		// what you are about to pay.
+		//
+		// The payer's own amount goes with it. It was chosen for a different payee,
+		// and carried over it arrives pre-filled against this one, looking exactly
+		// as though this invoice had named it, with Pay enabled. One click then
+		// sends a figure chosen for someone else.
+		setDecoded(null);
+		setEstimate(null);
+		setAmount('');
 		setDecoding(true);
 		setError(null);
 		setResult(null);
@@ -662,8 +690,36 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 	const typedAmount = parseInt(amount, 10) || 0;
 	const amountSats = needsAmount ? typedAmount : decoded?.amountSats ?? 0;
 
+	// The expiry is seconds since the epoch, counted from the invoice's own
+	// timestamp, and an invoice without an expiry tag has none to show. The clock
+	// is ticked while one is on screen so that "expires in a minute" becomes
+	// "expired" on its own rather than when something else happens to re-render.
+	// Read before the estimate below, which must not be asked for at all once the
+	// answer cannot be acted on.
+	const expiresAt =
+		decoded && decoded.timestamp != null && decoded.expiry != null
+			? (decoded.timestamp + decoded.expiry) * 1000
+			: null;
 	useEffect(() => {
-		if (!invoice || !decoded || amountSats <= 0) {
+		if (expiresAt == null) return () => {};
+		const timer = setInterval(() => setNow(Date.now()), 15000);
+		setNow(Date.now());
+		return () => clearInterval(timer);
+	}, [expiresAt]);
+	const expired = expiresAt != null && expiresAt <= now;
+
+	useEffect(() => {
+		// An expired invoice is not routable, so there is nothing to estimate. The
+		// estimate is the most reassuring row in the panel, and offering one for a
+		// payment this same card has just refused puts two statements on screen that
+		// cannot both be acted on, which makes the refusal look arguable. It also
+		// spends a daemon round trip on a payment that cannot happen.
+		if (!invoice || !decoded || expired || amountSats <= 0) {
+			// The sequence has to move even on the way out, or an estimate already in
+			// flight still matches and writes its answer after the amount it was
+			// asked about has gone. The decode effect above gets this right, which is
+			// what made the omission here look accidental.
+			latestEstimate.current += 1;
 			setEstimate(null);
 			return () => {};
 		}
@@ -679,23 +735,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 				});
 		}, DECODE_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [api, invoice, decoded, needsAmount, amountSats]);
-
-	// The expiry is seconds since the epoch, counted from the invoice's own
-	// timestamp, and an invoice without an expiry tag has none to show. The clock
-	// is ticked while one is on screen so that "expires in a minute" becomes
-	// "expired" on its own rather than when something else happens to re-render.
-	const expiresAt =
-		decoded && decoded.timestamp != null && decoded.expiry != null
-			? (decoded.timestamp + decoded.expiry) * 1000
-			: null;
-	useEffect(() => {
-		if (expiresAt == null) return () => {};
-		const timer = setInterval(() => setNow(Date.now()), 15000);
-		setNow(Date.now());
-		return () => clearInterval(timer);
-	}, [expiresAt]);
-	const expired = expiresAt != null && expiresAt <= now;
+	}, [api, invoice, decoded, expired, needsAmount, amountSats]);
 
 	// The most that can leave over Lightning, for the amount slider a zero-amount
 	// invoice needs. Routing fees and each channel's reserve come out of it, so
@@ -734,17 +774,22 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 					rows={3}
 					value={value}
 					onChange={(e) => onChange(e.target.value)}
+					onFocus={() => setFocused(true)}
+					onBlur={() => setFocused(false)}
 					placeholder="lnbc…"
 				/>
 			</Field>
-			{parsed.kind === 'invalid' && <div className="error-note">{parsed.message}</div>}
+			{parsed.kind === 'invalid' && mayRefuse && <div className="error-note">{parsed.message}</div>}
 			{parsed.kind === 'bolt12' && (
 				<div className="info-note">
 					That is a BOLT12 offer rather than an invoice. Pay it from the Offers tab.
 				</div>
 			)}
 			{error && <div className="error-note">{error}</div>}
-			{decoding && !decoded && <div className="wallet-meta">Reading the invoice…</div>}
+			{/* Not `decoding && !decoded`: the panel is emptied the moment the invoice
+			    changes, and the one moment the reader most needs to be told "this is
+			    not your invoice yet" was exactly the moment that gate said nothing. */}
+			{decoding && <div className="wallet-meta">Reading the invoice…</div>}
 			{decoded && (
 				<>
 					<table style={{ marginTop: 4 }}>
@@ -771,7 +816,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 									</td>
 								</tr>
 							)}
-							{estimate && (
+							{estimate && !expired && (
 								<tr>
 									<td className="wallet-meta">Estimate</td>
 									<td>
@@ -784,7 +829,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 					</table>
 					{decoded.warnings?.length > 0 && (
 						<div className="info-note" style={{ marginTop: 12 }}>
-							{decoded.warnings.join(' ')}
+							{decoded.warnings.map(formatInvoiceWarning).join(' ')}
 						</div>
 					)}
 					{needsAmount && (

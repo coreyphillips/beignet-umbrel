@@ -763,3 +763,52 @@ function readPayment(input, opts) {
 function attempt(text, warnings, opts) {
 	return /^ln/i.test(text) ? parseLightning(text, warnings, opts) : parseAddress(text, warnings, opts);
 }
+
+/* -------------------------------------------------------------- half typed */
+
+// No BOLT11 invoice comes in under this: it carries a payment hash, a payment
+// secret and a signature before anything optional, and a real one runs past 200.
+const SHORTEST_INVOICE = 100;
+// The base58 form bottoms out here, and it is also the floor for anything whose
+// prefix says nothing about how long it should be.
+const SHORTEST_BASE58_ADDRESS = 26;
+// The exotic short witness versions BIP350 allows, like the 14-character
+// bc1sw50qgdz25j. Valid, and not a string anyone types.
+const SHORTEST_BECH32_ADDRESS = 14;
+// A witness program's length in bech32 characters, by the version character that
+// precedes it: version 0 is 20 or 32 bytes, so 32 characters is its floor, and
+// version 1 is always the 32 bytes of a taproot output key.
+const PROGRAM_CHARS = { q: 32, p: 52 };
+
+/** hrp, separator, witness version, program, six checksum characters. */
+function shortestAddress(body) {
+	const hit = /^(bc|tb|bcrt)1([a-z0-9])/i.exec(body);
+	if (!hit) return SHORTEST_BASE58_ADDRESS;
+	const program = PROGRAM_CHARS[hit[2].toLowerCase()];
+	return program ? hit[1].length + 2 + program + 6 : SHORTEST_BECH32_ADDRESS;
+}
+
+/**
+ * Is this string too short for a refusal about it to mean anything?
+ *
+ * A field being typed into holds half of something for as long as it takes to
+ * write the rest, and every refusal this file can make is true of half a valid
+ * string. Telling someone their invoice "fails its own checksum, so it is
+ * incomplete or was mistyped. Copy the whole of it again" while their caret is
+ * still in the field is both the harshest thing the form can say and the wrong
+ * advice for what they are doing: it is incomplete because they have not
+ * finished writing it.
+ *
+ * Length is the signal that separates the two, and the prefix says how long the
+ * finished thing should be, so the question is answered here rather than guessed
+ * at by each caller.
+ */
+export function tooShortToJudge(input) {
+	const text = typeof input === 'string' ? input.trim() : '';
+	if (text === '') return true;
+	// A scheme is something a person pastes rather than types, so what follows it
+	// is what the length is about.
+	const body = schemeOf(text) ? text.slice(text.indexOf(':') + 1) : text;
+	if (/^ln/i.test(body)) return body.length < SHORTEST_INVOICE;
+	return body.length < shortestAddress(body);
+}

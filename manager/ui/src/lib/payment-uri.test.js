@@ -16,7 +16,8 @@ import {
 	convertBits,
 	parseBolt11Hrp,
 	parsePayment,
-	satsToBtcString
+	satsToBtcString,
+	tooShortToJudge
 } from './payment-uri.js';
 
 /* ------------------------------------------------------------------ money */
@@ -542,6 +543,42 @@ test('nothing pasted crashes it', () => {
 	assert.equal(parsePayment('a'.repeat(9000), {}).code, 'INPUT_TOO_LONG');
 	assert.equal(parsePayment('‮bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', {}).code, 'BIDI_CONTROL');
 	assert.equal(parsePayment('bitcoin:', {}).code, 'BIP21_NO_PAYABLE_TARGET');
+});
+
+test('half a payment string is not judged as a damaged one', () => {
+	// What a field holds while it is being typed into. Every refusal this file can
+	// make is true of these, and none of them is worth saying yet.
+	const halfWritten = [
+		'',
+		'   ',
+		'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzq',
+		// One character short of the P2WPKH and taproot forms their prefixes name.
+		ADDR.slice(0, -1),
+		'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj'.slice(0, -1),
+		'bc1qw508d6qejxtdg4y5r3zar',
+		'1A1zP1eP5QGefi2',
+		'lightning:lnbc2500u1pvjluezpp5'
+	];
+	for (const input of halfWritten) {
+		assert.equal(tooShortToJudge(input), true, JSON.stringify(input).slice(0, 40));
+	}
+
+	// And what a finished one holds. A refusal about any of these is the answer.
+	const finished = [
+		ADDR,
+		'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5',
+		'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0',
+		'1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa',
+		// A witness version with no standard program length behind it falls back to
+		// the shortest string bech32 itself allows, since nothing narrows it.
+		'bc1sw50qgdz25j',
+		invoiceFor('lnbc2500u'),
+		`lightning:${invoiceFor('lnbc2500u')}`,
+		'hello world, this is plainly not a payment string at all'
+	];
+	for (const input of finished) {
+		assert.equal(tooShortToJudge(input), false, input.slice(0, 24));
+	}
 });
 
 test('every refusal carries a sentence a person can act on', () => {
