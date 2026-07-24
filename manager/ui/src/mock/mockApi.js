@@ -3,6 +3,14 @@
 // backend (enable with ?demo, VITE_DEMO=1, or sessionStorage beignet-demo=1).
 // Field names mirror exactly what the real endpoints return and the UI reads.
 
+import {
+	bech32Decode,
+	bech32Encode,
+	classifyAddress,
+	convertBits,
+	parseBolt11Hrp
+} from '../lib/payment-uri.js';
+
 const HEX = '0123456789abcdef';
 let seedCounter = 7;
 function rnd() {
@@ -23,6 +31,67 @@ function pick(arr) {
 }
 function between(min, max) {
 	return Math.floor(min + rnd() * (max - min));
+}
+
+// A string's own hex, the same every time it is asked for. Anything the mock
+// derives from a pasted invoice has to be stable, or the same paste decodes
+// differently twice and the demo looks broken rather than fake.
+function derivedHex(seed, length) {
+	let h = 2166136261;
+	for (let i = 0; i < seed.length; i++) h = ((h ^ seed.charCodeAt(i)) * 16777619) >>> 0;
+	let out = '';
+	while (out.length < length) {
+		h = (h * 1103515245 + 12345) >>> 0;
+		out += HEX[(h >> 4) & 15] + HEX[(h >> 12) & 15] + HEX[(h >> 20) & 15] + HEX[(h >> 28) & 15];
+	}
+	return out.slice(0, length);
+}
+
+const SEGWIT_HRP = { mainnet: 'bc', testnet: 'tb', regtest: 'bcrt' };
+const BOLT11_HRP = { mainnet: 'lnbc', testnet: 'lntb', regtest: 'lnbcrt' };
+
+// The dashboard checks a pasted address against its own checksum before it will
+// put it in a send form, so the demo has to hand out addresses that pass one.
+// A random 20-byte witness program, encoded the way the daemon encodes it.
+function demoAddress(network = 'mainnet') {
+	const program = Array.from({ length: 20 }, () => Math.floor(rnd() * 256));
+	return bech32Encode(SEGWIT_HRP[network] || 'bc', [0].concat(convertBits(program, 8, 5, true)));
+}
+
+// Likewise for invoices: the amount rides in the human readable part, in nano
+// bitcoin (a satoshi is ten of them), and the body is bech32 rather than hex,
+// which is not the same alphabet.
+function demoInvoice(network = 'mainnet', amountSats = null) {
+	const hrp = (BOLT11_HRP[network] || 'lnbc') + (amountSats ? `${amountSats * 10}n` : '');
+	return bech32Encode(hrp, Array.from({ length: 220 }, () => Math.floor(rnd() * 32)));
+}
+
+/** The invoice behind a string, if one of the demo wallets minted it. */
+function mintedInvoice(bolt11) {
+	if (!bolt11) return null;
+	for (const state of Object.values(store.state)) {
+		const hit = state.invoices.find((inv) => inv.bolt11 === bolt11);
+		if (hit) return hit;
+	}
+	return null;
+}
+
+/** What paying this invoice would move, the payer's own figure included. */
+function invoiceAmount(bolt11, given) {
+	const minted = mintedInvoice(String(bolt11 || '').trim());
+	if (minted?.amountSats) return minted.amountSats;
+	if (!minted) {
+		const hrp = parseBolt11Hrp(String(bolt11 || '').trim());
+		if (hrp.ok && hrp.amountMsat != null) return Number(hrp.amountMsat / 1000n);
+	}
+	// An invoice that names no amount leaves it to the payer.
+	return Math.floor(Number(given) || 0);
+}
+
+/** Would the daemon accept this as a destination on this wallet's chain. */
+function payableAddress(address, network) {
+	const classified = classifyAddress(String(address || '').trim());
+	return classified.ok && classified.networks.includes(network);
 }
 
 const WORDS =
@@ -69,7 +138,7 @@ function makeTxs(count, heightBase) {
 			feeSats,
 			// The real endpoint returns these two and the list never showed them.
 			satsPerVbyte: received ? null : between(2, 40),
-			address: 'bc1q' + hex(38),
+			address: demoAddress(),
 			confirmed,
 			height: confirmed ? heightBase - i * between(2, 40) : null,
 			timestamp: now - i * between(3, 30) * 3600000,
@@ -110,20 +179,31 @@ function makeUtxos(count, heightBase) {
 	return Array.from({ length: count }, (_, i) => ({
 		txid: hex(64),
 		vout: Math.floor(rnd() * 3),
-		address: 'bc1q' + hex(38),
+		address: demoAddress(),
 		valueSats: between(20000, 1200000),
 		height: i === 0 ? null : heightBase - between(10, 4000)
 	}));
 }
 
-function makeInvoices(count) {
+function makeInvoices(count, network = 'mainnet') {
 	const descs = ['Coffee', 'Podcast boost', 'Invoice #1042', 'Consulting', 'Tip jar', ''];
-	return Array.from({ length: count }, (_, i) => ({
-		paymentHash: hex(64),
-		amountSats: rnd() > 0.3 ? between(500, 120000) : null,
-		description: pick(descs),
-		status: i < 3 ? 'PAID' : 'PENDING'
-	}));
+	return Array.from({ length: count }, (_, i) => {
+		// One of every shape the Send tab has to render: an ordinary invoice, one
+		// that names no amount (the payer chooses), and one old enough to have
+		// expired. All three are copyable out of the invoices table, so all three
+		// are reachable in the demo.
+		const amountSats = i === 1 ? null : rnd() > 0.3 ? between(500, 120000) : null;
+		const createdAt = now - (i === 2 ? 3 * DAY : i * 1800000);
+		return {
+			paymentHash: hex(64),
+			bolt11: demoInvoice(network, amountSats),
+			amountSats,
+			description: pick(descs),
+			createdAt,
+			expiry: 3600,
+			status: i < 3 ? 'PAID' : 'PENDING'
+		};
+	});
 }
 
 function walletState({ blockHeight, channels, txs, payments, utxos, invoices, offers, peers }) {
@@ -241,7 +321,7 @@ store.state['demo-testnet'] = walletState({
 	txs: makeTxs(6, 3411502),
 	payments: makePayments(7),
 	utxos: makeUtxos(2, 3411502),
-	invoices: makeInvoices(3),
+	invoices: makeInvoices(3, 'testnet'),
 	offers: [],
 	peers: [{ pubkey: pubkey(), host: '127.0.0.1', port: 9737, state: 'connected', alias: 'endurance' }]
 });
@@ -696,13 +776,16 @@ function walletRequest(id, path, method, body) {
 		}
 		case '/address/new':
 			st.addressN += 1;
-			return { address: (w.network === 'mainnet' ? 'bc1q' : 'tb1q') + hex(38) };
+			return { address: demoAddress(w.network) };
 		case '/invoice/create': {
+			const amountSats = body.amountSats || null;
 			const inv = {
 				paymentHash: hex(64),
-				bolt11: (w.network === 'mainnet' ? 'lnbc' : 'lntb') + (body.amountSats ? body.amountSats * 10 + 'n' : '') + '1' + hex(180),
-				amountSats: body.amountSats || null,
+				bolt11: demoInvoice(w.network, amountSats),
+				amountSats,
 				description: body.description || '',
+				createdAt: Date.now(),
+				expiry: 3600,
 				status: 'PENDING'
 			};
 			st.invoices.unshift(inv);
@@ -710,18 +793,52 @@ function walletRequest(id, path, method, body) {
 		}
 		case '/invoices':
 			return st.invoices;
-		case '/invoice/decode':
-			if (!/^ln/i.test(body.bolt11 || '')) throw err('Not a BOLT11 invoice');
-			return {
-				amountSats: between(1000, 60000),
-				description: 'Demo invoice',
-				payeeNodeKey: pubkey()
+		case '/invoice/decode': {
+			// The daemon reads the invoice it is given. So does this: the same
+			// string must decode to the same thing every time, and an invoice one
+			// demo wallet minted must decode in another, which is most of the point
+			// of the demo having more than one wallet.
+			const bolt11 = String(body.bolt11 || '').trim();
+			const hrp = parseBolt11Hrp(bolt11);
+			// The real decoder reads the data part and checks the signature over it.
+			// The nearest honest thing here is the checksum, which at least refuses
+			// a string that only looks like an invoice.
+			if (!hrp.ok || !bech32Decode(bolt11, { maxLength: 8192 }).ok) {
+				throw err('Not a BOLT11 invoice');
+			}
+			const minted = mintedInvoice(bolt11);
+			const decoded = {
+				network: SEGWIT_HRP[hrp.network] || 'bc',
+				timestamp: Math.floor((minted?.createdAt ?? now) / 1000),
+				paymentHash: minted?.paymentHash || derivedHex(bolt11, 64),
+				expiry: minted?.expiry ?? 3600,
+				minFinalCltvExpiry: 18,
+				payeeNodeKey: `02${derivedHex(`payee:${bolt11}`, 64)}`
 			};
-		case '/payment/estimate':
+			const amountSats = minted
+				? minted.amountSats
+				: hrp.amountMsat == null
+				? null
+				: Number(hrp.amountMsat / 1000n);
+			// An invoice with no amount omits the field outright, as the daemon does.
+			if (amountSats != null) decoded.amountSats = amountSats;
+			const description = minted ? minted.description : 'Demo invoice';
+			if (description) decoded.description = description;
+			return decoded;
+		}
+		case '/payment/estimate': {
+			const amountSats = invoiceAmount(body.bolt11, body.amountSats);
+			// Nothing can be routed until there is an amount to route.
+			if (!amountSats) throw err('Unable to estimate payment (no route or invalid invoice)', 'NO_ROUTE');
 			return { estimatedFeeSats: between(1, 30), successProbabilityPct: between(88, 99), hopCount: between(1, 4) };
+		}
 		case '/invoice/pay-safe': {
-			const amountSats = between(1000, 60000);
+			const amountSats = invoiceAmount(body.bolt11, body.amountSats);
+			if (!amountSats) throw err('This invoice names no amount, so one has to be given');
 			const feeSats = between(0, 25);
+			// Paying an invoice one of the demo wallets minted settles it there.
+			const minted = mintedInvoice(String(body.bolt11 || '').trim());
+			if (minted) minted.status = 'PAID';
 			st.payments.unshift({
 				paymentHash: hex(64),
 				direction: 'OUTGOING',
@@ -754,6 +871,9 @@ function walletRequest(id, path, method, body) {
 			return { status: 'COMPLETED' };
 		}
 		case '/send': {
+			// The daemon refuses a destination it cannot build an output for, which
+			// is what catches a URI that reached it with its scheme still attached.
+			if (!payableAddress(body.address, w.network)) throw err('Invalid address', 'SEND_FAILED');
 			const amountSats = body.amountSats || 0;
 			const txid = hex(64);
 			st.txs.unshift({
@@ -770,6 +890,7 @@ function walletRequest(id, path, method, body) {
 			return { txid };
 		}
 		case '/send-max': {
+			if (!payableAddress(body.address, w.network)) throw err('Invalid address', 'SEND_FAILED');
 			const balance = onchainBalance(id);
 			if (!balance) throw err('No spendable UTXOs', 'SEND_FAILED');
 			const rate = body.satsPerVbyte || 7;
@@ -995,7 +1116,7 @@ function walletRequest(id, path, method, body) {
 				if (amt > c.localBalanceSats) throw err('Amount exceeds local balance');
 				c.capacitySats -= amt;
 				c.localBalanceSats -= amt;
-				st.utxos.push({ txid: hex(64), vout: 0, address: 'bc1q' + hex(38), valueSats: amt, height: null });
+				st.utxos.push({ txid: hex(64), vout: 0, address: demoAddress(w.network), valueSats: amt, height: null });
 			}
 			return { ok: true };
 		}
