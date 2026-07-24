@@ -549,9 +549,11 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 					</label>
 					{trusted && (
 						<div className="wallet-meta" style={{ marginBottom: 12 }}>
-							Usable the moment it is funded, no confirmation wait. Safe
-							because the peer is your own node. Hand-editing the peer fields
-							turns this off.
+							Usable the moment it is funded, no confirmation wait, and the
+							channel stays private permanently: its negotiated type is never
+							announced to the network, so it will not earn routing fees from
+							strangers. Safe because the peer is your own node. Hand-editing
+							the peer fields turns this off.
 						</div>
 					)}
 				</>
