@@ -12,6 +12,7 @@ export default function ReceiveTab({ id, api, tick }) {
 	const [onchainAmount, setOnchainAmount] = useState('');
 	const [onchainMessage, setOnchainMessage] = useState('');
 	const [invoice, setInvoice] = useState(null);
+	const [includeInvoice, setIncludeInvoice] = useState(true);
 	const [amount, setAmount] = useState('');
 	const [description, setDescription] = useState('');
 	const [busy, setBusy] = useState(false);
@@ -36,12 +37,36 @@ export default function ReceiveTab({ id, api, tick }) {
 	// on every keystroke. With nothing attached it comes back as the bare
 	// address, which is what should be shared when nothing is being asked for.
 	const onchainSats = parseInt(onchainAmount, 10) || 0;
+	const trimmedMessage = onchainMessage.trim();
+
+	// A request can carry the invoice from the card beside it, which makes it one
+	// thing to hand out that a payer can settle on either rail: the address for a
+	// wallet that only reads BIP21, the invoice for one that would rather use
+	// Lightning. That is the shape the Send tab has always been able to read, and
+	// until now nothing here could write one.
+	//
+	// The two amounts have to agree. A payer's wallet is entitled to treat the
+	// BIP21 amount as binding on both rails, and our own parser refuses a request
+	// whose halves disagree rather than guess which was meant, so a request this
+	// tab could mint and the Send tab would refuse is not one to mint. An
+	// amountless invoice agrees with anything: it leaves the figure to the payer,
+	// and the request supplies it.
+	const invoiceConflicts =
+		!!invoice && onchainSats > 0 && invoice.amountSats != null && invoice.amountSats !== onchainSats;
+	const carriesInvoice = !!invoice && includeInvoice && !invoiceConflicts;
+
 	const request = useMemo(
 		// `message` rather than `label`: BIP21 defines label as the recipient's own
 		// name for themselves and message as the note to the payer, and a note to
 		// the payer is what this field is for.
-		() => buildBip21({ address, amountSats: onchainSats, message: onchainMessage.trim() }),
-		[address, onchainSats, onchainMessage]
+		() =>
+			buildBip21({
+				address,
+				amountSats: onchainSats,
+				message: trimmedMessage,
+				lightning: carriesInvoice ? invoice.bolt11 : undefined
+			}),
+		[address, onchainSats, trimmedMessage, carriesInvoice, invoice]
 	);
 	const isRequest = request !== address;
 
@@ -97,13 +122,49 @@ export default function ReceiveTab({ id, api, tick }) {
 				<div style={{ marginTop: 12, textAlign: 'center' }}>
 					<CopyText value={request} truncate={isRequest} />
 				</div>
+				{/* Built out of what is actually attached, sentence by sentence. Said
+				    as one fixed paragraph it described the message field whether or
+				    not anything had been typed into it, so an empty box showing its
+				    "Coffee" placeholder read as though the placeholder were being
+				    handed out, and the hint is the only thing explaining what is being
+				    shared. */}
 				<div className="field-hint" style={{ marginTop: 10 }}>
-					{isRequest
-						? `A wallet that scans this fills in ${
-								onchainSats > 0 ? fmtSats(onchainSats) : 'the details'
-						  } for the payer. The message travels with the request and is never written to the chain.`
-						: 'Nothing attached, so this is a plain address. Anyone can pay it any amount.'}
+					{!isRequest
+						? 'Nothing attached, so this is a plain address. Anyone can pay it any amount.'
+						: [
+								onchainSats > 0
+									? `A wallet that scans this fills in ${fmtSats(onchainSats)} for the payer.`
+									: null,
+								trimmedMessage
+									? 'The message travels with the request and is never written to the chain.'
+									: null,
+								carriesInvoice
+									? 'It also carries the Lightning invoice below, so whoever scans it can settle on either rail.'
+									: null
+						  ]
+								.filter(Boolean)
+								.join(' ')}
 				</div>
+				{invoice && (
+					<>
+						<label className="checkbox field" style={{ marginTop: 10 }}>
+							<input
+								type="checkbox"
+								checked={includeInvoice}
+								disabled={invoiceConflicts}
+								onChange={(e) => setIncludeInvoice(e.target.checked)}
+							/>
+							Carry the Lightning invoice in this request
+						</label>
+						{invoiceConflicts && (
+							<div className="info-note">
+								The invoice below asks for {fmtSats(invoice.amountSats)} and this request asks for{' '}
+								{fmtSats(onchainSats)}. A payer's wallet reads the request's amount as binding on
+								both rails, so the two have to agree before they can be handed out as one thing.
+							</div>
+						)}
+					</>
+				)}
 			</Card>
 
 			<Card title="Lightning invoice">

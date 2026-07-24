@@ -476,6 +476,34 @@ test('the things that start with ln and are not invoices say so', () => {
 	assert.equal(parsePayment('lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84', {}).code, 'LNURL_UNSUPPORTED');
 });
 
+test('a request this writes with an invoice in it is one this reads', () => {
+	const invoice = invoiceFor('lnbc2500u');
+
+	// The whole point of the parameter: one string a payer can settle either way.
+	const both = buildBip21({ address: ADDR, amountSats: 250000, message: 'Table 12', lightning: invoice });
+	assert.equal(both, `bitcoin:${ADDR}?amount=0.0025&message=Table%2012&lightning=${invoice}`);
+	const read = parsePayment(both, { network: 'mainnet' });
+	assert.equal(read.kind, 'onchain');
+	assert.equal(read.address, ADDR);
+	assert.equal(read.amountSats, 250000);
+	assert.equal(read.message, 'Table 12');
+	assert.equal(read.lightning.kind, 'bolt11');
+	assert.equal(read.lightning.invoice, invoice);
+
+	// An amountless invoice leaves the figure to the payer, and the request
+	// supplies it, so there is nothing for the two to disagree about.
+	const amountless = buildBip21({ address: ADDR, amountSats: 250000, lightning: invoiceFor('lnbc') });
+	assert.equal(parsePayment(amountless, { network: 'mainnet' }).amountSats, 250000);
+
+	// Written last, so a request without one is byte-identical to before.
+	assert.equal(
+		buildBip21({ address: ADDR, amountSats: 250000, message: 'Table 12' }),
+		`bitcoin:${ADDR}?amount=0.0025&message=Table%2012`
+	);
+	assert.equal(buildBip21({ address: ADDR, lightning: '' }), ADDR);
+	assert.equal(buildBip21({ address: ADDR, lightning: '   ' }), ADDR);
+});
+
 test('a unified request offers both rails, and refuses two amounts that disagree', () => {
 	const invoice = invoiceFor('lnbc2500u');
 	const both = parsePayment(`bitcoin:${ADDR}?amount=0.0025&lightning=${invoice}`, { network: 'mainnet' });

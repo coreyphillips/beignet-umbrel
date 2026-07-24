@@ -395,11 +395,20 @@ export function parseBolt11Hrp(invoice) {
  * and shared when nothing is being asked for: a bare address is understood by
  * every wallet and every exchange, and a URI is not.
  *
- * The parameter order and the omissions match what the daemon's own encoder
- * produces, so a request written here is indistinguishable from one written by
- * `beignet address --bip21`.
+ * With an address, an amount, a label and a message, the parameter order and the
+ * omissions match what the daemon's own encoder produces, so such a request is
+ * indistinguishable from one written by `beignet address --bip21`.
+ *
+ * `lightning` goes beyond the daemon's encoder, which has no such parameter. It
+ * is the one form of request a payer can settle on either rail: the address is
+ * there for a wallet that only reads BIP21, the invoice for one that prefers
+ * Lightning, and neither has to be handed out separately. BTCPay and Phoenix
+ * emit these, `parsePayment` reads them, and until now nothing here could write
+ * one. It is written last so a request without it is byte-identical to before,
+ * and unescaped because bech32 is alphanumeric throughout, which is also what
+ * keeps a QR of it in the alphanumeric mode.
  */
-export function buildBip21({ address, amountSats, label, message } = {}) {
+export function buildBip21({ address, amountSats, label, message, lightning } = {}) {
 	if (!address) return '';
 	const params = [];
 	// The same ceiling btcStringToSats enforces on the way in. Without it the two
@@ -414,6 +423,8 @@ export function buildBip21({ address, amountSats, label, message } = {}) {
 	const trimmedMessage = String(message ?? '').trim();
 	if (trimmedLabel) params.push(`label=${encodeURIComponent(trimmedLabel)}`);
 	if (trimmedMessage) params.push(`message=${encodeURIComponent(trimmedMessage)}`);
+	const trimmedLightning = String(lightning ?? '').trim();
+	if (trimmedLightning) params.push(`lightning=${trimmedLightning}`);
 	return params.length ? `bitcoin:${address}?${params.join('&')}` : address;
 }
 
