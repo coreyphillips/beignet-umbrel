@@ -23,6 +23,21 @@ export function fmtDate(ts) {
 	return d.toLocaleString();
 }
 
+/**
+ * A span of seconds in the largest unit that still reads as a number rather
+ * than a measurement: "3 minutes" and "2 days", never "0.05 hours".
+ */
+export function fmtDuration(seconds) {
+	const s = Math.abs(Math.round(Number(seconds) || 0));
+	if (s < 60) return `${s} second${s === 1 ? '' : 's'}`;
+	const minutes = Math.round(s / 60);
+	if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'}`;
+	const days = Math.round(hours / 24);
+	return `${days} day${days === 1 ? '' : 's'}`;
+}
+
 export function pct(n) {
 	if (n === null || n === undefined) return '-';
 	return `${Math.round(Number(n))}%`;

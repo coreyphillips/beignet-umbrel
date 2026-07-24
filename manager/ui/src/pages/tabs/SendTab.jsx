@@ -1,22 +1,30 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { AmountField, Button, Card, Field, FeeField, Badge, Segmented } from '../../components/ui.jsx';
-import { fmtSats, shortId } from '../../lib/format.js';
+import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
+import { parsePayment } from '../../lib/payment-uri.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { manager, walletApi } from '../../api.js';
 
+// beignet 0.6.0 pays during splices: the daemon marks each channel with
+// htlcUsable, true for NORMAL and for a channel mid-splice that carries
+// payments through its confirmation window. Older daemons lack the flag, so
+// NORMAL remains the fallback.
+const usable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
+
 export default function SendTab({ id, api, info, rec, tick, bump }) {
 	const [mode, setMode] = useState('onchain');
+	// Both input boxes live here rather than in the cards below, because what is
+	// pasted into one of them regularly belongs to the other. A Lightning invoice
+	// in the on-chain box is not a mistake to correct, it is a payment on the
+	// other rail, and moving it there is the whole of the correction.
+	const [onchainInput, setOnchainInput] = useState('');
+	const [lnInput, setLnInput] = useState('');
 	const { data: channels } = usePoll(() => api.get('/channels').catch(() => null), 15000, [id, tick]);
-	// beignet 0.6.0 pays during splices: the daemon marks each channel with
-	// htlcUsable, true for NORMAL and for a channel mid-splice that carries
-	// payments through its confirmation window. Older daemons lack the flag,
-	// so NORMAL remains the fallback. splicingOnly covers the rare parked
-	// splice (e.g. taproot), where "open a channel first" would still be the
-	// wrong message.
-	const usable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
+	// splicingOnly covers the rare parked splice (e.g. taproot), where "open a
+	// channel first" would still be the wrong message.
 	const splicingOnly = channels
 		? channels.length > 0 &&
 		  !channels.some(usable) &&
@@ -29,6 +37,23 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 	useEffect(() => {
 		if (!canLightning && mode !== 'onchain') setMode('onchain');
 	}, [canLightning, mode]);
+
+	// Handing a payment string to the rail it belongs on. The refusal is a return
+	// value rather than a thrown error: with no channel open there is nowhere for
+	// an invoice to go, and the card that took the paste is the one that has to
+	// say so.
+	const toLightning = (text) => {
+		if (!canLightning) return false;
+		setLnInput(text);
+		setOnchainInput('');
+		setMode('lightning');
+		return true;
+	};
+	const toOnchain = (text) => {
+		setOnchainInput(text);
+		setLnInput('');
+		setMode('onchain');
+	};
 
 	return (
 		<div>
@@ -49,16 +74,38 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 						: 'Lightning payments need an open channel. Open one in the Channels tab.'}
 				</div>
 			)}
-			{mode === 'onchain' && <OnChain id={id} api={api} info={info} rec={rec} bump={bump} />}
-			{mode === 'lightning' && <Lightning api={api} bump={bump} />}
+			{mode === 'onchain' && (
+				<OnChain
+					id={id}
+					api={api}
+					info={info}
+					rec={rec}
+					bump={bump}
+					value={onchainInput}
+					onChange={setOnchainInput}
+					onLightning={toLightning}
+					canLightning={canLightning}
+				/>
+			)}
+			{mode === 'lightning' && (
+				<Lightning
+					api={api}
+					rec={rec}
+					channels={channels}
+					bump={bump}
+					value={lnInput}
+					onChange={setLnInput}
+					onOnchain={toOnchain}
+				/>
+			)}
 			{mode === 'keysend' && <Keysend api={api} channels={channels} bump={bump} />}
 		</div>
 	);
 }
 
-function OnChain({ id, api, info, rec, bump }) {
+function OnChain({ id, api, info, rec, bump, value, onChange, onLightning, canLightning }) {
 	const toast = useToast();
-	const [address, setAddress] = useState('');
+	const address = value;
 	const [amount, setAmount] = useState('');
 	const [feeRate, setFeeRate] = useState('');
 	const [dest, setDest] = useState('custom');
@@ -66,6 +113,10 @@ function OnChain({ id, api, info, rec, bump }) {
 	const [fetchingAddr, setFetchingAddr] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [txid, setTxid] = useState('');
+	// What was read out of a pasted payment request, kept so the form can show
+	// the payee's own numbers back to them and hold itself to them.
+	const [request, setRequest] = useState(null);
+	const [note, setNote] = useState(null);
 	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
 	const { data: wallets } = usePoll(() => manager.listWallets().catch(() => []), 15000, []);
 	const { data: utxos } = usePoll(() => api.get('/utxos').catch(() => null), 30000, [id]);
@@ -76,6 +127,92 @@ function OnChain({ id, api, info, rec, bump }) {
 	const balance = info?.onchainBalanceSats;
 	const effRate = parseInt(feeRate, 10) || fees?.normal || null;
 	const typed = parseInt(amount, 10) || 0;
+
+	// Anything can be pasted into the recipient box: a bare address, a payment
+	// request with an amount and a message attached, an invoice meant for the
+	// other rail. Reading it costs nothing and happens on every change rather
+	// than on paste alone, so typing and pasting behave identically.
+	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
+
+	// The two ways a payee's amount stops binding this form, which are not the
+	// same thing and must not be treated as one.
+	//
+	// The user takes the amount over by typing or dragging: the figure stands,
+	// it is simply theirs now, so only the request's claim on it is released.
+	const releaseAmount = () => {
+		if (request?.amountSats != null) setRequest({ ...request, amountSats: null });
+	};
+	// The request itself goes away, because the box no longer holds the address
+	// it named. Then its amount goes with it. Leaving the number behind is what
+	// turns a refused "asks for more than you have" into an armed sweep: the
+	// guard below only watches amounts it knows came from a request, and the
+	// fallback below that only arms on amounts it thinks the user typed. An
+	// orphaned figure moves from one to the other without anyone touching it.
+	const dropRequest = () => {
+		if (request?.amountSats != null) setAmount('');
+		setRequest(null);
+	};
+
+	useEffect(() => {
+		// Whatever is in the box now is what the form is about, so a request read
+		// out of a previous paste stops applying here, before anything else, and
+		// its amount and its message go with it.
+		//
+		// An unreadable string is the exception. Half an address is what a field
+		// holds while it is being edited, and dropping the request over it would
+		// mean a stray keystroke in the middle of a long address quietly discarded
+		// what the payee asked for. The request is held until the box holds a
+		// different address, or nothing at all.
+		if (parsed.kind === 'empty' || parsed.kind === 'bolt11' || parsed.kind === 'bolt12') dropRequest();
+		if (parsed.kind === 'bolt11' || parsed.kind === 'bolt12') {
+			const text = parsed.kind === 'bolt11' ? parsed.invoice : parsed.offer;
+			if (onLightning(text)) return;
+			setNote({
+				tone: 'error',
+				text: 'That is a Lightning invoice, and this wallet has no channel to pay it with yet.'
+			});
+			return;
+		}
+		if (parsed.kind === 'invalid') {
+			setNote({ tone: 'error', text: parsed.message });
+			return;
+		}
+		if (parsed.kind !== 'onchain') {
+			setNote(null);
+			return;
+		}
+		setNote(
+			parsed.warnings.length > 0
+				? { tone: 'info', text: parsed.warnings.map((w) => w.message).join(' ') }
+				: null
+		);
+		if (!parsed.isRequest) {
+			// The scheme and parameters are stripped off as soon as a request is
+			// read, so what is in the box afterwards is a bare address and lands
+			// here. A request goes on applying while that address is still the one
+			// it named, and stops the moment it is not.
+			if (request && request.address !== parsed.address) dropRequest();
+			return;
+		}
+		setRequest({
+			address: parsed.address,
+			amountSats: parsed.amountSats,
+			message: parsed.message || parsed.label,
+			lightning: parsed.lightning
+		});
+		// The payee's amount is not a preference for the form to reinterpret, so
+		// it is set directly rather than through setAmountManually, which would
+		// press Max the moment the request happened to ask for the whole balance.
+		// It replaces whatever the field held outright: a figure left over from
+		// the last request belongs to the last payee, not to this one.
+		setMaxMode(false);
+		setAmount(parsed.amountSats != null ? String(parsed.amountSats) : '');
+		// Strip the scheme and the parameters: the daemon's send takes an address
+		// and nothing else, and a URI reaches it as a fee-flavoured error deep
+		// inside transaction building.
+		if (value !== parsed.address) onChange(parsed.address);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [parsed]);
 
 	// What this transaction really costs, from the wallet, which is the only place
 	// that knows. The fee turns on which UTXOs coin selection picks, on their
@@ -158,6 +295,9 @@ function OnChain({ id, api, info, rec, bump }) {
 	// so arriving there presses it rather than leaving a number that Max would beat.
 	// Coming back down leaves max mode, clamped to what an ordinary payment can send.
 	const setAmountManually = (val) => {
+		// Touching the amount takes it back from the request: from here on it is
+		// the user's number, and the form treats it as one.
+		releaseAmount();
 		const next = parseInt(val, 10) || 0;
 		if (maxMode) {
 			// Still waiting on the sweep's own figure: nothing said now is a real
@@ -184,29 +324,51 @@ function OnChain({ id, api, info, rec, bump }) {
 		setFeeRate(val);
 	};
 
+	// A request for more than the wallet holds is refused rather than reshaped.
+	// The fallback below turns an unaffordable amount into a sweep, which is the
+	// right answer when the number was the user's own reach for "everything", and
+	// the wrong one when it is a payee's figure: a sweep pays a different amount
+	// than was asked for, and the payment would be short.
+	// The balance alone settles it before the quote lands, and the quote sharpens
+	// it once it has: waiting for a fee to say "this is more than you have" would
+	// leave the button live in the meantime.
+	const requestedAmount = request?.amountSats ?? null;
+	const requestTooLarge =
+		requestedAmount != null &&
+		balance != null &&
+		(requestedAmount > balance || (feeSats != null && requestedAmount > ordinaryMax));
+
 	// A balance that drops, or a fee that climbs, can still strand an amount that
 	// was affordable when it was entered. Rather than leave the form unsendable,
 	// fall back to sweeping, which is what the amount was reaching for.
 	const stranded =
-		!maxMode && typed > 0 && balance != null && feeSats != null && typed + feeSats > balance;
+		!maxMode &&
+		requestedAmount == null &&
+		typed > 0 &&
+		balance != null &&
+		feeSats != null &&
+		typed + feeSats > balance;
 	useEffect(() => {
 		if (stranded) setMaxMode(true);
 	}, [stranded]);
 
+	// Offering to sweep is good advice for someone reaching for everything they
+	// have, and bad advice when a payee named the figure: sweeping would pay a
+	// different amount than was asked for.
 	const nearMax =
-		!maxMode && amountNum > 0 && balance != null && feeSats != null &&
+		!maxMode && requestedAmount == null && amountNum > 0 && balance != null && feeSats != null &&
 		amountNum >= balance - feeSats * 2;
 
 	const onDest = async (val) => {
 		setDest(val);
 		if (val === 'custom') {
-			setAddress('');
+			onChange('');
 			return;
 		}
 		setFetchingAddr(true);
 		try {
 			const r = await walletApi(val).post('/address/new', {});
-			setAddress(r.address);
+			onChange(r.address);
 		} catch (e) {
 			toast(`Could not get address: ${e.message}`, 'error');
 			setDest('custom');
@@ -228,6 +390,8 @@ function OnChain({ id, api, info, rec, bump }) {
 			setTxid(r.txid);
 			setMaxMode(false);
 			setAmount('');
+			setRequest(null);
+			setNote(null);
 			if (dest !== 'custom') setDest('custom');
 			toast('Sent', 'success');
 			bump();
@@ -255,29 +419,76 @@ function OnChain({ id, api, info, rec, bump }) {
 					</select>
 				</Field>
 			)}
-			<Field label="Recipient address">
+			<Field
+				label="Recipient address or payment request"
+				hint={
+					parsed.kind === 'onchain' && !parsed.isRequest && parsed.addressType
+						? `${parsed.addressType} address.`
+						: undefined
+				}
+			>
 				<input
 					value={address}
 					onChange={(e) => {
-						setAddress(e.target.value);
+						onChange(e.target.value);
 						if (dest !== 'custom') setDest('custom');
 					}}
-					placeholder={fetchingAddr ? 'Fetching address…' : 'bc1…'}
+					placeholder={fetchingAddr ? 'Fetching address…' : 'bc1… or bitcoin:bc1…?amount=…'}
 				/>
 			</Field>
+			{note && <div className={note.tone === 'error' ? 'error-note' : 'info-note'}>{note.text}</div>}
+			{/* While the box holds something unreadable, that is the only thing worth
+			    saying about it. The request is still held, and says its piece again
+			    as soon as the address is back. */}
+			{request && parsed.kind === 'onchain' && (
+				<div className="info-note">
+					Read from a payment request
+					{request.amountSats != null ? `, which asks for ${fmtSats(request.amountSats)}` : ''}.
+					{request.lightning && canLightning ? ' It also carries a Lightning invoice.' : ''}
+					{request.lightning && canLightning && (
+						<div className="center-actions">
+							<Button className="sm" onClick={() => onLightning(request.lightning.invoice)}>
+								Pay over Lightning instead
+							</Button>
+						</div>
+					)}
+				</div>
+			)}
+			{request?.message && (
+				<Field
+					label="Message"
+					hint="From the payment request. It is for your records, and does not travel with the transaction."
+				>
+					<input value={request.message} readOnly />
+				</Field>
+			)}
 			<AmountField
 				label="Amount (sats)"
 				value={shownAmount}
 				onChange={setAmountManually}
 				max={maxMode ? sweepAmount || 0 : sliderMax}
 				isMax={maxMode}
-				onMax={() => setMaxMode((v) => !v)}
+				onMax={() => {
+					// Pressing Max is choosing an amount, the same as typing one, so
+					// the payee's figure stops binding here too. Otherwise the form
+					// would sweep the wallet while still claiming to pay their sum.
+					releaseAmount();
+					setMaxMode((v) => !v);
+				}}
 				hint={
 					maxMode
 						? 'Sweeps the whole balance. The wallet works out the exact amount when it broadcasts, so this follows the fee rate you pick.'
 						: 'The slider stops at the most you can send at this fee rate, so it leaves room for the fee.'
 				}
 			/>
+			{requestTooLarge && parsed.kind === 'onchain' && (
+				<div className="error-note">
+					This request asks for {fmtSats(requestedAmount)}, which is more than this wallet can send.{' '}
+					{feeSats != null
+						? `The most it can send at this fee rate is ${fmtSats(ordinaryMax)}, with the fee coming out of the rest. Ask for a smaller amount, or lower the fee rate.`
+						: `It holds ${fmtSats(balance)}. Ask for a smaller amount.`}
+				</div>
+			)}
 			<FeeField
 				label="Fee rate (sat/vB)"
 				value={feeRate}
@@ -327,7 +538,17 @@ function OnChain({ id, api, info, rec, bump }) {
 				variant="primary"
 				busy={busy}
 				onClick={send}
-				disabled={!address || amountNum <= 0 || balance === 0 || fetchingAddr}
+				// Nothing but a destination the parser could read goes to the daemon.
+				// It refuses the rest anyway, but it refuses them from inside
+				// transaction building, with a message about fees rather than about
+				// the address, long after the note above said what was wrong.
+				disabled={
+					parsed.kind !== 'onchain' ||
+					amountNum <= 0 ||
+					balance === 0 ||
+					fetchingAddr ||
+					requestTooLarge
+				}
 			>
 				{maxMode ? 'Send max' : 'Send'}
 			</Button>
@@ -340,35 +561,132 @@ function OnChain({ id, api, info, rec, bump }) {
 	);
 }
 
-function Lightning({ api, bump }) {
+// Long enough that a typed invoice is not decoded character by character, short
+// enough that a pasted one answers before the eye leaves the field.
+const DECODE_DEBOUNCE_MS = 300;
+
+function Lightning({ api, rec, channels, value, onChange, onOnchain, bump }) {
 	const toast = useToast();
-	const [bolt11, setBolt11] = useState('');
 	const [decoded, setDecoded] = useState(null);
 	const [estimate, setEstimate] = useState(null);
+	const [error, setError] = useState(null);
+	const [decoding, setDecoding] = useState(false);
+	const [amount, setAmount] = useState('');
 	const [busy, setBusy] = useState(false);
 	const [result, setResult] = useState(null);
+	const [now, setNow] = useState(() => Date.now());
+	// Only the newest decode may write its answer: a slow one must not overwrite
+	// a fresher one that landed first.
+	const latest = useRef(0);
+	const latestEstimate = useRef(0);
 
-	const decode = async () => {
-		setDecoded(null);
-		setEstimate(null);
-		setResult(null);
-		try {
-			const d = await api.post('/invoice/decode', { bolt11: bolt11.trim() });
-			setDecoded(d);
-			api
-				.post('/payment/estimate', { bolt11: bolt11.trim() })
-				.then(setEstimate)
-				.catch(() => setEstimate(null));
-		} catch (e) {
-			toast(e.message, 'error');
+	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
+	const invoice = parsed.kind === 'bolt11' ? parsed.invoice : null;
+
+	// An on-chain address in the invoice box belongs on the other rail.
+	useEffect(() => {
+		if (parsed.kind === 'onchain') onOnchain(value);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [parsed]);
+
+	// Tidy what was pasted down to the invoice itself: the lightning: scheme and
+	// the capitals a QR code arrives in are not part of it.
+	useEffect(() => {
+		if (invoice && value !== invoice) onChange(invoice);
+	}, [invoice, value, onChange]);
+
+	// Reading an invoice is the daemon's job and it is asked as soon as there is
+	// something to ask about. There is no Decode button: pressing one to find out
+	// what you are about to pay is a step that only ever had one right answer.
+	useEffect(() => {
+		if (!invoice) {
+			// Anything in flight belongs to a string that is no longer in the box.
+			latest.current += 1;
+			setDecoded(null);
+			setEstimate(null);
+			setError(null);
+			setDecoding(false);
+			return () => {};
 		}
-	};
+		const id = ++latest.current;
+		setDecoding(true);
+		setError(null);
+		setResult(null);
+		const timer = setTimeout(() => {
+			api
+				.post('/invoice/decode', { bolt11: invoice })
+				.then((d) => {
+					if (id !== latest.current) return;
+					setDecoded(d);
+					setError(null);
+				})
+				.catch((e) => {
+					if (id !== latest.current) return;
+					setDecoded(null);
+					setError(e.message);
+				})
+				.finally(() => {
+					if (id === latest.current) setDecoding(false);
+				});
+		}, DECODE_DEBOUNCE_MS);
+		return () => clearTimeout(timer);
+	}, [api, invoice]);
+
+	// An invoice with no amount in it leaves the amount to the payer, so it has to
+	// be asked for before anything can be estimated or paid.
+	const needsAmount = decoded != null && decoded.amountSats == null;
+	const typedAmount = parseInt(amount, 10) || 0;
+	const amountSats = needsAmount ? typedAmount : decoded?.amountSats ?? 0;
+
+	useEffect(() => {
+		if (!invoice || !decoded || amountSats <= 0) {
+			setEstimate(null);
+			return () => {};
+		}
+		const id = ++latestEstimate.current;
+		const timer = setTimeout(() => {
+			api
+				.post('/payment/estimate', needsAmount ? { bolt11: invoice, amountSats } : { bolt11: invoice })
+				.then((e) => {
+					if (id === latestEstimate.current) setEstimate(e);
+				})
+				.catch(() => {
+					if (id === latestEstimate.current) setEstimate(null);
+				});
+		}, DECODE_DEBOUNCE_MS);
+		return () => clearTimeout(timer);
+	}, [api, invoice, decoded, needsAmount, amountSats]);
+
+	// The expiry is seconds since the epoch, counted from the invoice's own
+	// timestamp, and an invoice without an expiry tag has none to show. The clock
+	// is ticked while one is on screen so that "expires in a minute" becomes
+	// "expired" on its own rather than when something else happens to re-render.
+	const expiresAt =
+		decoded && decoded.timestamp != null && decoded.expiry != null
+			? (decoded.timestamp + decoded.expiry) * 1000
+			: null;
+	useEffect(() => {
+		if (expiresAt == null) return () => {};
+		const timer = setInterval(() => setNow(Date.now()), 15000);
+		setNow(Date.now());
+		return () => clearInterval(timer);
+	}, [expiresAt]);
+	const expired = expiresAt != null && expiresAt <= now;
+
+	// The most that can leave over Lightning, for the amount slider a zero-amount
+	// invoice needs. Routing fees and each channel's reserve come out of it, so
+	// this is a ceiling rather than a promise.
+	const outbound = (channels || [])
+		.filter(usable)
+		.reduce((sum, c) => sum + (c.localBalanceSats || 0), 0);
 
 	const pay = async () => {
 		setBusy(true);
 		setResult(null);
 		try {
-			const r = await api.post('/invoice/pay-safe', { bolt11: bolt11.trim() });
+			const body = { bolt11: invoice };
+			if (needsAmount) body.amountSats = typedAmount;
+			const r = await api.post('/invoice/pay-safe', body);
 			setResult(r);
 			toast(r.status === 'COMPLETED' ? 'Payment sent' : `Payment ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
 			bump();
@@ -379,46 +697,103 @@ function Lightning({ api, bump }) {
 		}
 	};
 
+	const clear = () => {
+		onChange('');
+		setAmount('');
+		setResult(null);
+	};
+
 	return (
 		<Card title="Pay a Lightning invoice">
 			<Field label="BOLT11 invoice">
-				<textarea rows={3} value={bolt11} onChange={(e) => setBolt11(e.target.value)} placeholder="lnbc…" />
+				<textarea
+					rows={3}
+					value={value}
+					onChange={(e) => onChange(e.target.value)}
+					placeholder="lnbc…"
+				/>
 			</Field>
-			<div className="center-actions">
-				<Button onClick={decode} disabled={!bolt11}>
-					Decode
-				</Button>
-				<Button variant="primary" busy={busy} onClick={pay} disabled={!decoded}>
-					Pay
-				</Button>
-			</div>
-			{decoded && (
-				<table style={{ marginTop: 14 }}>
-					<tbody>
-						<tr>
-							<td className="wallet-meta">Amount</td>
-							<td>{decoded.amountSats ? fmtSats(decoded.amountSats) : 'any (zero-amount)'}</td>
-						</tr>
-						<tr>
-							<td className="wallet-meta">Description</td>
-							<td>{decoded.description || '-'}</td>
-						</tr>
-						<tr>
-							<td className="wallet-meta">Payee</td>
-							<td className="mono">{shortId(decoded.payeeNodeKey)}</td>
-						</tr>
-						{estimate && (
-							<tr>
-								<td className="wallet-meta">Estimate</td>
-								<td>
-									~{fmtSats(estimate.estimatedFeeSats)} fee · {estimate.successProbabilityPct}% success ·{' '}
-									{estimate.hopCount} hops
-								</td>
-							</tr>
-						)}
-					</tbody>
-				</table>
+			{parsed.kind === 'invalid' && <div className="error-note">{parsed.message}</div>}
+			{parsed.kind === 'bolt12' && (
+				<div className="info-note">
+					That is a BOLT12 offer rather than an invoice. Pay it from the Offers tab.
+				</div>
 			)}
+			{error && <div className="error-note">{error}</div>}
+			{decoding && !decoded && <div className="wallet-meta">Reading the invoice…</div>}
+			{decoded && (
+				<>
+					<table style={{ marginTop: 4 }}>
+						<tbody>
+							<tr>
+								<td className="wallet-meta">Amount</td>
+								<td>{decoded.amountSats ? fmtSats(decoded.amountSats) : 'any (you choose below)'}</td>
+							</tr>
+							<tr>
+								<td className="wallet-meta">Description</td>
+								<td>{decoded.description || '-'}</td>
+							</tr>
+							<tr>
+								<td className="wallet-meta">Payee</td>
+								<td className="mono">{shortId(decoded.payeeNodeKey)}</td>
+							</tr>
+							{expiresAt != null && (
+								<tr>
+									<td className="wallet-meta">Expires</td>
+									<td>
+										{expired
+											? `Expired ${fmtDuration((now - expiresAt) / 1000)} ago`
+											: `In ${fmtDuration((expiresAt - now) / 1000)}`}
+									</td>
+								</tr>
+							)}
+							{estimate && (
+								<tr>
+									<td className="wallet-meta">Estimate</td>
+									<td>
+										~{fmtSats(estimate.estimatedFeeSats)} fee · {estimate.successProbabilityPct}% success ·{' '}
+										{estimate.hopCount} hops
+									</td>
+								</tr>
+							)}
+						</tbody>
+					</table>
+					{decoded.warnings?.length > 0 && (
+						<div className="info-note" style={{ marginTop: 12 }}>
+							{decoded.warnings.join(' ')}
+						</div>
+					)}
+					{needsAmount && (
+						<div style={{ marginTop: 12 }}>
+							<AmountField
+								label="Amount to pay (sats)"
+								value={amount}
+								onChange={setAmount}
+								max={outbound}
+								onMax={() => setAmount(String(outbound))}
+								isMax={outbound > 0 && typedAmount === outbound}
+								hint="This invoice names no amount, so it is yours to choose. Bounded by your outbound channel balance, which routing fees and the channel reserve come out of."
+							/>
+						</div>
+					)}
+					{expired && (
+						<div className="error-note">
+							This invoice has expired, so it can no longer be paid. Ask for a new one.
+						</div>
+					)}
+				</>
+			)}
+			<div className="center-actions">
+				<Button
+					variant="primary"
+					busy={busy}
+					onClick={pay}
+					disabled={!decoded || decoding || expired || (needsAmount && typedAmount <= 0)}
+				>
+					{decoded?.amountSats ? `Pay ${fmtSats(decoded.amountSats)}` : 'Pay'}
+				</Button>
+				{value && <Button onClick={clear}>Clear</Button>}
+			</div>
 			{result && (
 				<div className={result.status === 'COMPLETED' ? 'info-note' : 'error-note'} style={{ marginTop: 12 }}>
 					Payment {result.status}
@@ -441,7 +816,7 @@ function Keysend({ api, channels, bump }) {
 	// is a ceiling rather than a promise, and the slider is bounded by it only to
 	// keep the amount in the right order of magnitude.
 	const outbound = (channels || [])
-		.filter((c) => c.state === 'NORMAL')
+		.filter(usable)
 		.reduce((sum, c) => sum + (c.localBalanceSats || 0), 0);
 
 	const send = async () => {
