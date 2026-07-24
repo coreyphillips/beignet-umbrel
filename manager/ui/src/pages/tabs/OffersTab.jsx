@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, CopyText, Field } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
+import { parsePayment } from '../../lib/payment-uri.js';
+import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 
 export default function OffersTab({ id, api, tick, bump }) {
 	const toast = useToast();
@@ -15,6 +17,26 @@ export default function OffersTab({ id, api, tick, bump }) {
 	const [payStr, setPayStr] = useState('');
 	const [payAmount, setPayAmount] = useState('');
 	const [paying, setPaying] = useState(false);
+	const [focused, setFocused] = useState(false);
+
+	// An offer arrives the same way every other payment string does: out of a chat
+	// window with the scheme still on it, off a QR code in capitals, wrapped in the
+	// punctuation of the sentence it was copied from. This is the one tab the Send
+	// card explicitly sends people to, so it is the one that most has to understand
+	// what it is handed.
+	const parsed = useMemo(() => parsePayment(payStr), [payStr]);
+	const offer = parsed.kind === 'bolt12' ? parsed.offer : null;
+	const mayRefuse = useSettledRefusal(payStr, focused);
+	// What this tab pays is an offer. Anything else the parser can name, it names,
+	// and a bolt11 belongs on the Send tab rather than here.
+	const refusal =
+		offer || parsed.kind === 'empty' || !mayRefuse
+			? null
+			: parsed.kind === 'invalid'
+			? parsed.message
+			: parsed.kind === 'bolt11'
+			? 'That is a Lightning invoice rather than an offer. Pay it from the Send tab.'
+			: 'That is not a BOLT12 offer. An offer starts with lno1.';
 
 	const create = async () => {
 		setCreating(true);
@@ -36,7 +58,9 @@ export default function OffersTab({ id, api, tick, bump }) {
 	const pay = async () => {
 		setPaying(true);
 		try {
-			const body = { offer: payStr.trim() };
+			// The offer the parser settled on, with the lightning: scheme stripped and
+			// the capitals folded back down, rather than the raw box.
+			const body = { offer };
 			if (payAmount) body.amountSats = parseInt(payAmount, 10);
 			const r = await api.post('/offer/pay', body);
 			toast(r.status === 'COMPLETED' ? 'Offer paid' : `Payment ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
@@ -66,12 +90,20 @@ export default function OffersTab({ id, api, tick, bump }) {
 
 				<Card title="Pay an offer">
 					<Field label="Offer (lno…)">
-						<textarea rows={3} value={payStr} onChange={(e) => setPayStr(e.target.value)} placeholder="lno…" />
+						<textarea
+							rows={3}
+							value={payStr}
+							onChange={(e) => setPayStr(e.target.value)}
+							onFocus={() => setFocused(true)}
+							onBlur={() => setFocused(false)}
+							placeholder="lno…"
+						/>
 					</Field>
+					{refusal && <div className="error-note">{refusal}</div>}
 					<Field label="Amount (sats, if offer has none)">
 						<input value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
 					</Field>
-					<Button variant="primary" busy={paying} onClick={pay} disabled={!payStr}>
+					<Button variant="primary" busy={paying} onClick={pay} disabled={!offer}>
 						Pay offer
 					</Button>
 				</Card>

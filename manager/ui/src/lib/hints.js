@@ -77,3 +77,37 @@ export function withPeerHint(rec, message, { port } = {}) {
 
 	return `${lead} ${causes.map((c, i) => `(${i + 1}) ${c}`).join(' ')}`;
 }
+
+/**
+ * The daemon's own words about an invoice, said in this wallet's voice.
+ *
+ * `/invoice/decode` returns warnings as `CODE: sentence` strings written for a
+ * developer reading a JSON response. Rendering them raw puts an error code with
+ * a colon after it next to prose the rest of the card is written in, which is a
+ * visible break in the house voice, and "Payers without a direct channel in
+ * their gossip graph" is not a sentence to hand a person.
+ *
+ * Both of these only fire for an invoice your own node minted, which is the case
+ * where the reader is also the one who can fix it, so each says what to do.
+ */
+const INVOICE_WARNINGS = {
+	NO_ROUTING_HINTS:
+		'This invoice carries no routing hints, so a payer has to find your node in ' +
+		'the public gossip graph to pay it. Anyone without a direct channel to you ' +
+		'will fail to find a route. An invoice made once a channel is announced, or ' +
+		'over a private channel that can be hinted at, is payable by more people.',
+	NO_PEERS:
+		'No peers are connected, so your channel partner may treat the channel as ' +
+		'inactive and refuse to route to it. Reconnect in the Channels tab before ' +
+		'handing this invoice out.'
+};
+
+export function formatInvoiceWarning(warning) {
+	const raw = String(warning || '').trim();
+	const split = raw.indexOf(':');
+	const code = split === -1 ? raw : raw.slice(0, split);
+	if (INVOICE_WARNINGS[code]) return INVOICE_WARNINGS[code];
+	// A warning this wallet has not been taught still has something to say, so it
+	// is passed through with the code taken off the front rather than dropped.
+	return split === -1 || !/^[A-Z0-9_]+$/.test(code) ? raw : raw.slice(split + 1).trim();
+}
