@@ -115,7 +115,18 @@ env:
   # diffing the published 0.7.3 and 0.7.4 tarballs' dist/cli. The dashboard's
   # Max preview on channel opens asks funding-quote for its figure; nothing
   # else needed changing.
-  BEIGNET_VERSION: "0.7.4"
+  # 0.7.5 is one fix: the stuck-channel watchdog now measures how long a
+  # channel has actually been disconnected. Its reestablish timer was only
+  # reset when a channel first became ready, never after a successful
+  # reconnect, so on a daemon that had been up a couple of weeks a routine
+  # peer restart could be force closed on the very next block. That showed up
+  # as the dashboard reporting a force close while the peer still listed the
+  # channel as open and saw this node as merely offline. The timer now counts
+  # contiguous blocks in the disconnected state, and the errored and
+  # shutting-down timers got the same correction. Daemon surface: none. The
+  # published 0.7.4 and 0.7.5 tarballs' dist/cli are byte-identical: no env
+  # vars, no routes, no CLI changes.
+  BEIGNET_VERSION: "0.7.5"
 
 jobs:
   build:
