@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 const DEBOUNCE_MS = 250;
 
 /**
- * Ask the wallet what a transaction will cost.
+ * Ask the wallet what something will cost.
  *
  * The fee depends on which UTXOs coin selection picks, on their script types,
  * and on whether change is needed. None of that is knowable from here, so it is
@@ -16,10 +16,16 @@ const DEBOUNCE_MS = 250;
  * even if the wallet is set to select coins in a way that makes the fee depend
  * on the amount.
  *
+ * `path` is a parameter because there is more than one thing worth a quote and
+ * the debounce, the sequence guard and the keep-the-last-answer behaviour are the
+ * same for all of them. /tx/quote prices a transaction; /channel/funding-quote
+ * prices a max channel open toward a particular peer, which is a different
+ * question with a different answer.
+ *
  * Returns { quote, error, pending }. `quote` is the last good answer, kept while
  * a new one is in flight so the figures on screen do not flicker to nothing.
  */
-export function useQuote(api, params, enabled = true) {
+export function useQuote(api, params, enabled = true, path = '/tx/quote') {
 	const [quote, setQuote] = useState(null);
 	const [error, setError] = useState(null);
 	const [pending, setPending] = useState(false);
@@ -38,7 +44,7 @@ export function useQuote(api, params, enabled = true) {
 		setPending(true);
 		const timer = setTimeout(() => {
 			api
-				.post('/tx/quote', JSON.parse(key))
+				.post(path, JSON.parse(key))
 				.then((res) => {
 					if (id !== latest.current) return;
 					setQuote(res);
@@ -56,7 +62,7 @@ export function useQuote(api, params, enabled = true) {
 				});
 		}, DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [api, key, enabled]);
+	}, [api, key, enabled, path]);
 
 	return { quote, error, pending };
 }
