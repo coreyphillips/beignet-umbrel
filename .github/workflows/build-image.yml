@@ -112,8 +112,9 @@ env:
   # arithmetic the dashboard's Max preview reconstructs today, which is a few
   # sats out against a dual-fund peer). Nothing else changed: no env vars, no
   # CLI changes, and every existing route is byte-identical, verified by
-  # diffing the published 0.7.3 and 0.7.4 tarballs' dist/cli. The manager and
-  # the dashboard need no changes; adopting funding-quote is a follow-up.
+  # diffing the published 0.7.3 and 0.7.4 tarballs' dist/cli. The dashboard's
+  # Max preview on channel opens uses funding-quote as of app 0.9.5; nothing
+  # else needed changing.
   BEIGNET_VERSION: "0.7.4"
 
 jobs:

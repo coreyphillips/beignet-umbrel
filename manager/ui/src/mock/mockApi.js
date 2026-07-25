@@ -57,6 +57,15 @@ const BOLT11_HRP = { mainnet: 'lnbc', testnet: 'lntb', signet: 'lntbs', regtest:
 // its splice, which is the same rule the Send tab and /liquidity below use.
 const htlcUsable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
 
+// beignet prices a v2 funding contribution in sat/kw, and the dashboard talks in
+// sat/vB. One vbyte is four weight units.
+const SATVB_TO_PERKW_MOCK = 250;
+
+// Peers whose alias belongs to an implementation that advertises dual funding, so
+// a max open toward one is priced the v2 way and toward the rest the v1 way, and
+// both answers are visitable in the demo.
+const DUAL_FUND_ALIASES = new Set(['ACINQ', 'endurance']);
+
 const SECOND = 1000;
 /** Seconds since the epoch, which is what a BOLT11 timestamp is counted in. */
 const inSeconds = (ms) => Math.floor(ms / SECOND);
@@ -1167,6 +1176,54 @@ function walletRequest(id, path, method, body) {
 				htlcMinimumMsat: '1000',
 				htlcMaximumMsat: String(c.capacitySats * 1000),
 				source: 'node-default'
+			};
+		}
+		case '/channel/funding-quote': {
+			// What a max open would commit toward this peer, priced the way the
+			// daemon prices it: a peer that negotiated dual funding gets the v2
+			// interactive-tx arithmetic, anyone else gets the v1 sweep. A peer that
+			// has not sent its init is a peer we are not connected to, and the v2
+			// judgment cannot be made about it, so the answer falls back to the
+			// sweep and says peerKnown false rather than guessing.
+			const peerPubkey = String(body.peerPubkey || '');
+			if (!/^[0-9a-f]{66}$/i.test(peerPubkey)) throw err('peerPubkey must be a 66-character hex pubkey', 'INVALID_PARAMS');
+			const satsPerVbyte = body.satsPerVbyte || 7;
+			const balance = onchainBalance(id);
+			const wanted = peerPubkey.toLowerCase();
+			const peer = st.peers.find((p) => p.pubkey.toLowerCase() === wanted);
+			const peerKnown = !!peer;
+			// beignet negotiates dual funding, so another of these wallets is a v2
+			// peer, as is anyone running an implementation that advertises it.
+			const isSiblingWallet = Object.values(nodeIds).some((k) => k.toLowerCase() === wanted);
+			const dualFund = peerKnown && (isSiblingWallet || DUAL_FUND_ALIASES.has(peer.alias));
+			if (dualFund) {
+				// A v2 contribution is weighed per input plus the shared output, and
+				// the rate is pinned in sat/kw, which is where it parts company with
+				// the sweep's vsize arithmetic.
+				const feeratePerKw = satsPerVbyte * SATVB_TO_PERKW_MOCK;
+				const weight = 164 * (st.utxos.length || 1) + 172;
+				const feeSats = Math.ceil((weight * feeratePerKw) / 1000);
+				return {
+					method: 'v2',
+					peerKnown: true,
+					satsPerVbyte,
+					feeratePerKw,
+					fundingSatoshis: Math.max(0, balance - feeSats),
+					feeSats,
+					spendableSats: balance,
+					inputCount: st.utxos.length || 1
+				};
+			}
+			const vsize = Math.ceil(10.5 + (st.utxos.length || 1) * 68 + 43);
+			const feeSats = vsize * satsPerVbyte;
+			return {
+				method: 'v1',
+				peerKnown,
+				satsPerVbyte,
+				fundingSatoshis: Math.max(0, balance - feeSats),
+				feeSats,
+				vsize,
+				maxSatsPerVbyte: Math.floor(balance / 2 / vsize)
 			};
 		}
 		case '/channel/splice-quote': {

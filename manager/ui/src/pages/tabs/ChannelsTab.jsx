@@ -325,15 +325,41 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 		balance > 0 && effRate > 0
 	);
 
-	const shownFee = quote?.feeSats ?? null;
+	// A max open is not a sweep, and how far it is from one turns on the peer.
+	// openChannel routes a dual-fund peer to the v2 interactive transaction, whose
+	// weight formula is not the sweep's, so reconstructing the figure here from a
+	// v1 sweep quote put a number on screen a few sats from the one the channel
+	// opened with. The daemon prices it against the peer instead, using the same
+	// arithmetic the open itself will use.
+	//
+	// Asked only in max mode, and only once there is a peer to ask about: the
+	// question is about the peer, not the wallet. The rate is passed so the answer
+	// is for the rate the open will name.
+	const peerPubkey = /^[0-9a-fA-F]{66}$/.test(pubkey.trim()) ? pubkey.trim().toLowerCase() : null;
+	const { quote: funding } = useQuote(
+		api,
+		{ peerPubkey, satsPerVbyte: effRate || undefined },
+		maxAmount && !!peerPubkey && effRate > 0,
+		'/channel/funding-quote'
+	);
+	// The peer has to have sent its init for the v2 judgment to be possible, which
+	// means being connected. Until then the daemon says so and answers with the
+	// sweep, which is the same figure as before and may move on connect.
+	const fundingExact = maxAmount && funding?.peerKnown === true;
+
+	// The sweep quote is still asked for: it prices an ordinary amount, and its
+	// vsize is what the fee-affordability clamp below is built on, neither of which
+	// a max-open quote answers.
+	const shownFee = (maxAmount ? funding?.feeSats : null) ?? quote?.feeSats ?? null;
 	const vsize = quote?.vsize ?? null;
 
 	// Max is the whole balance less the funding fee, worked out by the wallet at
 	// the rate we are about to name. Nothing is held back "just in case", because
-	// there is nothing left to guess at.
-	const sweepAmount = maxAmount ? quote?.maxSendSats ?? null : null;
+	// there is nothing left to guess at. The daemon's own figure for this peer
+	// when it has one, and the sweep until it does.
+	const sweepAmount = maxAmount ? funding?.fundingSatoshis ?? quote?.maxSendSats ?? null : null;
 	const ordinaryMax =
-		balance != null && shownFee != null ? Math.max(0, balance - shownFee) : 0;
+		balance != null && quote?.feeSats != null ? Math.max(0, balance - quote.feeSats) : 0;
 
 	// The range must not collapse to nothing while the sweep's own figure is still
 	// in flight: a ceiling of zero hands back a zero, which reads as a deliberate
@@ -584,7 +610,11 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 				onMax={() => setMaxAmount((v) => !v)}
 				hint={
 					maxAmount && shownFee != null
-						? `Everything except the ${fmtSats(shownFee)} funding fee at ${effRate} sat/vB. Change the fee rate and this follows it.`
+						? `Everything except the ${fmtSats(shownFee)} funding fee at ${effRate} sat/vB. Change the fee rate and this follows it.${
+								fundingExact
+									? ' This is the amount the channel opens with, priced for this peer.'
+									: ' The exact amount is settled when the peer is reached, and may move by a few sats.'
+						  }`
 						: 'Becomes your outbound capacity. The on-chain funding fee is paid on top, from the remaining balance.'
 				}
 			/>
