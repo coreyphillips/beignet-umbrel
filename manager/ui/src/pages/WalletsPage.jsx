@@ -17,6 +17,7 @@ import {
 } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import { copy, fmtSats } from '../lib/format.js';
+import { isClosedChannel } from '../lib/channels.js';
 
 function statusTone(s) {
 	if (s === 'running') return 'green';
@@ -39,7 +40,22 @@ export default function WalletsPage() {
 					.filter((w) => w.status === 'running')
 					.map(async (w) => {
 						try {
-							infos[w.id] = await walletApi(w.id).get('/info');
+							const api = walletApi(w.id);
+							const info = await api.get('/info');
+							// The daemon's /info channelCount is every channel it has ever
+							// had, closed ones included, so a wallet whose channels all
+							// closed still reads "2 channels" forever. Count open ones from
+							// the list itself; on any hiccup fall back to the daemon figure
+							// rather than showing nothing.
+							try {
+								const channels = await api.get('/channels');
+								info.openChannelCount = channels.filter(
+									(c) => !isClosedChannel(c)
+								).length;
+							} catch (_) {
+								info.openChannelCount = info.channelCount;
+							}
+							infos[w.id] = info;
 						} catch (_) {
 							/* not ready */
 						}
@@ -125,7 +141,8 @@ export default function WalletsPage() {
 									{info && (
 										<div className="wallet-meta">
 											{fmtSats((info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0))} ·{' '}
-											{info.channelCount} channels · {info.peerCount} peers
+											{info.openChannelCount ?? info.channelCount} channels ·{' '}
+											{info.peerCount} peers
 										</div>
 									)}
 								</div>

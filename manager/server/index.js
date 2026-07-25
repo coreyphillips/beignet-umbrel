@@ -221,6 +221,19 @@ async function main() {
 		});
 	});
 
+	// Durable channel history captured from the daemon's event stream: opening,
+	// ready, closing, and the reason an automatic force-close fired. Unlike the
+	// error ring this survives manager restarts, so a channel that closed while
+	// nobody was watching can still explain itself in the detail view.
+	api.get('/wallets/:id/channel-events', (req, res) => {
+		const channelId =
+			typeof req.query.channelId === 'string' ? req.query.channelId : undefined;
+		res.json({
+			ok: true,
+			result: manager.channelEvents(req.params.id, { channelId })
+		});
+	});
+
 	// Fetch the wallet daemon's OpenAPI spec and rewrite its server URL so the
 	// Swagger UI "Try it out" calls route back through this manager (with auth).
 	api.get(

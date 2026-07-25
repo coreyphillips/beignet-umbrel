@@ -419,6 +419,45 @@ store.state['demo-fresh'] = walletState({
 	peers: [{ pubkey: pubkey(), host: '203.0.113.8', port: 9735, state: 'connected', alias: 'ACINQ' }]
 });
 
+// Durable channel history, mirroring the manager's channel-events log: the
+// real manager records lifecycle events off the daemon's stream and serves
+// them back at /wallets/:id/channel-events for the detail view's History
+// section. Seeded so the demo's closed channels have a story: the force-closed
+// one tells the reestablish-watchdog incident (beignet #212) that motivated
+// the feature.
+const channelEvents = {};
+
+function recordChannelEvent(walletId, entry) {
+	if (!channelEvents[walletId]) channelEvents[walletId] = [];
+	channelEvents[walletId].push({ timestamp: Date.now(), ...entry });
+}
+
+{
+	const day = 86400000;
+	const chans = store.state['demo-main'].channels;
+	const acinq = chans[0];
+	const sparky = chans[4];
+	const endurance = chans[5];
+	channelEvents['demo-main'] = [
+		{ timestamp: now - 41 * day, event: 'channel:opening', channelId: sparky.channelId, fundingTxid: hex(64) },
+		{ timestamp: now - 41 * day + 3600000, event: 'channel:ready', channelId: sparky.channelId },
+		{ timestamp: now - 30 * day, event: 'channel:opening', channelId: endurance.channelId, fundingTxid: hex(64) },
+		{ timestamp: now - 30 * day + 2400000, event: 'channel:ready', channelId: endurance.channelId },
+		{ timestamp: now - 25 * day, event: 'channel:opening', channelId: acinq.channelId, fundingTxid: hex(64) },
+		{ timestamp: now - 25 * day + 1200000, event: 'channel:ready', channelId: acinq.channelId },
+		{ timestamp: now - 6 * day, event: 'channel:pending-close', channelId: sparky.channelId, initiator: 'local' },
+		{ timestamp: now - 6 * day + 1800000, event: 'channel:closed', channelId: sparky.channelId },
+		{
+			timestamp: now - 2 * day,
+			event: 'node:error',
+			channelId: endurance.channelId,
+			code: 'REESTABLISH_TIMEOUT_FORCE_CLOSED',
+			message: 'Channel stuck in AWAITING_REESTABLISH for > 2016 blocks, force-closing'
+		},
+		{ timestamp: now - 2 * day + 1000, event: 'channel:force-closing', channelId: endurance.channelId, initiator: 'local' }
+	];
+}
+
 // The daemon lists a channel's peer in /peers while the connection is up; the
 // channels table uses that to badge channels whose peer has dropped. Link each
 // wallet's channel peers into its peers list so demo channels read as healthy,
@@ -668,6 +707,13 @@ function managerRequest(path, method, body) {
 		const since = parseInt(new URLSearchParams(subQuery || '').get('since'), 10);
 		const all = demoNodeErrors().concat(runtimeErrors[w.id] || []);
 		return Number.isFinite(since) ? all.filter((e) => e.timestamp >= since) : all;
+	}
+	if (sub === 'channel-events') {
+		// Same shape as the manager's durable log: oldest first, optionally for
+		// one channel.
+		const channelId = new URLSearchParams(subQuery || '').get('channelId');
+		const all = channelEvents[w.id] || [];
+		return channelId ? all.filter((e) => e.channelId === channelId) : all.slice();
 	}
 	throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
 }
@@ -1290,12 +1336,20 @@ function walletRequest(id, path, method, body) {
 				c.state = 'AWAITING_FUNDING_CONFIRMED';
 				// The permanent channel id replaces the temporary one.
 				c.channelId = hex(64);
+				// The daemon announces channel:opening under the permanent id, which
+				// is where the channel's recorded history begins.
+				recordChannelEvent(id, {
+					event: 'channel:opening',
+					channelId: c.channelId,
+					fundingTxid: hex(64)
+				});
 			}, 3000);
 			// A trusted (zero-conf) open is usable the moment the funding is
 			// broadcast; a normal one waits out the demo's confirmation delay.
 			setTimeout(
 				() => {
 					c.state = 'NORMAL';
+					recordChannelEvent(id, { event: 'channel:ready', channelId: c.channelId });
 					emit(id, 'channel:ready', {});
 				},
 				body.trusted ? 3200 : 9000
@@ -1310,11 +1364,18 @@ function walletRequest(id, path, method, body) {
 		case '/channel/forceclose': {
 			const c = st.channels.find((x) => x.channelId === body.channelId);
 			if (!c) throw err('Channel not found');
-			c.state = route.endsWith('forceclose') ? 'FORCE_CLOSED' : 'NEGOTIATING_CLOSING';
+			const force = route.endsWith('forceclose');
+			c.state = force ? 'FORCE_CLOSED' : 'NEGOTIATING_CLOSING';
+			recordChannelEvent(id, {
+				event: force ? 'channel:force-closing' : 'channel:pending-close',
+				channelId: c.channelId,
+				initiator: 'local'
+			});
 			setTimeout(() => {
 				store.state[id].channels = store.state[id].channels.filter(
 					(x) => x.channelId !== body.channelId
 				);
+				recordChannelEvent(id, { event: 'channel:closed', channelId: body.channelId });
 				emit(id, 'channel:closed', {});
 			}, 6000);
 			return { ok: true };

@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { AmountField, Badge, BalanceBar, Button, Card, CopyText, DetailRow, Field, FeeField, Modal, Segmented } from '../../components/ui.jsx';
-import { fmtSats, shortId } from '../../lib/format.js';
+import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { withPeerHint } from '../../lib/hints.js';
+import { isClosedChannel } from '../../lib/channels.js';
 import { watchChannelOpen } from '../../lib/channel-open.js';
 import { manager, walletApi } from '../../api.js';
 
@@ -64,10 +65,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 	// Never badge before the first /peers answer arrives: an empty set would
 	// flash every channel offline on first paint.
 	const peerOffline = (c) =>
-		peers != null &&
-		c.state !== 'CLOSED' &&
-		c.state !== 'FORCE_CLOSED' &&
-		!connectedPeers.has(c.peerPubkey);
+		peers != null && !isClosedChannel(c) && !connectedPeers.has(c.peerPubkey);
 
 	const doAction = async (fn, ok) => {
 		try {
@@ -92,9 +90,8 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 	// A closed channel is history, not workload: it has no actions, cannot
 	// route, and every one that lingers pushes a live channel further down the
 	// list. Split the views like the Activity tab does.
-	const CLOSED_STATES = new Set(['CLOSED', 'FORCE_CLOSED']);
-	const openChannels = (channels || []).filter((c) => !CLOSED_STATES.has(c.state));
-	const closedChannels = (channels || []).filter((c) => CLOSED_STATES.has(c.state));
+	const openChannels = (channels || []).filter((c) => !isClosedChannel(c));
+	const closedChannels = (channels || []).filter(isClosedChannel);
 	const shown = view === 'closed' ? closedChannels : openChannels;
 
 	const renderRows = (list, { withActions }) => (
@@ -209,6 +206,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 			)}
 			{modal?.type === 'detail' && (
 				<ChannelDetailModal
+					id={id}
 					api={api}
 					channel={modal.channel}
 					origin={modal.origin}
@@ -891,11 +889,40 @@ function fmtScid(scidHex) {
 	return `${block}x${tx}x${vout}`;
 }
 
-function ChannelDetailModal({ api, channel, origin, onClose }) {
+// The channel's recorded story, in the words a timeline can print. Entries
+// come from the manager's durable event log; anything unrecognized falls back
+// to the raw event name so a newer daemon's events still show up.
+function historyLabel(e) {
+	const by =
+		e.initiator === 'local'
+			? ' by this node'
+			: e.initiator === 'remote'
+				? ' by the peer'
+				: '';
+	switch (e.event) {
+		case 'channel:opening':
+			return 'Funding broadcast';
+		case 'channel:ready':
+			return 'Channel ready';
+		case 'channel:pending-close':
+			return `Cooperative close started${by}`;
+		case 'channel:force-closing':
+			return `Force close started${by}`;
+		case 'channel:closed':
+			return 'Close resolved on-chain';
+		case 'node:error':
+			return `${e.code}: ${e.message}`;
+		default:
+			return e.event;
+	}
+}
+
+function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 	const toast = useToast();
 	const [diag, setDiag] = useState(null);
 	const [health, setHealth] = useState(null);
 	const [policy, setPolicy] = useState(null);
+	const [history, setHistory] = useState(null);
 	const [reconnecting, setReconnecting] = useState(false);
 	// Bumped after a reconnect so the diagnostics (and the connected badge)
 	// re-fetch instead of showing the pre-reconnect answer.
@@ -904,16 +931,22 @@ function ChannelDetailModal({ api, channel, origin, onClose }) {
 	useEffect(() => {
 		let alive = true;
 		const qs = `?channelId=${channel.channelId}`;
-		// Three independent lookups; each may 404 on older daemons or a channel
-		// that vanished between the list and the click, and the modal shows
-		// whatever it does get.
+		// Independent lookups; each may 404 on older daemons or a channel that
+		// vanished between the list and the click, and the modal shows whatever
+		// it does get.
 		api.get(`/channel/diagnostics${qs}`).then((d) => alive && setDiag(d)).catch(() => {});
 		api.get(`/channel/health${qs}`).then((d) => alive && setHealth(d)).catch(() => {});
 		api.get(`/channel/policy${qs}`).then((d) => alive && setPolicy(d)).catch(() => {});
+		// The manager's durable record, not the daemon's: it survives daemon and
+		// app restarts, which is the point when the question is "what happened?".
+		manager
+			.channelEvents(id, channel.channelId)
+			.then((d) => alive && setHistory(d))
+			.catch(() => {});
 		return () => {
 			alive = false;
 		};
-	}, [api, channel.channelId, diagTick]);
+	}, [id, api, channel.channelId, diagTick]);
 
 	const reconnect = async () => {
 		setReconnecting(true);
@@ -938,18 +971,24 @@ function ChannelDetailModal({ api, channel, origin, onClose }) {
 	const announcing =
 		diag?.announceChannel &&
 		!(diag.announcementSigsSent && diag.announcementSigsReceived);
+	// A closed channel gets none of the live-channel apparatus: a Reconnect
+	// button cannot help it, HTLC slots and routing policy do not apply, and
+	// the diagnostics issues ("routing hints require a usable channel") are
+	// advice for a channel that no longer takes advice. What it gets instead
+	// is its history below.
+	const closed = isClosedChannel(channel);
 
 	return (
 		<Modal title="Channel" onClose={onClose} origin={origin} wide>
 			<div className="detail">
 				<DetailRow label="State">
 					<Badge tone={STATE_TONE[state] || 'muted'}>{state}</Badge>
-					{diag && (
+					{!closed && diag && (
 						<Badge tone={diag.isPeerConnected ? 'green' : 'red'}>
 							{diag.isPeerConnected ? 'peer connected' : 'peer offline'}
 						</Badge>
 					)}
-					{diag && !diag.isPeerConnected && (
+					{!closed && diag && !diag.isPeerConnected && (
 						<Button className="sm" onClick={reconnect} disabled={reconnecting}>
 							{reconnecting ? 'Reconnecting…' : 'Reconnect'}
 						</Button>
@@ -983,7 +1022,7 @@ function ChannelDetailModal({ api, channel, origin, onClose }) {
 						</span>
 					</DetailRow>
 				)}
-				{diag && (
+				{!closed && diag && (
 					<DetailRow label="Visibility">
 						{diag.announceChannel
 							? announcing
@@ -992,18 +1031,18 @@ function ChannelDetailModal({ api, channel, origin, onClose }) {
 							: 'private (payments to you need routing hints, which invoices include)'}
 					</DetailRow>
 				)}
-				{health && (
+				{!closed && health && (
 					<DetailRow label="In-flight payments">
 						{health.htlcCount} of {health.maxHtlcs} HTLC slots in use
 					</DetailRow>
 				)}
-				{policy && (
+				{!closed && policy && (
 					<DetailRow label="Routing policy">
 						{policy.feeBaseMsat} msat + {policy.feeProportionalMillionths} ppm,
 						cltv delta {policy.cltvExpiryDelta}
 					</DetailRow>
 				)}
-				{diag?.issues?.length > 0 && (
+				{!closed && diag?.issues?.length > 0 && (
 					<DetailRow label="Issues">
 						{diag.issues.map((issue, i) => (
 							<div className="error-note" key={i} style={{ marginBottom: 6 }}>
@@ -1012,13 +1051,35 @@ function ChannelDetailModal({ api, channel, origin, onClose }) {
 						))}
 					</DetailRow>
 				)}
-				{diag?.issues?.length === 0 && health?.warnings?.length > 0 && (
+				{!closed && diag?.issues?.length === 0 && health?.warnings?.length > 0 && (
 					<DetailRow label="Warnings">
 						{health.warnings.map((wrn, i) => (
 							<div className="wallet-meta" key={i}>
 								{wrn}
 							</div>
 						))}
+					</DetailRow>
+				)}
+				{/* The channel's recorded story. Shown whenever there is one, and for
+				    closed channels even when there is not, because "what happened?" is
+				    the question a closed channel gets asked; the empty text says
+				    honestly that recording starts when this version starts watching. */}
+				{(history?.length > 0 || isClosedChannel(channel)) && (
+					<DetailRow label="History">
+						{history?.length > 0 ? (
+							history.map((e, i) => (
+								<div className="wallet-meta" key={i} style={{ marginBottom: 4 }}>
+									<span className="mono">{fmtDate(e.timestamp)}</span>
+									{' · '}
+									{historyLabel(e)}
+								</div>
+							))
+						) : (
+							<div className="wallet-meta">
+								No recorded history for this channel. Events are recorded as they
+								happen, so the story starts with events observed from now on.
+							</div>
+						)}
 					</DetailRow>
 				)}
 			</div>
