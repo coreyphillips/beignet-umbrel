@@ -13,6 +13,7 @@ const { Settings } = require('./settings');
 const { TorControl, pickLocalIp } = require('./tor-control');
 const { probeSocksConnect } = require('./socks-probe');
 const { subscribeToEvents } = require('./node-events');
+const { ChannelEventLog } = require('./channel-events');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -78,6 +79,10 @@ class WalletManager {
 			defaultElectrum: config.defaultElectrum.host ? { ...config.defaultElectrum } : null
 		});
 		this.runtime = new Map();
+		// Per-wallet durable channel history (see channel-events.js). Keyed
+		// separately from runtime state so it is readable while a wallet is
+		// stopped and survives runtime resets.
+		this.channelLogs = new Map();
 		this.onion = null;
 		this.torControl = null;
 		// null = unknown/not applicable, true/false = last probe result.
@@ -646,6 +651,20 @@ class WalletManager {
 			token,
 			log: (m) => this._log(id, m),
 			onEvent: (name, data) => {
+				// Channel lifecycle events (and errors naming a channel) go to the
+				// durable per-wallet history, so a close that happens while nobody
+				// is watching still has a story the detail view can tell later. A
+				// recording that could not reach disk is flagged in the log line;
+				// the log module itself warns with the reason.
+				const recorded = this.channelLog(id).record(name, data);
+				if (recorded && name !== 'node:error') {
+					this._log(
+						id,
+						`channel event ${name} ${recorded.entry.channelId}${
+							recorded.persisted ? '' : ' (memory only, not persisted)'
+						}`
+					);
+				}
 				if (name !== 'node:error' || !data) return;
 				const entry = {
 					code: data.code || 'ERROR',
@@ -822,6 +841,7 @@ class WalletManager {
 		const p = this.paths(id);
 		this.registry.remove(id);
 		this.runtime.delete(id);
+		this.channelLogs.delete(id);
 		if (purge) {
 			fs.rmSync(p.base, { recursive: true, force: true });
 		}
@@ -864,6 +884,27 @@ class WalletManager {
 	// output, rather than only in the browser that happened to make the request.
 	recordLog(id, line) {
 		this._log(id, line);
+	}
+
+	channelLog(id) {
+		if (!this.channelLogs.has(id)) {
+			this.channelLogs.set(
+				id,
+				new ChannelEventLog(this.paths(id).base, {
+					// Persistence problems land in the wallet's log ring, so a
+					// history that silently stopped being durable is visible in the
+					// dashboard's Logs tab rather than nowhere.
+					warn: (m) => this._log(id, `channel history: ${m}`)
+				})
+			);
+		}
+		return this.channelLogs.get(id);
+	}
+
+	// Durable channel history, oldest first, optionally for one channel.
+	channelEvents(id, { channelId } = {}) {
+		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		return this.channelLog(id).list({ channelId });
 	}
 
 	// Recent node-level errors, newest last. `since` filters by timestamp so a

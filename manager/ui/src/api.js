@@ -45,7 +45,11 @@ export const manager = {
 		request(`/api/wallets/${id}${purge ? '?purge=true' : ''}`, { method: 'DELETE' }),
 	logs: (id) => request(`/api/wallets/${id}/logs`),
 	errors: (id, since) =>
-		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`)
+		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
+	channelEvents: (id, channelId) =>
+		request(
+			`/api/wallets/${id}/channel-events${channelId ? `?channelId=${channelId}` : ''}`
+		)
 };
 
 // Per-wallet beignet daemon API (proxied; bearer token injected server-side)
