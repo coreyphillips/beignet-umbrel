@@ -653,10 +653,17 @@ class WalletManager {
 			onEvent: (name, data) => {
 				// Channel lifecycle events (and errors naming a channel) go to the
 				// durable per-wallet history, so a close that happens while nobody
-				// is watching still has a story the detail view can tell later.
+				// is watching still has a story the detail view can tell later. A
+				// recording that could not reach disk is flagged in the log line;
+				// the log module itself warns with the reason.
 				const recorded = this.channelLog(id).record(name, data);
 				if (recorded && name !== 'node:error') {
-					this._log(id, `channel event ${name} ${recorded.channelId}`);
+					this._log(
+						id,
+						`channel event ${name} ${recorded.entry.channelId}${
+							recorded.persisted ? '' : ' (memory only, not persisted)'
+						}`
+					);
 				}
 				if (name !== 'node:error' || !data) return;
 				const entry = {
@@ -881,7 +888,15 @@ class WalletManager {
 
 	channelLog(id) {
 		if (!this.channelLogs.has(id)) {
-			this.channelLogs.set(id, new ChannelEventLog(this.paths(id).base));
+			this.channelLogs.set(
+				id,
+				new ChannelEventLog(this.paths(id).base, {
+					// Persistence problems land in the wallet's log ring, so a
+					// history that silently stopped being durable is visible in the
+					// dashboard's Logs tab rather than nowhere.
+					warn: (m) => this._log(id, `channel history: ${m}`)
+				})
+			);
 		}
 		return this.channelLogs.get(id);
 	}

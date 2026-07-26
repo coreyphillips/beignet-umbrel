@@ -12,20 +12,28 @@ const path = require('path');
 // detail view could not say what happened or when).
 const MAX_EVENTS = 500;
 
-// The daemon SSE events that narrate a channel's lifecycle. `channel:voided`
-// exists but is not relayed on the stream, so it cannot be recorded here.
+// The daemon SSE events that narrate a channel's lifecycle. channel:resolved
+// (every on-chain output of a close irrevocably swept) is listed even though
+// the daemon does not relay it yet, so the day it does, the record gains the
+// true terminal event without a manager change.
 const LIFECYCLE_EVENTS = new Set([
 	'channel:opening',
 	'channel:ready',
 	'channel:pending-close',
 	'channel:force-closing',
-	'channel:closed'
+	'channel:closed',
+	'channel:resolved'
 ]);
 
 class ChannelEventLog {
-	constructor(dir) {
+	constructor(dir, { warn } = {}) {
 		this.file = path.join(dir, 'channel-events.jsonl');
 		this.entries = null; // loaded lazily so a stopped wallet is still readable
+		this.warn = warn || (() => {});
+		// Set when the file exists but cannot be read. Writing through that would
+		// compact over history we could not see, destroying it; a broken log
+		// records in memory only, and says so.
+		this.broken = false;
 	}
 
 	_load() {
@@ -34,15 +42,22 @@ class ChannelEventLog {
 		let raw;
 		try {
 			raw = fs.readFileSync(this.file, 'utf8');
-		} catch (_) {
-			return; // no history yet
+		} catch (err) {
+			if (err && err.code === 'ENOENT') return; // genuinely no history yet
+			this.broken = true;
+			this.warn(
+				`channel history unreadable (${err.message}); recording in memory only for this session`
+			);
+			return;
 		}
 		for (const line of raw.split('\n')) {
 			if (!line.trim()) continue;
 			try {
 				this.entries.push(JSON.parse(line));
-			} catch (_) {
-				/* a torn write loses one line, not the log */
+			} catch (err) {
+				// A torn write loses one line, not the log; but say so rather than
+				// silently presenting a shortened history as complete.
+				this.warn(`ignoring malformed channel-event entry: ${err.message}`);
 			}
 		}
 	}
@@ -51,7 +66,11 @@ class ChannelEventLog {
 	 * Record a daemon event if it tells a channel's story: a lifecycle event,
 	 * or a node:error that names a channel (automatic force-close reasons like
 	 * REESTABLISH_TIMEOUT_FORCE_CLOSED arrive that way and nowhere else).
-	 * Returns the recorded entry, or null if the event was not channel-shaped.
+	 *
+	 * Returns null for events that are not channel-shaped, otherwise
+	 * { entry, persisted }: persisted is false when the entry lives only in
+	 * this process's memory (unwritable disk, unreadable log), so the caller
+	 * never mistakes a session-only note for the durable record.
 	 */
 	record(name, data) {
 		if (!data || typeof data !== 'object') return null;
@@ -71,21 +90,30 @@ class ChannelEventLog {
 		}
 		this._load();
 		this.entries.push(entry);
-		try {
-			if (this.entries.length > MAX_EVENTS) {
-				// Compact: keep the newest MAX_EVENTS and rewrite atomically, so a
-				// crash mid-write leaves the old file rather than half a file.
-				this.entries = this.entries.slice(-MAX_EVENTS);
-				const tmp = `${this.file}.tmp`;
-				fs.writeFileSync(tmp, this.entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
-				fs.renameSync(tmp, this.file);
-			} else {
-				fs.appendFileSync(this.file, JSON.stringify(entry) + '\n');
+		let persisted = false;
+		if (!this.broken) {
+			try {
+				if (this.entries.length > MAX_EVENTS) {
+					// Compact: keep the newest MAX_EVENTS and rewrite atomically, so a
+					// crash mid-write leaves the old file rather than half a file.
+					this.entries = this.entries.slice(-MAX_EVENTS);
+					const tmp = `${this.file}.tmp`;
+					fs.writeFileSync(
+						tmp,
+						this.entries.map((e) => JSON.stringify(e)).join('\n') + '\n'
+					);
+					fs.renameSync(tmp, this.file);
+				} else {
+					fs.appendFileSync(this.file, JSON.stringify(entry) + '\n');
+				}
+				persisted = true;
+			} catch (err) {
+				this.warn(
+					`channel history write failed (${err.message}); entry kept in memory only`
+				);
 			}
-		} catch (_) {
-			/* an unwritable disk keeps the in-memory history for this session */
 		}
-		return entry;
+		return { entry, persisted };
 	}
 
 	/** Entries oldest first, optionally for one channel. */
@@ -98,4 +126,4 @@ class ChannelEventLog {
 	}
 }
 
-module.exports = { ChannelEventLog };
+module.exports = { ChannelEventLog, MAX_EVENTS };

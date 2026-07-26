@@ -6,7 +6,7 @@ import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { withPeerHint } from '../../lib/hints.js';
-import { isClosedChannel } from '../../lib/channels.js';
+import { isClosedChannel, isClosedChannelState } from '../../lib/channels.js';
 import { watchChannelOpen } from '../../lib/channel-open.js';
 import { manager, walletApi } from '../../api.js';
 
@@ -909,7 +909,14 @@ function historyLabel(e) {
 		case 'channel:force-closing':
 			return `Force close started${by}`;
 		case 'channel:closed':
-			return 'Close resolved on-chain';
+			// The daemon emits this when the close is agreed or its spend is seen,
+			// which can be BEFORE anything confirms; funds from a force close may
+			// still be waiting out timelocks. Claiming more than "closed" here
+			// would be a lie some of the time.
+			return 'Channel closed';
+		case 'channel:resolved':
+			// Not relayed by the daemon yet; recorded and rendered the day it is.
+			return 'All on-chain outputs resolved';
 		case 'node:error':
 			return `${e.code}: ${e.message}`;
 		default:
@@ -922,7 +929,7 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 	const [diag, setDiag] = useState(null);
 	const [health, setHealth] = useState(null);
 	const [policy, setPolicy] = useState(null);
-	const [history, setHistory] = useState(null);
+	const [historyState, setHistoryState] = useState({ status: 'loading', entries: [] });
 	const [reconnecting, setReconnecting] = useState(false);
 	// Bumped after a reconnect so the diagnostics (and the connected badge)
 	// re-fetch instead of showing the pre-reconnect answer.
@@ -933,20 +940,29 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 		const qs = `?channelId=${channel.channelId}`;
 		// Independent lookups; each may 404 on older daemons or a channel that
 		// vanished between the list and the click, and the modal shows whatever
-		// it does get.
+		// it does get. Diagnostics are always fetched: they carry the freshest
+		// state, which is what detects a channel that closed after the list.
 		api.get(`/channel/diagnostics${qs}`).then((d) => alive && setDiag(d)).catch(() => {});
-		api.get(`/channel/health${qs}`).then((d) => alive && setHealth(d)).catch(() => {});
-		api.get(`/channel/policy${qs}`).then((d) => alive && setPolicy(d)).catch(() => {});
+		// A channel the list already knows is closed has no HTLC slots or
+		// routing policy left to ask about; skip lookups whose answers would be
+		// discarded. (A stale NORMAL row still fetches them, and the fresher
+		// diagnostics state hides the rows below.)
+		if (!isClosedChannel(channel)) {
+			api.get(`/channel/health${qs}`).then((d) => alive && setHealth(d)).catch(() => {});
+			api.get(`/channel/policy${qs}`).then((d) => alive && setPolicy(d)).catch(() => {});
+		}
 		// The manager's durable record, not the daemon's: it survives daemon and
 		// app restarts, which is the point when the question is "what happened?".
-		manager
-			.channelEvents(id, channel.channelId)
-			.then((d) => alive && setHistory(d))
-			.catch(() => {});
+		// A failed fetch is an ERROR state, never an empty history: "no recorded
+		// history" is a claim this modal must not make on a network hiccup.
+		manager.channelEvents(id, channel.channelId).then(
+			(entries) => alive && setHistoryState({ status: 'ready', entries }),
+			() => alive && setHistoryState({ status: 'error', entries: [] })
+		);
 		return () => {
 			alive = false;
 		};
-	}, [id, api, channel.channelId, diagTick]);
+	}, [id, api, channel, diagTick]);
 
 	const reconnect = async () => {
 		setReconnecting(true);
@@ -975,8 +991,10 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 	// button cannot help it, HTLC slots and routing policy do not apply, and
 	// the diagnostics issues ("routing hints require a usable channel") are
 	// advice for a channel that no longer takes advice. What it gets instead
-	// is its history below.
-	const closed = isClosedChannel(channel);
+	// is its history below. Closedness follows the SAME freshest state the
+	// badge shows: a stale NORMAL list row whose diagnostics answer
+	// FORCE_CLOSED must not show a red badge next to a Reconnect button.
+	const closed = isClosedChannelState(state);
 
 	return (
 		<Modal title="Channel" onClose={onClose} origin={origin} wide>
@@ -1061,13 +1079,19 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 					</DetailRow>
 				)}
 				{/* The channel's recorded story. Shown whenever there is one, and for
-				    closed channels even when there is not, because "what happened?" is
-				    the question a closed channel gets asked; the empty text says
-				    honestly that recording starts when this version starts watching. */}
-				{(history?.length > 0 || isClosedChannel(channel)) && (
+				    closed channels always, because "what happened?" is the question a
+				    closed channel gets asked. The three request states stay distinct:
+				    a failed fetch must never be presented as an empty history. */}
+				{(historyState.entries.length > 0 || closed) && (
 					<DetailRow label="History">
-						{history?.length > 0 ? (
-							history.map((e, i) => (
+						{historyState.status === 'error' ? (
+							<div className="error-note">
+								Channel history could not be loaded.
+							</div>
+						) : historyState.status === 'loading' ? (
+							<div className="wallet-meta">Loading history…</div>
+						) : historyState.entries.length > 0 ? (
+							historyState.entries.map((e, i) => (
 								<div className="wallet-meta" key={i} style={{ marginBottom: 4 }}>
 									<span className="mono">{fmtDate(e.timestamp)}</span>
 									{' · '}
