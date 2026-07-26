@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.9.5"
+version: "0.9.6"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,28 +30,28 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A brief disconnect is not a reason to close a channel.
+  A channel remembers what happened to it.
 
 
-  The engine carries a safety net that force closes a channel stuck
-  waiting to reconnect for about two weeks, and its timer was only ever
-  reset when a channel first opened, never after a successful reconnect.
-  So on a node that had been up for a while, a routine restart of the
-  other side could be answered with an immediate force close. You saw it
-  as a channel this wallet called force closed while the other node
-  still listed it as open and thought this one was merely offline. The
-  timer now measures how long the channel has actually been disconnected
-  this time, so the safety net fires only for the two-week outages it
-  was built for.
+  Every channel now keeps a durable history: opened, ready, closing,
+  closed, and the reason behind an automatic force close, each with a
+  timestamp, recorded as it happens and kept across restarts. The
+  channel detail view shows the story, so a close that happened while
+  nobody was watching can finally explain itself. Recording starts with
+  this version, so the history begins now; the record only ever claims
+  what was actually observed, and says plainly when it could not be
+  loaded or could not be written.
 
 
-  The Max preview when opening a channel is now priced by the wallet
-  engine against the peer you are opening to, so the figure shown is the
-  figure that funds, whichever open protocol the peer speaks.
+  A closed channel also stops dressing like an open one. Its detail
+  view no longer offers a Reconnect button, HTLC slots, a routing
+  policy, or routing advice; it shows what the channel was and what
+  happened to it. And the wallet list now counts only open channels,
+  so a node whose channels have all closed no longer claims them
+  forever.
 
 
-  Ships beignet 0.7.5, which contains the watchdog fix and nothing else:
-  the daemon surface is unchanged from 0.7.4.
+  Ships beignet 0.7.5, unchanged from the previous release.
 
 dependencies: []
 path: ""
