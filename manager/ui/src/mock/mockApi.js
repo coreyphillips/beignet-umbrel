@@ -895,8 +895,13 @@ function walletRequest(id, path, method, body) {
 				(c) => c.state === 'NORMAL' || c.htlcUsable
 			);
 			const totalLocalBalanceSats = lightningBalance(id);
-			const totalCapacitySats = st.channels.reduce((a, c) => a + c.capacitySats, 0);
-			const totalRemoteBalanceSats = totalCapacitySats - totalLocalBalanceSats;
+			// The daemon's advisor sums balances and capacity over ACTIVE channels
+			// only; a closed channel's capacity is not liquidity anyone can use.
+			const totalCapacitySats = routable.reduce((a, c) => a + c.capacitySats, 0);
+			const totalRemoteBalanceSats = routable.reduce(
+				(a, c) => a + c.remoteBalanceSats,
+				0
+			);
 			const outboundLiquidityPct = totalCapacitySats
 				? Math.round((totalLocalBalanceSats / totalCapacitySats) * 100)
 				: 0;
