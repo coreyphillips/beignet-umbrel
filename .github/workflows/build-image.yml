@@ -126,7 +126,16 @@ env:
   # shutting-down timers got the same correction. Daemon surface: none. The
   # published 0.7.4 and 0.7.5 tarballs' dist/cli are byte-identical: no env
   # vars, no routes, no CLI changes.
-  BEIGNET_VERSION: "0.7.5"
+  # 0.7.6 is one fix: GET /offers now includes each offer's encoded lno1
+  # string. The encoding was stored beside every offer but only ever left
+  # the daemon in the create response, so the list gave ids and metadata
+  # and nothing a payer could use; the dashboard's offers table becomes
+  # copyable against this version. Daemon surface: no new routes, env vars
+  # or CLI changes; OfferInfo already declared encoded optional, the list
+  # route now populates it. Verified by diffing the published 0.7.5 and
+  # 0.7.6 tarballs' dist/cli (only beignet-node.js changed) and by driving
+  # offer/create and /offers on a daemon booted from the 0.7.6 tarball.
+  BEIGNET_VERSION: "0.7.6"
 
 jobs:
   build:
