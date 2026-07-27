@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Button, Card, CopyText, Field } from '../../components/ui.jsx';
+import { Button, Card, CopyText, Field, QR } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { parsePayment } from '../../lib/payment-uri.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
@@ -13,6 +14,10 @@ export default function OffersTab({ id, api, tick, bump }) {
 	const [description, setDescription] = useState('');
 	const [amount, setAmount] = useState('');
 	const [creating, setCreating] = useState(false);
+	// The create response is the one place the daemon is guaranteed to hand
+	// over the encoded offer: daemons through 0.7.5 omit it from /offers, so a
+	// toast-and-clear here left no way to see or copy what was just made.
+	const [created, setCreated] = useState(null);
 
 	const [payStr, setPayStr] = useState('');
 	const [payAmount, setPayAmount] = useState('');
@@ -43,7 +48,8 @@ export default function OffersTab({ id, api, tick, bump }) {
 		try {
 			const body = { description };
 			if (amount) body.amountSats = parseInt(amount, 10);
-			await api.post('/offer/create', body);
+			const r = await api.post('/offer/create', body);
+			setCreated(r && r.encoded ? r : null);
 			toast('Offer created', 'success');
 			setDescription('');
 			setAmount('');
@@ -86,6 +92,22 @@ export default function OffersTab({ id, api, tick, bump }) {
 					<Button variant="primary" busy={creating} onClick={create} disabled={!description}>
 						Create offer
 					</Button>
+					<AnimatePresence>
+						{created && (
+							<m.div
+								key={created.encoded}
+								style={{ textAlign: 'center', marginTop: 16 }}
+								initial={{ opacity: 0, scale: 0.92, y: 8 }}
+								animate={{ opacity: 1, scale: 1, y: 0 }}
+								exit={{ opacity: 0, scale: 0.96 }}
+							>
+								<QR value={created.encoded} />
+								<div style={{ marginTop: 12 }}>
+									<CopyText value={created.encoded} truncate />
+								</div>
+							</m.div>
+						)}
+					</AnimatePresence>
 				</Card>
 
 				<Card title="Pay an offer">
