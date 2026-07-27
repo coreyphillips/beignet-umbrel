@@ -3,18 +3,20 @@ import { m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { Badge, Button, Card, CopyText, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
+import { isClosedChannel } from '../../lib/channels.js';
 
 export default function OverviewTab({ id, api, info, health, rec, tick }) {
 	const { data } = usePoll(
 		async () => {
-			const [balance, nodeUri, liquidity, fees, feeEst] = await Promise.all([
+			const [balance, nodeUri, liquidity, fees, feeEst, channels] = await Promise.all([
 				api.get('/balance').catch(() => null),
 				api.get('/node/uri?host=127.0.0.1').then((r) => r.uri).catch(() => null),
 				api.get('/liquidity').catch(() => null),
 				api.get('/fees').catch(() => null),
-				api.get('/fees/estimates').catch(() => null)
+				api.get('/fees/estimates').catch(() => null),
+				api.get('/channels').catch(() => null)
 			]);
-			return { balance, nodeUri, liquidity, fees, feeEst };
+			return { balance, nodeUri, liquidity, fees, feeEst, channels };
 		},
 		10000,
 		[id, tick]
@@ -25,6 +27,14 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 	const fees = data?.fees;
 	const feeEst = data?.feeEst;
 	const splicing = bal?.splicingSats ?? info?.splicingBalanceSats ?? 0;
+	// Both /info's channelCount and the liquidity snapshot's channelCount are
+	// every channel the node has ever had, closed ones included forever. Every
+	// count this page shows is of channels that still OPERATE, so count open
+	// ones from the list itself; until the list answers, fall back to the
+	// daemon figure rather than showing nothing.
+	const openCount = data?.channels
+		? data.channels.filter((c) => !isClosedChannel(c)).length
+		: null;
 
 	// What you can actually send is the balance above the channel reserve; below
 	// it, nothing is sendable and the balance is still filling the reserve. Fall
@@ -81,7 +91,7 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 					<Stat
 						key="ch"
 						label="Channels"
-						num={info?.channelCount}
+						num={openCount ?? info?.channelCount}
 						sub={`${info?.peerCount ?? 0} peers`}
 					/>
 				].map((stat, i) => (
@@ -107,7 +117,7 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 				</Card>
 
 				<Card title="Liquidity">
-					{liq && liq.channelCount > 0 ? (
+					{liq && (openCount ?? liq.channelCount) > 0 ? (
 						<>
 							<div className="liq">
 								<div className="out" style={{ width: `${outBarPct}%` }} />
@@ -148,8 +158,8 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 								</div>
 							)}
 							<div className="wallet-meta" style={{ marginTop: 10 }}>
-								{liq.activeChannelCount}/{liq.channelCount} channels active · capacity{' '}
-								{fmtSats(liq.totalCapacitySats)}
+								{liq.activeChannelCount}/{openCount ?? liq.channelCount} channels
+								active · capacity {fmtSats(liq.totalCapacitySats)}
 							</div>
 						</>
 					) : (
