@@ -678,14 +678,18 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 				label="Amount (sats)"
 				value={shownAmount}
 				onChange={setAmountManually}
-				max={maxMode ? sweepAmount || 0 : sliderMax}
+				max={sliderMax}
 				isMax={maxMode}
 				onMax={() => {
 					// Pressing Max is choosing an amount, the same as typing one, so
 					// the payee's figure stops binding here too. Otherwise the form
 					// would sweep the wallet while still claiming to pay their sum.
 					releaseAmount();
-					setMaxMode((v) => !v);
+					// A plain value, not an updater: this setter patches the lifted
+					// form state rather than calling React's, so an updater function
+					// handed to it is stored as the value itself. A function is
+					// truthy, so the form entered max mode with no way back out.
+					setMaxMode(!maxMode);
 				}}
 				hint={
 					maxMode

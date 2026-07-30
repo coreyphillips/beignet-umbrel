@@ -48,7 +48,14 @@ function stubApi({ channels = [], decodedOffer, offerDecodeError } = {}) {
 		},
 		post: async (path, body) => {
 			calls.push(['POST', path, body]);
-			if (path === '/tx/quote') return { satsPerVbyte: 7, feeSats: 3367, vsize: 481 };
+			if (path === '/tx/quote') {
+				// Priced from what was asked: the fee follows the rate, and a max
+				// quote answers with what a sweep at that rate would send.
+				const rate = body.satsPerVbyte ?? 7;
+				const quote = { satsPerVbyte: rate, feeSats: rate * 481, vsize: 481 };
+				if (body.max) quote.maxSendSats = BALANCE - quote.feeSats;
+				return quote;
+			}
 			if (path === '/send') return { txid: 'a'.repeat(64) };
 			if (path === '/offer/decode') {
 				if (offerDecodeError) {
@@ -140,6 +147,77 @@ test('a request asking for zero says why the amount box is empty', async () => {
 	await settle(50);
 	assert.match(view.text(), /amount of zero, which means the payer chooses/);
 	assert.equal(view.$('.amount-input').value, '', 'and nothing was filled in');
+	await view.unmount();
+});
+
+test('pressing Max asks the wallet for the sweep, and the amount follows the fee rate', async () => {
+	// Max stored an updater function as the mode itself after the form state was
+	// lifted out of the card: a function is truthy, so the form entered max mode,
+	// but JSON.stringify drops function values, so the quote never asked for the
+	// sweep, the amount's ceiling collapsed to zero, and the slider, the field
+	// and the Max button all went dead with no way back out.
+	const api = stubApi();
+	const view = await mountSend(api);
+	await type(view.$('input[placeholder^="bc1"]'), ADDR);
+	await settle(400);
+
+	const maxBtn = view.$$('button').find((b) => b.textContent.trim() === 'Max');
+	await click(maxBtn);
+
+	// The sweep's own figure takes a round trip. Until it lands, the last
+	// ceiling holds, so the field must not collapse into a disabled slider
+	// under a disabled Max button, which is a form nothing can act on.
+	assert.ok(!maxBtn.disabled, 'Max stays pressable while the quote is in flight');
+	assert.ok(
+		!view.$('input[aria-label="Amount (sats) slider"]').disabled,
+		'and the slider stays live'
+	);
+
+	await settle(400);
+	const quoted = api.calls.filter(([m, p]) => m === 'POST' && p === '/tx/quote').at(-1);
+	assert.equal(quoted[2].max, true, 'the daemon was asked for the sweep');
+	assert.equal(
+		view.$('.amount-input').value,
+		String(BALANCE - 7 * 481),
+		'and its answer is the amount on screen'
+	);
+
+	// Raising the fee re-asks the question, and the amount gives way to the
+	// new fee so the total never exceeds the balance.
+	await type(view.$('input[aria-label="Fee rate (sat/vB) slider"]'), '18');
+	await settle(400);
+	assert.equal(
+		view.$('.amount-input').value,
+		String(BALANCE - 18 * 481),
+		'the amount follows the fee rate'
+	);
+	await view.unmount();
+});
+
+test('max mode releases: the button toggles off, and the slider comes back down', async () => {
+	const api = stubApi();
+	const view = await mountSend(api);
+	await type(view.$('input[placeholder^="bc1"]'), ADDR);
+	await settle(400);
+
+	const maxBtn = view.$$('button').find((b) => b.textContent.trim() === 'Max');
+	await click(maxBtn);
+	await settle(400);
+	assert.equal(maxBtn.getAttribute('aria-pressed'), 'true', 'max mode is on');
+
+	// Coming back down the slider is leaving max mode, at the number reached.
+	await type(view.$('input[aria-label="Amount (sats) slider"]'), '250000');
+	await settle(50);
+	assert.equal(maxBtn.getAttribute('aria-pressed'), 'false', 'the slider hands max mode back');
+	assert.equal(view.$('.amount-input').value, '250000', 'at the amount it was dragged to');
+
+	// And the button itself is the other way out.
+	await click(maxBtn);
+	await settle(400);
+	assert.equal(maxBtn.getAttribute('aria-pressed'), 'true');
+	await click(maxBtn);
+	await settle(50);
+	assert.equal(maxBtn.getAttribute('aria-pressed'), 'false', 'pressing Max again turns it off');
 	await view.unmount();
 });
 
