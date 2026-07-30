@@ -204,11 +204,11 @@ test('an offer naming no amount asks for one, and it reaches the daemon', async 
 	await view.unmount();
 });
 
-test("the daemon's scrubbed 500 is not shown to the payer as-is", async () => {
-	// beignet 0.8.0 answers an unrecognised throw with a bare "Internal server
-	// error", and its offer decoder throws plainly on bad input, so a mistyped
-	// offer arrives looking like the daemon fell over. An offer carries no
-	// checksum for the parser to catch first, which is why this is reachable.
+test('a generic daemon fault is not rewritten into a complaint about the paste', async () => {
+	// From beignet 0.8.1 a bad offer comes back as a typed 400 carrying the
+	// parser's reason, so a bare "Internal server error" means what it says: a
+	// real fault. Translating it into "check your offer" would send the payer to
+	// inspect a string that was fine.
 	const api = stubApi({
 		channels: [OPEN_CHANNEL],
 		offerDecodeError: 'Internal server error'
@@ -218,8 +218,8 @@ test("the daemon's scrubbed 500 is not shown to the payer as-is", async () => {
 	await type(view.$('input[placeholder^="bc1"]'), OFFER);
 	await settle(600);
 
-	assert.match(view.text(), /offer could not be read.*copied in full/i);
-	assert.doesNotMatch(view.text(), /internal server error/i);
+	assert.match(view.text(), /internal server error/i, 'shown as the daemon gave it');
+	assert.doesNotMatch(view.text(), /copied in full/i, 'and not blamed on the paste');
 	await view.unmount();
 });
 

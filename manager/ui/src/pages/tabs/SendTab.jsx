@@ -779,27 +779,6 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 // enough that a pasted one answers before the eye leaves the field.
 const DECODE_DEBOUNCE_MS = 300;
 
-/**
- * What to show when the daemon would not read what was pasted.
- *
- * The daemon's own message is passed through whenever it has one: from beignet
- * 0.8.1 a bad offer or invoice comes back as a typed 400 carrying the parser's
- * reason, which says what is wrong with the string far better than anything
- * guessed here.
- *
- * The fallback is for the case where it does not. beignet 0.8.0 answered every
- * untyped throw with a bare "Internal server error", and its decoders threw
- * plainly on bad input, so a mistyped offer read as a daemon fault (beignet
- * #269, fixed in 0.8.1). Offers carry no checksum for the parser here to catch
- * first, so this stays: a payer who pastes a truncated offer at an older daemon
- * deserves better than being told the server broke.
- */
-function decodeRefusal(err, what) {
-	const generic = !err.message || /^internal server error$/i.test(err.message);
-	if (!generic) return err.message;
-	return `This ${what} could not be read. Check it was copied in full, without anything trimmed from either end.`;
-}
-
 function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bump }) {
 	const toast = useToast();
 	const [decoded, setDecoded] = useState(null);
@@ -899,10 +878,17 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 					setDecoded(d);
 					setError(null);
 				})
+					// The daemon's refusal is shown as it was given. It reads the
+					// string, so it is the one that knows what is wrong with it, and
+					// from beignet 0.8.1 a bad offer or invoice comes back as a typed
+					// 400 carrying the parser's own reason. A generic message means a
+					// genuine fault, and must not be dressed up as a complaint about
+					// the paste: that would send the payer to check a string that was
+					// fine.
 					.catch((e) => {
 						if (id !== latest.current) return;
 						setDecoded(null);
-						setError(decodeRefusal(e, offer ? 'offer' : 'invoice'));
+						setError(e.message);
 					})
 				.finally(() => {
 					if (id === latest.current) setDecoding(false);
