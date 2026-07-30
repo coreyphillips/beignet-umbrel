@@ -355,20 +355,28 @@ const store = {
 	state: {}
 };
 
+const mainChannels = makeChannels([
+	[2000000, 62, 'NORMAL', false, 'ACINQ'],
+	[5000000, 38, 'NORMAL', false, 'WalletOfSatoshi.com'],
+	[1200000, 81, 'AWAITING_FUNDING_CONFIRMED', false, 'Bitrefill'],
+	// No alias: an unannounced peer, so the list falls back to the pubkey.
+	[750000, 22, 'NORMAL', true],
+	// Closed history, so the channels view's Closed tab is visitable: a
+	// cooperative close and a force close (the latter waiting out its CSV
+	// delay). Neither counts toward balances or liquidity.
+	[1500000, 30, 'CLOSED', false, 'Sparky'],
+	[650000, 45, 'FORCE_CLOSED', false, 'endurance']
+]);
+// True to life: eclair splices, LND does not, and the daemon reads it off each
+// peer's init (beignet 0.8.2+). The WalletOfSatoshi channel demos the Channels
+// tab hiding its splice buttons on an explicit no; the unannounced peer's
+// channel says nothing, the shape an old daemon or a disconnected peer leaves.
+mainChannels[0].peerSupportsSplicing = true;
+mainChannels[1].peerSupportsSplicing = false;
+
 store.state['demo-main'] = walletState({
 	blockHeight: 908214,
-	channels: makeChannels([
-		[2000000, 62, 'NORMAL', false, 'ACINQ'],
-		[5000000, 38, 'NORMAL', false, 'WalletOfSatoshi.com'],
-		[1200000, 81, 'AWAITING_FUNDING_CONFIRMED', false, 'Bitrefill'],
-		// No alias: an unannounced peer, so the list falls back to the pubkey.
-		[750000, 22, 'NORMAL', true],
-		// Closed history, so the channels view's Closed tab is visitable: a
-		// cooperative close and a force close (the latter waiting out its CSV
-		// delay). Neither counts toward balances or liquidity.
-		[1500000, 30, 'CLOSED', false, 'Sparky'],
-		[650000, 45, 'FORCE_CLOSED', false, 'endurance']
-	]),
+	channels: mainChannels,
 	txs: makeTxs(25, 908214),
 	payments: makePayments(40),
 	utxos: makeUtxos(6, 908214),

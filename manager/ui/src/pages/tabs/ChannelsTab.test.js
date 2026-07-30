@@ -257,3 +257,47 @@ test('an open channel still shows the live apparatus, with history alongside', a
 		restoreFetch();
 	}
 });
+
+test('splice controls are hidden only when the daemon says the peer cannot', async () => {
+	// beignet 0.8.2+ reads option_splice + option_quiesce off the peer's init
+	// and reports it per channel. An LND peer gets an explicit false; an old
+	// daemon or a disconnected peer says nothing, and unknown keeps the
+	// buttons, because hiding on ignorance would strip them from every channel
+	// whose peer blinked.
+	const channel = (id, extra) => ({
+		channelId: id.repeat(64),
+		peerPubkey: '02' + id.repeat(64),
+		capacitySats: 1_000_000,
+		localBalanceSats: 500_000,
+		remoteBalanceSats: 500_000,
+		state: 'NORMAL',
+		...extra
+	});
+	const restore = stubManagerFetch({ fail: true });
+	const view = await render(wrapped, tabProps({
+		channels: [
+			channel('a', { peerSupportsSplicing: true }),
+			channel('b', { peerSupportsSplicing: false }),
+			channel('d', {})
+		]
+	}));
+	await settle(50);
+
+	const rows = view.$$('tbody tr');
+	assert.equal(rows.length, 3, 'all three channels are listed');
+	const spliceable = rows.map((row) =>
+		[...row.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Splice in')
+	);
+	assert.deepEqual(
+		spliceable,
+		[true, false, true],
+		'an explicit no hides the buttons; yes and unknown keep them'
+	);
+	// The rest of the actions survive: the LND channel can still be closed.
+	assert.ok(
+		[...rows[1].querySelectorAll('button')].some((b) => b.textContent.trim() === 'Close'),
+		'Close stays'
+	);
+	await view.unmount();
+	restore();
+});

@@ -145,12 +145,24 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 												Reconnect
 											</Button>
 										)}
-										<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
-											Splice in
-										</Button>
-										<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'out', channel: c, origin: clickOrigin(e) })}>
-											Splice out
-										</Button>
+										{/* Only an explicit no hides these. The daemon reads
+										    option_splice + option_quiesce off the peer's init and
+										    says so on the listing (beignet 0.8.2+): offering a
+										    splice to an LND peer is offering an action the daemon
+										    refuses every time. Absent means unknown, an old
+										    daemon or a disconnected peer, and unknown keeps the
+										    buttons: hiding on ignorance would strip them from
+										    every channel whose peer blinked. */}
+										{c.peerSupportsSplicing !== false && (
+											<>
+												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
+													Splice in
+												</Button>
+												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'out', channel: c, origin: clickOrigin(e) })}>
+													Splice out
+												</Button>
+											</>
+										)}
 										<Button className="sm" onClick={(e) => setModal({ type: 'close', channel: c, origin: clickOrigin(e) })}>
 											Close
 										</Button>
