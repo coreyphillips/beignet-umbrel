@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.9.8"
+version: "0.10.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,32 +30,41 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  An offer you create is an offer you can share.
+  An offer is payable, and it is paid where invoices are paid.
 
 
-  Creating a BOLT12 offer used to end in a toast and a cleared form:
-  the offer existed, but nothing on screen could show or copy it. The
-  create card now presents the offer the moment it is made, as a QR
-  code and a copy row, and the Your offers list carries the full
-  offer string for every entry, so any offer can be copied again
-  later.
+  Paying a BOLT12 offer published by another Beignet node did not
+  work at all. The node issuing the offer asked for a secret that
+  BOLT12 gives it no way to send, so every such payment was refused
+  with incorrect_or_unknown_payment_details. Offers are now
+  authenticated the way the spec intends, and one Beignet node can
+  pay another's offer.
 
 
-  One honest caveat: offers currently live in daemon memory, so a
-  wallet restart clears the list and retires previously shared
-  offers. Making them durable is tracked upstream and will ship in a
-  future release.
+  Offers also survive a restart. The previous release noted that
+  offers lived in daemon memory, so a restart cleared the list and
+  retired anything already shared. That is fixed: an offer you
+  publish stays published.
 
 
-  From the previous release: every count of channels is a count of
-  open channels. The overview's Channels tile and the Liquidity
-  card's active figure now count only channels that still operate,
-  so a wallet whose channels have all closed says zero instead of
-  claiming them forever.
+  Offers are paid from the Send tab now, in the same box as
+  invoices, rather than from a separate tab. Paste either one. An
+  offer naming no amount asks you for one, and the card says why an
+  offer shows no fee estimate: an offer is not a destination, it is
+  a code that has to be exchanged for an invoice first, and the
+  route that invoice comes back with is what a fee would be priced
+  over.
 
 
-  Ships beignet 0.7.6, whose one change is the daemon's offer list
-  including each offer's encoded form.
+  Offers can be deleted. Now that they persist, the list would only
+  grow, so each one has a Delete. It asks first, because deleting an
+  offer stops every saved copy of that code from working, and a new
+  offer is a different code rather than a restored one.
+
+
+  Ships beignet 0.8.1, which also brings BOLT12 payment correctness
+  and routing fixes, on-chain fee estimation fixes, and clearer
+  refusals when something you paste cannot be read.
 
 dependencies: []
 path: ""
