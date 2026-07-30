@@ -135,7 +135,58 @@ env:
   # route now populates it. Verified by diffing the published 0.7.5 and
   # 0.7.6 tarballs' dist/cli (only beignet-node.js changed) and by driving
   # offer/create and /offers on a daemon booted from the 0.7.6 tarball.
-  BEIGNET_VERSION: "0.7.6"
+  # 0.8.0 is a large release, 72 commits, and the headline for this app is that
+  # BOLT 12 offers are payable between two beignet nodes at all. Through 0.7.6
+  # the issuer generated a payment_secret, registered it as a receive-side
+  # requirement, and then had no way to send it, because BOLT 12 defines no
+  # such field; every offer paid to another beignet node failed with
+  # incorrect_or_unknown_payment_details. Offers are now authenticated by the
+  # blinded path's path_id, as the spec intends (beignet issue #252). Offers
+  # also survive a restart now: they were an in-memory map, so a restart
+  # emptied the list and made a shared offer unpayable. The rest is BOLT 12
+  # payment correctness (retry context, blinded final payload validation, MPP
+  # accounting by amt_to_forward, expiry sweeps), MPP routing fixes, on-chain
+  # fee estimation fixes, and chain watcher teardown.
+  #
+  # Daemon surface: additive only, verified by diffing the published 0.7.6 and
+  # 0.8.0 tarballs' dist/cli. One new route, DELETE /offer; none removed or
+  # renamed. Two new env vars, BEIGNET_INSECURE and BEIGNET_METRICS_PUBLIC,
+  # both opt-in and both unset here.
+  #
+  # The one behavior change worth naming is the HTTP hardening. GET /metrics
+  # now sits behind auth, and the daemon refuses to start if it binds a
+  # non-loopback host without auth, or enables wildcard CORS without auth.
+  # None of that affects this app: the manager binds 127.0.0.1, always sets
+  # BEIGNET_API_TOKEN, never enables CORS and never reads /metrics. The
+  # request rate limiter also moved ahead of auth, but it stays opt-in and
+  # nothing here configures it. Verified by booting a daemon from the 0.8.0
+  # tarball with the exact env WalletManager spawns and driving every route
+  # the dashboard calls: all present, all unchanged in shape.
+  #
+  # One 0.8.0 behavior change was worth reporting rather than absorbing, and
+  # 0.8.1 below fixes it: a throw that was not one of the daemon's own typed
+  # errors got scrubbed to a bare "Internal server error" with a stack trace
+  # logged as an unhandled fault. The offer and BOLT 11 decoders throw plainly
+  # on BAD INPUT, so a mistyped offer read as a daemon fault (beignet #269).
+  #
+  # 0.8.1 is those two follow-ups and nothing else. Unparseable invoice and
+  # offer input now returns a typed 400, INVALID_OFFER or INVALID_INVOICE,
+  # carrying the parser's own message, across all four entry points
+  # (/offer/decode, /offer/pay, /invoice/decode, /invoice/pay-safe); a bad
+  # paste no longer writes an unhandled-error stack to the wallet log. The
+  # rate limiter also learned to honor X-Forwarded-For, but only from proxies
+  # it has been explicitly configured to trust, which is the safe shape: doing
+  # it unconditionally would let any direct caller spoof the header and skip a
+  # limiter that deliberately runs ahead of auth to throttle credential
+  # guessing. Nothing here configures the limiter, so that part is inert.
+  #
+  # Daemon surface: no new routes, no removed routes, no new or changed env
+  # vars, verified by diffing the published 0.8.0 and 0.8.1 tarballs' dist/cli
+  # (only beignet-node.js, daemon.js, errors.js and http-rate-limiter.js
+  # differ). Verified again by booting 0.8.1 with the manager's env, driving
+  # every route the dashboard calls, and confirming the four decode paths now
+  # answer 400 with the parser's message and leave the log clean.
+  BEIGNET_VERSION: "0.8.1"
 
 jobs:
   build:
