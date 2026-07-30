@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Button, Card, CopyText, Field, QR } from '../../components/ui.jsx';
+import { Button, Card, CopyText, Field, Modal, QR } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { parsePayment } from '../../lib/payment-uri.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
@@ -23,6 +23,12 @@ export default function OffersTab({ id, api, tick, bump }) {
 	const [payAmount, setPayAmount] = useState('');
 	const [paying, setPaying] = useState(false);
 	const [focused, setFocused] = useState(false);
+	// The offer a delete has been asked for and not yet confirmed. Deleting is
+	// asked about rather than done on the click, because an offer is a code other
+	// people hold: what it costs is not this row disappearing, it is every saved
+	// copy of it becoming unpayable, and that is not visible from here.
+	const [deleting, setDeleting] = useState(null);
+	const [removing, setRemoving] = useState(false);
 
 	// An offer arrives the same way every other payment string does: out of a chat
 	// window with the scheme still on it, off a QR code in capitals, wrapped in the
@@ -75,6 +81,27 @@ export default function OffersTab({ id, api, tick, bump }) {
 			toast(e.message, 'error');
 		} finally {
 			setPaying(false);
+		}
+	};
+
+	// Removal is by offer id in the query string, which is the daemon's contract
+	// (DELETE /offer?offerId=...). Requires beignet 0.8.0; older daemons answer
+	// 404 and the refusal is surfaced as-is rather than guessed at.
+	const remove = async () => {
+		setRemoving(true);
+		try {
+			await api.del(`/offer?offerId=${encodeURIComponent(deleting.offerId)}`);
+			// The created-offer panel is showing the same offer often enough that
+			// leaving it up after the delete would keep a QR on screen for a code
+			// the daemon has just stopped answering for.
+			if (created && created.offerId === deleting.offerId) setCreated(null);
+			toast('Offer deleted', 'success');
+			setDeleting(null);
+			refresh();
+		} catch (e) {
+			toast(e.message, 'error');
+		} finally {
+			setRemoving(false);
 		}
 	};
 
@@ -142,6 +169,7 @@ export default function OffersTab({ id, api, tick, bump }) {
 									<th>Description</th>
 									<th>Amount</th>
 									<th>Offer</th>
+									<th />
 								</tr>
 							</thead>
 							<tbody>
@@ -150,6 +178,14 @@ export default function OffersTab({ id, api, tick, bump }) {
 										<td>{o.description || '-'}</td>
 										<td>{o.amountSats ? fmtSats(o.amountSats) : 'any'}</td>
 										<td>{o.encoded ? <CopyText value={o.encoded} truncate /> : shortId(o.offerId)}</td>
+										<td>
+											<Button
+												className="sm"
+												onClick={(e) => setDeleting({ ...o, origin: e.currentTarget })}
+											>
+												Delete
+											</Button>
+										</td>
 									</tr>
 								))}
 							</tbody>
@@ -157,6 +193,32 @@ export default function OffersTab({ id, api, tick, bump }) {
 					</div>
 				)}
 			</Card>
+
+			{deleting && (
+				<Modal title="Delete offer" onClose={() => setDeleting(null)} origin={deleting.origin}>
+					<p className="wallet-meta">
+						Delete{' '}
+						{deleting.description ? (
+							<strong>{deleting.description}</strong>
+						) : (
+							<span className="mono">{shortId(deleting.offerId)}</span>
+						)}
+						? This node stops answering for it, so anyone who saved the code can no
+						longer pay it. Payments already made are unaffected, and nothing about
+						this deletes them.
+					</p>
+					<p className="wallet-meta">
+						An offer cannot be restored by making another one: a new offer is a
+						different code.
+					</p>
+					<div className="center-actions">
+						<Button variant="danger" busy={removing} onClick={remove}>
+							Delete offer
+						</Button>
+						<Button onClick={() => setDeleting(null)}>Cancel</Button>
+					</div>
+				</Modal>
+			)}
 		</div>
 	);
 }

@@ -102,6 +102,20 @@ function mintedInvoice(bolt11) {
 }
 
 /**
+ * The offer equivalent of mintedInvoice: an offer one demo wallet published has
+ * to decode in another, since paying across the demo wallets is the point of
+ * there being more than one.
+ */
+function mintedOffer(encoded) {
+	if (!encoded) return null;
+	for (const [walletId, state] of Object.entries(store.state)) {
+		const hit = state.offers.find((o) => o.encoded === encoded);
+		if (hit) return { offer: hit, walletId };
+	}
+	return null;
+}
+
+/**
  * An invoice as the daemon reports it, status derived rather than stored.
  *
  * The daemon works status out on every read: PAID when an incoming payment for
@@ -1443,6 +1457,35 @@ function walletRequest(id, path, method, body) {
 			};
 			st.offers.unshift(o);
 			return o;
+		}
+		case '/offer': {
+			// DELETE /offer?offerId=... (beignet 0.8.0). The route only exists for
+			// removal, so anything else reaching it is a caller mistake.
+			if (method !== 'DELETE') throw err(`Unknown demo endpoint ${route}`, 'NOT_FOUND');
+			const offerId = new URLSearchParams(query || '').get('offerId');
+			if (!offerId) throw err('offerId required', 'INVALID_PARAMS');
+			const i = st.offers.findIndex((o) => o.offerId === offerId);
+			if (i === -1) throw err('Offer not found', 'NOT_FOUND');
+			st.offers.splice(i, 1);
+			return { removed: true };
+		}
+		case '/offer/decode': {
+			// An offer carries no checksum, so the shape of the string is the whole
+			// of what can be checked here, exactly as the parser in the UI does it.
+			const encoded = String(body.offer || '').trim();
+			if (!/^lno1[a-z0-9]+$/i.test(encoded)) throw err('Not a BOLT12 offer');
+			const minted = mintedOffer(encoded);
+			const decoded = {
+				offerId: minted ? minted.offer.offerId : derivedHex(`offer:${encoded}`, 64),
+				description: minted ? minted.offer.description : 'Demo offer',
+				encoded
+			};
+			// An offer with no amount omits the field outright, as the daemon does,
+			// which is what puts the amount box in front of the payer.
+			const amountSats = minted ? minted.offer.amountSats : null;
+			if (amountSats != null) decoded.amountSats = amountSats;
+			if (minted) decoded.issuerId = nodeId(minted.walletId);
+			return decoded;
 		}
 		case '/offer/pay':
 			if (!/^lno/i.test(body.offer || '')) throw err('Not a BOLT12 offer');

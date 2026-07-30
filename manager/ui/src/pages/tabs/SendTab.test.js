@@ -22,15 +22,26 @@ import SendTab from './SendTab.jsx';
 
 const ADDR = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
 const BALANCE = 4_000_000;
+// Shape only: the card's parser checks that an offer looks like one, and the
+// daemon is what actually reads it. An offer carries no checksum to satisfy.
+const OFFER = `lno1${'qwerty0123456789'.repeat(6)}`;
+
+/** A channel with enough outbound to make the Lightning rail available. */
+const OPEN_CHANNEL = {
+	channelId: 'c'.repeat(64),
+	state: 'NORMAL',
+	htlcUsable: true,
+	localBalanceSats: 500_000
+};
 
 /** A daemon that records what it was asked, and answers plausibly. */
-function stubApi() {
+function stubApi({ channels = [], decodedOffer, offerDecodeError } = {}) {
 	const calls = [];
 	return {
 		calls,
 		get: async (path) => {
 			calls.push(['GET', path]);
-			if (path === '/channels') return [];
+			if (path === '/channels') return channels;
 			if (path === '/fees/estimates') return { fast: 18, normal: 7, slow: 2 };
 			if (path === '/utxos') return [];
 			return null;
@@ -39,17 +50,26 @@ function stubApi() {
 			calls.push(['POST', path, body]);
 			if (path === '/tx/quote') return { satsPerVbyte: 7, feeSats: 3367, vsize: 481 };
 			if (path === '/send') return { txid: 'a'.repeat(64) };
+			if (path === '/offer/decode') {
+				if (offerDecodeError) {
+					const e = new Error(offerDecodeError);
+					e.code = 'INTERNAL_ERROR';
+					throw e;
+				}
+				return decodedOffer ?? { offerId: 'f'.repeat(64), description: 'Donations' };
+			}
+			if (path === '/offer/pay') return { status: 'COMPLETED', feeSats: 3 };
 			throw new Error(`unexpected POST ${path}`);
 		}
 	};
 }
 
-async function mountSend(api) {
+async function mountSend(api, { channelCount = 0 } = {}) {
 	return render(ToastProvider, {
 		children: createElement(SendTab, {
 			id: 'w1',
 			api,
-			info: { onchainBalanceSats: BALANCE, channelCount: 0 },
+			info: { onchainBalanceSats: BALANCE, channelCount },
 			rec: { network: 'mainnet' },
 			tick: 0,
 			bump: () => {}
@@ -120,6 +140,100 @@ test('a request asking for zero says why the amount box is empty', async () => {
 	await settle(50);
 	assert.match(view.text(), /amount of zero, which means the payer chooses/);
 	assert.equal(view.$('.amount-input').value, '', 'and nothing was filled in');
+	await view.unmount();
+});
+
+test('an offer pasted into the on-chain box is paid from the Lightning card', async () => {
+	const api = stubApi({
+		channels: [OPEN_CHANNEL],
+		decodedOffer: { offerId: 'f'.repeat(64), description: 'Donations', amountSats: 21000 }
+	});
+	const view = await mountSend(api, { channelCount: 1 });
+	await settle(50);
+
+	// Off a QR code, in capitals. It used to be answered with a note sending the
+	// payer to the Offers tab; it is moved to the rail that pays it instead.
+	await type(view.$('input[placeholder^="bc1"]'), OFFER.toUpperCase());
+	await settle(600);
+
+	const ln = view.$('textarea[placeholder^="lnbc"]');
+	assert.ok(ln, 'the Lightning card is showing');
+	assert.equal(ln.value, OFFER, 'and holds the offer, folded back to lower case');
+	assert.match(view.text(), /moved here from the on-chain form/);
+	assert.match(view.text(), /Donations/, 'the decoded offer is on screen');
+
+	// An offer is not a destination, so there is no route to price yet.
+	assert.ok(
+		!api.calls.some(([, path]) => path === '/payment/estimate'),
+		'no estimate is asked for'
+	);
+
+	const payBtn = view.$$('button').find((b) => /^Pay\s/.test(b.textContent.trim()));
+	assert.ok(payBtn && !payBtn.disabled, 'Pay is live');
+	await click(payBtn);
+	await settle(50);
+
+	const posted = api.calls.find(([method, path]) => method === 'POST' && path === '/offer/pay');
+	assert.ok(posted, '/offer/pay was called');
+	assert.equal(posted[2].offer, OFFER, 'with the offer the parser settled on');
+	await view.unmount();
+});
+
+test('an offer naming no amount asks for one, and it reaches the daemon', async () => {
+	const api = stubApi({
+		channels: [OPEN_CHANNEL],
+		decodedOffer: { offerId: 'f'.repeat(64), description: 'Tips' }
+	});
+	const view = await mountSend(api, { channelCount: 1 });
+	await settle(50);
+	await type(view.$('input[placeholder^="bc1"]'), OFFER);
+	await settle(600);
+
+	assert.match(view.text(), /offer names no amount, so it is yours to choose/);
+	await type(view.$('.amount-input'), '4200');
+	await settle(100);
+
+	const payBtn = view.$$('button').find((b) => b.textContent.trim() === 'Pay');
+	assert.ok(payBtn && !payBtn.disabled, 'Pay is live once an amount is chosen');
+	await click(payBtn);
+	await settle(50);
+
+	const posted = api.calls.find(([method, path]) => method === 'POST' && path === '/offer/pay');
+	assert.ok(posted, '/offer/pay was called');
+	assert.equal(posted[2].amountSats, 4200, 'with the amount the payer chose');
+	await view.unmount();
+});
+
+test("the daemon's scrubbed 500 is not shown to the payer as-is", async () => {
+	// beignet 0.8.0 answers an unrecognised throw with a bare "Internal server
+	// error", and its offer decoder throws plainly on bad input, so a mistyped
+	// offer arrives looking like the daemon fell over. An offer carries no
+	// checksum for the parser to catch first, which is why this is reachable.
+	const api = stubApi({
+		channels: [OPEN_CHANNEL],
+		offerDecodeError: 'Internal server error'
+	});
+	const view = await mountSend(api, { channelCount: 1 });
+	await settle(50);
+	await type(view.$('input[placeholder^="bc1"]'), OFFER);
+	await settle(600);
+
+	assert.match(view.text(), /offer could not be read.*copied in full/i);
+	assert.doesNotMatch(view.text(), /internal server error/i);
+	await view.unmount();
+});
+
+test('a typed message from the daemon is passed through untouched', async () => {
+	const api = stubApi({
+		channels: [OPEN_CHANNEL],
+		offerDecodeError: "BOLT 12 string has invalid character 'b'"
+	});
+	const view = await mountSend(api, { channelCount: 1 });
+	await settle(50);
+	await type(view.$('input[placeholder^="bc1"]'), OFFER);
+	await settle(600);
+
+	assert.match(view.text(), /invalid character/i, 'the daemon says it better than we could');
 	await view.unmount();
 });
 

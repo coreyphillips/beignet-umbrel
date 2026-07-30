@@ -74,10 +74,11 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 	// refusing outright when the two disagree.
 	const toLightning = useCallback(
 		(text, { amountSats = null, note = null } = {}) => {
-			// A BOLT12 offer has no invoice to hand over. Calling this with one used
-			// to pass undefined straight through: the textarea's value became
-			// undefined and the on-chain box was wiped, losing a payable request to a
-			// button click.
+			// Nothing is handed over without a string to hand over. Called with an
+			// absent one this used to pass undefined straight through: the textarea's
+			// value became undefined and the on-chain box was wiped, losing a payable
+			// request to a button click. An offer reaches here as its own string now,
+			// so it travels the same route an invoice does.
 			if (!text) return false;
 			if (!canLightning) return false;
 			setLnInput(text);
@@ -238,20 +239,13 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 		// what the payee asked for. The request is held until the box holds a
 		// different address, or nothing at all.
 		if (parsed.kind === 'empty' || parsed.kind === 'bolt11' || parsed.kind === 'bolt12') dropRequest();
-		if (parsed.kind === 'bolt12') {
-			// An offer is paid from the Offers tab, and it is said here, once, where
-			// the paste landed. Sending it to the Lightning card first only to be
-			// told the same thing again is two redirects for one paste, and the box
-			// keeps the offer so it can be copied out of.
-			setNote({
-				tone: 'info',
-				text: 'That is a BOLT12 offer rather than an address. Pay it from the Offers tab, which reads offers the same way this box reads addresses.'
-			});
-			return;
-		}
-		// An invoice belongs on the other rail, and the hand-off has a second
-		// trigger of its own, so it lives in its own effect below.
-		if (parsed.kind === 'bolt11') return;
+		// An invoice or an offer belongs on the other rail, and the hand-off has a
+		// second trigger of its own, so it lives in its own effect below. An offer
+		// used to be answered here instead, with a note sending the payer to the
+		// Offers tab, because that was the only place that could pay one. The
+		// Lightning card takes both now, so an offer is moved across like anything
+		// else rather than being described and left where it landed.
+		if (parsed.kind === 'bolt11' || parsed.kind === 'bolt12') return;
 		if (parsed.kind === 'invalid') {
 			// The refusal is rendered straight from the parse rather than stored,
 			// because it has to be held back while the field is still being typed
@@ -315,17 +309,19 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	// it. `onLightning` changes identity with `canLightning`, so listing it here
 	// is what makes a change in channel state re-run the hand-off.
 	useEffect(() => {
-		if (parsed.kind !== 'bolt11') return;
+		if (parsed.kind !== 'bolt11' && parsed.kind !== 'bolt12') return;
+		const isOffer = parsed.kind === 'bolt12';
+		const what = isOffer ? 'a BOLT12 offer' : 'a Lightning invoice';
 		if (
-			onLightning(parsed.invoice, {
-				note: 'That is a Lightning invoice, so it was moved here from the on-chain form.'
+			onLightning(isOffer ? parsed.offer : parsed.invoice, {
+				note: `That is ${what}, so it was moved here from the on-chain form.`
 			})
 		) {
 			return;
 		}
 		setNote({
 			tone: 'error',
-			text: 'That is a Lightning invoice, and this wallet has no channel to pay it with yet. It stays here, and moves across on its own once a channel is usable.'
+			text: `That is ${what}, and this wallet has no channel to pay it with yet. It stays here, and moves across on its own once a channel is usable.`
 		});
 	}, [parsed, onLightning]);
 
@@ -498,6 +494,17 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 		!maxMode && requestedAmount == null && amountNum > 0 && balance != null && feeSats != null &&
 		amountNum >= balance - feeSats * 2;
 
+	// The payable string a unified request carries alongside the address, whichever
+	// of the two it turned out to be. The Lightning card takes both, so an offer is
+	// offered across with the same button an invoice gets rather than being named
+	// and left with nowhere to go.
+	const carriedIsOffer = request?.lightning?.kind === 'bolt12';
+	const carried = !request?.lightning
+		? null
+		: carriedIsOffer
+		? request.lightning.offer
+		: request.lightning.invoice;
+
 	const onDest = async (val) => {
 		setDest(val);
 		if (val === 'custom') {
@@ -615,16 +622,16 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 						? ' You have changed the amount.'
 						: ''}
 					{request.lightning && canLightning
-						? request.lightning.kind === 'bolt12'
-							? ' It also carries a BOLT12 offer, which is paid from the Offers tab.'
+						? carriedIsOffer
+							? ' It also carries a BOLT12 offer.'
 							: ' It also carries a Lightning invoice.'
 						: ''}
-					{request.lightning?.kind === 'bolt11' && canLightning && (
+					{carried && canLightning && (
 						<div className="center-actions">
 							<Button
 								className="sm"
 								onClick={() =>
-									onLightning(request.lightning.invoice, {
+									onLightning(carried, {
 										// The BIP21 amount binds both rails, which is why a request
 										// whose two halves disagree is refused outright. Having gone
 										// to that trouble, dropping the figure here whenever the
@@ -634,10 +641,16 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 											request.lightning.amountSats == null ? request.amountSats : null,
 										note:
 											request.lightning.amountSats == null && request.amountSats != null
-												? `That request also carried a Lightning invoice, so it was moved here. The invoice names no amount, so the ${fmtSats(
+												? `That request also carried a ${
+														carriedIsOffer ? 'BOLT12 offer' : 'Lightning invoice'
+												  }, so it was moved here. The ${
+														carriedIsOffer ? 'offer' : 'invoice'
+												  } names no amount, so the ${fmtSats(
 														request.amountSats
 												  )} the request asked for has been filled in below.`
-												: 'That request also carried a Lightning invoice, so it was moved here.'
+												: `That request also carried a ${
+														carriedIsOffer ? 'BOLT12 offer' : 'Lightning invoice'
+												  }, so it was moved here.`
 									})
 								}
 							>
@@ -766,6 +779,27 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 // enough that a pasted one answers before the eye leaves the field.
 const DECODE_DEBOUNCE_MS = 300;
 
+/**
+ * What to show when the daemon would not read what was pasted.
+ *
+ * The daemon's own message is passed through whenever it has one: from beignet
+ * 0.8.1 a bad offer or invoice comes back as a typed 400 carrying the parser's
+ * reason, which says what is wrong with the string far better than anything
+ * guessed here.
+ *
+ * The fallback is for the case where it does not. beignet 0.8.0 answered every
+ * untyped throw with a bare "Internal server error", and its decoders threw
+ * plainly on bad input, so a mistyped offer read as a daemon fault (beignet
+ * #269, fixed in 0.8.1). Offers carry no checksum for the parser here to catch
+ * first, so this stays: a payer who pastes a truncated offer at an older daemon
+ * deserves better than being told the server broke.
+ */
+function decodeRefusal(err, what) {
+	const generic = !err.message || /^internal server error$/i.test(err.message);
+	if (!generic) return err.message;
+	return `This ${what} could not be read. Check it was copied in full, without anything trimmed from either end.`;
+}
+
 function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bump }) {
 	const toast = useToast();
 	const [decoded, setDecoded] = useState(null);
@@ -793,6 +827,12 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 
 	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
 	const invoice = parsed.kind === 'bolt11' ? parsed.invoice : null;
+	const offer = parsed.kind === 'bolt12' ? parsed.offer : null;
+	// The one string this card is about, whichever of the two was pasted. Both are
+	// paid over Lightning from the same box: sending someone to another tab to pay
+	// an offer was a redirect for a string that had already arrived somewhere it
+	// could be paid.
+	const payable = invoice ?? offer;
 	const mayRefuse = useSettledRefusal(value, focused);
 
 	// An on-chain address in the invoice box belongs on the other rail.
@@ -810,17 +850,18 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 		inputRef.current?.focus();
 	}, [arrival]);
 
-	// Tidy what was pasted down to the invoice itself: the lightning: scheme and
-	// the capitals a QR code arrives in are not part of it.
+	// Tidy what was pasted down to the invoice or offer itself: the lightning:
+	// scheme and the capitals a QR code arrives in are not part of either.
 	useEffect(() => {
-		if (invoice && value !== invoice) onChange(invoice);
-	}, [invoice, value, onChange]);
+		if (payable && value !== payable) onChange(payable);
+	}, [payable, value, onChange]);
 
-	// Reading an invoice is the daemon's job and it is asked as soon as there is
-	// something to ask about. There is no Decode button: pressing one to find out
-	// what you are about to pay is a step that only ever had one right answer.
+	// Reading an invoice, or an offer, is the daemon's job and it is asked as soon
+	// as there is something to ask about. There is no Decode button: pressing one
+	// to find out what you are about to pay is a step that only ever had one right
+	// answer.
 	useEffect(() => {
-		if (!invoice) {
+		if (!payable) {
 			// Anything in flight belongs to a string that is no longer in the box.
 			latest.current += 1;
 			setDecoded(null);
@@ -844,29 +885,31 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 		// sends a figure chosen for someone else.
 		setDecoded(null);
 		setEstimate(null);
-		setAmount(handover?.invoice === invoice ? String(handover.amountSats) : '');
+		setAmount(handover?.invoice === payable ? String(handover.amountSats) : '');
 		setDecoding(true);
 		setError(null);
 		setResult(null);
 		const timer = setTimeout(() => {
-			api
-				.post('/invoice/decode', { bolt11: invoice })
+			(invoice
+				? api.post('/invoice/decode', { bolt11: invoice })
+				: api.post('/offer/decode', { offer })
+			)
 				.then((d) => {
 					if (id !== latest.current) return;
 					setDecoded(d);
 					setError(null);
 				})
-				.catch((e) => {
-					if (id !== latest.current) return;
-					setDecoded(null);
-					setError(e.message);
-				})
+					.catch((e) => {
+						if (id !== latest.current) return;
+						setDecoded(null);
+						setError(decodeRefusal(e, offer ? 'offer' : 'invoice'));
+					})
 				.finally(() => {
 					if (id === latest.current) setDecoding(false);
 				});
 		}, DECODE_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [api, invoice, handover]);
+	}, [api, payable, invoice, offer, handover]);
 
 	// An invoice with no amount in it leaves the amount to the payer, so it has to
 	// be asked for before anything can be estimated or paid.
@@ -874,16 +917,24 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 	const typedAmount = parseInt(amount, 10) || 0;
 	const amountSats = needsAmount ? typedAmount : decoded?.amountSats ?? 0;
 
-	// The expiry is seconds since the epoch, counted from the invoice's own
-	// timestamp, and an invoice without an expiry tag has none to show. The clock
-	// is ticked while one is on screen so that "expires in a minute" becomes
-	// "expired" on its own rather than when something else happens to re-render.
-	// Read before the estimate below, which must not be asked for at all once the
-	// answer cannot be acted on.
-	const expiresAt =
-		decoded && decoded.timestamp != null && decoded.expiry != null
-			? (decoded.timestamp + decoded.expiry) * 1000
-			: null;
+	// When the thing in the box stops being payable. An invoice counts its expiry
+	// from its own timestamp; an offer names an absolute one outright, and most
+	// offers name none at all, which is rather the point of a reusable code. Either
+	// way a decoded thing without one has no expiry to show.
+	//
+	// The clock is ticked while one is on screen so that "expires in a minute"
+	// becomes "expired" on its own rather than when something else happens to
+	// re-render. Read before the estimate below, which must not be asked for at all
+	// once the answer cannot be acted on.
+	const expiresAt = !decoded
+		? null
+		: offer
+		? decoded.absoluteExpiry != null
+			? decoded.absoluteExpiry * 1000
+			: null
+		: decoded.timestamp != null && decoded.expiry != null
+		? (decoded.timestamp + decoded.expiry) * 1000
+		: null;
 	useEffect(() => {
 		if (expiresAt == null) return () => {};
 		const timer = setInterval(() => setNow(Date.now()), 15000);
@@ -898,6 +949,12 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 		// payment this same card has just refused puts two statements on screen that
 		// cannot both be acted on, which makes the refusal look arguable. It also
 		// spends a daemon round trip on a payment that cannot happen.
+		//
+		// An offer gets no estimate either, and `invoice` being null for one is what
+		// leaves it out. There is no route to price yet: an offer is not a
+		// destination, it is a code that has to be exchanged for an invoice first,
+		// and the blinded path that invoice comes back with is what a fee would be
+		// worked out over.
 		if (!invoice || !decoded || expired || amountSats <= 0) {
 			// The sequence has to move even on the way out, or an estimate already in
 			// flight still matches and writes its answer after the amount it was
@@ -932,9 +989,13 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 		setBusy(true);
 		setResult(null);
 		try {
-			const body = { bolt11: invoice };
+			// An offer is paid by its own route: the daemon fetches an invoice for it
+			// over an onion message first, then pays that. The payer does not see the
+			// intermediate invoice and has nothing to do with it, which is why this is
+			// one button rather than a fetch step and a pay step.
+			const body = offer ? { offer } : { bolt11: invoice };
 			if (needsAmount) body.amountSats = typedAmount;
-			const r = await api.post('/invoice/pay-safe', body);
+			const r = await api.post(offer ? '/offer/pay' : '/invoice/pay-safe', body);
 			setResult(r);
 			toast(r.status === 'COMPLETED' ? 'Payment sent' : `Payment ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
 			bump();
@@ -952,8 +1013,8 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 	};
 
 	return (
-		<Card title="Pay a Lightning invoice">
-			<Field label="BOLT11 invoice">
+		<Card title="Pay a Lightning invoice or offer">
+			<Field label="BOLT11 invoice or BOLT12 offer">
 				<textarea
 					ref={inputRef}
 					rows={3}
@@ -964,7 +1025,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 					}}
 					onFocus={() => setFocused(true)}
 					onBlur={() => setFocused(false)}
-					placeholder="lnbc…"
+					placeholder="lnbc… or lno…"
 				/>
 			</Field>
 			{arrived && (
@@ -975,11 +1036,6 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 			{parsed.kind === 'invalid' && mayRefuse && (
 				<div className="error-note" role="alert">
 					{parsed.message}
-				</div>
-			)}
-			{parsed.kind === 'bolt12' && (
-				<div className="info-note" role="status">
-					That is a BOLT12 offer rather than an invoice. Pay it from the Offers tab.
 				</div>
 			)}
 			{error && (
@@ -997,7 +1053,9 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 				    invoice changes, and the one moment the reader most needs to be told
 				    "this is not your invoice yet" was exactly the moment that gate said
 				    nothing. */}
-				{decoding && <div className="wallet-meta">Reading the invoice…</div>}
+				{decoding && (
+					<div className="wallet-meta">Reading the {offer ? 'offer' : 'invoice'}…</div>
+				)}
 				{decoded && (
 					<>
 					<table style={{ marginTop: 4 }}>
@@ -1010,9 +1068,19 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 								<td className="wallet-meta">Description</td>
 								<td>{decoded.description || '-'}</td>
 							</tr>
+							{/* An offer names who is asking rather than who is being paid, and
+							    it may say so in words as well as by node id. The words are the
+							    issuer's own and unverified, so they are shown as the issuer's
+							    claim rather than dressed up as an identity. */}
 							<tr>
-								<td className="wallet-meta">Payee</td>
-								<td className="mono">{shortId(decoded.payeeNodeKey)}</td>
+								<td className="wallet-meta">{offer ? 'Issuer' : 'Payee'}</td>
+								{offer && decoded.issuer ? (
+									<td>{decoded.issuer}</td>
+								) : (
+									<td className="mono">
+										{shortId(offer ? decoded.issuerId : decoded.payeeNodeKey)}
+									</td>
+								)}
 							</tr>
 							{expiresAt != null && (
 								<tr>
@@ -1040,6 +1108,18 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 							{decoded.warnings.map(formatInvoiceWarning).join(' ')}
 						</div>
 					)}
+					{/* Said once, here, because it is the whole of why this card behaves
+					    differently for an offer: there is no fee estimate above, and the
+					    button takes longer to come back. Both follow from the exchange,
+					    and neither is a fault. */}
+					{offer && (
+						<div className="info-note" style={{ marginTop: 12 }}>
+							An offer is a reusable code rather than a one-off request, so paying it
+							asks the issuer for a fresh invoice first and then pays that. It takes a
+							few seconds longer than paying an invoice, and the fee is not known
+							until the invoice comes back.
+						</div>
+					)}
 					{needsAmount && (
 						<div style={{ marginTop: 12 }}>
 							<AmountField
@@ -1049,13 +1129,16 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 								max={outbound}
 								onMax={() => setAmount(String(outbound))}
 								isMax={outbound > 0 && typedAmount === outbound}
-								hint="This invoice names no amount, so it is yours to choose. Bounded by your outbound channel balance, which routing fees and the channel reserve come out of."
+								hint={`This ${
+									offer ? 'offer' : 'invoice'
+								} names no amount, so it is yours to choose. Bounded by your outbound channel balance, which routing fees and the channel reserve come out of.`}
 							/>
 						</div>
 					)}
 					{expired && (
 						<div className="error-note" role="alert">
-							This invoice has expired, so it can no longer be paid. Ask for a new one.
+							This {offer ? 'offer' : 'invoice'} has expired, so it can no longer be
+							paid. Ask for a new one.
 						</div>
 					)}
 					</>

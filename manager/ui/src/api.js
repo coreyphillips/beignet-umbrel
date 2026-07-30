@@ -58,6 +58,9 @@ export function walletApi(id) {
 	return {
 		get: (path) => request(base + path),
 		post: (path, body) => request(base + path, { method: 'POST', body }),
+		// The daemon's removal routes take their target in the query string and
+		// carry no body, so this takes a path already carrying it.
+		del: (path) => request(base + path, { method: 'DELETE' }),
 		eventsUrl: () => (DEMO ? `demo:${id}` : `${base}/events`)
 	};
 }
