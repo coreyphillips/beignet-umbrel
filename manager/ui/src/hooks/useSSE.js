@@ -33,6 +33,11 @@ export function useSSE(url, onEvent) {
 			// invoice this wallet issued, carrying the bolt11 and the hash the
 			// Receive tab matches its on-screen invoice against.
 			'invoice:settled',
+			// On-chain arrivals and confirmations (beignet 0.8.2+), carrying the
+			// same shape /transactions answers with. Older daemons never send
+			// them, and the receive watcher's poll covers the gap.
+			'transaction:received',
+			'transaction:confirmed',
 			'channel:ready',
 			'channel:closed',
 			'peer:connect',

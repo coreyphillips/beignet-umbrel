@@ -584,13 +584,13 @@ function startAmbientEvents() {
 			emit(w.id, 'payment:received', { paymentHash, amountSats });
 		} else if (roll > 0.35) {
 			// An on-chain receive, unconfirmed, with its UTXO so the balance
-			// moves. No event is emitted, faithfully: the daemon has no SSE
-			// event for on-chain arrivals, which is exactly what the receive
-			// watcher's poll exists to cover.
+			// moves. From beignet 0.8.2 the daemon announces these over SSE
+			// with the same shape /transactions answers with, so the mock does
+			// too; the receive watcher's poll still covers daemons that do not.
 			const txid = hex(64);
 			const valueSats = between(10000, 400000);
 			const address = demoAddress(w.network);
-			st.txs.unshift({
+			const tx = {
 				txid,
 				type: 'received',
 				valueSats,
@@ -601,8 +601,10 @@ function startAmbientEvents() {
 				height: null,
 				timestamp: Date.now(),
 				confirmTimestamp: null
-			});
+			};
+			st.txs.unshift(tx);
 			st.utxos.unshift({ txid, vout: 0, address, valueSats, height: null });
+			emit(w.id, 'transaction:received', { ...tx });
 		} else {
 			emit(w.id, 'peer:connect', {});
 		}

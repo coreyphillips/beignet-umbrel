@@ -55,6 +55,21 @@ export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 		};
 
 		handlerRef.current = (name, data) => {
+			// An on-chain arrival off the stream (beignet 0.8.2+). The event
+			// fires for both directions, so the type gate matters: a send is not
+			// a receive, and an absent type is not evidence of one.
+			if (name === 'transaction:received') {
+				if (data?.type !== 'received' || !data.txid) return;
+				if (txSeen.has(data.txid)) return;
+				txSeen.add(data.txid);
+				notify({
+					rail: 'onchain',
+					amountSats: Math.abs(data.valueSats ?? 0) || null,
+					txid: data.txid,
+					pending: !data.confirmed
+				});
+				return;
+			}
 			if (name !== 'payment:received' && name !== 'invoice:settled') return;
 			// Both events fire for a settled invoice, and the poll will list the
 			// same payment shortly after either. The hash is what ties the three

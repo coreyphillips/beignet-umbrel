@@ -139,6 +139,39 @@ test('the stream announces first, and the poll does not say it again', async () 
 	await view.unmount();
 });
 
+test('an on-chain arrival off the stream is instant, and the poll stays quiet', async () => {
+	const api = stubApi();
+	const { view, got, handle } = await mountWatch(api);
+
+	// A send off the stream is not a receive, whatever announced it.
+	handle.onEvent('transaction:received', {
+		txid: 'f'.repeat(64),
+		type: 'sent',
+		valueSats: -9000,
+		confirmed: false
+	});
+	assert.equal(got.length, 0, 'a sent transaction says nothing');
+
+	handle.onEvent('transaction:received', {
+		txid: 'e'.repeat(64),
+		type: 'received',
+		valueSats: 33000,
+		confirmed: false
+	});
+	assert.equal(got.length, 1, 'the arrival is announced at once');
+	assert.deepEqual(got[0], {
+		rail: 'onchain',
+		amountSats: 33000,
+		txid: 'e'.repeat(64),
+		pending: true
+	});
+
+	api.state.txs = [tx('e'.repeat(64), 33000)];
+	await settle(TICK * 2);
+	assert.equal(got.length, 1, 'the poll recognises it as already told');
+	await view.unmount();
+});
+
 test('a source that was down at the first look gets its own baseline', async () => {
 	const api = stubApi();
 	api.state.failTxs = true;
