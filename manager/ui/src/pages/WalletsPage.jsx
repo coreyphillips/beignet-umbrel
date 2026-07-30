@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
+import { useSSE } from '../hooks/useSSE.js';
+import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import {
 	Button,
@@ -26,6 +28,22 @@ function statusTone(s) {
 }
 
 const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
+
+/**
+ * Renders nothing; watches one running wallet for money arriving. The list
+ * page is where balances are stared at, and it used to be the one page a
+ * receive said nothing on: the figure changed on the next poll and nothing
+ * pointed at it. Named per wallet, because more than one can be running.
+ */
+function ReceiveWatcher({ wallet }) {
+	const toast = useToast();
+	const api = useMemo(() => walletApi(wallet.id), [wallet.id]);
+	const { onEvent } = useReceiveWatch(api, true, (r) => {
+		toast(describeReceive(r, wallet.name), 'success', { duration: 8000 });
+	});
+	useSSE(api.eventsUrl(), onEvent);
+	return null;
+}
 
 export default function WalletsPage() {
 	const toast = useToast();
@@ -184,6 +202,11 @@ export default function WalletsPage() {
 
 	return (
 		<div className="container">
+			{(wallets || [])
+				.filter((w) => w.status === 'running')
+				.map((w) => (
+					<ReceiveWatcher key={w.id} wallet={w} />
+				))}
 			{hasWallets && walletsCard}
 			<NewWallet config={config} onDone={refresh} onSeed={(s) => setModal(s)} />
 			{!hasWallets && walletsCard}

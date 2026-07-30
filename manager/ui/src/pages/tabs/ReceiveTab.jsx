@@ -6,7 +6,7 @@ import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.js
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
 
-export default function ReceiveTab({ id, api, tick }) {
+export default function ReceiveTab({ id, api, tick, lastReceive }) {
 	const toast = useToast();
 	const [address, setAddress] = useState('');
 	const [onchainAmount, setOnchainAmount] = useState('');
@@ -16,6 +16,7 @@ export default function ReceiveTab({ id, api, tick }) {
 	const [amount, setAmount] = useState('');
 	const [description, setDescription] = useState('');
 	const [busy, setBusy] = useState(false);
+	const { data: invoices, refresh } = usePoll(() => api.get('/invoices').catch(() => []), 10000, [id, tick]);
 
 	const newAddress = async () => {
 		try {
@@ -53,7 +54,34 @@ export default function ReceiveTab({ id, api, tick }) {
 	// and the request supplies it.
 	const invoiceConflicts =
 		!!invoice && onchainSats > 0 && invoice.amountSats != null && invoice.amountSats !== onchainSats;
-	const carriesInvoice = !!invoice && includeInvoice && !invoiceConflicts;
+
+	// Whether the invoice on screen has been paid, learned two ways: the page's
+	// receive watcher hands settled hashes down the moment they settle, and the
+	// invoice list below is polled anyway and marks it PAID within its interval
+	// even when every event was missed. This is the moment the tab exists for.
+	// Someone showing this QR across a table is watching this screen, not their
+	// balance, and the payer's phone saying "sent" is the payer's wallet
+	// talking; the receipt is ours to show.
+	const paidInfo = useMemo(() => {
+		if (!invoice) return null;
+		if (
+			lastReceive?.rail === 'lightning' &&
+			lastReceive.paymentHash &&
+			lastReceive.paymentHash === invoice.paymentHash
+		) {
+			return { amountSats: lastReceive.amountSats ?? invoice.amountSats ?? null };
+		}
+		const row = (invoices || []).find((i) => i.paymentHash === invoice.paymentHash);
+		if (row && (row.status === 'PAID' || row.status === 'COMPLETED')) {
+			return { amountSats: row.amountSats ?? invoice.amountSats ?? null };
+		}
+		return null;
+	}, [invoice, invoices, lastReceive]);
+	const paid = !!paidInfo;
+
+	// A settled invoice cannot be paid again, so it has no place in a request
+	// still being handed out.
+	const carriesInvoice = !!invoice && !paid && includeInvoice && !invoiceConflicts;
 
 	const request = useMemo(
 		// `message` rather than `label`: BIP21 defines label as the recipient's own
@@ -87,8 +115,6 @@ export default function ReceiveTab({ id, api, tick }) {
 			setBusy(false);
 		}
 	};
-
-	const { data: invoices, refresh } = usePoll(() => api.get('/invoices').catch(() => []), 10000, [id, tick]);
 
 	return (
 		<div className="grid cols-2">
@@ -145,7 +171,7 @@ export default function ReceiveTab({ id, api, tick }) {
 								.filter(Boolean)
 								.join(' ')}
 				</div>
-				{invoice && (
+				{invoice && !paid && (
 					<>
 						<label className="checkbox field" style={{ marginTop: 10 }}>
 							<input
@@ -183,8 +209,8 @@ export default function ReceiveTab({ id, api, tick }) {
 				<Button variant="primary" busy={busy} onClick={createInvoice}>
 					Create invoice
 				</Button>
-				<AnimatePresence>
-					{invoice && (
+				<AnimatePresence mode="wait">
+					{invoice && !paid && (
 						<m.div
 							key={invoice.bolt11}
 							style={{ textAlign: 'center', marginTop: 16 }}
@@ -195,6 +221,28 @@ export default function ReceiveTab({ id, api, tick }) {
 							<QR value={invoice.bolt11} />
 							<div style={{ marginTop: 12 }}>
 								<CopyText value={invoice.bolt11} truncate />
+							</div>
+						</m.div>
+					)}
+					{invoice && paid && (
+						// The receipt takes the QR's place outright. A paid invoice
+						// cannot be paid again, so leaving its code on screen invites
+						// the one scan that is guaranteed to fail.
+						<m.div
+							key={`paid-${invoice.bolt11}`}
+							className="paid-receipt"
+							role="status"
+							initial={{ opacity: 0, scale: 0.9 }}
+							animate={{ opacity: 1, scale: 1 }}
+						>
+							<div className="paid-check" aria-hidden="true">
+								✓
+							</div>
+							<div className="paid-title">Paid</div>
+							<div className="wallet-meta">
+								{paidInfo.amountSats != null
+									? `${fmtSats(paidInfo.amountSats)} received over Lightning.`
+									: 'Received over Lightning.'}
 							</div>
 						</m.div>
 					)}

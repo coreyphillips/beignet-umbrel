@@ -548,10 +548,19 @@ function startAmbientEvents() {
 		if (!running.length) return;
 		const w = pick(running);
 		const st = store.state[w.id];
-		if (rnd() > 0.35) {
-			const amountSats = between(500, 90000);
+		const roll = rnd();
+		if (roll > 0.6) {
+			// A Lightning receive. It settles the newest open invoice when there
+			// is one, so the Receive tab's paid receipt can actually be seen in
+			// demo mode, and the event carries the payment hash the way the real
+			// daemon's does, which is what the receive watcher dedupes by.
+			const nowSecs = inSeconds(Date.now());
+			const open = st.invoices.find((i) => !i.paid && nowSecs <= i.createdAt + i.expiry);
+			const amountSats = open?.amountSats || between(500, 90000);
+			const paymentHash = open ? open.paymentHash : hex(64);
+			if (open) open.paid = true;
 			st.payments.unshift({
-				paymentHash: hex(64),
+				paymentHash,
 				direction: 'INCOMING',
 				amountSats,
 				feeSats: null,
@@ -564,7 +573,28 @@ function startAmbientEvents() {
 				ch.localBalanceSats += amountSats;
 				ch.remoteBalanceSats -= amountSats;
 			}
-			emit(w.id, 'payment:received', { amountSats });
+			emit(w.id, 'payment:received', { paymentHash, amountSats });
+		} else if (roll > 0.35) {
+			// An on-chain receive, unconfirmed, with its UTXO so the balance
+			// moves. No event is emitted, faithfully: the daemon has no SSE
+			// event for on-chain arrivals, which is exactly what the receive
+			// watcher's poll exists to cover.
+			const txid = hex(64);
+			const valueSats = between(10000, 400000);
+			const address = demoAddress(w.network);
+			st.txs.unshift({
+				txid,
+				type: 'received',
+				valueSats,
+				feeSats: null,
+				satsPerVbyte: null,
+				address,
+				confirmed: false,
+				height: null,
+				timestamp: Date.now(),
+				confirmTimestamp: null
+			});
+			st.utxos.unshift({ txid, vout: 0, address, valueSats, height: null });
 		} else {
 			emit(w.id, 'peer:connect', {});
 		}

@@ -6,10 +6,13 @@ const ToastCtx = createContext(() => {});
 export function ToastProvider({ children }) {
 	const [toasts, setToasts] = useState([]);
 
-	const push = useCallback((message, type = 'info') => {
+	// `duration` exists for the toasts that carry news rather than confirmation.
+	// "Sent" confirms a click and can go quickly; money arriving is news the
+	// reader did nothing to cause, and it should survive a glance away.
+	const push = useCallback((message, type = 'info', { duration = 3600 } = {}) => {
 		const id = Math.random().toString(36).slice(2);
 		setToasts((t) => [...t, { id, message, type }]);
-		setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3600);
+		setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), duration);
 	}, []);
 
 	return (

@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react';
 
 /**
  * Subscribes to a wallet's SSE event stream. Calls onEvent(name, data) for each
- * named beignet event (payment:*, channel:*, peer:*, node:ready). Reconnects
+ * named beignet event (payment:*, invoice:settled, channel:*, peer:*,
+ * node:ready). Reconnects
  * automatically via the browser's EventSource. The proxy injects the bearer
  * token, so no auth handling is needed here.
  */
@@ -28,6 +29,10 @@ export function useSSE(url, onEvent) {
 			'payment:received',
 			'payment:sent',
 			'payment:failed',
+			// Fires alongside payment:received when the settled receive is an
+			// invoice this wallet issued, carrying the bolt11 and the hash the
+			// Receive tab matches its on-screen invoice against.
+			'invoice:settled',
 			'channel:ready',
 			'channel:closed',
 			'peer:connect',

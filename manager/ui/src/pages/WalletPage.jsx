@@ -4,6 +4,7 @@ import { AnimatePresence, m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useSSE } from '../hooks/useSSE.js';
+import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
@@ -30,8 +31,9 @@ const TABS = [
 	['console', 'Console', ConsoleTab]
 ];
 
+// Receives are absent deliberately: they are announced by the receive watcher
+// below, which knows the amount and catches the ones the stream missed.
 const EVENT_LABELS = {
-	'payment:received': 'Payment received',
 	'payment:sent': 'Payment sent',
 	'payment:failed': 'Payment failed',
 	'channel:ready': 'Channel ready',
@@ -70,8 +72,22 @@ export default function WalletPage() {
 		[id, running, tick]
 	);
 
-	useSSE(running ? api.eventsUrl() : null, (name) => {
+	// Money arriving is the one event a wallet's owner did nothing to cause, so
+	// it must not depend on them causing anything to see it. The watcher is fed
+	// by the SSE stream below for immediacy and backstopped by its own poll of
+	// the payment and transaction lists, so a receive is announced even when the
+	// stream died without saying so. The last one is handed to the tabs: the
+	// Receive tab flips its on-screen invoice to paid the moment it settles.
+	const [lastReceive, setLastReceive] = useState(null);
+	const { onEvent: receiveEvent } = useReceiveWatch(api, running, (r) => {
+		setLastReceive(r);
+		toast(describeReceive(r), 'success', { duration: 8000 });
 		bump();
+	});
+
+	useSSE(running ? api.eventsUrl() : null, (name, data) => {
+		bump();
+		receiveEvent(name, data);
 		if (EVENT_LABELS[name]) toast(EVENT_LABELS[name], name === 'payment:failed' ? 'error' : 'success');
 	});
 
@@ -179,7 +195,16 @@ export default function WalletPage() {
 							exit={{ opacity: 0, y: -6 }}
 							transition={{ duration: 0.18, ease: 'easeOut' }}
 						>
-							<ActiveTab id={id} api={api} info={info} health={health} rec={rec} tick={tick} bump={bump} />
+							<ActiveTab
+								id={id}
+								api={api}
+								info={info}
+								health={health}
+								rec={rec}
+								tick={tick}
+								bump={bump}
+								lastReceive={lastReceive}
+							/>
 						</m.div>
 					</AnimatePresence>
 				</div>
