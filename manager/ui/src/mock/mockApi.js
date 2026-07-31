@@ -624,6 +624,18 @@ export const mockEvents = {
 
 const latency = () => new Promise((r) => setTimeout(r, 150 + rnd() * 250));
 
+// Signatures the demo has minted, so the Verify card confirms exactly what the
+// Sign card produced and refuses everything else, which is the honest half of
+// what the real daemon does (it also recovers foreign signers; the demo has no
+// cryptography to recover with).
+const ZBASE32 = 'ybndrfg8ejkmcpqxot1uwisza345h769';
+const mintedSignatures = new Map(); // signature -> { walletId, message }
+function demoSignature() {
+	let sig = '';
+	for (let i = 0; i < 104; i++) sig += ZBASE32[Math.floor(rnd() * 32)];
+	return sig;
+}
+
 function err(message, code = 'DEMO') {
 	const e = new Error(message);
 	e.code = code;
@@ -1479,6 +1491,21 @@ function walletRequest(id, path, method, body) {
 			const alias = peer?.alias || chan?.alias;
 			if (!alias) throw err('Node not found in graph', 'NOT_FOUND');
 			return { pubkey: pk, alias, color: '3399ff', channelCount: 24 };
+		}
+		case '/message/sign': {
+			if (!body.message) throw err('message required', 'INVALID_PARAMS');
+			const signature = demoSignature();
+			mintedSignatures.set(signature, { walletId: id, message: body.message });
+			return { signature, pubkey: nodeId(id) };
+		}
+		case '/message/verify': {
+			if (!body.message || !body.signature)
+				throw err('message and signature required', 'INVALID_PARAMS');
+			const minted = mintedSignatures.get(body.signature);
+			if (minted && minted.message === body.message) {
+				return { valid: true, pubkey: nodeId(minted.walletId), knownNode: true };
+			}
+			return { valid: false, pubkey: null, knownNode: false };
 		}
 		case '/transactions':
 			return st.txs;

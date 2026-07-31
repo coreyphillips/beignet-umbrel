@@ -16,6 +16,7 @@ import ChannelsTab from './tabs/ChannelsTab.jsx';
 import PeersTab from './tabs/PeersTab.jsx';
 import ActivityTab from './tabs/ActivityTab.jsx';
 import OffersTab from './tabs/OffersTab.jsx';
+import ToolsTab from './tabs/ToolsTab.jsx';
 import LogsTab from './tabs/LogsTab.jsx';
 import ConsoleTab from './tabs/ConsoleTab.jsx';
 
@@ -27,6 +28,7 @@ const TABS = [
 	['peers', 'Peers', PeersTab],
 	['activity', 'Activity', ActivityTab],
 	['offers', 'Offers', OffersTab],
+	['tools', 'Tools', ToolsTab],
 	['logs', 'Logs', LogsTab],
 	['console', 'Console', ConsoleTab]
 ];
