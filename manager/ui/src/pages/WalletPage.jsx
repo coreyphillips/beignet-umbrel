@@ -256,14 +256,18 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 	const [busy, setBusy] = useState(false);
 	// Whether this wallet has OPEN channels, asked the moment the modal opens:
 	// it decides whether Lightning may be turned off, and the answer has to be
-	// in hand before the checkbox is touched, not after.
+	// in hand before the checkbox is touched, not after. null is "not yet
+	// known", and unknown fails safe: the off switch stays locked until the
+	// count arrives, because the race between the fetch and a fast click must
+	// not be winnable.
 	const [openChannels, setOpenChannels] = useState(null);
+	const [channelsUnknown, setChannelsUnknown] = useState(false);
 	useEffect(() => {
 		let alive = true;
 		walletApi(rec.id)
 			.get('/channels')
 			.then((chs) => alive && setOpenChannels(chs.filter((c) => !isClosedChannel(c)).length))
-			.catch(() => alive && setOpenChannels(null));
+			.catch(() => alive && setChannelsUnknown(true));
 		return () => {
 			alive = false;
 		};
@@ -271,8 +275,9 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 
 	// Turning Lightning off with channels open would hide live channels from
 	// the one screen watching them; the daemon would keep running them either
-	// way. The move is offered only when there is nothing it would hide.
-	const mustKeepLightning = !rec.onchainOnly && (openChannels ?? 0) > 0;
+	// way. The move is offered only when the wallet is KNOWN to have nothing
+	// it would hide.
+	const mustKeepLightning = !rec.onchainOnly && openChannels !== 0;
 
 	const save = async () => {
 		setBusy(true);
@@ -320,11 +325,17 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 				/>
 				Lightning enabled
 			</label>
-			{mustKeepLightning && (
+			{mustKeepLightning && openChannels > 0 && (
 				<div className="info-note">
 					This wallet has {openChannels} open channel{openChannels === 1 ? '' : 's'}, and
 					turning Lightning off would hide them from the screen that watches them. Close
 					the channels first, then this switch unlocks.
+				</div>
+			)}
+			{mustKeepLightning && channelsUnknown && (
+				<div className="info-note">
+					This wallet's channels could not be read just now, so Lightning stays on: the
+					switch only unlocks once the wallet is known to have no open channels.
 				</div>
 			)}
 			{!mustKeepLightning && onchainOnly && !rec.onchainOnly && (
