@@ -186,7 +186,7 @@ env:
   # differ). Verified again by booting 0.8.1 with the manager's env, driving
   # every route the dashboard calls, and confirming the four decode paths now
   # answer 400 with the parser's message and leave the log clean.
-  BEIGNET_VERSION: "0.8.1"
+  BEIGNET_VERSION: "0.8.2"
 
 jobs:
   build:
