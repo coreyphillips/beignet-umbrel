@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.11.1"
+version: "0.11.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,41 +30,37 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  An offer is payable, and it is paid where invoices are paid.
+  A Tools tab: prove a message came from your node. Sign any text with
+  a wallet's node key and hand out the signature, or verify one from
+  anyone else. The format is the LND-compatible one, so it checks out
+  under lncli verifymessage and vice versa. Verification names the key
+  that signed rather than just saying valid, because a valid signature
+  from the wrong key is a valid signature by someone else.
 
 
-  Paying a BOLT12 offer published by another Beignet node did not
-  work at all. The node issuing the offer asked for a secret that
-  BOLT12 gives it no way to send, so every such payment was refused
-  with incorrect_or_unknown_payment_details. Offers are now
-  authenticated the way the spec intends, and one Beignet node can
-  pay another's offer.
+  Money arriving is announced. A payment received over Lightning or
+  on-chain shows a notification with the amount, on whichever page of
+  the dashboard you are on, backed by a poll so a quietly dead event
+  stream cannot silence it. The Receive tab turns a paid invoice into
+  a receipt the moment it settles, replacing the QR code: a settled
+  invoice cannot be paid twice, so its code invites the one scan
+  guaranteed to fail.
 
 
-  Offers also survive a restart. The previous release noted that
-  offers lived in daemon memory, so a restart cleared the list and
-  retired anything already shared. That is fixed: an offer you
-  publish stays published.
+  Splice buttons appear only on channels whose peer can splice. The
+  daemon reads splice support off each peer's connection, so a channel
+  to an LND node stops offering the two buttons LND would refuse every
+  time. Close and Reconnect stay.
 
 
-  Offers are paid from the Send tab now, in the same box as
-  invoices, rather than from a separate tab. Paste either one. An
-  offer naming no amount asks you for one, and the card says why an
-  offer shows no fee estimate: an offer is not a destination, it is
-  a code that has to be exchanged for an invoice first, and the
-  route that invoice comes back with is what a fee would be priced
-  over.
+  The Send tab's Max button works again: pressing it no longer locks
+  the form, and with Max on the amount follows the fee slider, so the
+  total never exceeds your balance.
 
 
-  Offers can be deleted. Now that they persist, the list would only
-  grow, so each one has a Delete. It asks first, because deleting an
-  offer stops every saved copy of that code from working, and a new
-  offer is a different code rather than a restored one.
-
-
-  Ships beignet 0.8.1, which also brings BOLT12 payment correctness
-  and routing fixes, on-chain fee estimation fixes, and clearer
-  refusals when something you paste cannot be read.
+  Ships beignet 0.8.2: on-chain arrivals, sends and confirmations are
+  announced over the daemon's event stream, and channel listings say
+  whether each peer can splice.
 
 dependencies: []
 path: ""
