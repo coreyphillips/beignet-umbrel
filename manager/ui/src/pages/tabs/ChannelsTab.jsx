@@ -936,6 +936,116 @@ function historyLabel(e) {
 	}
 }
 
+/**
+ * The routing policy row, editable in place. The three numbers here are what
+ * this channel charges and demands to forward other people's payments; the
+ * daemon validates them (fees up to 2^32-1, cltv delta 1 to 65535) and
+ * regenerates the channel_update, so this form's job is to say what each
+ * number means and pass the daemon's refusals through unrewritten.
+ */
+function PolicyRow({ api, channelId, policy, onSaved }) {
+	const toast = useToast();
+	const [editing, setEditing] = useState(false);
+	const [base, setBase] = useState('');
+	const [ppm, setPpm] = useState('');
+	const [cltv, setCltv] = useState('');
+	const [busy, setBusy] = useState(false);
+
+	const digits = (v) => v.replace(/[^0-9]/g, '');
+	const open = () => {
+		// Prefilled from the policy in force, so saving without touching
+		// anything is a no-op rather than a surprise.
+		setBase(String(policy.feeBaseMsat));
+		setPpm(String(policy.feeProportionalMillionths));
+		setCltv(String(policy.cltvExpiryDelta));
+		setEditing(true);
+	};
+
+	const save = async () => {
+		setBusy(true);
+		try {
+			const r = await api.post('/channel/update-policy', {
+				channelId,
+				feeBaseMsat: parseInt(base, 10),
+				feeProportionalMillionths: parseInt(ppm, 10),
+				cltvExpiryDelta: parseInt(cltv, 10)
+			});
+			// The daemon answers with the policy it actually applied, which is
+			// the one worth showing back.
+			if (r.policies?.[0]) onSaved(r.policies[0]);
+			toast('Routing policy updated', 'success');
+			setEditing(false);
+		} catch (e) {
+			toast(e.message, 'error');
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	return (
+		<DetailRow label="Routing policy">
+			{!editing && (
+				<>
+					{policy.feeBaseMsat} msat + {policy.feeProportionalMillionths} ppm,
+					cltv delta {policy.cltvExpiryDelta}{' '}
+					<Button className="sm" onClick={open}>
+						Edit
+					</Button>
+				</>
+			)}
+			{editing && (
+				<div style={{ marginTop: 6 }}>
+					<Field
+						label="Base fee (msat)"
+						hint="Charged on every payment this channel forwards, whatever its size. 1000 msat is one sat."
+					>
+						<input
+							inputMode="numeric"
+							value={base}
+							onChange={(e) => setBase(digits(e.target.value))}
+						/>
+					</Field>
+					<Field
+						label="Proportional fee (ppm)"
+						hint="Parts per million of each forwarded amount. 100 ppm is 0.01%."
+					>
+						<input
+							inputMode="numeric"
+							value={ppm}
+							onChange={(e) => setPpm(digits(e.target.value))}
+						/>
+					</Field>
+					<Field
+						label="CLTV delta (blocks)"
+						hint="Blocks of headroom this channel demands between an incoming payment and the outgoing one it funds. Below 18 leaves too little room to react to a force close, so the default is a safe floor rather than a number to race to zero."
+					>
+						<input
+							inputMode="numeric"
+							value={cltv}
+							onChange={(e) => setCltv(digits(e.target.value))}
+						/>
+					</Field>
+					<div className="wallet-meta" style={{ marginBottom: 10 }}>
+						The change is broadcast as a channel update and spreads through
+						gossip, so senders may route on the old numbers for a while.
+					</div>
+					<div className="center-actions">
+						<Button
+							variant="primary"
+							busy={busy}
+							onClick={save}
+							disabled={base === '' || ppm === '' || cltv === ''}
+						>
+							Save policy
+						</Button>
+						<Button onClick={() => setEditing(false)}>Cancel</Button>
+					</div>
+				</div>
+			)}
+		</DetailRow>
+	);
+}
+
 function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 	const toast = useToast();
 	const [diag, setDiag] = useState(null);
@@ -1067,10 +1177,12 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 					</DetailRow>
 				)}
 				{!closed && policy && (
-					<DetailRow label="Routing policy">
-						{policy.feeBaseMsat} msat + {policy.feeProportionalMillionths} ppm,
-						cltv delta {policy.cltvExpiryDelta}
-					</DetailRow>
+					<PolicyRow
+						api={api}
+						channelId={channel.channelId}
+						policy={policy}
+						onSaved={setPolicy}
+					/>
 				)}
 				{!closed && diag?.issues?.length > 0 && (
 					<DetailRow label="Issues">

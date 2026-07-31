@@ -1287,12 +1287,38 @@ function walletRequest(id, path, method, body) {
 			if (!c) throw err('Channel not found', 'NOT_FOUND');
 			return {
 				channelId: c.channelId,
-				feeBaseMsat: 1000,
-				feeProportionalMillionths: 100,
-				cltvExpiryDelta: 80,
+				feeBaseMsat: c.policy?.feeBaseMsat ?? 1000,
+				feeProportionalMillionths: c.policy?.feeProportionalMillionths ?? 100,
+				cltvExpiryDelta: c.policy?.cltvExpiryDelta ?? 80,
 				htlcMinimumMsat: '1000',
 				htlcMaximumMsat: String(c.capacitySats * 1000),
-				source: 'node-default'
+				source: c.policy ? 'channel-override' : 'node-default'
+			};
+		}
+		case '/channel/update-policy': {
+			const c = st.channels.find((x) => x.channelId === body.channelId);
+			if (!c) throw err('Channel not found', 'NOT_FOUND');
+			// The daemon's own bounds, refused with its own words.
+			if (body.cltvExpiryDelta < 1 || body.cltvExpiryDelta > 65535)
+				throw err(
+					`cltvExpiryDelta must be an integer in [1, 65535] (>= 18 recommended), got ${body.cltvExpiryDelta}`,
+					'INVALID_PARAMS'
+				);
+			c.policy = {
+				feeBaseMsat: body.feeBaseMsat,
+				feeProportionalMillionths: body.feeProportionalMillionths,
+				cltvExpiryDelta: body.cltvExpiryDelta
+			};
+			return {
+				updated: 1,
+				policies: [
+					{
+						channelId: c.channelId,
+						...c.policy,
+						htlcMinimumMsat: '1000',
+						htlcMaximumMsat: String(c.capacitySats * 1000)
+					}
+				]
 			};
 		}
 		case '/channel/funding-quote': {

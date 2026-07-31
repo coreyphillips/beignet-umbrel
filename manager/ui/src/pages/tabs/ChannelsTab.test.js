@@ -14,7 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
-import { click, render, settle } from '../../../test/render.mjs';
+import { click, render, settle, type } from '../../../test/render.mjs';
 import { ToastProvider } from '../../components/Toast.jsx';
 import ChannelsTab from './ChannelsTab.jsx';
 
@@ -82,7 +82,22 @@ function stubApi({ channels, diagnostics } = {}) {
 			}
 			return null;
 		},
-		post: async () => ({})
+		post: async (path, reqBody) => {
+			if (path === '/channel/update-policy') {
+				return {
+					updated: 1,
+					policies: [
+						{
+							channelId: reqBody.channelId,
+							feeBaseMsat: reqBody.feeBaseMsat,
+							feeProportionalMillionths: reqBody.feeProportionalMillionths,
+							cltvExpiryDelta: reqBody.cltvExpiryDelta
+						}
+					]
+				};
+			}
+			return {};
+		}
 	};
 }
 
@@ -298,6 +313,51 @@ test('splice controls are hidden only when the daemon says the peer cannot', asy
 		[...rows[1].querySelectorAll('button')].some((b) => b.textContent.trim() === 'Close'),
 		'Close stays'
 	);
+	await view.unmount();
+	restore();
+});
+
+test('the routing policy is edited where it is read', async () => {
+	// The row used to be static text, which made the one lever a routing node
+	// has look like a fact about the channel rather than a choice.
+	const restore = stubManagerFetch({ fail: true });
+	// The stub's default diagnostics describe the force-closed channel; this
+	// test opens the live one, whose modal must read NORMAL or the policy row
+	// (live apparatus) is legitimately withheld.
+	const view = await render(wrapped, tabProps({
+		diagnostics: {
+			state: 'NORMAL',
+			isPeerConnected: true,
+			localBalanceSats: 500_000,
+			remoteBalanceSats: 500_000,
+			announceChannel: true,
+			announcementSigsSent: true,
+			announcementSigsReceived: true,
+			issues: []
+		}
+	}));
+	await settle(50);
+
+	// Open the NORMAL channel's detail modal.
+	await click(view.$$('tbody tr')[0]);
+	await settle(100);
+	assert.match(modalText(view), /1000 msat \+ 1 ppm, cltv delta 40/);
+
+	await click(view.$$('button').find((b) => b.textContent.trim() === 'Edit'));
+	await settle(10);
+	const inputs = view.$$('.detail input[inputmode="numeric"]');
+	assert.equal(inputs.length, 3, 'base, ppm and cltv delta are editable');
+	assert.equal(inputs[0].value, '1000', 'prefilled with the policy in force');
+	assert.equal(inputs[1].value, '1');
+	assert.equal(inputs[2].value, '40');
+
+	await type(inputs[1], '250');
+	await click(view.$$('button').find((b) => b.textContent.trim() === 'Save policy'));
+	await settle(50);
+
+	assert.match(modalText(view), /1000 msat \+ 250 ppm, cltv delta 40/,
+		'the row shows the policy the daemon answered with');
+	assert.doesNotMatch(modalText(view), /Save policy/, 'the form closed');
 	await view.unmount();
 	restore();
 });
