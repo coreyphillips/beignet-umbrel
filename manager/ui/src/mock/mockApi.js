@@ -329,7 +329,10 @@ const store = {
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
 			tor: false,
 			announce: false,
-			createdAt: now - 40 * DAY
+			// The on-chain only demo: imported two days ago, and its history
+			// reaches back years anyway, because recovery reads the chain.
+			onchainOnly: true,
+			createdAt: now - 2 * DAY
 		},
 		{
 			id: 'demo-testnet',
@@ -393,10 +396,18 @@ store.state['demo-main'] = walletState({
 		{ pubkey: pubkey(), host: '192.168.4.20', port: 9736, state: 'connected' }
 	]
 });
+const savingsTxs = makeTxs(9, 908214);
+// Imported two days ago, history back to 2023: recovery reads the chain, so
+// everything the seed ever did is here, long predating the wallet record.
+savingsTxs.forEach((t, i) => {
+	if (i === 0) return; // the newest stays recent
+	t.timestamp = now - (i * 130 + between(0, 60)) * DAY;
+	if (t.confirmTimestamp) t.confirmTimestamp = t.timestamp + 900000;
+});
 store.state['demo-savings'] = walletState({
 	blockHeight: 908214,
 	channels: [],
-	txs: makeTxs(9, 908214),
+	txs: savingsTxs,
 	payments: [],
 	utxos: makeUtxos(3, 908214),
 	invoices: [],
@@ -686,7 +697,8 @@ function managerRequest(path, method, body) {
 			status: 'running',
 			electrum: body.electrum || store.settings.defaultElectrum || { host: '', port: 50001, tls: false },
 			tor: !!body.tor,
-			announce: !!body.announce,
+			announce: !!body.announce && !body.onchainOnly,
+			onchainOnly: !!body.onchainOnly,
 			createdAt: Date.now()
 		};
 		store.wallets.push(w);
@@ -713,14 +725,18 @@ function managerRequest(path, method, body) {
 			status: 'running',
 			electrum: body.electrum || store.settings.defaultElectrum || { host: '', port: 50001, tls: false },
 			tor: !!body.tor,
-			announce: !!body.announce,
+			announce: !!body.announce && !body.onchainOnly,
+			onchainOnly: !!body.onchainOnly,
 			createdAt: Date.now()
 		};
 		store.wallets.push(w);
 		store.state[id] = walletState({
 			blockHeight: 908214,
 			channels: [],
-			txs: makeTxs(4, 908214, w.network),
+			// An import recovers whatever the seed has done, from before this
+			// wallet existed: history is read off the chain, not begun at
+			// import.
+			txs: makeTxs(12, 908214, w.network),
 			payments: [],
 			utxos: makeUtxos(2, 908214, w.network),
 			invoices: [],
@@ -744,6 +760,10 @@ function managerRequest(path, method, body) {
 			if (body.electrum) w.electrum = body.electrum;
 			if (body.tor !== undefined) w.tor = !!body.tor;
 			if (body.announce !== undefined) w.announce = !!body.announce;
+			if (body.onchainOnly !== undefined) {
+				w.onchainOnly = !!body.onchainOnly;
+				if (w.onchainOnly) w.announce = false;
+			}
 			return publicRecord(w);
 		}
 		if (method === 'DELETE') {

@@ -57,11 +57,18 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 				id="activity-view"
 				value={tab}
 				onChange={setTab}
-				options={[
-					['onchain', 'On-chain'],
-					['lightning', 'Lightning'],
-					['utxos', 'Coins']
-				]}
+				options={
+					rec?.onchainOnly
+						? [
+								['onchain', 'On-chain'],
+								['utxos', 'Coins']
+						  ]
+						: [
+								['onchain', 'On-chain'],
+								['lightning', 'Lightning'],
+								['utxos', 'Coins']
+						  ]
+				}
 			/>
 
 			{tab === 'onchain' && (

@@ -426,13 +426,13 @@ class WalletManager {
 		return this.getSettings();
 	}
 
-	async createWallet({ name, network, electrum, wordCount, tor, announce } = {}) {
+	async createWallet({ name, network, electrum, wordCount, tor, announce, onchainOnly } = {}) {
 		const strength = Number(wordCount) === 12 ? 128 : 256;
 		const mnemonic = bip39.generateMnemonic(strength);
-		return this._provision({ name, network, electrum, mnemonic, tor, announce });
+		return this._provision({ name, network, electrum, mnemonic, tor, announce, onchainOnly });
 	}
 
-	async importWallet({ name, network, electrum, mnemonic, tor, announce } = {}) {
+	async importWallet({ name, network, electrum, mnemonic, tor, announce, onchainOnly } = {}) {
 		const normalized = String(mnemonic || '')
 			.trim()
 			.toLowerCase()
@@ -440,10 +440,10 @@ class WalletManager {
 		if (!bip39.validateMnemonic(normalized)) {
 			throw httpError(400, 'BAD_MNEMONIC', 'Invalid mnemonic phrase');
 		}
-		return this._provision({ name, network, electrum, mnemonic: normalized, tor, announce });
+		return this._provision({ name, network, electrum, mnemonic: normalized, tor, announce, onchainOnly });
 	}
 
-	async _provision({ name, network, electrum, mnemonic, tor, announce }) {
+	async _provision({ name, network, electrum, mnemonic, tor, announce, onchainOnly }) {
 		const net = this._validateNetwork(network);
 		const resolvedElectrum = this._resolveElectrum(electrum);
 		const id = crypto.randomUUID();
@@ -454,7 +454,10 @@ class WalletManager {
 			network: net,
 			electrum: resolvedElectrum,
 			tor: !!tor,
-			announce: !!announce,
+			// Announcing is inbound Lightning, which an on-chain only wallet
+			// has sworn off, so the flag wins over the checkbox.
+			announce: !!announce && !onchainOnly,
+			onchainOnly: !!onchainOnly,
 			port,
 			running: true,
 			createdAt: nowIso()
@@ -474,13 +477,23 @@ class WalletManager {
 		return { record: this.publicRecord(id), mnemonic };
 	}
 
-	async updateWallet(id, { name, electrum, tor, announce } = {}) {
+	async updateWallet(id, { name, electrum, tor, announce, onchainOnly } = {}) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
 		if (tor !== undefined) rec.tor = !!tor;
 		if (announce !== undefined) rec.announce = !!announce;
+		// The same seed backs both modes, so this is freely reversible: the
+		// Lightning identity derives from the mnemonic whether or not it has
+		// ever been used. Turning Lightning OFF is guarded in the dashboard
+		// (open channels need eyes on them), not here: the daemon keeps
+		// watching its channels either way, this flag only decides whether it
+		// LISTENS for new Lightning and whether the dashboard offers it.
+		if (onchainOnly !== undefined) {
+			rec.onchainOnly = !!onchainOnly;
+			if (rec.onchainOnly) rec.announce = false;
+		}
 		this.registry.upsert(rec);
 		// Restart a running daemon so it reconnects with the new Electrum config.
 		const rt = this.runtimeState(id);
@@ -560,9 +573,6 @@ class WalletManager {
 			BEIGNET_ALIAS: rec.name,
 			BEIGNET_DAEMON_HOST: '127.0.0.1',
 			BEIGNET_DAEMON_PORT: String(rec.port),
-			// Enable an inbound Lightning listen port so other nodes can connect.
-			// Derived from the (unique) HTTP port; matches the torrc mapping.
-			BEIGNET_LISTEN_PORT: String(this.listenPort(rec)),
 			BEIGNET_ELECTRUM_HOST: rec.electrum.host,
 			BEIGNET_ELECTRUM_PORT: String(rec.electrum.port),
 			BEIGNET_ELECTRUM_TLS: rec.electrum.tls ? 'true' : 'false',
@@ -572,6 +582,15 @@ class WalletManager {
 			// debug when diagnosing a peer).
 			BEIGNET_LOG_LEVEL: process.env.BEIGNET_LOG_LEVEL || 'info'
 		};
+		// Enable an inbound Lightning listen port so other nodes can connect.
+		// Derived from the (unique) HTTP port; matches the torrc mapping. An
+		// on-chain only wallet gets none: the daemon only starts its Lightning
+		// listener when a port is configured, so this is the whole of the
+		// switch on the daemon side, and flipping the flag back re-listens on
+		// the next start.
+		if (!rec.onchainOnly) {
+			env.BEIGNET_LISTEN_PORT = String(this.listenPort(rec));
+		}
 		if (process.env.TOR_PROXY_IP) env.TOR_PROXY_IP = process.env.TOR_PROXY_IP;
 		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
 		// Route Lightning peer connections through Umbrel's Tor proxy when enabled.
@@ -858,6 +877,7 @@ class WalletManager {
 			electrum: rec.electrum,
 			tor: !!rec.tor,
 			announce: !!rec.announce,
+			onchainOnly: !!rec.onchainOnly,
 			onionAddress: this.onionAddress(rec),
 			// Only meaningful for Tor-enabled wallets: false means the last
 			// probe could not build a circuit, so peer connects will time out.
