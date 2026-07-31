@@ -21,7 +21,7 @@ services:
     # image under the app version, so the two move together. The digest pins the
     # exact multi-arch index the v0.9.1 build published, and proves it exists:
     # main must never name an image that has not been built (see check-release).
-    image: ghcr.io/coreyphillips/beignet-app:0.11.0@sha256:299d5246d16226114b4714dfa7afdf72dcfefe4fb0e8a3c714bc7292b57de1b2
+    image: ghcr.io/coreyphillips/beignet-app:0.11.1@sha256:25a85b0739f2258e8faec4ec9c2aa08daf21138d5ceac87616af051c552e82ce
     restart: on-failure
     init: true
     stop_grace_period: 1m
