@@ -254,12 +254,10 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 	const [announce, setAnnounce] = useState(!!rec.announce);
 	const [onchainOnly, setOnchainOnly] = useState(!!rec.onchainOnly);
 	const [busy, setBusy] = useState(false);
-	// Whether this wallet has OPEN channels, asked the moment the modal opens:
-	// it decides whether Lightning may be turned off, and the answer has to be
-	// in hand before the checkbox is touched, not after. null is "not yet
-	// known", and unknown fails safe: the off switch stays locked until the
-	// count arrives, because the race between the fetch and a fast click must
-	// not be winnable.
+	// Whether this wallet has OPEN channels, asked the moment the modal opens.
+	// Spinning Lightning down with channels open is the owner's call to make,
+	// so the count does not lock anything; it decides how much the dialog has
+	// to say about what going quiet means for those channels.
 	const [openChannels, setOpenChannels] = useState(null);
 	const [channelsUnknown, setChannelsUnknown] = useState(false);
 	useEffect(() => {
@@ -272,12 +270,8 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 			alive = false;
 		};
 	}, [rec.id]);
-
-	// Turning Lightning off with channels open would hide live channels from
-	// the one screen watching them; the daemon would keep running them either
-	// way. The move is offered only when the wallet is KNOWN to have nothing
-	// it would hide.
-	const mustKeepLightning = !rec.onchainOnly && openChannels !== 0;
+	const parkingChannels =
+		onchainOnly && !rec.onchainOnly && ((openChannels ?? 0) > 0 || channelsUnknown);
 
 	const save = async () => {
 		setBusy(true);
@@ -320,32 +314,30 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 				<input
 					type="checkbox"
 					checked={!onchainOnly}
-					disabled={mustKeepLightning}
 					onChange={(e) => setOnchainOnly(!e.target.checked)}
 				/>
 				Lightning enabled
 			</label>
-			{mustKeepLightning && openChannels > 0 && (
-				<div className="info-note">
-					This wallet has {openChannels} open channel{openChannels === 1 ? '' : 's'}, and
-					turning Lightning off would hide them from the screen that watches them. Close
-					the channels first, then this switch unlocks.
+			{parkingChannels && (
+				<div className="error-note">
+					{openChannels > 0
+						? `This wallet has ${openChannels} open channel${openChannels === 1 ? '' : 's'}. `
+						: 'This wallet may have open channels (they could not be read just now). '}
+					They stay open and the daemon keeps watching the chain for them, but the node
+					goes quiet: to its peers it is simply offline, payments through these channels
+					stop, and the dashboard puts the Channels tab away until Lightning is switched
+					back on. Parked for more than about two weeks, the node force-closes channels
+					it cannot reach, by design, and the funds return on-chain.
 				</div>
 			)}
-			{mustKeepLightning && channelsUnknown && (
-				<div className="info-note">
-					This wallet's channels could not be read just now, so Lightning stays on: the
-					switch only unlocks once the wallet is known to have no open channels.
-				</div>
-			)}
-			{!mustKeepLightning && onchainOnly && !rec.onchainOnly && (
+			{onchainOnly && !rec.onchainOnly && !parkingChannels && (
 				<div className="info-note">
 					The wallet stops listening for Lightning peers and the dashboard puts the
 					Lightning apparatus away. The seed is untouched and the node identity stays
 					derived from it, so flipping this back on later loses nothing.
 				</div>
 			)}
-			{!mustKeepLightning && !onchainOnly && rec.onchainOnly && (
+			{!onchainOnly && rec.onchainOnly && (
 				<div className="info-note">
 					The wallet starts listening for Lightning peers on its next start. Open a
 					channel in the Channels tab and it is a Lightning node like any other.

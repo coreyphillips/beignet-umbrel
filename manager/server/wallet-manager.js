@@ -590,6 +590,12 @@ class WalletManager {
 		// the next start.
 		if (!rec.onchainOnly) {
 			env.BEIGNET_LISTEN_PORT = String(this.listenPort(rec));
+		} else {
+			// Quiet outbound as well as inbound: without this the daemon dials
+			// its channel partners back and the channels quietly reestablish,
+			// which is the opposite of appearing offline. Engines before the
+			// env landed ignore it, and lose only the outbound half.
+			env.BEIGNET_AUTO_RECONNECT = 'false';
 		}
 		if (process.env.TOR_PROXY_IP) env.TOR_PROXY_IP = process.env.TOR_PROXY_IP;
 		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
