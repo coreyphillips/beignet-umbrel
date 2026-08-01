@@ -141,6 +141,11 @@ class WalletManager {
 			.find(
 				(rec) =>
 					rec.tor &&
+					// An on-chain only wallet runs no Lightning listener, so it can
+					// never answer the probe; selecting it would fail the local
+					// precheck below on every cycle and starve the probe for the
+					// wallets that could actually answer.
+					!rec.onchainOnly &&
 					rec.running &&
 					this.runtimeState(rec.id).healthy &&
 					this._onionMapsPort(this.listenPort(rec))
@@ -507,6 +512,56 @@ class WalletManager {
 		return this.publicRecord(id);
 	}
 
+	/**
+	 * The daemon's environment, extracted so a test can hold the one contract
+	 * that decides a wallet's Lightning posture without spawning anything:
+	 * on-chain only means no BEIGNET_LISTEN_PORT (the daemon only starts its
+	 * listener when a port is configured) and BEIGNET_AUTO_RECONNECT=false
+	 * (or the daemon dials its channel partners back and the channels quietly
+	 * reestablish). Engines before that env landed ignore it and lose only
+	 * the outbound half of the quiet.
+	 */
+	_daemonEnv(rec, p, mnemonic, token) {
+		const env = {
+			PATH: process.env.PATH,
+			HOME: p.home,
+			BEIGNET_DATA_DIR: p.data,
+			BEIGNET_MNEMONIC: mnemonic,
+			BEIGNET_API_TOKEN: token,
+			BEIGNET_NETWORK: rec.network,
+			// The wallet's name doubles as the Lightning node alias in the
+			// node_announcement. The daemon truncates values over the BOLT 7
+			// 32-byte limit itself, so no validation is needed here. A rename
+			// propagates because updateWallet restarts a running daemon.
+			BEIGNET_ALIAS: rec.name,
+			BEIGNET_DAEMON_HOST: '127.0.0.1',
+			BEIGNET_DAEMON_PORT: String(rec.port),
+			BEIGNET_ELECTRUM_HOST: rec.electrum.host,
+			BEIGNET_ELECTRUM_PORT: String(rec.electrum.port),
+			BEIGNET_ELECTRUM_TLS: rec.electrum.tls ? 'true' : 'false',
+			// The daemon only builds a logger when a log level is set; without one
+			// it runs silent and its stdout carries nothing to show in the Logs
+			// tab. Overridable so a noisy wallet can be turned down (or up to
+			// debug when diagnosing a peer).
+			BEIGNET_LOG_LEVEL: process.env.BEIGNET_LOG_LEVEL || 'info'
+		};
+		if (!rec.onchainOnly) {
+			env.BEIGNET_LISTEN_PORT = String(this.listenPort(rec));
+		} else {
+			env.BEIGNET_AUTO_RECONNECT = 'false';
+		}
+		if (process.env.TOR_PROXY_IP) env.TOR_PROXY_IP = process.env.TOR_PROXY_IP;
+		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
+		// Route Lightning peer connections through Umbrel's Tor proxy when enabled.
+		if (rec.tor && config.torProxy) env.BEIGNET_TOR_PROXY = config.torProxy;
+		// Advertise the onion address so peers can open inbound channels, but only
+		// when the onion actually forwards this wallet's listen port.
+		if (rec.announce && this.onion && this._onionMapsPort(this.listenPort(rec))) {
+			env.BEIGNET_ANNOUNCE_ADDRESSES = `${this.onion}:${this.listenPort(rec)}`;
+		}
+		return env;
+	}
+
 	async startWallet(id) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
@@ -559,53 +614,7 @@ class WalletManager {
 
 		const mnemonic = fs.readFileSync(p.mnemonicFile, 'utf8').trim();
 		const token = this.token(id);
-		const env = {
-			PATH: process.env.PATH,
-			HOME: p.home,
-			BEIGNET_DATA_DIR: p.data,
-			BEIGNET_MNEMONIC: mnemonic,
-			BEIGNET_API_TOKEN: token,
-			BEIGNET_NETWORK: rec.network,
-			// The wallet's name doubles as the Lightning node alias in the
-			// node_announcement. The daemon truncates values over the BOLT 7
-			// 32-byte limit itself, so no validation is needed here. A rename
-			// propagates because updateWallet restarts a running daemon.
-			BEIGNET_ALIAS: rec.name,
-			BEIGNET_DAEMON_HOST: '127.0.0.1',
-			BEIGNET_DAEMON_PORT: String(rec.port),
-			BEIGNET_ELECTRUM_HOST: rec.electrum.host,
-			BEIGNET_ELECTRUM_PORT: String(rec.electrum.port),
-			BEIGNET_ELECTRUM_TLS: rec.electrum.tls ? 'true' : 'false',
-			// The daemon only builds a logger when a log level is set; without one
-			// it runs silent and its stdout carries nothing to show in the Logs
-			// tab. Overridable so a noisy wallet can be turned down (or up to
-			// debug when diagnosing a peer).
-			BEIGNET_LOG_LEVEL: process.env.BEIGNET_LOG_LEVEL || 'info'
-		};
-		// Enable an inbound Lightning listen port so other nodes can connect.
-		// Derived from the (unique) HTTP port; matches the torrc mapping. An
-		// on-chain only wallet gets none: the daemon only starts its Lightning
-		// listener when a port is configured, so this is the whole of the
-		// switch on the daemon side, and flipping the flag back re-listens on
-		// the next start.
-		if (!rec.onchainOnly) {
-			env.BEIGNET_LISTEN_PORT = String(this.listenPort(rec));
-		} else {
-			// Quiet outbound as well as inbound: without this the daemon dials
-			// its channel partners back and the channels quietly reestablish,
-			// which is the opposite of appearing offline. Engines before the
-			// env landed ignore it, and lose only the outbound half.
-			env.BEIGNET_AUTO_RECONNECT = 'false';
-		}
-		if (process.env.TOR_PROXY_IP) env.TOR_PROXY_IP = process.env.TOR_PROXY_IP;
-		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
-		// Route Lightning peer connections through Umbrel's Tor proxy when enabled.
-		if (rec.tor && config.torProxy) env.BEIGNET_TOR_PROXY = config.torProxy;
-		// Advertise the onion address so peers can open inbound channels, but only
-		// when the onion actually forwards this wallet's listen port.
-		if (rec.announce && this.onion && this._onionMapsPort(this.listenPort(rec))) {
-			env.BEIGNET_ANNOUNCE_ADDRESSES = `${this.onion}:${this.listenPort(rec)}`;
-		}
+		const env = this._daemonEnv(rec, p, mnemonic, token);
 
 		const { cmd, args } = beignetSpawn();
 		rt.status = 'starting';

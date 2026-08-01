@@ -178,7 +178,7 @@ export default function WalletPage() {
 				</div>
 			) : (
 				<div className="wallet-layout">
-					{rec?.tor && rec.torCircuitOk === false && (
+					{rec?.tor && !rec.onchainOnly && rec.torCircuitOk === false && (
 						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							Tor on this Umbrel cannot build circuits right now. Peers reached over Tor,
 							onion addresses and, while Tor is on, public ones, will time out. Peers on
@@ -361,8 +361,13 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 				</label>
 			)}
 			<div className="center-actions">
+				{/* The consequence rides the button: saving while parking channels
+				    is a deliberate act, named at the moment of the click rather
+				    than behind a second dialog. */}
 				<Button variant="primary" busy={busy} onClick={save} disabled={!electrum.host}>
-					Save changes
+					{parkingChannels && openChannels > 0
+						? `Save and park ${openChannels} channel${openChannels === 1 ? '' : 's'}`
+						: 'Save changes'}
 				</Button>
 				<Button onClick={onClose}>Cancel</Button>
 			</div>

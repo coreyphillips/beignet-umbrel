@@ -352,7 +352,7 @@ function NewWallet({ config, onDone, onSeed }) {
 					modes, so Lightning can be switched on later from the wallet's Edit dialog
 					without touching the seed.
 					{tab === 'import'
-						? ' Importing recovers the full on-chain history of the seed, including everything from before this wallet existed.'
+						? " Importing reads the seed's history off the chain itself, reaching back to before this wallet existed, as far as the standard address scan finds use."
 						: ''}
 				</div>
 			)}
