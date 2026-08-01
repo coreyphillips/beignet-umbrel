@@ -6,7 +6,8 @@ import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.js
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
 
-export default function ReceiveTab({ id, api, tick, lastReceive }) {
+export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
+	const onchainOnly = !!rec?.onchainOnly;
 	const toast = useToast();
 	const [address, setAddress] = useState('');
 	const [onchainAmount, setOnchainAmount] = useState('');
@@ -16,7 +17,11 @@ export default function ReceiveTab({ id, api, tick, lastReceive }) {
 	const [amount, setAmount] = useState('');
 	const [description, setDescription] = useState('');
 	const [busy, setBusy] = useState(false);
-	const { data: invoices, refresh } = usePoll(() => api.get('/invoices').catch(() => []), 10000, [id, tick]);
+	const { data: invoices, refresh } = usePoll(
+		() => (onchainOnly ? Promise.resolve([]) : api.get('/invoices').catch(() => [])),
+		10000,
+		[id, tick, onchainOnly]
+	);
 
 	const newAddress = async () => {
 		try {
@@ -81,7 +86,8 @@ export default function ReceiveTab({ id, api, tick, lastReceive }) {
 
 	// A settled invoice cannot be paid again, so it has no place in a request
 	// still being handed out.
-	const carriesInvoice = !!invoice && !paid && includeInvoice && !invoiceConflicts;
+	const carriesInvoice =
+		!onchainOnly && !!invoice && !paid && includeInvoice && !invoiceConflicts;
 
 	const request = useMemo(
 		// `message` rather than `label`: BIP21 defines label as the recipient's own
@@ -117,7 +123,7 @@ export default function ReceiveTab({ id, api, tick, lastReceive }) {
 	};
 
 	return (
-		<div className="grid cols-2">
+		<div className={onchainOnly ? undefined : 'grid cols-2'}>
 			<Card
 				title="On-chain"
 				actions={
@@ -193,7 +199,8 @@ export default function ReceiveTab({ id, api, tick, lastReceive }) {
 				)}
 			</Card>
 
-			<Card title="Lightning invoice">
+			{!onchainOnly && (
+				<Card title="Lightning invoice">
 				<div className="row">
 					<Field label="Amount (sats, optional)">
 						<input
@@ -248,8 +255,10 @@ export default function ReceiveTab({ id, api, tick, lastReceive }) {
 					)}
 				</AnimatePresence>
 			</Card>
+			)}
 
-			<Card title="Recent invoices" className="grid-full" >
+			{!onchainOnly && (
+				<Card title="Recent invoices" className="grid-full">
 				{!invoices || invoices.length === 0 ? (
 					<div className="empty">No invoices yet.</div>
 				) : (
@@ -289,6 +298,7 @@ export default function ReceiveTab({ id, api, tick, lastReceive }) {
 					</div>
 				)}
 			</Card>
+			)}
 		</div>
 	);
 }

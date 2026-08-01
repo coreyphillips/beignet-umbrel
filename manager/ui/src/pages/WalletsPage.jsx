@@ -155,12 +155,19 @@ export default function WalletsPage() {
 									</m.div>
 									<div className="wallet-meta">
 										{w.network} · {w.electrum.host}:{w.electrum.port}
+										{w.onchainOnly ? ' · on-chain only' : ''}
 									</div>
 									{info && (
 										<div className="wallet-meta">
-											{fmtSats((info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0))} ·{' '}
-											{info.openChannelCount ?? info.channelCount} channels ·{' '}
-											{info.peerCount} peers
+											{w.onchainOnly ? (
+												fmtSats(info.onchainBalanceSats || 0)
+											) : (
+												<>
+													{fmtSats((info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0))} ·{' '}
+													{info.openChannelCount ?? info.channelCount} channels ·{' '}
+													{info.peerCount} peers
+												</>
+											)}
 										</div>
 									)}
 								</div>
@@ -247,6 +254,7 @@ function NewWallet({ config, onDone, onSeed }) {
 	const [electrum, setElectrum] = useState(emptyElectrum(config));
 	const [tor, setTor] = useState(false);
 	const [announce, setAnnounce] = useState(false);
+	const [onchainOnly, setOnchainOnly] = useState(false);
 	const [busy, setBusy] = useState(false);
 
 	const submit = async () => {
@@ -256,10 +264,10 @@ function NewWallet({ config, onDone, onSeed }) {
 				? { host: electrum.host.trim(), port: parseInt(electrum.port, 10), tls: !!electrum.tls }
 				: undefined;
 			if (tab === 'create') {
-				const r = await manager.createWallet({ name, network, wordCount, electrum: elec, tor, announce });
+				const r = await manager.createWallet({ name, network, wordCount, electrum: elec, tor, announce, onchainOnly });
 				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
 			} else {
-				await manager.importWallet({ name, network, mnemonic, electrum: elec, tor, announce });
+				await manager.importWallet({ name, network, mnemonic, electrum: elec, tor, announce, onchainOnly });
 				toast('Wallet imported. It will sync in the background.', 'success');
 			}
 			setName('');
@@ -329,18 +337,38 @@ function NewWallet({ config, onDone, onSeed }) {
 				<ElectrumFields presets={config.electrumPresets} value={electrum} onChange={setElectrum} />
 			)}
 
-			{(config.torAvailable || config.onionAvailable) && (
+			<label className="checkbox field">
+				<input
+					type="checkbox"
+					checked={onchainOnly}
+					onChange={(e) => setOnchainOnly(e.target.checked)}
+				/>
+				On-chain only (no Lightning)
+			</label>
+			{onchainOnly && (
+				<div className="info-note">
+					A plain Bitcoin wallet: addresses, transactions and coins, with the Lightning
+					apparatus put away and no Lightning listener running. The same seed backs both
+					modes, so Lightning can be switched on later from the wallet's Edit dialog
+					without touching the seed.
+					{tab === 'import'
+						? " Importing reads the seed's history off the chain itself, reaching back to before this wallet existed, as far as the standard address scan finds use."
+						: ''}
+				</div>
+			)}
+
+			{(config.torAvailable || config.onionAvailable) && !onchainOnly && (
 				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 					Tor
 				</div>
 			)}
-			{config.torAvailable && (
+			{config.torAvailable && !onchainOnly && (
 				<label className="checkbox field">
 					<input type="checkbox" checked={tor} onChange={(e) => setTor(e.target.checked)} />
 					Outbound: connect to peers over Tor
 				</label>
 			)}
-			{config.onionAvailable && (
+			{config.onionAvailable && !onchainOnly && (
 				<label className="checkbox field">
 					<input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
 					Inbound: publish a Tor address so peers can open channels to you

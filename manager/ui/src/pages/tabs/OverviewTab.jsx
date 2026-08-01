@@ -22,6 +22,10 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 		[id, tick]
 	);
 
+	// An on-chain only wallet's overview is an on-chain wallet's overview: the
+	// balance, the chain, the fees. Lightning stats, liquidity and the connect
+	// card would all describe apparatus the wallet has put away.
+	const onchainOnly = !!rec?.onchainOnly;
 	const bal = data?.balance;
 	const liq = data?.liquidity;
 	const fees = data?.fees;
@@ -72,29 +76,35 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 				</div>
 			)}
 			<m.div
-				className="grid cols-4"
+				className={onchainOnly ? 'grid cols-2' : 'grid cols-4'}
 				style={{ marginBottom: 18 }}
 				variants={staggerContainer}
 				initial="hidden"
 				animate="show"
 			>
-				{[
-					<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
-					<Stat
-						key="ln"
-						label="Lightning"
-						num={bal?.lightning ?? info?.lightningBalanceSats}
-						suffix=" sats"
-						sub={splicing > 0 ? `+ ${fmtSats(splicing)} splicing` : undefined}
-					/>,
-					<Stat key="total" label="Total" num={bal?.total} suffix=" sats" />,
-					<Stat
-						key="ch"
-						label="Channels"
-						num={openCount ?? info?.channelCount}
-						sub={`${info?.peerCount ?? 0} peers`}
-					/>
-				].map((stat, i) => (
+				{(onchainOnly
+					? [
+							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
+							<Stat key="height" label="Block height" num={info?.blockHeight} />
+					  ]
+					: [
+							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
+							<Stat
+								key="ln"
+								label="Lightning"
+								num={bal?.lightning ?? info?.lightningBalanceSats}
+								suffix=" sats"
+								sub={splicing > 0 ? `+ ${fmtSats(splicing)} splicing` : undefined}
+							/>,
+							<Stat key="total" label="Total" num={bal?.total} suffix=" sats" />,
+							<Stat
+								key="ch"
+								label="Channels"
+								num={openCount ?? info?.channelCount}
+								sub={`${info?.peerCount ?? 0} peers`}
+							/>
+					  ]
+				).map((stat, i) => (
 					<m.div key={i} variants={staggerItem}>
 						{stat}
 					</m.div>
@@ -108,14 +118,17 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 							<Row k="Sync" v={<Badge tone={health?.status === 'ready' ? 'green' : 'yellow'}>{health?.status || '-'}</Badge>} />
 							<Row k="Block height" v={info?.blockHeight ?? '-'} />
 							<Row k="Electrum" v={<Badge tone={health?.electrumConnected ? 'green' : 'red'}>{health?.electrumConnected ? 'connected' : 'disconnected'}</Badge>} />
-							<Row k="Listening" v={info?.listening ? 'yes' : 'no'} />
-							<Row k="Graph" v={health ? `${health.graphNodes} nodes / ${health.graphChannels} channels` : '-'} />
-							<Row k="Pending close" v={fmtSats(info?.pendingCloseBalanceSats)} />
+							{!onchainOnly && <Row k="Listening" v={info?.listening ? 'yes' : 'no'} />}
+							{!onchainOnly && (
+								<Row k="Graph" v={health ? `${health.graphNodes} nodes / ${health.graphChannels} channels` : '-'} />
+							)}
+							{!onchainOnly && <Row k="Pending close" v={fmtSats(info?.pendingCloseBalanceSats)} />}
 						{splicing > 0 && <Row k="Splicing" v={fmtSats(splicing)} />}
 						</tbody>
 					</table>
 				</Card>
 
+				{!onchainOnly && (
 				<Card title="Liquidity">
 					{liq && (openCount ?? liq.channelCount) > 0 ? (
 						<>
@@ -166,6 +179,7 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 						<div className="empty">No channels yet. Open one from the Channels tab.</div>
 					)}
 				</Card>
+				)}
 
 				<Card title="Fees">
 					{feeEst ? (
@@ -177,14 +191,14 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 					) : (
 						<div className="empty">Fee estimates not available yet.</div>
 					)}
-					{fees && (
+					{fees && !onchainOnly && (
 						<div className="wallet-meta" style={{ marginTop: 10 }}>
 							Channel-open advice: {fees.recommendation} · ~{fmtSats(fees.estimatedOpenChannelCostSats)}
 						</div>
 					)}
 				</Card>
 
-				<ConnectCard id={id} info={info} rec={rec} nodeUri={data?.nodeUri} />
+				{!onchainOnly && <ConnectCard id={id} info={info} rec={rec} nodeUri={data?.nodeUri} />}
 			</div>
 		</div>
 	);

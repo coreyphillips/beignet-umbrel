@@ -47,9 +47,9 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 		  !channels.some(usable) &&
 		  channels.some((c) => c.state === 'SPLICING')
 		: false;
-	const canLightning = channels
-		? channels.some(usable)
-		: (info?.channelCount ?? 0) > 0;
+	const canLightning =
+		!rec?.onchainOnly &&
+		(channels ? channels.some(usable) : (info?.channelCount ?? 0) > 0);
 
 	useEffect(() => {
 		if (!canLightning && mode !== 'onchain') setMode('onchain');
@@ -100,6 +100,25 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 		},
 		[patchOnchain]
 	);
+
+	// An on-chain only wallet has one rail, so there is no rail to pick and no
+	// pill row to say so with. The on-chain card alone is the whole tab.
+	if (rec?.onchainOnly) {
+		return (
+			<OnChain
+				id={id}
+				api={api}
+				info={info}
+				rec={rec}
+				bump={bump}
+				state={onchain}
+				patch={patchOnchain}
+				arrival={arrival?.rail === 'onchain' ? arrival : null}
+				onLightning={toLightning}
+				canLightning={false}
+			/>
+		);
+	}
 
 	return (
 		<div>
@@ -321,7 +340,9 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 		}
 		setNote({
 			tone: 'error',
-			text: `That is ${what}, and this wallet has no channel to pay it with yet. It stays here, and moves across on its own once a channel is usable.`
+			text: rec?.onchainOnly
+				? `That is ${what}, and this wallet is on-chain only, so it cannot pay it. Lightning can be switched on in the wallet's Edit dialog.`
+				: `That is ${what}, and this wallet has no channel to pay it with yet. It stays here, and moves across on its own once a channel is usable.`
 		});
 	}, [parsed, onLightning]);
 
