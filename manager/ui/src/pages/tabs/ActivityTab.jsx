@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import {
@@ -22,6 +22,12 @@ const confirmations = (tx, tipHeight) =>
 
 export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 	const [tab, setTab] = useState('onchain');
+	// The edit dialog can flip the wallet to on-chain only without this tab
+	// unmounting, so the pill row loses Lightning while local state still says
+	// lightning: the view has to follow the record, not outlive it.
+	useEffect(() => {
+		if (rec?.onchainOnly && tab === 'lightning') setTab('onchain');
+	}, [rec?.onchainOnly, tab]);
 	const [bumping, setBumping] = useState(null);
 	// The row the user opened, if any. Every list here is a summary of something
 	// with more to it than the columns can hold.
@@ -57,11 +63,18 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 				id="activity-view"
 				value={tab}
 				onChange={setTab}
-				options={[
-					['onchain', 'On-chain'],
-					['lightning', 'Lightning'],
-					['utxos', 'Coins']
-				]}
+				options={
+					rec?.onchainOnly
+						? [
+								['onchain', 'On-chain'],
+								['utxos', 'Coins']
+						  ]
+						: [
+								['onchain', 'On-chain'],
+								['lightning', 'Lightning'],
+								['utxos', 'Coins']
+						  ]
+				}
 			/>
 
 			{tab === 'onchain' && (
@@ -127,7 +140,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 				</Card>
 			)}
 
-			{tab === 'lightning' && (
+			{tab === 'lightning' && !rec?.onchainOnly && (
 				<Card title="Lightning payments">
 					{!data?.payments || data.payments.length === 0 ? (
 						<div className="empty">No Lightning payments yet.</div>

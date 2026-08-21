@@ -9,6 +9,7 @@ import { useToast } from '../components/Toast.jsx';
 import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import { shortId } from '../lib/format.js';
+import { isClosedChannel } from '../lib/channels.js';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import ReceiveTab from './tabs/ReceiveTab.jsx';
 import SendTab from './tabs/SendTab.jsx';
@@ -93,7 +94,14 @@ export default function WalletPage() {
 		if (EVENT_LABELS[name]) toast(EVENT_LABELS[name], name === 'payment:failed' ? 'error' : 'success');
 	});
 
-	const ActiveTab = (TABS.find((t) => t[0] === tab) || TABS[0])[2];
+	// An on-chain only wallet gets no Lightning apparatus: not hidden features,
+	// absent ones. A URL pointing at a withheld tab falls back to Overview the
+	// same way an unknown tab always has.
+	const LIGHTNING_TABS = ['channels', 'peers', 'offers'];
+	const tabs = rec?.onchainOnly
+		? TABS.filter(([key]) => !LIGHTNING_TABS.includes(key))
+		: TABS;
+	const ActiveTab = (tabs.find((t) => t[0] === tab) || tabs[0])[2];
 
 	return (
 		<div className="container">
@@ -115,6 +123,7 @@ export default function WalletPage() {
 						</m.span>
 					)}
 					{rec && <Badge tone="blue">{rec.network}</Badge>}
+					{rec?.onchainOnly && <Badge tone="muted">on-chain only</Badge>}
 					{health && (
 						<Badge tone={health.electrumConnected ? 'green' : 'red'}>
 							{health.electrumConnected ? 'electrum ok' : 'electrum down'}
@@ -128,8 +137,13 @@ export default function WalletPage() {
 					{info ? (
 						<>
 							<AnimatedNumber value={info.onchainBalanceSats} suffix=" sats" /> on-chain ·{' '}
-							<AnimatedNumber value={info.lightningBalanceSats} suffix=" sats" /> lightning · node{' '}
-							<CopyText value={info.nodeId} label={shortId(info.nodeId)} /> · height {info.blockHeight}
+							{!rec?.onchainOnly && (
+								<>
+									<AnimatedNumber value={info.lightningBalanceSats} suffix=" sats" /> lightning ·{' '}
+								</>
+							)}
+							node <CopyText value={info.nodeId} label={shortId(info.nodeId)} /> · height{' '}
+							{info.blockHeight}
 						</>
 					) : rec?.electrum ? (
 						`electrum ${rec.electrum.host}:${rec.electrum.port}`
@@ -164,7 +178,7 @@ export default function WalletPage() {
 				</div>
 			) : (
 				<div className="wallet-layout">
-					{rec?.tor && rec.torCircuitOk === false && (
+					{rec?.tor && !rec.onchainOnly && rec.torCircuitOk === false && (
 						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							Tor on this Umbrel cannot build circuits right now. Peers reached over Tor,
 							onion addresses and, while Tor is on, public ones, will time out. Peers on
@@ -173,7 +187,7 @@ export default function WalletPage() {
 						</div>
 					)}
 					<nav className="wnav">
-						{TABS.map(([key, label]) => (
+						{tabs.map(([key, label]) => (
 							<NavLink key={key} to={`/w/${id}/${key}`} className={key === tab ? 'active' : ''}>
 								{key === tab && (
 									<m.span
@@ -238,7 +252,26 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 	const [electrum, setElectrum] = useState({ ...rec.electrum });
 	const [tor, setTor] = useState(!!rec.tor);
 	const [announce, setAnnounce] = useState(!!rec.announce);
+	const [onchainOnly, setOnchainOnly] = useState(!!rec.onchainOnly);
 	const [busy, setBusy] = useState(false);
+	// Whether this wallet has OPEN channels, asked the moment the modal opens.
+	// Spinning Lightning down with channels open is the owner's call to make,
+	// so the count does not lock anything; it decides how much the dialog has
+	// to say about what going quiet means for those channels.
+	const [openChannels, setOpenChannels] = useState(null);
+	const [channelsUnknown, setChannelsUnknown] = useState(false);
+	useEffect(() => {
+		let alive = true;
+		walletApi(rec.id)
+			.get('/channels')
+			.then((chs) => alive && setOpenChannels(chs.filter((c) => !isClosedChannel(c)).length))
+			.catch(() => alive && setChannelsUnknown(true));
+		return () => {
+			alive = false;
+		};
+	}, [rec.id]);
+	const parkingChannels =
+		onchainOnly && !rec.onchainOnly && ((openChannels ?? 0) > 0 || channelsUnknown);
 
 	const save = async () => {
 		setBusy(true);
@@ -246,7 +279,8 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 			await manager.updateWallet(rec.id, {
 				name,
 				tor,
-				announce,
+				announce: onchainOnly ? false : announce,
+				onchainOnly,
 				electrum: {
 					host: electrum.host.trim(),
 					port: parseInt(electrum.port, 10),
@@ -273,6 +307,42 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 				Electrum server
 			</div>
 			<ElectrumFields presets={presets} value={electrum} onChange={setElectrum} />
+			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+				Lightning
+			</div>
+			<label className="checkbox field">
+				<input
+					type="checkbox"
+					checked={!onchainOnly}
+					onChange={(e) => setOnchainOnly(!e.target.checked)}
+				/>
+				Lightning enabled
+			</label>
+			{parkingChannels && (
+				<div className="error-note">
+					{openChannels > 0
+						? `This wallet has ${openChannels} open channel${openChannels === 1 ? '' : 's'}. `
+						: 'This wallet may have open channels (they could not be read just now). '}
+					They stay open and the daemon keeps watching the chain for them, but the node
+					goes quiet: to its peers it is simply offline, payments through these channels
+					stop, and the dashboard puts the Channels tab away until Lightning is switched
+					back on. Parked for more than about two weeks, the node force-closes channels
+					it cannot reach, by design, and the funds return on-chain.
+				</div>
+			)}
+			{onchainOnly && !rec.onchainOnly && !parkingChannels && (
+				<div className="info-note">
+					The wallet stops listening for Lightning peers and the dashboard puts the
+					Lightning apparatus away. The seed is untouched and the node identity stays
+					derived from it, so flipping this back on later loses nothing.
+				</div>
+			)}
+			{!onchainOnly && rec.onchainOnly && (
+				<div className="info-note">
+					The wallet starts listening for Lightning peers on its next start. Open a
+					channel in the Channels tab and it is a Lightning node like any other.
+				</div>
+			)}
 			{(torAvailable || onionAvailable) && (
 				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 					Tor
@@ -284,15 +354,20 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 					Outbound: connect to peers over Tor
 				</label>
 			)}
-			{onionAvailable && (
+			{onionAvailable && !onchainOnly && (
 				<label className="checkbox field">
 					<input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
 					Inbound: publish a Tor address so peers can open channels to you
 				</label>
 			)}
 			<div className="center-actions">
+				{/* The consequence rides the button: saving while parking channels
+				    is a deliberate act, named at the moment of the click rather
+				    than behind a second dialog. */}
 				<Button variant="primary" busy={busy} onClick={save} disabled={!electrum.host}>
-					Save changes
+					{parkingChannels && openChannels > 0
+						? `Save and park ${openChannels} channel${openChannels === 1 ? '' : 's'}`
+						: 'Save changes'}
 				</Button>
 				<Button onClick={onClose}>Cancel</Button>
 			</div>
