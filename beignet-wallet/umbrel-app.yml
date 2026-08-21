@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.12.0"
+version: "0.12.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,30 +30,28 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A wallet can be on-chain only, and change its mind either way. The
-  create and import forms gain an 'On-chain only (no Lightning)'
-  checkbox, and the Edit dialog gains a Lightning switch that is
-  freely reversible because the same seed backs both modes. An
-  on-chain only wallet runs no Lightning at all: no listener, no
-  dialing out to peers, and a dashboard with the Lightning apparatus
-  put away. Turning Lightning off with open channels is allowed and
-  warned rather than barred: the channels stay chain-watched, the
-  node appears offline to its peers until turned back on, and the
-  save button says what it does, 'Save and park N channels'.
+  This release unsticks wallets that vanished into loading skeletons
+  after 0.12.0. The cause was in the engine: a peer sending the full
+  network graph was checked signature by signature on the daemon's
+  only thread, which could freeze a wallet for good on modest
+  hardware, and one frozen wallet then blanked the whole dashboard.
+  beignet 0.9.1 does that work in small slices off to the side and
+  skips signatures that prove nothing new, so the first start after
+  this update may quietly chew through its peers' graph for a while,
+  with the dashboard responsive throughout.
 
 
-  Importing a seed brings its history along. Recovery reads the
-  chain and dates recovered transactions to their block time, so an
-  imported wallet's Activity reaches back to before the wallet
-  existed here, as far as the standard address scan finds use.
+  The dashboard takes its own lesson: one unresponsive wallet can no
+  longer take the page down with it. Its row stays, its live figures
+  wait, and everything else renders. The manager also keeps checking
+  wallet health after startup instead of trusting the first hello
+  forever, so an unresponsive wallet is now reported as exactly that.
 
 
-  Ships beignet 0.9.0: the engine learns to hold its tongue for
-  parked wallets (no more dialing channel partners back), carries
-  channel close status and rebroadcast plumbing the dashboard will
-  adopt in a coming release, and brings a long run of Lightning
-  hardening around splices, dual-funded opens and hostile peer
-  input.
+  And a wallet whose daemon was force-killed before an update can no
+  longer refuse to start afterward over its own leftover lock file:
+  the manager clears a lock that provably belongs to a previous
+  container before starting the wallet.
 
 dependencies: []
 path: ""
