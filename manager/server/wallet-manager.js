@@ -238,6 +238,7 @@ class WalletManager {
 				electrumWait: null,
 				chainWatch: null,
 				chainStallPolls: 0,
+				healthFailPolls: 0,
 				lastStallRestartAt: 0
 			});
 		}
@@ -737,6 +738,23 @@ class WalletManager {
 			if (res.ok) health = (await res.json()).result;
 		} catch (_) {
 			/* daemon unreachable; not a chain stall */
+		}
+		// healthy was set once by the startup poll and then never revisited, so a
+		// daemon that stopped answering mid-life (alive but its API deadlocked)
+		// kept reading healthy forever. Demote it after two straight silent polls
+		// of a daemon that had finished starting; any answer restores it.
+		if (health) {
+			if (!rt.healthy && rt.status === 'running') {
+				this._log(id, 'daemon answering /health again');
+			}
+			rt.healthy = true;
+			rt.healthFailPolls = 0;
+		} else if (rt.status === 'running') {
+			rt.healthFailPolls += 1;
+			if (rt.healthy && rt.healthFailPolls >= 2) {
+				rt.healthy = false;
+				this._log(id, 'daemon stopped answering /health; marking unhealthy');
+			}
 		}
 		if (!health || health.electrumConnected !== true || health.blockHeight !== 0) {
 			rt.chainStallPolls = 0;
