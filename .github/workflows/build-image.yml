@@ -186,7 +186,38 @@ env:
   # differ). Verified again by booting 0.8.1 with the manager's env, driving
   # every route the dashboard calls, and confirming the four decode paths now
   # answer 400 with the parser's message and leave the log clean.
-  BEIGNET_VERSION: "0.8.2"
+  # 0.8.2 landed here without a note: peerSupportsSplicing on /channels (the
+  # dashboard hides splice buttons only on an explicit false), a mutual
+  # local-and-remote capability check behind it, and on-chain transaction
+  # events (transaction:received / transaction:confirmed) relayed over SSE,
+  # which the dashboard's instant receive toasts ride.
+  # 0.9.0 is a large release, the first since 0.8.2, and the reason it ships
+  # here is one env var: BEIGNET_AUTO_RECONNECT (beignet #280). The manager
+  # sets it false for on-chain only wallets, which silences the outbound half
+  # of going quiet; without it the daemon dials its channel partners back on
+  # start and the Edit dialog's parking promise is false. Parsing is exact
+  # 'true'/'false', anything else means the default, reconnect on, the safe
+  # direction for every other wallet. The engine's own headline is the
+  # Recovery Protocol library plus a long run of lightning hardening (splice
+  # unwind and reserve enforcement, v2 open RBF, hostile-peer decode guards).
+  # Also relevant here: /info gains openChannelCount, channel info gains
+  # closeStatus, channel:resolved is relayed over SSE (suppressed until the
+  # close is confirmed), and POST /channel/rebroadcast-close lands, the set
+  # requested in beignet #214 that part 2 of the channel history work waits
+  # on; the dashboard does not consume any of it yet. L402 client routes
+  # (POST /l402/fetch, GET /l402/credentials, DELETE /l402/credential) exist
+  # and nothing here calls them. The Recovery Protocol has no daemon surface
+  # yet, no env vars, routes or CLI, so there is nothing to wire. The CLI now
+  # shuts down gracefully on SIGTERM with a bounded timeout, which is what
+  # docker stop sends.
+  # Daemon surface: additive only, verified by diffing the published 0.8.2
+  # and 0.9.0 tarballs' dist/cli (one new env var, four new routes, nothing
+  # removed or renamed; errors.js, webhooks.js and types.js byte-identical)
+  # and by booting 0.9.0 with the manager's exact env in both postures:
+  # on-chain only (no listen port, no reconnect, no dialing in the log) and
+  # Lightning (every route the dashboard calls answers in the 0.8.2 shape,
+  # and a garbage offer still decodes to a typed 400).
+  BEIGNET_VERSION: "0.9.0"
 
 jobs:
   build:
