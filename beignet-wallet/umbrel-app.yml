@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.11.2"
+version: "0.12.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,37 +30,30 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A Tools tab: prove a message came from your node. Sign any text with
-  a wallet's node key and hand out the signature, or verify one from
-  anyone else. The format is the LND-compatible one, so it checks out
-  under lncli verifymessage and vice versa. Verification names the key
-  that signed rather than just saying valid, because a valid signature
-  from the wrong key is a valid signature by someone else.
+  A wallet can be on-chain only, and change its mind either way. The
+  create and import forms gain an 'On-chain only (no Lightning)'
+  checkbox, and the Edit dialog gains a Lightning switch that is
+  freely reversible because the same seed backs both modes. An
+  on-chain only wallet runs no Lightning at all: no listener, no
+  dialing out to peers, and a dashboard with the Lightning apparatus
+  put away. Turning Lightning off with open channels is allowed and
+  warned rather than barred: the channels stay chain-watched, the
+  node appears offline to its peers until turned back on, and the
+  save button says what it does, 'Save and park N channels'.
 
 
-  Money arriving is announced. A payment received over Lightning or
-  on-chain shows a notification with the amount, on whichever page of
-  the dashboard you are on, backed by a poll so a quietly dead event
-  stream cannot silence it. The Receive tab turns a paid invoice into
-  a receipt the moment it settles, replacing the QR code: a settled
-  invoice cannot be paid twice, so its code invites the one scan
-  guaranteed to fail.
+  Importing a seed brings its history along. Recovery reads the
+  chain and dates recovered transactions to their block time, so an
+  imported wallet's Activity reaches back to before the wallet
+  existed here, as far as the standard address scan finds use.
 
 
-  Splice buttons appear only on channels whose peer can splice. The
-  daemon reads splice support off each peer's connection, so a channel
-  to an LND node stops offering the two buttons LND would refuse every
-  time. Close and Reconnect stay.
-
-
-  The Send tab's Max button works again: pressing it no longer locks
-  the form, and with Max on the amount follows the fee slider, so the
-  total never exceeds your balance.
-
-
-  Ships beignet 0.8.2: on-chain arrivals, sends and confirmations are
-  announced over the daemon's event stream, and channel listings say
-  whether each peer can splice.
+  Ships beignet 0.9.0: the engine learns to hold its tongue for
+  parked wallets (no more dialing channel partners back), carries
+  channel close status and rebroadcast plumbing the dashboard will
+  adopt in a coming release, and brings a long run of Lightning
+  hardening around splices, dual-funded opens and hostile peer
+  input.
 
 dependencies: []
 path: ""
