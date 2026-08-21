@@ -8,13 +8,24 @@ if (new URLSearchParams(window.location.search).has('demo')) {
 export const DEMO =
 	import.meta.env.VITE_DEMO === '1' || sessionStorage.getItem('beignet-demo') === '1';
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, timeoutMs } = {}) {
 	if (DEMO) return (await import('./mock/mockApi.js')).mockRequest(path, { method, body });
-	const res = await fetch(path, {
-		method,
-		headers: body ? { 'Content-Type': 'application/json' } : undefined,
-		body: body ? JSON.stringify(body) : undefined
-	});
+	let res;
+	try {
+		res = await fetch(path, {
+			method,
+			headers: body ? { 'Content-Type': 'application/json' } : undefined,
+			body: body ? JSON.stringify(body) : undefined,
+			signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
+		});
+	} catch (e) {
+		if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+			const err = new Error('Wallet is not responding');
+			err.code = 'WALLET_UNRESPONSIVE';
+			throw err;
+		}
+		throw e;
+	}
 	let data = {};
 	try {
 		data = await res.json();
@@ -52,11 +63,17 @@ export const manager = {
 		)
 };
 
-// Per-wallet beignet daemon API (proxied; bearer token injected server-side)
+// Per-wallet beignet daemon API (proxied; bearer token injected server-side).
+// Reads carry a timeout because a deadlocked daemon holds the socket open
+// without answering, and a page that awaits it without one shows skeletons
+// forever for every wallet, not just the sick one. Writes stay unbounded:
+// channel opens and payments legitimately take long, and cutting them off
+// client-side would abandon an action the daemon may still complete.
+const DAEMON_READ_TIMEOUT_MS = 10000;
 export function walletApi(id) {
 	const base = `/wallets/${id}/api`;
 	return {
-		get: (path) => request(base + path),
+		get: (path) => request(base + path, { timeoutMs: DAEMON_READ_TIMEOUT_MS }),
 		post: (path, body) => request(base + path, { method: 'POST', body }),
 		// The daemon's removal routes take their target in the query string and
 		// carry no body, so this takes a path already carrying it.
