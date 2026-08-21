@@ -74,6 +74,21 @@ test('any answer restores healthy and resets the count', async () => {
 	assert.ok(m.logs.some((l) => l.includes('answering /health again')));
 });
 
+test('a slow boot that answers after the startup window is promoted to running', async () => {
+	// Seen in the field: a 67s first boot (lock clear plus gossip chew) outlasted
+	// the 45s startup poll, and the record read 'starting' forever with the
+	// demotion path unarmed.
+	const rt = runningState();
+	rt.status = 'starting';
+	rt.healthy = false;
+	const m = managerWith(rt);
+	answers();
+	await m._checkChainStall('w1');
+	assert.equal(rt.status, 'running');
+	assert.equal(rt.healthy, true);
+	assert.ok(m.logs.some((l) => l.includes('after the startup poll window')));
+});
+
 test('a daemon still starting is not demoted; startup owns that window', async () => {
 	const rt = runningState();
 	rt.status = 'starting';

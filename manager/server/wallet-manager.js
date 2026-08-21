@@ -786,6 +786,15 @@ class WalletManager {
 			if (!rt.healthy && rt.status === 'running') {
 				this._log(id, 'daemon answering /health again');
 			}
+			// A slow first boot (a mainnet gossip chew, a large recovery) can
+			// outlast the startup poll's window, leaving the record 'starting'
+			// forever even though the daemon is up: promote it here, both so
+			// the status is honest and so the demotion below (gated on
+			// running) is armed for a wallet that booted slowly.
+			if (rt.proc && !rt.stopping && rt.status === 'starting') {
+				rt.status = 'running';
+				this._log(id, 'healthy (after the startup poll window)');
+			}
 			rt.healthy = true;
 			rt.healthFailPolls = 0;
 		} else if (rt.status === 'running') {
