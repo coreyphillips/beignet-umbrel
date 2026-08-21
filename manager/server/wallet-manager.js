@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const net = require('net');
 const tls = require('tls');
 const path = require('path');
@@ -563,6 +564,43 @@ class WalletManager {
 		return env;
 	}
 
+	/**
+	 * Clear a single-instance lock left behind by a daemon hard-killed in a
+	 * PREVIOUS container. The engine's lock records {pid, hostname} but its
+	 * liveness check probes the pid in the CURRENT pid namespace, so after a
+	 * container recreate (every app update) the old pid can belong to some
+	 * unrelated process and the daemon refuses to start forever with
+	 * START_FAILED. The manager is the only thing that spawns daemons in
+	 * this container, and it only calls this with no child running for the
+	 * wallet, so a lock naming another hostname cannot have a live holder
+	 * here and is safe to remove. A same-hostname lock is left alone: the
+	 * engine's own pid check is valid inside one container, and reclaiming
+	 * or refusing it is the daemon's call to make.
+	 */
+	_clearStaleInstanceLock(rec, p) {
+		const lockPath = path.join(p.data, `${rec.network}.lock`);
+		let holder;
+		try {
+			holder = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+		} catch (_) {
+			return; // no lock, or unreadable (the engine reclaims corrupt locks)
+		}
+		if (!holder || holder.hostname === os.hostname()) return;
+		try {
+			fs.unlinkSync(lockPath);
+			this._log(
+				rec.id,
+				`cleared stale instance lock left by pid ${holder.pid} on ` +
+					`${holder.hostname}; this container is ${os.hostname()}`
+			);
+		} catch (err) {
+			this._log(
+				rec.id,
+				`stale instance lock could not be cleared: ${err.message}`
+			);
+		}
+	}
+
 	async startWallet(id) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
@@ -615,6 +653,7 @@ class WalletManager {
 
 		const mnemonic = fs.readFileSync(p.mnemonicFile, 'utf8').trim();
 		const token = this.token(id);
+		this._clearStaleInstanceLock(rec, p);
 		const env = this._daemonEnv(rec, p, mnemonic, token);
 
 		const { cmd, args } = beignetSpawn();
