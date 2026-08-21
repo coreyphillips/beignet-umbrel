@@ -217,7 +217,36 @@ env:
   # on-chain only (no listen port, no reconnect, no dialing in the log) and
   # Lightning (every route the dashboard calls answers in the 0.8.2 shape,
   # and a garbage offer still decodes to a typed 400).
-  BEIGNET_VERSION: "0.9.0"
+  # 0.9.1 is the fix for the field incident 0.9.0 caused on this app's own
+  # node (beignet issue #437): inbound peer gossip was signature-verified
+  # synchronously on the event loop with pure-JS secp256k1, so a peer
+  # serving a full mainnet graph dump pinned the daemon for tens of
+  # minutes; every route including /health starved, SIGTERM needed
+  # SIGKILL, and the starved pings made peers reconnect and restart the
+  # dump, a livelock that recurred on every boot and spread between
+  # wallets when they reconnected. Diagnosed by pausing the live wedged
+  # daemon through the inspector: all five stack samples sat in gossip
+  # signature math. Fixed twofold: the graph refuses to pay for signatures
+  # on messages that cannot change it (a re-served known graph costs map
+  # lookups), and broadcast gossip drains through a bounded queue in 10ms
+  # slices that yield to the event loop, with updates for our own channels
+  # kept synchronous. Expect the FIRST boot on an established node to chew
+  # its peers' full dump in the background for a while; the dashboard
+  # stays responsive throughout and later re-dumps cost nearly nothing.
+  # 0.9.1 also ships the Recovery Protocol daemon surface (issue #435):
+  # env vars BEIGNET_RECOVERY_MODE / _GUARDIANS / _PROFILE, GET
+  # /recovery/status, POST /recovery/restore, a recovery CLI command and
+  # six recovery:* SSE events. All of it is inert here: nothing sets the
+  # env vars (mode defaults to off) and the status route answers state
+  # "disabled", which is exactly the capability probe the future recovery
+  # UI will use.
+  # Daemon surface: additive only, verified by diffing the published 0.9.0
+  # and 0.9.1 tarballs' dist/cli (three new env vars, two new routes,
+  # nothing removed or renamed) and by booting 0.9.1 with the manager's
+  # exact env in both postures: on-chain only binds only the API and
+  # /recovery/status answers 200 disabled; Lightning answers every route
+  # the dashboard calls in the 0.9.0 shape with the typed 400s intact.
+  BEIGNET_VERSION: "0.9.1"
 
 jobs:
   build:
