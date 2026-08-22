@@ -246,7 +246,28 @@ env:
   # exact env in both postures: on-chain only binds only the API and
   # /recovery/status answers 200 disabled; Lightning answers every route
   # the dashboard calls in the 0.9.0 shape with the typed 400s intact.
-  BEIGNET_VERSION: "0.9.1"
+  # 0.9.2 closes out the incident's follow-up program (beignet issues #440
+  # and #441). The instance lock now treats a lock recorded under another
+  # hostname as stale and reclaims it, with the daemon opting in on behalf
+  # of container deployments, so the manager's own preflight clear becomes
+  # harmless redundancy rather than the only protection. Signature
+  # verification routes through node:crypto (OpenSSL) whenever the
+  # platform proves it at startup, at the shared crypto boundary, so every
+  # verify in the engine gets the native path, not just gossip. Foreign
+  # gossip verification is deferred to serve time (BEIGNET_EAGER_GOSSIP_VERIFY
+  # opts back into eager, unset here: a wallet routes off unverified
+  # entries either way and never serves them), with admission bounded by
+  # far-future timestamp gates and a channel ceiling. Connect-time gossip
+  # sync waits for the boot RGS attempt to settle, so a fresh graph no
+  # longer solicits a full dump it is about to receive for free. Together
+  # these turn the first post-upgrade sync from tens of background minutes
+  # into seconds.
+  # Daemon surface: one new env var (BEIGNET_EAGER_GOSSIP_VERIFY, opt-in,
+  # unset here), no new or removed routes, verified by diffing the
+  # published 0.9.1 and 0.9.2 tarballs' dist/cli and by booting 0.9.2
+  # with the manager's env: every dashboard route answers, the typed 400s
+  # hold, /recovery/status still reads disabled, and SIGTERM exits clean.
+  BEIGNET_VERSION: "0.9.2"
 
 jobs:
   build:
