@@ -191,7 +191,18 @@ export default function WalletPage() {
 				</div>
 			)}
 
-			{!running ? (
+			{rec?.status === 'restore-required' ? (
+				<div className="card">
+					<div className="empty">
+						The guardians hold channel state for this seed that this wallet has not
+						restored yet. Until the restore runs, the wallet has no channels and cannot
+						use Lightning.
+						<div className="center-actions" style={{ justifyContent: 'center' }}>
+							<Button onClick={() => navigate('/')}>Back</Button>
+						</div>
+					</div>
+				</div>
+			) : !running ? (
 				<div className="card">
 					<div className="empty">
 						This wallet is not running.
