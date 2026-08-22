@@ -63,3 +63,59 @@ test('flipping the flag flips the whole posture, both directions', () => {
 	assert.equal(parked.BEIGNET_AUTO_RECONNECT, 'false');
 	assert.equal(revived.BEIGNET_AUTO_RECONNECT, undefined);
 });
+
+// Channel backup (the Recovery Protocol, beignet 0.9.1+). The daemon refuses
+// to start on a guardian list outside the guardian modes and on any profile
+// but crash-v1, so the env is all or nothing per mode.
+const G = [
+	`${'a'.repeat(64)}@http://127.0.0.1:8101`,
+	`${'b'.repeat(64)}@http://127.0.0.1:8102`,
+	`${'c'.repeat(64)}@https://guardian.example`
+];
+
+test('a wallet without the field sends the env an older engine always saw', () => {
+	const env = bareManager()._daemonEnv(rec(), PATHS, 's', 't');
+	assert.equal(env.BEIGNET_RECOVERY_MODE, undefined);
+	assert.equal(env.BEIGNET_RECOVERY_GUARDIANS, undefined);
+	assert.equal(env.BEIGNET_RECOVERY_PROFILE, undefined);
+	const off = bareManager()._daemonEnv(rec({ recovery: { mode: 'off', guardians: [] } }), PATHS, 's', 't');
+	assert.equal(off.BEIGNET_RECOVERY_MODE, undefined, 'off is the absence of the var');
+});
+
+test('peer storage sets the mode and nothing else', () => {
+	const env = bareManager()._daemonEnv(
+		rec({ recovery: { mode: 'peer-storage', guardians: [] } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(env.BEIGNET_RECOVERY_MODE, 'peer-storage');
+	assert.equal(env.BEIGNET_RECOVERY_GUARDIANS, undefined, 'guardians outside a guardian mode refuse startup');
+	assert.equal(env.BEIGNET_RECOVERY_PROFILE, undefined);
+});
+
+test('a guardian mode carries the pinned set in order and the crash-v1 profile', () => {
+	const env = bareManager()._daemonEnv(
+		rec({ recovery: { mode: 'quorum', guardians: G } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(env.BEIGNET_RECOVERY_MODE, 'quorum');
+	assert.equal(env.BEIGNET_RECOVERY_GUARDIANS, G.join(','));
+	assert.equal(env.BEIGNET_RECOVERY_PROFILE, 'crash-v1');
+});
+
+test('a parked quorum wallet still boots with its barrier', () => {
+	// The journal of a wallet that promised quorum refuses to run without an
+	// enforcing barrier, so on-chain only must not strip the recovery env.
+	const env = bareManager()._daemonEnv(
+		rec({ onchainOnly: true, recovery: { mode: 'quorum', guardians: G } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(env.BEIGNET_LISTEN_PORT, undefined);
+	assert.equal(env.BEIGNET_RECOVERY_MODE, 'quorum');
+	assert.equal(env.BEIGNET_RECOVERY_GUARDIANS, G.join(','));
+});

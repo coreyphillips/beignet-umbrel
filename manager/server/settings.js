@@ -14,7 +14,11 @@ class Settings {
 		this.file = file;
 		this.data = {
 			defaultNetwork: seed.defaultNetwork,
-			defaultElectrum: seed.defaultElectrum || null
+			defaultElectrum: seed.defaultElectrum || null,
+			// The guardian set new guardian-mode wallets register with (empty
+			// when none is configured). Each wallet pins its own copy at the
+			// moment it first enables a guardian mode; this is only the default.
+			recoveryGuardians: []
 		};
 	}
 
@@ -50,6 +54,9 @@ class Settings {
 		if (patch.defaultElectrum !== undefined) {
 			// null clears the default (wallets must then specify a server).
 			this.data.defaultElectrum = patch.defaultElectrum;
+		}
+		if (patch.recoveryGuardians !== undefined) {
+			this.data.recoveryGuardians = patch.recoveryGuardians;
 		}
 		this.save();
 		return this.data;

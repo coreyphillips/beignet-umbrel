@@ -130,7 +130,12 @@ async function main() {
 				supportedNetworks: SUPPORTED_NETWORKS,
 				electrumPresets: ELECTRUM_PRESETS,
 				torAvailable: !!config.torProxy,
-				onionAvailable: manager.onionAvailable()
+				onionAvailable: manager.onionAvailable(),
+				// Channel backup (the Recovery Protocol) needs an engine that
+				// carries its surface; older engines get no controls for it.
+				engineVersion: manager.engineVersion,
+				recoveryAvailable: manager.recoveryAvailable(),
+				recoveryGuardians: settings.recoveryGuardians
 			}
 		});
 	});
