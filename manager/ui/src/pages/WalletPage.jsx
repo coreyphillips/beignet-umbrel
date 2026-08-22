@@ -9,9 +9,10 @@ import { useToast } from '../components/Toast.jsx';
 import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
+import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
 import { shortId } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
-import { describeRecovery, isGuardianMode } from '../lib/recovery.js';
+import { describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import ReceiveTab from './tabs/ReceiveTab.jsx';
 import SendTab from './tabs/SendTab.jsx';
@@ -71,6 +72,28 @@ export default function WalletPage() {
 	// morphing header renders real content immediately instead of flashing.
 	const rec = polledRec || location.state?.wallet || null;
 	const running = rec?.status === 'running';
+	// A daemon holding for a guardian restore is up but has no node: the
+	// manager reports restore-required, the daemon's own status route says
+	// restore-required or restoring. The panel takes the tab area for the
+	// hold, and keeps it (a session marker, so a reload lands back here) until
+	// the owner leaves it after the channels have landed.
+	const restoreHold = rec?.status === 'restore-required';
+	const [restoreMarker, setRestoreMarker] = useState(() => readRestoreMarker(id));
+	useEffect(() => {
+		setRestoreMarker(readRestoreMarker(id));
+	}, [id]);
+	// Leaving the panel after the node booted waits for the manager to report
+	// the wallet running (its hold poll runs every two seconds), so the tabs
+	// appear once instead of the list page for a beat.
+	const [leavingRestore, setLeavingRestore] = useState(false);
+	useEffect(() => {
+		if (leavingRestore && running) {
+			setLeavingRestore(false);
+			setRestoreMarker(false);
+			bump();
+		}
+	}, [leavingRestore, running, bump]);
+	const showRestore = restoreHold || (running && restoreMarker);
 	const [config, setConfig] = useState(null);
 	const [editing, setEditing] = useState(null); // click origin or null
 	useEffect(() => {
@@ -117,7 +140,9 @@ export default function WalletPage() {
 		bump();
 	});
 
-	useSSE(running ? api.eventsUrl() : null, (name, data) => {
+	// The stream is open during the hold too: the daemon's /events arm
+	// bypasses the hold, and restore progress rides it.
+	useSSE(running || restoreHold ? api.eventsUrl() : null, (name, data) => {
 		bump();
 		receiveEvent(name, data);
 		if (EVENT_LABELS[name]) toast(EVENT_LABELS[name], ERROR_EVENTS.has(name) ? 'error' : 'success');
@@ -191,17 +216,24 @@ export default function WalletPage() {
 				</div>
 			)}
 
-			{rec?.status === 'restore-required' ? (
-				<div className="card">
-					<div className="empty">
-						The guardians hold channel state for this seed that this wallet has not
-						restored yet. Until the restore runs, the wallet has no channels and cannot
-						use Lightning.
-						<div className="center-actions" style={{ justifyContent: 'center' }}>
-							<Button onClick={() => navigate('/')}>Back</Button>
-						</div>
-					</div>
-				</div>
+			{showRestore ? (
+				<RestorePanel
+					id={id}
+					api={api}
+					rec={rec}
+					tick={tick}
+					onStarted={() => setRestoreMarker(true)}
+					onDone={(landed) => {
+						if (landed && !running) {
+							setLeavingRestore(true);
+							refreshRec();
+							return;
+						}
+						setRestoreMarker(false);
+						if (!running) navigate('/');
+						else bump();
+					}}
+				/>
 			) : !running ? (
 				<div className="card">
 					<div className="empty">
@@ -227,6 +259,7 @@ export default function WalletPage() {
 				</div>
 			) : (
 				<div className="wallet-layout">
+					<ResumeBanner recovery={recovery} />
 					{rec?.tor && !rec.onchainOnly && rec.torCircuitOk === false && (
 						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							Tor on this Umbrel cannot build circuits right now. Peers reached over Tor,
@@ -295,6 +328,25 @@ export default function WalletPage() {
 					}}
 				/>
 			)}
+		</div>
+	);
+}
+
+// Channels still reconciling after a restore (or held behind the guardian
+// gate after a restart) are said so above the tabs, whatever page the owner
+// came in through: a restore is never presented as finished while a channel
+// is quarantined or reestablishing.
+function ResumeBanner({ recovery }) {
+	if (!recovery || !isGuardianMode(recovery.mode) || !recovery.node) return null;
+	const { channels, complete } = restoreProgress(recovery);
+	if (complete || channels.total === 0 || channels.pending === 0) return null;
+	const landed = channels.resumed + channels.closing;
+	return (
+		<div className="info-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+			Channels resuming: {landed} of {channels.total}
+			{channels.closing > 0 ? ` (${channels.closing} closing safely, funds return on-chain)` : ''}.
+			Each channel reconciles with its peer the moment the peer is reachable, and the
+			guardians must confirm this device owns them before any payment moves.
 		</div>
 	);
 }

@@ -224,7 +224,7 @@ export default function WalletsPage() {
 					<ReceiveWatcher key={w.id} wallet={w} />
 				))}
 			{hasWallets && walletsCard}
-			<NewWallet config={config} onDone={refresh} onSeed={(s) => setModal(s)} />
+			<NewWallet config={config} onDone={refresh} onSeed={(s) => setModal(s)} onOpen={openWallet} />
 			{!hasWallets && walletsCard}
 
 			{modal?.type === 'seed' && (
@@ -252,7 +252,7 @@ function emptyElectrum(config) {
 		: { host: '', port: 50001, tls: false };
 }
 
-function NewWallet({ config, onDone, onSeed }) {
+function NewWallet({ config, onDone, onSeed, onOpen }) {
 	const toast = useToast();
 	const [tab, setTab] = useState('create');
 	const [name, setName] = useState('');
@@ -289,7 +289,7 @@ function NewWallet({ config, onDone, onSeed }) {
 				});
 				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
 			} else {
-				await manager.importWallet({
+				const r = await manager.importWallet({
 					name,
 					network,
 					mnemonic,
@@ -300,6 +300,16 @@ function NewWallet({ config, onDone, onSeed }) {
 					recoveryMode: onchainOnly ? 'off' : recoveryMode
 				});
 				toast('Wallet imported. It will sync in the background.', 'success');
+				// A guardian-mode import may land in the restore hold (the
+				// guardians already hold this seed's channels); the wallet page
+				// is where that is answered, so go there.
+				if (!onchainOnly && (recoveryMode === 'async-remote' || recoveryMode === 'quorum') && r?.record?.id) {
+					setName('');
+					setMnemonic('');
+					onDone();
+					onOpen(r.record);
+					return;
+				}
 			}
 			setName('');
 			setMnemonic('');

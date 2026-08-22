@@ -404,6 +404,21 @@ const store = {
 			announce: false,
 			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
 			createdAt: now - 200 * DAY
+		},
+		{
+			// Just imported with the same guardians a lost device used: the
+			// daemon found the namespace on them and is holding for the
+			// restore (the manager reports restore-required; every daemon
+			// route but the recovery surface answers NODE_RESTORE_PENDING).
+			id: 'demo-restore',
+			name: 'Restored phone',
+			network: 'mainnet',
+			status: 'restore-required',
+			electrum: { host: 'umbrel.local', port: 50001, tls: false },
+			tor: false,
+			announce: false,
+			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
+			createdAt: now - 60000
 		}
 	],
 	state: {}
@@ -516,6 +531,90 @@ store.state['demo-fenced'] = walletState({
 	offers: [],
 	peers: []
 });
+
+store.state['demo-restore'] = walletState({
+	blockHeight: 908214,
+	channels: [],
+	txs: [],
+	payments: [],
+	utxos: [],
+	invoices: [],
+	offers: [],
+	peers: []
+});
+
+// The guardian restore, scripted in the engine's order: the progress events
+// in sequence, then the node boots with its channels quarantined, the gate
+// confirms, and the channels land one at a time, one of them on the DLP path
+// (the peer proved this state stale; it closes safely). Resolves the way the
+// real POST does, once the node is up.
+const RESTORE_SCRIPT = [
+	['heads:read', '3 usable heads, 0 possibly stale'],
+	['head:adopted', 'adopted epoch 2 sequence 1291'],
+	['epoch:cas-retry', 'attempt 1 collected 1 of 2 certificates'],
+	['epoch:acquired', 'epoch 3 acquired with 2 certificates over sequence 1291'],
+	['frames:downloaded', '9 records through sequence 1291'],
+	['restore:exactness', 'the certified head declares quorum durability, so restored channels resume'],
+	['restore:complete', 'restored 9 frames under epoch 3']
+];
+function runDemoRestore(w, st) {
+	return new Promise((resolve) => {
+		const r = st.recovery;
+		r.restore = { inProgress: true };
+		RESTORE_SCRIPT.forEach(([type, detail], i) => {
+			setTimeout(() => {
+				r.restore.lastEvent = { type, detail };
+				emit(w.id, 'recovery:restore-progress', { type, detail });
+			}, 700 * (i + 1));
+		});
+		const chans = makeChannels([
+			[2000000, 62, 'NORMAL', false, 'ACINQ'],
+			[900000, 40, 'NORMAL', false, 'WalletOfSatoshi.com'],
+			[500000, 55, 'NORMAL', true]
+		]);
+		setTimeout(() => {
+			// The node is up: the manager's next poll reads running, the
+			// restore key leaves the status, and the channels wait behind the
+			// quarantined gate.
+			r.restore = undefined;
+			r.gate = 'quarantined';
+			r.lastDurableSequence = '1291';
+			st.channels = chans;
+			st.peers = [
+				{ pubkey: chans[0].peerPubkey, host: 'ln.acinq.co', port: 9735, state: 'connected', alias: 'ACINQ' },
+				{ pubkey: chans[1].peerPubkey, host: '84.21.100.4', port: 9735, state: 'connected', alias: 'WalletOfSatoshi.com' }
+			];
+			chans.forEach((c) => {
+				r.channelStatuses[c.channelId] = 'quarantined';
+			});
+			w.status = 'running';
+			const info = { exact: true, framesApplied: 9, guardiansRepaired: 0, epoch: '3' };
+			emit(w.id, 'recovery:restored', info);
+			resolve(info);
+		}, 700 * (RESTORE_SCRIPT.length + 2));
+		const t0 = 700 * (RESTORE_SCRIPT.length + 4);
+		setTimeout(() => {
+			r.gate = 'confirmed';
+			r.channelStatuses[chans[0].channelId] = 'reestablishing';
+			emit(w.id, 'recovery:durable', { through: '1291' });
+		}, t0);
+		setTimeout(() => {
+			r.channelStatuses[chans[0].channelId] = 'active';
+			r.channelStatuses[chans[1].channelId] = 'replay_required';
+		}, t0 + 1500);
+		setTimeout(() => {
+			r.channelStatuses[chans[1].channelId] = 'active';
+			r.channelStatuses[chans[2].channelId] = 'reestablishing';
+		}, t0 + 3000);
+		setTimeout(() => {
+			// The unannounced peer proved this side stale: never broadcast,
+			// the peer closes, the funds come back on-chain.
+			r.channelStatuses[chans[2].channelId] = 'local_data_loss';
+			chans[2].state = 'ERRORED';
+			recordChannelEvent(w.id, { event: 'channel:closed', channelId: chans[2].channelId });
+		}, t0 + 4500);
+	});
+}
 
 // Durable channel history, mirroring the manager's channel-events log: the
 // real manager records lifecycle events off the daemon's stream and serves
@@ -854,6 +953,9 @@ function managerRequest(path, method, body) {
 			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null),
 			createdAt: Date.now()
 		};
+		// With the guardians a lost device used, the daemon finds the seed's
+		// namespace on them and holds for the restore.
+		if (isGuardianMode(w.recovery.mode)) w.status = 'restore-required';
 		store.wallets.push(w);
 		store.state[id] = walletState({
 			blockHeight: 908214,
@@ -1109,6 +1211,15 @@ function walletRequest(id, path, method, body) {
 	// only its recovery surface answers, everything else is 503.
 	if (w.status === 'restore-required') {
 		if (route === '/recovery/status') return recoveryStatus(w, st);
+		if (route === '/recovery/restore' && method === 'POST') {
+			if (body?.confirm !== true) {
+				throw err('Guardian restore permanently fences the previous writer; pass {"confirm": true} to proceed', 'INVALID_PARAMS');
+			}
+			if (st.recovery.restore?.inProgress) {
+				throw err('A guardian restore is already running; watch recovery:restore-progress over SSE or poll the status route.', 'RESTORE_IN_PROGRESS');
+			}
+			return runDemoRestore(w, st);
+		}
 		throw err(
 			'This daemon is holding for a guardian restore: the database is fresh and the guardian set holds its namespace.',
 			'NODE_RESTORE_PENDING'
@@ -1119,6 +1230,11 @@ function walletRequest(id, path, method, body) {
 	switch (route) {
 		case '/recovery/status':
 			return recoveryStatus(w, st);
+		case '/recovery/restore':
+			throw err(
+				'Guardian restore only applies while the daemon is in the restore-required state (a fresh database whose namespace the guardian set holds). This node is already running on its own state.',
+				'RESTORE_NOT_PENDING'
+			);
 		case '/info':
 			return {
 				nodeId: nodeId(id),

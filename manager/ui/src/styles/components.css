@@ -1463,3 +1463,79 @@ tbody tr:hover {
 	margin-top: 6px;
 	font-variant-numeric: tabular-nums;
 }
+
+/* ---------- Guardian restore ---------- */
+.restore-lead {
+	font-size: 14px;
+	line-height: 1.5;
+	margin: 0 0 12px;
+}
+.restore-steps {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 6px;
+}
+.restore-steps li {
+	display: grid;
+	grid-template-columns: 22px 1fr;
+	column-gap: 8px;
+	align-items: baseline;
+	font-size: 14px;
+	color: var(--faint);
+}
+.restore-steps li.done {
+	color: var(--text);
+}
+.restore-steps li.current {
+	color: var(--text);
+	font-weight: 600;
+}
+.restore-step-mark {
+	display: inline-block;
+	width: 22px;
+	height: 22px;
+	line-height: 22px;
+	text-align: center;
+	border-radius: 50%;
+	border: 1px solid var(--glass-border-bright);
+	font-size: 12px;
+	font-weight: 600;
+}
+.restore-steps li.done .restore-step-mark {
+	border-color: rgba(61, 220, 151, 0.6);
+	color: var(--green);
+}
+.restore-steps li.current .restore-step-mark {
+	border-color: rgba(240, 194, 63, 0.7);
+	color: var(--yellow);
+}
+.restore-step-detail {
+	grid-column: 2;
+	font-size: 12px;
+	font-weight: 400;
+	color: var(--faint);
+}
+.restore-channels {
+	margin-top: 14px;
+	display: grid;
+	gap: 8px;
+}
+.restore-summary {
+	font-size: 15px;
+	font-weight: 600;
+}
+.restore-channel-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 4px;
+}
+.restore-channel-list li {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	font-size: 13px;
+}
