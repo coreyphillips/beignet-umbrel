@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.12.3"
+version: "0.13.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,22 +30,29 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  The slow first start is gone. beignet 0.9.2 checks signatures with
-  the platform's native crypto when available, skips checks that
-  prove nothing until an entry is actually served to someone, and no
-  longer asks a peer for a network graph it is about to receive
-  anyway. The catch-up that used to occupy a wallet's daemon for
-  long background minutes after an update now takes seconds.
+  Channel backup. Every Lightning wallet now chooses what it keeps
+  beyond the seed: nothing (channels close on restore, the default),
+  encrypted checkpoints with the peers it has channels with, or an
+  encrypted journal on three guardian servers you set once in
+  Settings. With guardians, importing the seed elsewhere restores
+  the channels and resumes them instead of closing them, and strict
+  quorum mode fences the old device off so two copies can never act
+  on the same channels. The Overview tab states the tier plainly, and
+  the wallet header speaks up only when something is wrong.
 
 
-  The engine also learned what this app's manager already worked
-  around: a lock file left behind by a force-killed wallet in a
-  previous container can never again refuse that wallet its start.
+  Restoring from guardians is a page, not a procedure: import the
+  seed with the same guardians and the wallet offers the restore,
+  follows each step, then follows each channel as it reconciles with
+  its peer. A channel that cannot prove its state is current closes
+  safely and its funds return on-chain, and the page says so rather
+  than reporting an error.
 
 
-  And a wallet whose first boot outlasts the manager's startup
-  window is reported running the moment it answers, instead of
-  reading 'starting' forever beside a working wallet.
+  Peer storage checkpoints recover the funds of a lost wallet's
+  channels (the channels close safely); resuming them where they
+  were waits on the engine. beignet 0.9.3 is bundled.
+
 
 dependencies: []
 path: ""
