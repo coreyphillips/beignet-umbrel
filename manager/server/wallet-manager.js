@@ -946,6 +946,10 @@ class WalletManager {
 			rt.chainStallPolls = 0;
 			return;
 		}
+		if (probe.kind === 'restart-required') {
+			await this._restartOnRestoredState(id, rt);
+			return;
+		}
 		// healthy was set once by the startup poll and then never revisited, so a
 		// daemon that stopped answering mid-life (alive but its API deadlocked)
 		// kept reading healthy forever. Demote it after two straight silent polls
@@ -1066,6 +1070,11 @@ class WalletManager {
 				await sleep(this.restoreHoldPollMs || RESTORE_HOLD_POLL_MS);
 				continue;
 			}
+			if (probe.kind === 'restart-required') {
+				// The restart spawns a new process with its own poll.
+				await this._restartOnRestoredState(id, rt);
+				return;
+			}
 			if (Date.now() >= deadline) return;
 			await sleep(HEALTH_POLL_MS);
 		}
@@ -1093,6 +1102,13 @@ class WalletManager {
 				if (body && body.error && body.error.code === 'NODE_RESTORE_PENDING') {
 					return { kind: 'restore-pending' };
 				}
+				// A peer-storage capsule restore replaced the database (beignet
+				// 0.9.3+): the node underneath is gone until a restart builds
+				// one on the restored state, which the daemon asks for by
+				// refusing everything but its recovery surface.
+				if (body && body.error && body.error.code === 'NODE_RESTART_REQUIRED') {
+					return { kind: 'restart-required' };
+				}
 			}
 		} catch (_) {
 			/* unreachable or timed out */
@@ -1111,6 +1127,23 @@ class WalletManager {
 			id,
 			'holding for a guardian restore: the database is fresh and the guardian set holds this wallet; run the restore from the dashboard'
 		);
+	}
+
+	// The daemon installed a restored database and holds until it is
+	// restarted: do that for it, the way the chain-stall restart does.
+	async _restartOnRestoredState(id, rt) {
+		if (!rt.proc || rt.stopping) return;
+		this._log(id, 'a capsule restore replaced the database; restarting on the restored state');
+		try {
+			rt.stopping = true;
+			await this._killProc(rt.proc);
+			rt.proc = null;
+			rt.stopping = false;
+			await this.startWallet(id);
+		} catch (err) {
+			rt.stopping = false;
+			this._log(id, `restart on restored state failed: ${err.message}`);
+		}
 	}
 
 	// Whether a holding daemon's restore is running right now (its status

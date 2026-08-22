@@ -10,9 +10,10 @@ import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../compon
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
+import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
 import { shortId } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
-import { describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
+import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import ReceiveTab from './tabs/ReceiveTab.jsx';
 import SendTab from './tabs/SendTab.jsx';
@@ -260,6 +261,19 @@ export default function WalletPage() {
 			) : (
 				<div className="wallet-layout">
 					<ResumeBanner recovery={recovery} />
+					{capsuleOffer(recovery, info) && (
+						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+							<CapsuleRestoreCard
+								api={api}
+								offer={capsuleOffer(recovery, info)}
+								onRestored={() => {
+									toast('Checkpoint restored', 'success');
+									refreshRec();
+									bump();
+								}}
+							/>
+						</div>
+					)}
 					{rec?.tor && !rec.onchainOnly && rec.torCircuitOk === false && (
 						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							Tor on this Umbrel cannot build circuits right now. Peers reached over Tor,
@@ -337,7 +351,7 @@ export default function WalletPage() {
 // came in through: a restore is never presented as finished while a channel
 // is quarantined or reestablishing.
 function ResumeBanner({ recovery }) {
-	if (!recovery || !isGuardianMode(recovery.mode) || !recovery.node) return null;
+	if (!recovery || recovery.mode === 'off' || !recovery.node) return null;
 	const { channels, complete } = restoreProgress(recovery);
 	if (complete || channels.total === 0 || channels.pending === 0) return null;
 	const landed = channels.resumed + channels.closing;
@@ -345,8 +359,10 @@ function ResumeBanner({ recovery }) {
 		<div className="info-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 			Channels resuming: {landed} of {channels.total}
 			{channels.closing > 0 ? ` (${channels.closing} closing safely, funds return on-chain)` : ''}.
-			Each channel reconciles with its peer the moment the peer is reachable, and the
-			guardians must confirm this device owns them before any payment moves.
+			Each channel reconciles with its peer the moment the peer is reachable
+			{isGuardianMode(recovery.mode)
+				? ', and the guardians must confirm this device owns them before any payment moves.'
+				: '.'}
 		</div>
 	);
 }

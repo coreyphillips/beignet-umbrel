@@ -51,10 +51,11 @@ test('the selected mode explains itself, and quorum says it is permanent', async
 	}
 });
 
-test('peer storage is honest about what this engine cannot do yet', async () => {
+test('peer storage says how its restore is reached and that nothing fences the old device', async () => {
 	const r = await render(Harness, { value: 'peer-storage', onChange: () => {}, guardiansConfigured: false });
 	try {
-		assert.match(r.text(), /cannot restore from them yet/);
+		assert.match(r.text(), /recover from the newest checkpoint/);
+		assert.match(r.text(), /Nothing fences the old device/);
 	} finally {
 		await r.unmount();
 	}
