@@ -73,3 +73,15 @@ export async function click(element) {
 		element.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
 	});
 }
+
+/** Pick an option in a controlled select. */
+export async function select(element, value) {
+	await act(async () => {
+		const setter = Object.getOwnPropertyDescriptor(
+			globalThis.window.HTMLSelectElement.prototype,
+			'value'
+		).set;
+		setter.call(element, value);
+		element.dispatchEvent(new globalThis.window.Event('change', { bubbles: true }));
+	});
+}

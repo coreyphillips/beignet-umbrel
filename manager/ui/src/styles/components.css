@@ -928,6 +928,19 @@ tbody tr:hover {
 	margin-bottom: 12px;
 }
 
+/* A wallet's pinned guardian set, shown under the channel backup choice. */
+.guardian-list {
+	margin: 8px 0 0;
+	padding-left: 18px;
+}
+.guardian-list li {
+	margin: 2px 0;
+	word-break: break-all;
+}
+.guardian-list code {
+	font-size: 11px;
+}
+
 /* The Receive tab's settled-invoice receipt. It takes the QR's place, so it
    holds the same visual ground the code did. */
 .paid-receipt {

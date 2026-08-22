@@ -15,9 +15,21 @@ const { TorControl, pickLocalIp } = require('./tor-control');
 const { probeSocksConnect } = require('./socks-probe');
 const { subscribeToEvents } = require('./node-events');
 const { ChannelEventLog } = require('./channel-events');
+const {
+	isRecoveryMode,
+	isGuardianMode,
+	validateGuardianSet,
+	sameGuardianSet,
+	recoveryEnv
+} = require('./recovery');
+const { engineVersion, recoveryAvailable } = require('./engine');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
+// A daemon holding for a guardian restore answers /health with 503 until
+// the restore runs, which can be never if nobody asks for it. The startup
+// poll keeps watching it at this pace instead of giving up.
+const RESTORE_HOLD_POLL_MS = 5000;
 const MAX_LOG_LINES = 300;
 // Node-level errors kept per wallet. These carry the reason a channel open
 // failed, which the daemon reports only as a transient `node:error` event, so
@@ -90,11 +102,18 @@ class WalletManager {
 		this.torCircuitOk = null;
 		this.torProbeTimer = null;
 		this.torProbeRunning = false;
+		// The bundled engine's version (null when it cannot be read), which
+		// decides whether the dashboard offers features the engine predates.
+		this.engineVersion = engineVersion();
 	}
 
 	async init() {
 		this.settings.load();
 		this.registry.load();
+		process.stdout.write(
+			`engine: beignet ${this.engineVersion || 'unknown version'}` +
+				`${this.recoveryAvailable() ? '' : ' (recovery protocol not available)'}\n`
+		);
 		// Publish the inbound hidden service via Umbrel's system Tor before boot
 		// so announce-enabled wallets advertise the onion from the start.
 		if (config.torProxyIp && config.torPassword) {
@@ -240,7 +259,10 @@ class WalletManager {
 				chainWatch: null,
 				chainStallPolls: 0,
 				healthFailPolls: 0,
-				lastStallRestartAt: 0
+				lastStallRestartAt: 0,
+				// The daemon's own reason for a failed start (its START_FAILED
+				// line), kept so a wallet stuck restarting can say why.
+				lastStartError: null
 			});
 		}
 		return this.runtime.get(id);
@@ -404,10 +426,20 @@ class WalletManager {
 		return net;
 	}
 
+	recoveryGuardians() {
+		const list = this.settings.get().recoveryGuardians;
+		return Array.isArray(list) ? list.slice() : [];
+	}
+
+	recoveryAvailable() {
+		return recoveryAvailable(this.engineVersion);
+	}
+
 	getSettings() {
 		return {
 			defaultNetwork: this.defaultNetwork(),
-			defaultElectrum: this.defaultElectrum()
+			defaultElectrum: this.defaultElectrum(),
+			recoveryGuardians: this.recoveryGuardians()
 		};
 	}
 
@@ -429,17 +461,97 @@ class WalletManager {
 					? null
 					: this._normalizeElectrum(patch.defaultElectrum);
 		}
+		if (patch.recoveryGuardians !== undefined) {
+			try {
+				next.recoveryGuardians = validateGuardianSet(
+					patch.recoveryGuardians === null ? [] : patch.recoveryGuardians
+				);
+			} catch (err) {
+				throw httpError(400, 'BAD_GUARDIANS', err.message);
+			}
+		}
 		this.settings.update(next);
 		return this.getSettings();
 	}
 
-	async createWallet({ name, network, electrum, wordCount, tor, announce, onchainOnly } = {}) {
-		const strength = Number(wordCount) === 12 ? 128 : 256;
-		const mnemonic = bip39.generateMnemonic(strength);
-		return this._provision({ name, network, electrum, mnemonic, tor, announce, onchainOnly });
+	/**
+	 * The recovery field a wallet record should carry after a request names
+	 * `mode`. The rules the daemon would otherwise enforce with a refused
+	 * start, plus two of its own: a guardian set is pinned to the wallet the
+	 * first time a guardian mode is enabled and never replaced (protocol v1
+	 * has no set rotation; a wallet that moved sets would lose its journal),
+	 * and quorum is never left once entered (a journal that holds a quorum
+	 * frame refuses to run without its barrier, so the change would only
+	 * produce a wallet that cannot start).
+	 */
+	_normalizeRecovery(mode, existing) {
+		const current = existing || { mode: 'off', guardians: [] };
+		if (mode === undefined) return { mode: current.mode || 'off', guardians: current.guardians || [] };
+		if (!isRecoveryMode(mode)) {
+			throw httpError(400, 'BAD_RECOVERY_MODE', `Unknown channel backup mode "${mode}".`);
+		}
+		if (mode !== 'off' && !this.recoveryAvailable()) {
+			throw httpError(
+				400,
+				'RECOVERY_UNSUPPORTED',
+				`The bundled beignet (${this.engineVersion || 'unknown version'}) predates channel backup.`
+			);
+		}
+		if (current.mode === 'quorum' && mode !== 'quorum') {
+			throw httpError(
+				409,
+				'RECOVERY_QUORUM_STICKY',
+				'A wallet that has used strict quorum cannot move to a weaker setting: its journal refuses to run without the quorum barrier. Keep quorum, or create a new wallet.'
+			);
+		}
+		let guardians = current.guardians || [];
+		if (isGuardianMode(mode) && guardians.length === 0) {
+			guardians = this.recoveryGuardians();
+			if (guardians.length === 0) {
+				throw httpError(
+					400,
+					'NO_GUARDIANS',
+					'Guardian modes need three guardians. Set them in Settings first.'
+				);
+			}
+		}
+		return { mode, guardians };
 	}
 
-	async importWallet({ name, network, electrum, mnemonic, tor, announce, onchainOnly } = {}) {
+	async createWallet({
+		name,
+		network,
+		electrum,
+		wordCount,
+		tor,
+		announce,
+		onchainOnly,
+		recoveryMode
+	} = {}) {
+		const strength = Number(wordCount) === 12 ? 128 : 256;
+		const mnemonic = bip39.generateMnemonic(strength);
+		return this._provision({
+			name,
+			network,
+			electrum,
+			mnemonic,
+			tor,
+			announce,
+			onchainOnly,
+			recoveryMode
+		});
+	}
+
+	async importWallet({
+		name,
+		network,
+		electrum,
+		mnemonic,
+		tor,
+		announce,
+		onchainOnly,
+		recoveryMode
+	} = {}) {
 		const normalized = String(mnemonic || '')
 			.trim()
 			.toLowerCase()
@@ -447,12 +559,33 @@ class WalletManager {
 		if (!bip39.validateMnemonic(normalized)) {
 			throw httpError(400, 'BAD_MNEMONIC', 'Invalid mnemonic phrase');
 		}
-		return this._provision({ name, network, electrum, mnemonic: normalized, tor, announce, onchainOnly });
+		return this._provision({
+			name,
+			network,
+			electrum,
+			mnemonic: normalized,
+			tor,
+			announce,
+			onchainOnly,
+			recoveryMode
+		});
 	}
 
-	async _provision({ name, network, electrum, mnemonic, tor, announce, onchainOnly }) {
+	async _provision({
+		name,
+		network,
+		electrum,
+		mnemonic,
+		tor,
+		announce,
+		onchainOnly,
+		recoveryMode
+	}) {
 		const net = this._validateNetwork(network);
 		const resolvedElectrum = this._resolveElectrum(electrum);
+		// Channel backup is a Lightning concern; an on-chain only wallet is
+		// created without it (the dashboard does not offer the choice there).
+		const recovery = this._normalizeRecovery(onchainOnly ? 'off' : recoveryMode, null);
 		const id = crypto.randomUUID();
 		const port = this._allocatePort();
 		const rec = {
@@ -465,6 +598,7 @@ class WalletManager {
 			// has sworn off, so the flag wins over the checkbox.
 			announce: !!announce && !onchainOnly,
 			onchainOnly: !!onchainOnly,
+			recovery,
 			port,
 			running: true,
 			createdAt: nowIso()
@@ -484,9 +618,23 @@ class WalletManager {
 		return { record: this.publicRecord(id), mnemonic };
 	}
 
-	async updateWallet(id, { name, electrum, tor, announce, onchainOnly } = {}) {
+	async updateWallet(id, { name, electrum, tor, announce, onchainOnly, recoveryMode } = {}) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		const rt = this.runtimeState(id);
+		// Every update restarts a running daemon. Restarting one mid-restore
+		// abandons a guardian takeover the user is watching (the engine
+		// resumes it on the next attempt, but nothing on screen says so).
+		if (rt.proc && rt.status === 'restore-required' && (await this._restoreInFlight(rec))) {
+			throw httpError(
+				409,
+				'RESTORE_IN_PROGRESS',
+				'This wallet is restoring from its guardians. Wait for the restore to finish before editing it.'
+			);
+		}
+		// Validate before touching the record, so a refused mode leaves the
+		// wallet exactly as it was.
+		const recovery = this._normalizeRecovery(recoveryMode, rec.recovery);
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
 		if (tor !== undefined) rec.tor = !!tor;
@@ -501,9 +649,12 @@ class WalletManager {
 			rec.onchainOnly = !!onchainOnly;
 			if (rec.onchainOnly) rec.announce = false;
 		}
+		// Unlike announce, channel backup survives a switch to on-chain only:
+		// a parked quorum wallet still has to boot with its barrier, or it
+		// does not boot at all.
+		rec.recovery = recovery;
 		this.registry.upsert(rec);
 		// Restart a running daemon so it reconnects with the new Electrum config.
-		const rt = this.runtimeState(id);
 		if (rt.proc) {
 			rt.stopping = true;
 			await this._killProc(rt.proc);
@@ -561,6 +712,12 @@ class WalletManager {
 		if (rec.announce && this.onion && this._onionMapsPort(this.listenPort(rec))) {
 			env.BEIGNET_ANNOUNCE_ADDRESSES = `${this.onion}:${this.listenPort(rec)}`;
 		}
+		// Channel backup (the Recovery Protocol). Off contributes nothing, so
+		// an engine that predates the feature sees the env it always saw. It
+		// rides along even for an on-chain only wallet: the parked node still
+		// watches its channels, and a journal that promised quorum refuses to
+		// run without its barrier.
+		Object.assign(env, recoveryEnv(rec.recovery));
 		return env;
 	}
 
@@ -672,7 +829,9 @@ class WalletManager {
 			String(buf)
 				.split('\n')
 				.forEach((line) => {
-					if (line.trim()) this._log(id, line.trim());
+					if (!line.trim()) return;
+					this._log(id, line.trim());
+					this._noteStartFailure(rt, line.trim());
 				});
 		proc.stdout.on('data', emit);
 		proc.stderr.on('data', emit);
@@ -731,6 +890,13 @@ class WalletManager {
 				// recording that could not reach disk is flagged in the log line;
 				// the log module itself warns with the reason.
 				const recorded = this.channelLog(id).record(name, data);
+				// Recovery events are rare and every one of them matters
+				// (a fence, a lost backfill, restore progress): keep them in
+				// the log ring so the Logs tab and the container output carry
+				// the story even when no browser was watching.
+				if (name.startsWith('recovery:')) {
+					this._log(id, `recovery ${name} ${JSON.stringify(data || {})}`);
+				}
 				if (recorded && name !== 'node:error') {
 					this._log(
 						id,
@@ -769,14 +935,14 @@ class WalletManager {
 		const rec = this.registry.get(id);
 		const rt = this.runtimeState(id);
 		if (!rec || !rt.proc || rt.stopping) return;
-		let health = null;
-		try {
-			const res = await fetch(`http://127.0.0.1:${rec.port}/health`, {
-				signal: AbortSignal.timeout(5000)
-			});
-			if (res.ok) health = (await res.json()).result;
-		} catch (_) {
-			/* daemon unreachable; not a chain stall */
+		const probe = await this._probeHealth(rec, 5000);
+		const health = probe.kind === 'ok' ? probe.health : null;
+		// A daemon holding for a guardian restore is up but has no node
+		// underneath it; it is neither healthy nor stalled, it is waiting.
+		if (probe.kind === 'restore-pending') {
+			this._enterRestoreHold(id, rt);
+			rt.chainStallPolls = 0;
+			return;
 		}
 		// healthy was set once by the startup poll and then never revisited, so a
 		// daemon that stopped answering mid-life (alive but its API deadlocked)
@@ -790,13 +956,18 @@ class WalletManager {
 			// outlast the startup poll's window, leaving the record 'starting'
 			// forever even though the daemon is up: promote it here, both so
 			// the status is honest and so the demotion below (gated on
-			// running) is armed for a wallet that booted slowly.
+			// running) is armed for a wallet that booted slowly. A restore
+			// hold ends the same way: the first ok answer is the node booted.
 			if (rt.proc && !rt.stopping && rt.status === 'starting') {
 				rt.status = 'running';
 				this._log(id, 'healthy (after the startup poll window)');
+			} else if (rt.proc && !rt.stopping && rt.status === 'restore-required') {
+				rt.status = 'running';
+				this._log(id, 'healthy (restore finished, node running)');
 			}
 			rt.healthy = true;
 			rt.healthFailPolls = 0;
+			rt.lastStartError = null;
 		} else if (rt.status === 'running') {
 			rt.healthFailPolls += 1;
 			if (rt.healthy && rt.healthFailPolls >= 2) {
@@ -867,24 +1038,109 @@ class WalletManager {
 	async _pollHealth(id) {
 		const rec = this.registry.get(id);
 		if (!rec) return;
+		const rt = this.runtimeState(id);
+		// The process this poll belongs to. A restart spawns a new poll for
+		// the new child; this one must stop rather than report on it.
+		const proc = rt.proc;
 		const deadline = Date.now() + HEALTH_TIMEOUT_MS;
-		while (Date.now() < deadline) {
-			const rt = this.runtimeState(id);
-			if (!rt.proc) return;
-			try {
-				const res = await fetch(`http://127.0.0.1:${rec.port}/health`, {
-					signal: AbortSignal.timeout(2000)
-				});
-				if (res.ok) {
-					rt.healthy = true;
-					rt.status = 'running';
-					this._log(id, 'healthy');
-					return;
-				}
-			} catch (_) {
-				/* not up yet */
+		while (rt.proc && rt.proc === proc) {
+			const probe = await this._probeHealth(rec, 2000);
+			if (rt.proc !== proc) return;
+			if (probe.kind === 'ok') {
+				rt.healthy = true;
+				rt.lastStartError = null;
+				this._log(
+					id,
+					rt.status === 'restore-required' ? 'healthy (restore finished, node running)' : 'healthy'
+				);
+				rt.status = 'running';
+				return;
 			}
+			if (probe.kind === 'restore-pending') {
+				// Up, holding, and staying that way until someone runs the
+				// restore: keep watching at a slower pace with no deadline,
+				// so the wallet reads running the moment the node boots.
+				this._enterRestoreHold(id, rt);
+				await sleep(this.restoreHoldPollMs || RESTORE_HOLD_POLL_MS);
+				continue;
+			}
+			if (Date.now() >= deadline) return;
 			await sleep(HEALTH_POLL_MS);
+		}
+	}
+
+	/**
+	 * One /health probe, classified. A daemon booted against a fresh database
+	 * whose recovery namespace its guardians hold answers every route but the
+	 * recovery surface with 503 NODE_RESTORE_PENDING; that is a daemon that
+	 * is up and waiting, not one that is down.
+	 */
+	async _probeHealth(rec, timeoutMs) {
+		try {
+			const res = await fetch(`http://127.0.0.1:${rec.port}/health`, {
+				signal: AbortSignal.timeout(timeoutMs)
+			});
+			if (res.ok) return { kind: 'ok', health: (await res.json()).result };
+			if (res.status === 503) {
+				let body = null;
+				try {
+					body = await res.json();
+				} catch (_) {
+					/* not JSON */
+				}
+				if (body && body.error && body.error.code === 'NODE_RESTORE_PENDING') {
+					return { kind: 'restore-pending' };
+				}
+			}
+		} catch (_) {
+			/* unreachable or timed out */
+		}
+		return { kind: 'silent' };
+	}
+
+	_enterRestoreHold(id, rt) {
+		if (!rt.proc || rt.stopping || rt.status === 'restore-required') return;
+		rt.status = 'restore-required';
+		// Not healthy: the daemon itself says not-ready, and the Tor probe
+		// picks its target by healthy (a holding daemon has no listener).
+		rt.healthy = false;
+		rt.healthFailPolls = 0;
+		this._log(
+			id,
+			'holding for a guardian restore: the database is fresh and the guardian set holds this wallet; run the restore from the dashboard'
+		);
+	}
+
+	// Whether a holding daemon's restore is running right now (its status
+	// route is the one route that answers during the hold).
+	async _restoreInFlight(rec) {
+		try {
+			const res = await fetch(`http://127.0.0.1:${rec.port}/recovery/status`, {
+				headers: { Authorization: `Bearer ${this.token(rec.id)}` },
+				signal: AbortSignal.timeout(3000)
+			});
+			if (!res.ok) return false;
+			const body = await res.json();
+			return !!(body && body.result && body.result.state === 'restoring');
+		} catch (_) {
+			return false;
+		}
+	}
+
+	// The CLI reports a start that failed before the daemon listened (a
+	// guardian set it refuses, no guardian quorum to decide ownership with)
+	// as one JSON line on stdout and exits. Keep the reason: without it the
+	// wallet reads 'restarting' with the explanation only in the Logs tab.
+	_noteStartFailure(rt, line) {
+		if (!line.startsWith('{')) return;
+		let parsed;
+		try {
+			parsed = JSON.parse(line);
+		} catch (_) {
+			return;
+		}
+		if (parsed && parsed.ok === false && parsed.error && parsed.error.code === 'START_FAILED') {
+			rt.lastStartError = { message: String(parsed.error.message || ''), at: nowIso() };
 		}
 	}
 
@@ -963,10 +1219,15 @@ class WalletManager {
 			// Only meaningful for Tor-enabled wallets: false means the last
 			// probe could not build a circuit, so peer connects will time out.
 			torCircuitOk: rec.tor ? this.torCircuitOk : null,
+			recovery: {
+				mode: (rec.recovery && rec.recovery.mode) || 'off',
+				guardians: (rec.recovery && rec.recovery.guardians) || []
+			},
 			port: rec.port,
 			desiredRunning: !!rec.running,
 			status: rt.status,
 			healthy: rt.healthy,
+			lastStartError: rt.lastStartError,
 			createdAt: rec.createdAt
 		};
 	}

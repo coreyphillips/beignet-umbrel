@@ -42,7 +42,16 @@ export function useSSE(url, onEvent) {
 			'channel:closed',
 			'peer:connect',
 			'peer:disconnect',
-			'node:ready'
+			'node:ready',
+			// Channel backup (the Recovery Protocol, beignet 0.9.1+). Named
+			// events, so each must be listed or EventSource never delivers it.
+			// guardian_unreachable is spelled with an underscore on the wire.
+			'recovery:durable',
+			'recovery:fenced',
+			'recovery:backfill-lost',
+			'recovery:guardian_unreachable',
+			'recovery:restore-progress',
+			'recovery:restored'
 		];
 		let es;
 		try {

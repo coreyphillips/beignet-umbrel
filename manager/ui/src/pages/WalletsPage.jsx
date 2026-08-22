@@ -18,12 +18,15 @@ import {
 	staggerItem
 } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
+import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
 
 function statusTone(s) {
 	if (s === 'running') return 'green';
-	if (s === 'starting' || s === 'restarting' || s === 'waiting-electrum') return 'yellow';
+	if (s === 'starting' || s === 'restarting' || s === 'waiting-electrum' || s === 'restore-required') {
+		return 'yellow';
+	}
 	return 'muted';
 }
 
@@ -157,6 +160,12 @@ export default function WalletsPage() {
 										{w.network} · {w.electrum.host}:{w.electrum.port}
 										{w.onchainOnly ? ' · on-chain only' : ''}
 									</div>
+									{w.status === 'restore-required' && (
+										<div className="wallet-meta">Channels waiting to be restored from guardians</div>
+									)}
+									{w.status === 'restarting' && w.lastStartError && (
+										<div className="wallet-meta">Last start failed: {w.lastStartError.message}</div>
+									)}
 									{info && (
 										<div className="wallet-meta">
 											{w.onchainOnly ? (
@@ -178,7 +187,7 @@ export default function WalletsPage() {
 											{w.status}
 										</Badge>
 									</m.span>
-									{w.status === 'running' ? (
+									{w.status === 'running' || w.status === 'restore-required' ? (
 										<Button className="sm" onClick={() => openWallet(w)}>
 											Open
 										</Button>
@@ -255,7 +264,11 @@ function NewWallet({ config, onDone, onSeed }) {
 	const [tor, setTor] = useState(false);
 	const [announce, setAnnounce] = useState(false);
 	const [onchainOnly, setOnchainOnly] = useState(false);
+	// Channel backup defaults to seed only until peer-storage restore is
+	// reachable end to end; the choice is there for anyone opting in now.
+	const [recoveryMode, setRecoveryMode] = useState('off');
 	const [busy, setBusy] = useState(false);
+	const guardiansConfigured = (config.recoveryGuardians || []).length === 3;
 
 	const submit = async () => {
 		setBusy(true);
@@ -264,10 +277,28 @@ function NewWallet({ config, onDone, onSeed }) {
 				? { host: electrum.host.trim(), port: parseInt(electrum.port, 10), tls: !!electrum.tls }
 				: undefined;
 			if (tab === 'create') {
-				const r = await manager.createWallet({ name, network, wordCount, electrum: elec, tor, announce, onchainOnly });
+				const r = await manager.createWallet({
+					name,
+					network,
+					wordCount,
+					electrum: elec,
+					tor,
+					announce,
+					onchainOnly,
+					recoveryMode: onchainOnly ? 'off' : recoveryMode
+				});
 				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
 			} else {
-				await manager.importWallet({ name, network, mnemonic, electrum: elec, tor, announce, onchainOnly });
+				await manager.importWallet({
+					name,
+					network,
+					mnemonic,
+					electrum: elec,
+					tor,
+					announce,
+					onchainOnly,
+					recoveryMode: onchainOnly ? 'off' : recoveryMode
+				});
 				toast('Wallet imported. It will sync in the background.', 'success');
 			}
 			setName('');
@@ -355,6 +386,15 @@ function NewWallet({ config, onDone, onSeed }) {
 						? " Importing reads the seed's history off the chain itself, reaching back to before this wallet existed, as far as the standard address scan finds use."
 						: ''}
 				</div>
+			)}
+
+			{config.recoveryAvailable && !onchainOnly && (
+				<RecoveryModeField
+					value={recoveryMode}
+					onChange={setRecoveryMode}
+					guardiansConfigured={guardiansConfigured}
+					importing={tab === 'import'}
+				/>
 			)}
 
 			{(config.torAvailable || config.onionAvailable) && !onchainOnly && (

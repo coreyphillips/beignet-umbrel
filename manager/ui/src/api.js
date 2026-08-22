@@ -35,6 +35,9 @@ async function request(path, { method = 'GET', body, timeoutMs } = {}) {
 	if (!res.ok || data.ok === false) {
 		const err = new Error((data.error && data.error.message) || `Request failed (${res.status})`);
 		err.code = data.error && data.error.code;
+		// The HTTP status rides along for the one case a route's absence is
+		// an answer: a 404 from a daemon that predates a feature.
+		err.status = res.status;
 		throw err;
 	}
 	return data.result;
