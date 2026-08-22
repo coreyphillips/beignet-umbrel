@@ -321,6 +321,8 @@ function walletState({ blockHeight, channels, txs, payments, utxos, invoices, of
 			backfillLost: false,
 			startupRepairPending: false,
 			channelStatuses: {},
+			// The best Recovery Capsule a storage peer returned (0.9.3+).
+			capsule: null,
 			...(recovery || {})
 		}
 	};
@@ -419,6 +421,20 @@ const store = {
 			announce: false,
 			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
 			createdAt: now - 60000
+		},
+		{
+			// Imported with peer storage after a laptop died: empty, and the
+			// peer it reconnected to returned the checkpoint its previous life
+			// left there. The card on its page offers the restore (0.9.3+).
+			id: 'demo-capsule',
+			name: 'Restored laptop',
+			network: 'mainnet',
+			status: 'running',
+			electrum: { host: 'umbrel.local', port: 50001, tls: false },
+			tor: false,
+			announce: false,
+			recovery: { mode: 'peer-storage', guardians: [] },
+			createdAt: now - 120000
 		}
 	],
 	state: {}
@@ -531,6 +547,59 @@ store.state['demo-fenced'] = walletState({
 	offers: [],
 	peers: []
 });
+
+const capsulePeer = pubkey();
+store.state['demo-capsule'] = walletState({
+	blockHeight: 908214,
+	recovery: {
+		gate: 'disabled',
+		capsule: {
+			writerEpoch: '1',
+			latestSequence: '412',
+			inline: true,
+			channelCount: 2,
+			guardians: [],
+			fromPeer: capsulePeer,
+			receivedAt: now - 30000
+		}
+	},
+	channels: [],
+	txs: makeTxs(5, 908214),
+	payments: [],
+	utxos: makeUtxos(1, 908214),
+	invoices: [],
+	offers: [],
+	peers: [{ pubkey: capsulePeer, host: 'ln.acinq.co', port: 9735, state: 'connected', alias: 'ACINQ' }]
+});
+
+// The checkpoint recovery the dashboard offers: the capsule's embedded SCB
+// goes to the SCB restore, the channels come back as closing (the peer
+// closes them on reestablish, the DLP path) and the funds land on-chain.
+function runDemoScbRecovery(w, st) {
+	const r = st.recovery;
+	const capsule = r.capsule;
+	const chans = makeChannels([
+		[1500000, 58, 'FORCE_CLOSED', false, 'ACINQ'],
+		[600000, 35, 'FORCE_CLOSED', false, 'Bitrefill']
+	]);
+	st.channels = chans;
+	chans.forEach((c) => {
+		r.channelStatuses[c.channelId] = 'local_data_loss';
+		recordChannelEvent(w.id, { event: 'channel:closed', channelId: c.channelId });
+	});
+	r.capsule = null;
+	setTimeout(() => {
+		// The peer's close confirms and our side of it comes home.
+		const txid = hex(64);
+		const valueSats = 1500000 * 0.58 + 600000 * 0.35 - 1200;
+		const address = demoAddress(w.network);
+		const tx = { txid, type: 'received', valueSats: Math.round(valueSats), feeSats: null, satsPerVbyte: null, address, confirmed: false, height: null, timestamp: Date.now(), confirmTimestamp: null };
+		st.txs.unshift(tx);
+		st.utxos.unshift({ txid, vout: 0, address, valueSats: tx.valueSats, height: null });
+		emit(w.id, 'transaction:received', { ...tx });
+	}, 6000);
+	return { recovering: chans.map((c) => c.channelId), skipped: [], channelCount: capsule.channelCount };
+}
 
 store.state['demo-restore'] = walletState({
 	blockHeight: 908214,
@@ -1158,7 +1227,11 @@ function payOverLightning(st, id, { amountSats, bolt11, noAmount }) {
 // state, the guardian set, and the node layer with a status per channel.
 function recoveryStatus(w, st) {
 	const mode = w.recovery?.mode || 'off';
-	if (mode === 'off') return { mode: 'off', profile: null, guardians: [], state: 'disabled', node: null };
+	const capsules = {
+		candidates: st.recovery.capsule ? 1 : 0,
+		best: st.recovery.capsule ? { ...st.recovery.capsule } : null
+	};
+	if (mode === 'off') return { mode: 'off', profile: null, guardians: [], state: 'disabled', node: null, capsules };
 	const guardians = (w.recovery.guardians || []).map((g) => ({
 		guardianId: String(g).slice(0, 64),
 		url: String(g).slice(65)
@@ -1172,6 +1245,7 @@ function recoveryStatus(w, st) {
 			guardians,
 			state: r.restore?.inProgress ? 'restoring' : 'restore-required',
 			node: null,
+			capsules,
 			restore: { inProgress: !!r.restore?.inProgress, ...(r.restore?.lastEvent ? { lastEvent: r.restore.lastEvent } : {}) }
 		};
 	}
@@ -1198,7 +1272,8 @@ function recoveryStatus(w, st) {
 		profile,
 		guardians,
 		state: node.fenced || gate === 'fenced' ? 'fenced' : 'running',
-		node
+		node,
+		capsules
 	};
 }
 
@@ -1230,6 +1305,13 @@ function walletRequest(id, path, method, body) {
 	switch (route) {
 		case '/recovery/status':
 			return recoveryStatus(w, st);
+		case '/backup/peer-retrieved':
+			if (!st.recovery.capsule) throw err('No peer-retrieved backup this session', 'NOT_FOUND');
+			return { encoded: 'beignet-scb-v1:' + hex(96), createdAt: st.recovery.capsule.receivedAt, fromPeer: st.recovery.capsule.fromPeer };
+		case '/restore/scb':
+			if (!body?.encoded) throw err('Provide exactly one of encoded or path', 'INVALID_PARAMS');
+			if (!st.recovery.capsule) throw err('SCB decode failed', 'INVALID_PARAMS');
+			return runDemoScbRecovery(w, st);
 		case '/recovery/restore':
 			throw err(
 				'Guardian restore only applies while the daemon is in the restore-required state (a fresh database whose namespace the guardian set holds). This node is already running on its own state.',

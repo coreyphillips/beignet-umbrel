@@ -68,6 +68,15 @@ export function describeRecovery(status, rec = {}) {
 			degraded: true
 		};
 	}
+	if (status.state === 'restart-required') {
+		return {
+			tier: 'Restarting on restored state',
+			detail:
+				'A checkpoint restore replaced this wallet\'s database. The wallet restarts on the restored state and its channels resume from there.',
+			tone: 'yellow',
+			degraded: true
+		};
+	}
 	if (status.state === 'fenced' || node?.fenced || node?.gate === 'fenced') {
 		return {
 			tier: "Another device took over this wallet's channels",
@@ -98,7 +107,7 @@ export function describeRecovery(status, rec = {}) {
 		return {
 			tier: 'Checkpoints via peer storage',
 			detail:
-				'Encrypted channel checkpoints ride with the peers that offer storage. This engine sends them but cannot restore from them yet, so a restore still closes channels.',
+				'Encrypted channel checkpoints ride with the peers that offer storage. Importing the seed elsewhere with peer storage and reconnecting to those peers offers a recovery from the newest checkpoint: with this engine the channels close safely and the funds return on-chain rather than resuming. There is no fencing between devices in this mode.',
 			tone: 'blue',
 			degraded: false
 		};
@@ -239,4 +248,28 @@ export function restoreProgress(status) {
 	const gateOpen = node ? node.gate === 'confirmed' || node.gate === 'disabled' : false;
 	const complete = phase === 'channels' && channels.pending === 0 && gateOpen;
 	return { phase, steps, channels, complete };
+}
+
+/**
+ * Whether the wallet should be offered a restore from a Recovery Capsule a
+ * storage peer returned (beignet 0.9.3+, peer-storage mode). The offer is
+ * for a wallet that has nothing yet: one that already runs channels is not
+ * a restore target (the daemon refuses a dirty database anyway). Returns
+ * the capsule's summary, or null.
+ */
+export function capsuleOffer(status, info) {
+	if (!status || status.mode !== 'peer-storage' || status.state !== 'running') return null;
+	const best = status.capsules?.best;
+	if (!best) return null;
+	const open = info ? info.openChannelCount ?? info.channelCount ?? 0 : 0;
+	if (open > 0) return null;
+	return {
+		channelCount: best.channelCount,
+		sequence: best.latestSequence,
+		epoch: best.writerEpoch,
+		inline: !!best.inline,
+		fromPeer: best.fromPeer,
+		guardians: best.guardians || [],
+		candidates: status.capsules.candidates
+	};
 }

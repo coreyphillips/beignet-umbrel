@@ -37,7 +37,8 @@ Use Playwright (chromium) headless. Install into the scratchpad, not the repo.
   only), `demo-fenced` (running, another device took over its channels),
   `demo-restore` (holding for a guardian restore; its Restore channels button
   runs a scripted restore that lands three channels over about 15s, one of
-  them closing safely).
+  them closing safely), `demo-capsule` (peer storage, empty, a peer returned
+  a checkpoint; Recover channel funds runs the scripted SCB recovery).
 - Any non-API path other than the SPA routes gets proxied by Vite to the
   absent backend and 500s; always use the `/w/...` routes.
 - Demo mock state is per-page-load module state; a reload resets balances.

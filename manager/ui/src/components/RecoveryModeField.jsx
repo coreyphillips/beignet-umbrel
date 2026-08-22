@@ -14,7 +14,7 @@ import { MODE_LABELS, RECOVERY_MODES, isGuardianMode } from '../lib/recovery.js'
 const NOTES = {
 	off: 'Nothing is kept beyond the seed. If this Umbrel is lost, importing the seed elsewhere recovers the on-chain funds. Open channels are closed by their peers and the funds return on-chain over time. Fine for a wallet without channels.',
 	'peer-storage':
-		'The wallet keeps an encrypted checkpoint of its channels with the peers it has channels with. Nothing to set up and no extra servers. This version of the engine sends the checkpoints but cannot restore from them yet, so a restore still closes channels. Turning it on now means the checkpoints exist when it can.',
+		'The wallet keeps an encrypted checkpoint of its channels with the peers it has channels with. Nothing to set up and no extra servers. If this Umbrel is lost, import the seed with peer storage, reconnect to those peers, and the wallet offers to recover from the newest checkpoint they return: with this engine that closes the channels safely and returns the funds on-chain (resuming them where they were waits on the engine). Nothing fences the old device in this mode.',
 	'async-remote':
 		'Channel state is copied in the background to the three guardian servers set in Settings. Payments never wait on them. If this Umbrel is lost, importing the seed with the same guardians restores the channels and resumes them. A payment mid-flight at the exact moment of loss may not be covered; that channel closes safely instead.',
 	quorum:

@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeRecovery, restoreProgress, channelOutcome, RESTORE_STEPS } from './recovery.js';
+import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, RESTORE_STEPS } from './recovery.js';
 
 const node = (extra = {}) => ({
 	gate: 'confirmed',
@@ -42,7 +42,7 @@ test('peer storage says what it does and what it cannot do yet', () => {
 		{}
 	);
 	assert.equal(d.tier, 'Checkpoints via peer storage');
-	assert.match(d.detail, /cannot restore from them yet/);
+	assert.match(d.detail, /recovery from the newest checkpoint/);
 	assert.equal(d.degraded, false);
 });
 
@@ -199,4 +199,25 @@ test('a restore is never complete while a channel is still reconciling or the ga
 	const fenced = restoreProgress({ mode: 'quorum', state: 'fenced', node: node({ fenced: true, gate: 'fenced' }) });
 	assert.equal(fenced.phase, 'fenced');
 	assert.equal(fenced.complete, false);
+});
+
+test('a database replaced by a checkpoint restore reads as restarting, yellow', () => {
+	const d = describeRecovery({ mode: 'peer-storage', state: 'restart-required', node: null, capsules: { candidates: 1, best: null } }, {});
+	assert.equal(d.tier, 'Restarting on restored state');
+	assert.equal(d.degraded, true);
+	assert.equal(d.tone, 'yellow');
+});
+
+test('a capsule is offered only to a peer-storage wallet with nothing to lose', () => {
+	const best = { writerEpoch: '1', latestSequence: '412', inline: true, channelCount: 2, guardians: [], fromPeer: '02' + 'a'.repeat(64), receivedAt: 1 };
+	const status = { mode: 'peer-storage', state: 'running', node: node({ durability: 'local', gate: 'disabled' }), capsules: { candidates: 2, best } };
+	const offer = capsuleOffer(status, { openChannelCount: 0, channelCount: 0 });
+	assert.deepEqual(
+		{ channelCount: offer.channelCount, sequence: offer.sequence, inline: offer.inline, candidates: offer.candidates },
+		{ channelCount: 2, sequence: '412', inline: true, candidates: 2 }
+	);
+	assert.equal(capsuleOffer(status, { openChannelCount: 1, channelCount: 3 }), null, 'a wallet with channels is not a restore target');
+	assert.equal(capsuleOffer({ ...status, capsules: { candidates: 0, best: null } }, { openChannelCount: 0 }), null);
+	assert.equal(capsuleOffer({ ...status, mode: 'quorum' }, { openChannelCount: 0 }), null, 'guardian modes restore through the guardians');
+	assert.equal(capsuleOffer({ mode: 'peer-storage', state: 'running', node: null }, { openChannelCount: 0 }), null, 'an engine without the capsules key offers nothing');
 });

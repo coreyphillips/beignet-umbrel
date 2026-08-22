@@ -267,7 +267,42 @@ env:
   # published 0.9.1 and 0.9.2 tarballs' dist/cli and by booting 0.9.2
   # with the manager's env: every dashboard route answers, the typed 400s
   # hold, /recovery/status still reads disabled, and SIGTERM exits clean.
-  BEIGNET_VERSION: "0.9.2"
+  # 0.9.3 answers the three findings the channel backup UI turned up
+  # (beignet issues #453, #454, #455) and adds two more pieces. Retrieved
+  # Recovery Capsules are recognised on peer storage retrieval and a new
+  # POST /recovery/restore-capsule restores from them in peer-storage mode:
+  # Tier 2 installs the exact state into a fresh database and holds the
+  # daemon in a new restart-required state (503 NODE_RESTART_REQUIRED on
+  # everything but the recovery surface) until a restart, which the
+  # manager now performs for it; Tier 1 recovers the embedded SCB. The
+  # capsule names its guardians, reported (credentials redacted) under
+  # capsules.best.guardians on GET /recovery/status, so a seed restore that
+  # lost its configuration can rebuild the guardian set; an admin-scoped
+  # POST /recovery/capsule-guardians hands the set back with credentials.
+  # A guardian-backed capsule refuses the peer-storage restore by default
+  # (409 CAPSULE_RESTORE_GUARDIAN_BACKED); {"unfenced": true} is the
+  # labelled escape hatch that restores anyway without fencing the old
+  # device. An idle node re-checks its lease with the guardians every
+  # BEIGNET_RECOVERY_LEASE_CHECK_MS (default five minutes, left at the
+  # default here), so a device superseded while parked reads fenced within
+  # that window instead of at its next commit or restart. /readiness gains
+  # a CHANNEL_BACKUP check reporting the recovery tier.
+  # Daemon surface: additive only, verified by diffing the published 0.9.2
+  # and 0.9.3 tarballs' dist/cli (one new env var, two new routes, a new
+  # daemon state and eight new error codes, nothing removed or renamed) and
+  # by booting 0.9.3 with the manager's exact env against three loopback
+  # guardians: the guardian restore from the previous release still runs
+  # end to end, and /recovery/status carries the new capsules key in every
+  # mode. The capsule restore itself was run against a live regtest peer
+  # and found not usable yet: the peer force-closes the channel the moment
+  # the empty wallet reconnects, before the capsule can be applied, and the
+  # Tier 2 restart then drops the channel and leaves the close output
+  # unswept (beignet #462, #463; a manual SCB restore recovered the funds).
+  # The dashboard therefore offers the checkpoint's embedded SCB to the SCB
+  # restore (funds return on-chain), not POST /recovery/restore-capsule,
+  # and the manager handles restart-required only as the correct reaction
+  # to the daemon's state.
+  BEIGNET_VERSION: "0.9.3"
 
 jobs:
   build:

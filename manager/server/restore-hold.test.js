@@ -146,6 +146,38 @@ test('a poll whose process was replaced stops reporting', async () => {
 	assert.equal(rt.status, 'restore-required', 'and left the new process to its own poll');
 });
 
+test('a daemon holding on a restored database is restarted for it, once', async () => {
+	const rt = state({ status: 'running', healthy: true });
+	const m = managerWith(rt);
+	const killed = [];
+	m._killProc = async (proc) => killed.push(proc.pid);
+	let started = 0;
+	m.startWallet = async () => {
+		started += 1;
+		rt.proc = { pid: 2 };
+	};
+	globalThis.fetch = async () => ({
+		ok: false,
+		status: 503,
+		json: async () => ({ ok: false, error: { code: 'NODE_RESTART_REQUIRED' } })
+	});
+	await m._checkChainStall('w1');
+	assert.deepEqual(killed, [1], 'the old process was stopped');
+	assert.equal(started, 1, 'and the wallet started again');
+	assert.ok(m.logs.some((l) => l.includes('restarting on the restored state')));
+	// The startup poll does the same, then leaves the new process to its own poll.
+	const rt2 = state();
+	const m2 = managerWith(rt2);
+	m2._killProc = async () => {};
+	let started2 = 0;
+	m2.startWallet = async () => {
+		started2 += 1;
+		rt2.proc = { pid: 3 };
+	};
+	await m2._pollHealth('w1');
+	assert.equal(started2, 1);
+});
+
 test('a START_FAILED line from the daemon is kept as the wallet\'s last start error', () => {
 	const rt = state();
 	const m = managerWith(rt);
