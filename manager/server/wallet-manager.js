@@ -28,8 +28,10 @@ const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
 // A daemon holding for a guardian restore answers /health with 503 until
 // the restore runs, which can be never if nobody asks for it. The startup
-// poll keeps watching it at this pace instead of giving up.
-const RESTORE_HOLD_POLL_MS = 5000;
+// poll keeps watching it at this pace instead of giving up; a local GET
+// every two seconds is cheap, and it is how soon the wallet reads running
+// once the restore has built the node.
+const RESTORE_HOLD_POLL_MS = 2000;
 const MAX_LOG_LINES = 300;
 // Node-level errors kept per wallet. These carry the reason a channel open
 // failed, which the daemon reports only as a transient `node:error` event, so

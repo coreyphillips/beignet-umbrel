@@ -30,6 +30,8 @@ A seed alone recovers on-chain funds; channels restored from a seed close and th
 
 Two rules are enforced before a daemon is started, because the engine enforces them by refusing to start: a wallet keeps the guardian set it first registered with (the protocol has no set replacement yet), and a wallet that has used strict quorum cannot move to a weaker setting. The Overview tab's Node status card states the tier plainly; the wallet header only speaks up when something is wrong (guardians unreachable, another device took over, restore required). Guardian hosting is not part of this app.
 
+**Restoring from guardians.** Set the same three guardians in Settings, then import the seed with a guardian mode. If the guardians hold channel state for that seed, the daemon boots holding for a restore and the wallet page offers it: restoring takes the channels over (the previous device, if still running, is fenced off), downloads and verifies the journal, rebuilds the state and starts the node. The page then follows each channel as it reconciles with its peer, and never calls the restore complete while one is still doing so. A channel the peer proves stale, or whose state cannot be proven current, closes safely and its funds return on-chain; the page says so rather than reporting an error. A plain import (no guardians, or none holding the seed) works as it always has.
+
 ## Architecture
 
 ```
