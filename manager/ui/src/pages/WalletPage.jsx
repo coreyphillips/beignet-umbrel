@@ -8,8 +8,10 @@ import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
+import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import { shortId } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
+import { describeRecovery, isGuardianMode } from '../lib/recovery.js';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import ReceiveTab from './tabs/ReceiveTab.jsx';
 import SendTab from './tabs/SendTab.jsx';
@@ -40,8 +42,20 @@ const EVENT_LABELS = {
 	'payment:sent': 'Payment sent',
 	'payment:failed': 'Payment failed',
 	'channel:ready': 'Channel ready',
-	'channel:closed': 'Channel closed'
+	'channel:closed': 'Channel closed',
+	// Channel backup (the Recovery Protocol). Rare, and each one changes what
+	// the owner should do next, so they are announced rather than left to the
+	// Backup row to be noticed.
+	'recovery:fenced': "Another device took over this wallet's channels",
+	'recovery:guardian_unreachable': 'A recovery guardian is unreachable',
+	'recovery:backfill-lost': 'Recovery journal broken: channels are held'
 };
+const ERROR_EVENTS = new Set([
+	'payment:failed',
+	'recovery:fenced',
+	'recovery:guardian_unreachable',
+	'recovery:backfill-lost'
+]);
 
 export default function WalletPage() {
 	const { id, tab = 'overview' } = useParams();
@@ -74,6 +88,21 @@ export default function WalletPage() {
 		8000,
 		[id, running, tick]
 	);
+	// Channel backup. A 404 is an engine that predates the feature, which
+	// reads as seed only; any other failure keeps the last answer (usePoll
+	// leaves data alone on a throw) rather than flashing a tier away.
+	const { data: recovery } = usePoll(
+		() =>
+			running
+				? api.get('/recovery/status').catch((e) => {
+						if (e && e.status === 404) return { state: 'unsupported' };
+						throw e;
+				  })
+				: Promise.resolve(null),
+		8000,
+		[id, running, tick]
+	);
+	const backup = running && rec && recovery ? describeRecovery(recovery, rec) : null;
 
 	// Money arriving is the one event a wallet's owner did nothing to cause, so
 	// it must not depend on them causing anything to see it. The watcher is fed
@@ -91,7 +120,7 @@ export default function WalletPage() {
 	useSSE(running ? api.eventsUrl() : null, (name, data) => {
 		bump();
 		receiveEvent(name, data);
-		if (EVENT_LABELS[name]) toast(EVENT_LABELS[name], name === 'payment:failed' ? 'error' : 'success');
+		if (EVENT_LABELS[name]) toast(EVENT_LABELS[name], ERROR_EVENTS.has(name) ? 'error' : 'success');
 	});
 
 	// An on-chain only wallet gets no Lightning apparatus: not hidden features,
@@ -129,6 +158,9 @@ export default function WalletPage() {
 							{health.electrumConnected ? 'electrum ok' : 'electrum down'}
 						</Badge>
 					)}
+					{backup?.degraded && !rec?.onchainOnly && (
+						<Badge tone={backup.tone}>{backup.tier}</Badge>
+					)}
 					<Button className="sm" onClick={(e) => setEditing({ x: e.clientX, y: e.clientY })}>
 						Edit
 					</Button>
@@ -152,6 +184,12 @@ export default function WalletPage() {
 					)}
 				</div>
 			</m.div>
+
+			{rec?.status === 'restarting' && rec.lastStartError && (
+				<div className="error-note" style={{ marginBottom: 14 }}>
+					The wallet's last start failed and it is retrying: {rec.lastStartError.message}
+				</div>
+			)}
 
 			{!running ? (
 				<div className="card">
@@ -216,6 +254,7 @@ export default function WalletPage() {
 								api={api}
 								info={info}
 								health={health}
+								recovery={recovery}
 								rec={rec}
 								tick={tick}
 								bump={bump}
@@ -233,6 +272,9 @@ export default function WalletPage() {
 					presets={config?.electrumPresets || []}
 					torAvailable={!!config?.torAvailable}
 					onionAvailable={!!config?.onionAvailable}
+					recoveryAvailable={!!config?.recoveryAvailable}
+					settingsGuardians={config?.recoveryGuardians || []}
+					restoring={rec.status === 'restore-required' || recovery?.state === 'restoring'}
 					onClose={() => setEditing(null)}
 					onSaved={() => {
 						setEditing(null);
@@ -246,13 +288,26 @@ export default function WalletPage() {
 	);
 }
 
-function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, onClose, onSaved }) {
+function EditWalletModal({
+	rec,
+	origin,
+	presets,
+	torAvailable,
+	onionAvailable,
+	recoveryAvailable = false,
+	settingsGuardians = [],
+	restoring = false,
+	onClose,
+	onSaved
+}) {
 	const toast = useToast();
 	const [name, setName] = useState(rec.name);
 	const [electrum, setElectrum] = useState({ ...rec.electrum });
 	const [tor, setTor] = useState(!!rec.tor);
 	const [announce, setAnnounce] = useState(!!rec.announce);
 	const [onchainOnly, setOnchainOnly] = useState(!!rec.onchainOnly);
+	const [recoveryMode, setRecoveryMode] = useState(rec.recovery?.mode || 'off');
+	const pinnedGuardians = rec.recovery?.guardians || [];
 	const [busy, setBusy] = useState(false);
 	// Whether this wallet has OPEN channels, asked the moment the modal opens.
 	// Spinning Lightning down with channels open is the owner's call to make,
@@ -281,6 +336,10 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 				tor,
 				announce: onchainOnly ? false : announce,
 				onchainOnly,
+				// Channel backup survives parking: a quorum journal refuses to
+				// run without its barrier, so the mode is never sent as off
+				// just because Lightning is switched off.
+				recoveryMode,
 				electrum: {
 					host: electrum.host.trim(),
 					port: parseInt(electrum.port, 10),
@@ -342,6 +401,33 @@ function EditWalletModal({ rec, origin, presets, torAvailable, onionAvailable, o
 					The wallet starts listening for Lightning peers on its next start. Open a
 					channel in the Channels tab and it is a Lightning node like any other.
 				</div>
+			)}
+			{recoveryAvailable && !onchainOnly && (
+				<>
+					<RecoveryModeField
+						value={recoveryMode}
+						onChange={setRecoveryMode}
+						guardiansConfigured={settingsGuardians.length === 3}
+						disabled={restoring}
+						pinnedGuardians={pinnedGuardians}
+						settingsGuardians={settingsGuardians}
+						lockedToQuorum={rec.recovery?.mode === 'quorum'}
+					/>
+					{restoring && (
+						<div className="info-note">
+							Channel backup cannot change while this wallet is waiting for, or running,
+							a restore from its guardians.
+						</div>
+					)}
+					{recoveryMode !== (rec.recovery?.mode || 'off') && (
+						<div className="info-note">
+							Changing channel backup restarts this wallet.
+							{pinnedGuardians.length === 0 && isGuardianMode(recoveryMode)
+								? ' A guardian mode registers the wallet with the guardians in Settings on its next start, and that set stays with the wallet from then on.'
+								: ''}
+						</div>
+					)}
+				</>
 			)}
 			{(torAvailable || onionAvailable) && (
 				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>

@@ -18,6 +18,17 @@ Beignet runs one or many self-custodial wallets on your Umbrel:
 - **Create** a new wallet (generates a fresh seed) or **import** your own recovery phrase.
 - **Bring your own Electrum server**: no full node needed. Point at any Electrum server, or connect to your Umbrel's Electrs/Fulcrum with a one-click preset. Set an app-wide default and override it per wallet.
 - A per-wallet **API explorer** (Swagger UI) over the full beignet JSON API.
+- **Channel backup** per wallet, through beignet's Recovery Protocol (see below).
+
+### Channel backup
+
+A seed alone recovers on-chain funds; channels restored from a seed close and their funds come back on-chain over time. Each Lightning wallet chooses how much more it keeps, in its create form or Edit dialog:
+
+- **Seed only**: the default. Nothing beyond the seed.
+- **Checkpoints via peer storage**: an encrypted channel checkpoint rides with the peers that offer storage, no setup. The bundled engine sends the checkpoints but cannot restore from them yet, so a restore still closes channels.
+- **Guardians (async)** and **Guardians (strict quorum)**: three guardian servers, set once in Settings, hold an encrypted journal of channel state. Importing the seed elsewhere with the same guardians restores the channels and resumes them instead of closing. Strict quorum makes every channel step wait for two of the three guardians, so a restore is exact and the old device is fenced off; async never makes a payment wait, and a step mid-flight at the moment of loss closes safely instead.
+
+Two rules are enforced before a daemon is started, because the engine enforces them by refusing to start: a wallet keeps the guardian set it first registered with (the protocol has no set replacement yet), and a wallet that has used strict quorum cannot move to a weaker setting. The Overview tab's Node status card states the tier plainly; the wallet header only speaks up when something is wrong (guardians unreachable, another device took over, restore required). Guardian hosting is not part of this app.
 
 ## Architecture
 

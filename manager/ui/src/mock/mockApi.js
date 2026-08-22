@@ -300,14 +300,46 @@ function makeInvoices(count, network = 'mainnet') {
 	});
 }
 
-function walletState({ blockHeight, channels, txs, payments, utxos, invoices, offers, peers }) {
-	return { blockHeight, channels, txs, payments, utxos, invoices, offers, peers, addressN: 0 };
+function walletState({ blockHeight, channels, txs, payments, utxos, invoices, offers, peers, recovery }) {
+	return {
+		blockHeight,
+		channels,
+		txs,
+		payments,
+		utxos,
+		invoices,
+		offers,
+		peers,
+		addressN: 0,
+		// The node-level recovery picture (GET /recovery/status's `node`),
+		// only read for wallets whose record carries a recovery mode.
+		recovery: {
+			gate: 'confirmed',
+			lastDurableSequence: '0',
+			awaitingDurabilityCount: 0,
+			fenced: false,
+			backfillLost: false,
+			startupRepairPending: false,
+			channelStatuses: {},
+			...(recovery || {})
+		}
+	};
 }
+
+// The demo's guardian set (the Recovery Protocol's crash-v1 profile is three
+// guardians, two of which must answer): the user's own Umbrel guardian, an
+// LSP's onion guardian and an independent one, the reference arrangement.
+const DEMO_GUARDIANS = [
+	`${hex(64)}@http://127.0.0.1:8701`,
+	`${hex(64)}@http://${hex(28)}guardianexample.onion`,
+	`${hex(64)}@https://guardian.example.net`
+];
 
 const store = {
 	settings: {
 		defaultNetwork: 'mainnet',
-		defaultElectrum: { host: 'umbrel.local', port: 50001, tls: false }
+		defaultElectrum: { host: 'umbrel.local', port: 50001, tls: false },
+		recoveryGuardians: DEMO_GUARDIANS.slice()
 	},
 	wallets: [
 		{
@@ -319,6 +351,9 @@ const store = {
 			tor: true,
 			announce: true,
 			onionAddress: hex(28) + 'onionexample.onion:9735',
+			// Strict quorum: every channel step waits for two guardians, and
+			// a restore elsewhere resumes the channels and fences this device.
+			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
 			createdAt: now - 90 * DAY
 		},
 		{
@@ -342,6 +377,8 @@ const store = {
 			electrum: { host: 'testnet.aranguren.org', port: 51001, tls: false },
 			tor: false,
 			announce: false,
+			// Checkpoints via peer storage: no guardians, no setup.
+			recovery: { mode: 'peer-storage', guardians: [] },
 			createdAt: now - 12 * DAY
 		},
 		{
@@ -353,6 +390,20 @@ const store = {
 			tor: false,
 			announce: false,
 			createdAt: now - 2 * 3600000
+		},
+		{
+			// The seed of this wallet was restored on another device, which
+			// took the channels over: this copy is fenced, permanently, and
+			// the header badge says so.
+			id: 'demo-fenced',
+			name: 'Old phone',
+			network: 'mainnet',
+			status: 'running',
+			electrum: { host: 'umbrel.local', port: 50001, tls: false },
+			tor: false,
+			announce: false,
+			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
+			createdAt: now - 200 * DAY
 		}
 	],
 	state: {}
@@ -379,6 +430,7 @@ mainChannels[1].peerSupportsSplicing = false;
 
 store.state['demo-main'] = walletState({
 	blockHeight: 908214,
+	recovery: { lastDurableSequence: '1284' },
 	channels: mainChannels,
 	txs: makeTxs(25, 908214),
 	payments: makePayments(40),
@@ -450,6 +502,19 @@ store.state['demo-fresh'] = walletState({
 	invoices: [],
 	offers: [],
 	peers: [{ pubkey: pubkey(), host: '203.0.113.8', port: 9735, state: 'connected', alias: 'ACINQ' }]
+});
+// Fenced: the startup gate proved a newer epoch, so this copy holds its one
+// channel frozen; the other device owns it now.
+store.state['demo-fenced'] = walletState({
+	blockHeight: 908214,
+	recovery: { gate: 'fenced', fenced: true, lastDurableSequence: '402' },
+	channels: makeChannels([[1000000, 40, 'NORMAL', false, 'ACINQ']]),
+	txs: makeTxs(4, 908214),
+	payments: makePayments(5),
+	utxos: makeUtxos(1, 908214),
+	invoices: [],
+	offers: [],
+	peers: []
 });
 
 // Durable channel history, mirroring the manager's channel-events log: the
@@ -593,6 +658,12 @@ function startAmbientEvents() {
 				ch.remoteBalanceSats -= amountSats;
 			}
 			emit(w.id, 'payment:received', { paymentHash, amountSats });
+			// Under a guardian mode every channel step is a journal frame the
+			// guardians certify; the watermark moves with the payment.
+			if (isGuardianMode(w.recovery?.mode) && st.recovery.gate === 'confirmed') {
+				st.recovery.lastDurableSequence = String(BigInt(st.recovery.lastDurableSequence) + 2n);
+				emit(w.id, 'recovery:durable', { through: st.recovery.lastDurableSequence });
+			}
 		} else if (roll > 0.35) {
 			// An on-chain receive, unconfirmed, with its UTXO so the balance
 			// moves. From beignet 0.8.2 the daemon announces these over SSE
@@ -660,7 +731,52 @@ function publicRecord(w) {
 	// advertised Tor address, and anything keyed on it disappears with it.
 	const { ...rec } = w;
 	rec.onionAddress = w.announce ? (w.onionAddress ?? null) : null;
+	rec.recovery = {
+		mode: w.recovery?.mode || 'off',
+		guardians: (w.recovery?.guardians || []).slice()
+	};
+	rec.lastStartError = w.lastStartError || null;
 	return rec;
+}
+
+// The manager's channel backup rules, mirrored so the dialogs' refusals are
+// demoable: a guardian set is three entries or none, a wallet pins the set it
+// first enables a guardian mode with, and strict quorum is never left.
+const RECOVERY_MODES = ['off', 'peer-storage', 'async-remote', 'quorum'];
+const isGuardianMode = (m) => m === 'async-remote' || m === 'quorum';
+function guardianEntryOk(g) {
+	const at = String(g).indexOf('@');
+	return at === 64 && /^[0-9a-f]{64}$/i.test(String(g).slice(0, 64)) && /^https?:\/\//.test(String(g).slice(65));
+}
+function validateGuardianSet(list) {
+	const entries = (Array.isArray(list) ? list : []).map((g) => String(g || '').trim()).filter(Boolean);
+	if (entries.length === 0) return [];
+	if (entries.length !== 3) {
+		throw err(`a guardian set is exactly 3 entries (crash-v1 is 2-of-3); got ${entries.length}`, 'BAD_GUARDIANS');
+	}
+	for (const g of entries) {
+		if (!guardianEntryOk(g)) throw err(`guardian entry "${g}" is not <64-hex pubkey>@<http(s) url>`, 'BAD_GUARDIANS');
+	}
+	return entries;
+}
+function normalizeRecovery(mode, existing) {
+	const current = existing || { mode: 'off', guardians: [] };
+	if (mode === undefined) return { mode: current.mode || 'off', guardians: (current.guardians || []).slice() };
+	if (!RECOVERY_MODES.includes(mode)) throw err(`Unknown channel backup mode "${mode}".`, 'BAD_RECOVERY_MODE');
+	if (current.mode === 'quorum' && mode !== 'quorum') {
+		throw err(
+			'A wallet that has used strict quorum cannot move to a weaker setting: its journal refuses to run without the quorum barrier. Keep quorum, or create a new wallet.',
+			'RECOVERY_QUORUM_STICKY'
+		);
+	}
+	let guardians = (current.guardians || []).slice();
+	if (isGuardianMode(mode) && guardians.length === 0) {
+		guardians = store.settings.recoveryGuardians.slice();
+		if (guardians.length === 0) {
+			throw err('Guardian modes need three guardians. Set them in Settings first.', 'NO_GUARDIANS');
+		}
+	}
+	return { mode, guardians };
 }
 
 const ELECTRUM_PRESETS = [
@@ -677,12 +793,19 @@ function managerRequest(path, method, body) {
 			supportedNetworks: ['mainnet', 'testnet', 'regtest'],
 			electrumPresets: ELECTRUM_PRESETS,
 			torAvailable: true,
-			onionAvailable: true
+			onionAvailable: true,
+			engineVersion: '0.9.2',
+			recoveryAvailable: true,
+			recoveryGuardians: store.settings.recoveryGuardians.slice()
 		};
 	}
 	if (path === '/settings') {
 		if (method === 'PUT') {
-			Object.assign(store.settings, body);
+			const patch = { ...body };
+			if (patch.recoveryGuardians !== undefined) {
+				patch.recoveryGuardians = validateGuardianSet(patch.recoveryGuardians);
+			}
+			Object.assign(store.settings, patch);
 			return store.settings;
 		}
 		return store.settings;
@@ -699,6 +822,7 @@ function managerRequest(path, method, body) {
 			tor: !!body.tor,
 			announce: !!body.announce && !body.onchainOnly,
 			onchainOnly: !!body.onchainOnly,
+			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null),
 			createdAt: Date.now()
 		};
 		store.wallets.push(w);
@@ -727,6 +851,7 @@ function managerRequest(path, method, body) {
 			tor: !!body.tor,
 			announce: !!body.announce && !body.onchainOnly,
 			onchainOnly: !!body.onchainOnly,
+			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null),
 			createdAt: Date.now()
 		};
 		store.wallets.push(w);
@@ -743,7 +868,8 @@ function managerRequest(path, method, body) {
 			offers: [],
 			peers: []
 		});
-		return publicRecord(w);
+		// The real route answers { record }, with no seed echoed back.
+		return { record: publicRecord(w) };
 	}
 
 	const m = path.match(/^\/wallets\/([^/]+)(?:\/(.+))?$/);
@@ -756,6 +882,8 @@ function managerRequest(path, method, body) {
 	if (!sub) {
 		if (method === 'GET') return publicRecord(w);
 		if (method === 'PATCH') {
+			// Validated first, so a refused mode leaves the record untouched.
+			const recovery = normalizeRecovery(body.recoveryMode, w.recovery);
 			if (body.name) w.name = body.name;
 			if (body.electrum) w.electrum = body.electrum;
 			if (body.tor !== undefined) w.tor = !!body.tor;
@@ -764,6 +892,7 @@ function managerRequest(path, method, body) {
 				w.onchainOnly = !!body.onchainOnly;
 				if (w.onchainOnly) w.announce = false;
 			}
+			w.recovery = recovery;
 			return publicRecord(w);
 		}
 		if (method === 'DELETE') {
@@ -923,14 +1052,73 @@ function payOverLightning(st, id, { amountSats, bolt11, noAmount }) {
 	return payment;
 }
 
+// GET /recovery/status in the daemon's shape (beignet 0.9.2): the daemon's
+// state, the guardian set, and the node layer with a status per channel.
+function recoveryStatus(w, st) {
+	const mode = w.recovery?.mode || 'off';
+	if (mode === 'off') return { mode: 'off', profile: null, guardians: [], state: 'disabled', node: null };
+	const guardians = (w.recovery.guardians || []).map((g) => ({
+		guardianId: String(g).slice(0, 64),
+		url: String(g).slice(65)
+	}));
+	const profile = isGuardianMode(mode) ? 'crash-v1' : null;
+	const r = st.recovery;
+	if (w.status === 'restore-required' || r.restore) {
+		return {
+			mode,
+			profile,
+			guardians,
+			state: r.restore?.inProgress ? 'restoring' : 'restore-required',
+			node: null,
+			restore: { inProgress: !!r.restore?.inProgress, ...(r.restore?.lastEvent ? { lastEvent: r.restore.lastEvent } : {}) }
+		};
+	}
+	const gate = isGuardianMode(mode) ? r.gate : 'disabled';
+	const channels = st.channels
+		.filter((c) => c.state !== 'CLOSED' && c.state !== 'FORCE_CLOSED')
+		.map((c) => ({
+			channelId: c.channelId,
+			status: r.channelStatuses[c.channelId] || (gate === 'quarantined' ? 'quarantined' : 'active'),
+			awaitingDurability: false
+		}));
+	const node = {
+		gate,
+		durability: mode === 'peer-storage' ? 'local' : mode,
+		startupRepairPending: r.startupRepairPending,
+		lastDurableSequence: isGuardianMode(mode) ? r.lastDurableSequence : '0',
+		awaitingDurabilityCount: r.awaitingDurabilityCount,
+		fenced: r.fenced,
+		backfillLost: r.backfillLost,
+		channels
+	};
+	return {
+		mode,
+		profile,
+		guardians,
+		state: node.fenced || gate === 'fenced' ? 'fenced' : 'running',
+		node
+	};
+}
+
 function walletRequest(id, path, method, body) {
 	const w = store.wallets.find((x) => x.id === id);
 	if (!w) throw err('Wallet not found', 'NOT_FOUND');
-	if (w.status !== 'running') throw err('Wallet is not running', 'NOT_RUNNING');
 	const st = store.state[id];
 	const [route, query] = path.split('?');
+	// A daemon holding for a guardian restore has no node underneath it:
+	// only its recovery surface answers, everything else is 503.
+	if (w.status === 'restore-required') {
+		if (route === '/recovery/status') return recoveryStatus(w, st);
+		throw err(
+			'This daemon is holding for a guardian restore: the database is fresh and the guardian set holds its namespace.',
+			'NODE_RESTORE_PENDING'
+		);
+	}
+	if (w.status !== 'running') throw err('Wallet is not running', 'NOT_RUNNING');
 
 	switch (route) {
+		case '/recovery/status':
+			return recoveryStatus(w, st);
 		case '/info':
 			return {
 				nodeId: nodeId(id),
@@ -965,7 +1153,17 @@ function walletRequest(id, path, method, body) {
 				score: st.channels.length ? 82 : 45,
 				ready: st.channels.length > 0,
 				checks: [
-					{ name: 'backup', status: 'PASS', message: 'Seed backed up' },
+					// Mirrors the wallet's channel backup rather than a constant
+					// pass (the real daemon's readiness report carries no backup
+					// check at all; nothing in the dashboard reads this route).
+					{
+						name: 'backup',
+						status: w.recovery?.mode && w.recovery.mode !== 'off' ? 'PASS' : 'WARN',
+						message:
+							w.recovery?.mode && w.recovery.mode !== 'off'
+								? `Channel backup: ${w.recovery.mode}`
+								: 'Seed only; channels close on restore'
+					},
 					{ name: 'electrum', status: 'PASS', message: 'Electrum server reachable' },
 					{ name: 'channels', status: st.channels.length ? 'PASS' : 'FAIL', message: st.channels.length ? `${st.channels.length} channels open` : 'No channels open' },
 					{ name: 'inbound', status: 'WARN', message: 'Limited inbound liquidity' },

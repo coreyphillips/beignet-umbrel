@@ -11,6 +11,13 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 	const [electrum, setElectrum] = useState(
 		config.defaultElectrum || { host: '', port: 50001, tls: false }
 	);
+	// Three guardian slots, shown as three inputs; blank ones are dropped
+	// before the save so "all three or none" is the server's rule to state.
+	const [guardians, setGuardians] = useState(() => {
+		const list = (config.recoveryGuardians || []).slice(0, 3);
+		while (list.length < 3) list.push('');
+		return list;
+	});
 	const [busy, setBusy] = useState(false);
 
 	const save = async () => {
@@ -20,6 +27,9 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			patch.defaultElectrum = electrum.host.trim()
 				? { host: electrum.host.trim(), port: parseInt(electrum.port, 10), tls: !!electrum.tls }
 				: null;
+			if (config.recoveryAvailable) {
+				patch.recoveryGuardians = guardians.map((g) => g.trim()).filter(Boolean);
+			}
 			await manager.updateSettings(patch);
 			const c = await manager.config();
 			onSaved(c);
@@ -49,6 +59,31 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 				Default Electrum server
 			</div>
 			<ElectrumFields presets={config.electrumPresets} value={electrum} onChange={setElectrum} />
+			{config.recoveryAvailable && (
+				<>
+					<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+						Recovery guardians
+					</div>
+					<div className="info-note">
+						Three servers that hold an encrypted journal of channel state for wallets
+						using a guardian backup mode. All three or none. A wallet pins the set it
+						first registers with and cannot move to another set later, so choose servers
+						you expect to keep.
+					</div>
+					{guardians.map((g, i) => (
+						<Field key={i} label={`Guardian ${i + 1}`}>
+							<input
+								value={g}
+								placeholder="<64-hex pubkey>@https://guardian.example"
+								spellCheck={false}
+								onChange={(e) =>
+									setGuardians((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))
+								}
+							/>
+						</Field>
+					))}
+				</>
+			)}
 			<div className="center-actions">
 				<Button variant="primary" busy={busy} onClick={save}>
 					Save settings

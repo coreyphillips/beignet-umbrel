@@ -4,8 +4,9 @@ import { usePoll } from '../../hooks/usePoll.js';
 import { Badge, Button, Card, CopyText, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
+import { describeRecovery } from '../../lib/recovery.js';
 
-export default function OverviewTab({ id, api, info, health, rec, tick }) {
+export default function OverviewTab({ id, api, info, health, recovery, rec, tick }) {
 	const { data } = usePoll(
 		async () => {
 			const [balance, nodeUri, liquidity, fees, feeEst, channels] = await Promise.all([
@@ -124,6 +125,7 @@ export default function OverviewTab({ id, api, info, health, rec, tick }) {
 							)}
 							{!onchainOnly && <Row k="Pending close" v={fmtSats(info?.pendingCloseBalanceSats)} />}
 						{splicing > 0 && <Row k="Splicing" v={fmtSats(splicing)} />}
+							{!onchainOnly && <BackupRow recovery={recovery} rec={rec} />}
 						</tbody>
 					</table>
 				</Card>
@@ -274,6 +276,27 @@ function ConnectCard({ id, info, rec, nodeUri }) {
 				{hint}
 			</span>
 		</Card>
+	);
+}
+
+// Channel backup, the tier stated plainly: the daemon's recovery status
+// (null while it has not answered yet, state 'unsupported' when the engine
+// predates the feature) reduced to a line and a sentence.
+function BackupRow({ recovery, rec }) {
+	if (!recovery) return <Row k="Backup" v="-" />;
+	const d = describeRecovery(recovery, rec || {});
+	return (
+		<Row
+			k="Backup"
+			v={
+				<>
+					<Badge tone={d.tone}>{d.tier}</Badge>
+					<div className="wallet-meta" style={{ marginTop: 4 }}>
+						{d.detail}
+					</div>
+				</>
+			}
+		/>
 	);
 }
 

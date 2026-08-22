@@ -109,3 +109,91 @@ test('a wallet whose channels all closed reads as having none', async () => {
 		await r.unmount();
 	}
 });
+
+// The Backup row in the Node status card: the channel backup tier, stated
+// plainly from the daemon's recovery status (see lib/recovery.js for the
+// full table; these pin the row's presence and wording on the page).
+const recoveryNode = (extra = {}) => ({
+	gate: 'confirmed',
+	durability: 'quorum',
+	startupRepairPending: false,
+	lastDurableSequence: '1284',
+	awaitingDurabilityCount: 0,
+	fenced: false,
+	backfillLost: false,
+	channels: [],
+	...extra
+});
+
+function backupRow(r) {
+	return r.$$('tr').find((tr) => /^Backup/.test(tr.textContent.trim()));
+}
+
+test('the Backup row states the tier: seed only, quorum, fenced', async () => {
+	const off = await render(wrapped, {
+		...props([ch('NORMAL')]),
+		recovery: { mode: 'off', state: 'disabled', node: null, guardians: [] }
+	});
+	try {
+		await settle(50);
+		const row = backupRow(off);
+		assert.ok(row, 'a Lightning wallet has a Backup row');
+		assert.match(row.textContent, /Seed only \(channels close on restore\)/);
+		assert.ok(row.querySelector('.badge.yellow'), 'seed only on a Lightning wallet is a yellow');
+	} finally {
+		await off.unmount();
+	}
+	const quorum = await render(wrapped, {
+		...props([ch('NORMAL')]),
+		recovery: { mode: 'quorum', state: 'running', node: recoveryNode(), guardians: [] }
+	});
+	try {
+		await settle(50);
+		assert.match(backupRow(quorum).textContent, /Continuity: quorum, durable to seq 1284/);
+		assert.ok(backupRow(quorum).querySelector('.badge.green'));
+	} finally {
+		await quorum.unmount();
+	}
+	const fenced = await render(wrapped, {
+		...props([ch('NORMAL')]),
+		recovery: { mode: 'quorum', state: 'fenced', node: recoveryNode({ fenced: true, gate: 'fenced' }), guardians: [] }
+	});
+	try {
+		await settle(50);
+		assert.match(backupRow(fenced).textContent, /Another device took over/);
+		assert.ok(backupRow(fenced).querySelector('.badge.red'));
+	} finally {
+		await fenced.unmount();
+	}
+});
+
+test('an engine without the route reads as seed only, and a status not yet answered as a dash', async () => {
+	const old = await render(wrapped, { ...props([ch('NORMAL')]), recovery: { state: 'unsupported' } });
+	try {
+		await settle(50);
+		assert.match(backupRow(old).textContent, /Seed only/);
+	} finally {
+		await old.unmount();
+	}
+	const pending = await render(wrapped, { ...props([ch('NORMAL')]), recovery: null });
+	try {
+		await settle(50);
+		assert.match(backupRow(pending).textContent, /^Backup\s*-$/);
+	} finally {
+		await pending.unmount();
+	}
+});
+
+test('an on-chain only wallet has no Backup row', async () => {
+	const r = await render(wrapped, {
+		...props([]),
+		rec: { onchainOnly: true },
+		recovery: { mode: 'off', state: 'disabled', node: null, guardians: [] }
+	});
+	try {
+		await settle(50);
+		assert.equal(backupRow(r), undefined);
+	} finally {
+		await r.unmount();
+	}
+});
