@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.12.2"
+version: "0.12.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,28 +30,22 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  This release unsticks wallets that vanished into loading skeletons
-  after 0.12.0. The cause was in the engine: a peer sending the full
-  network graph was checked signature by signature on the daemon's
-  only thread, which could freeze a wallet for good on modest
-  hardware, and one frozen wallet then blanked the whole dashboard.
-  beignet 0.9.1 does that work in small slices off to the side and
-  skips signatures that prove nothing new, so the first start after
-  this update may quietly chew through its peers' graph for a while,
-  with the dashboard responsive throughout.
+  The slow first start is gone. beignet 0.9.2 checks signatures with
+  the platform's native crypto when available, skips checks that
+  prove nothing until an entry is actually served to someone, and no
+  longer asks a peer for a network graph it is about to receive
+  anyway. The catch-up that used to occupy a wallet's daemon for
+  long background minutes after an update now takes seconds.
 
 
-  The dashboard takes its own lesson: one unresponsive wallet can no
-  longer take the page down with it. Its row stays, its live figures
-  wait, and everything else renders. The manager also keeps checking
-  wallet health after startup instead of trusting the first hello
-  forever, so an unresponsive wallet is now reported as exactly that.
+  The engine also learned what this app's manager already worked
+  around: a lock file left behind by a force-killed wallet in a
+  previous container can never again refuse that wallet its start.
 
 
-  And a wallet whose daemon was force-killed before an update can no
-  longer refuse to start afterward over its own leftover lock file:
-  the manager clears a lock that provably belongs to a previous
-  container before starting the wallet.
+  And a wallet whose first boot outlasts the manager's startup
+  window is reported running the moment it answers, instead of
+  reading 'starting' forever beside a working wallet.
 
 dependencies: []
 path: ""
