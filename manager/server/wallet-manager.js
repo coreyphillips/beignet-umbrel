@@ -1751,11 +1751,18 @@ class WalletManager {
 			const balance = await this._daemonCall(rec, 'GET', '/balance').catch(() => null);
 			if (!balance) return null;
 			const onchainSats = balance.onchain || 0;
-			if (onchainSats < lfbw.CHANNELIZE_FLOOR_SATS) return decided({ action: 'wait', reason: 'below-floor' });
+			if (onchainSats < lfbw.CHANNELIZE_FLOOR_SATS) {
+				if (lf.previousPrimary) {
+					const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+					if (channels) this._forgetPreviousPrimary(rec, channels);
+				}
+				return decided({ action: 'wait', reason: 'below-floor' });
+			}
 			const [utxos, channels] = await Promise.all([
 				this._daemonCall(rec, 'GET', '/utxos').catch(() => null),
 				this._daemonCall(rec, 'GET', '/channels').catch(() => [])
 			]);
+			this._forgetPreviousPrimary(rec, channels);
 			const target = lfbw.channelizeTarget({ onchainSats, utxos, channels, primaryPubkey: lf.primaryPubkey });
 			if (target.action === 'wait') return decided(target);
 			const fees = await this._daemonCall(rec, 'GET', '/fees/estimates').catch(() => null);
@@ -1831,6 +1838,80 @@ class WalletManager {
 	 * fee wait (never the channel minimums), run at once whatever the
 	 * backoff says. Answers with what the pass decided.
 	 */
+	/**
+	 * The previous primary is remembered only while a channel with it
+	 * exists (umbrel #86); once the wallet holds none, the record forgets it
+	 * and the Overview stops listing it.
+	 */
+	_forgetPreviousPrimary(rec, channels) {
+		const lf = rec.lfbw;
+		if (!lf || !lf.previousPrimary) return false;
+		if (!lfbw.previousPrimaryDone(lf.previousPrimary, channels)) return false;
+		lf.previousPrimary = null;
+		this.registry.upsert(rec);
+		this._log(rec.id, 'lightning-first: the channel with the previous primary is gone; its funds are with the new one');
+		return true;
+	}
+
+	/**
+	 * "Move funds to the new primary": cooperatively close every live
+	 * channel with the previous primary. The payout lands on-chain and the
+	 * channelize pass carries it into the home channel once it confirms,
+	 * which is the flow a deposit takes anyway.
+	 */
+	async moveHome(id) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		if (!lfbw.isLfbw(rec)) throw httpError(400, 'NOT_LFBW', 'Not a lightning-first wallet');
+		const rt = this.runtimeState(id);
+		if (!rt.proc || !rt.healthy) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
+		const previous = rec.lfbw.previousPrimary;
+		if (!previous) throw httpError(409, 'NO_PREVIOUS_PRIMARY', 'This wallet has not changed its primary node');
+		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+		if (!channels) throw httpError(503, 'WALLET_UNRESPONSIVE', 'The wallet did not answer');
+		if (this._forgetPreviousPrimary(rec, channels)) {
+			throw httpError(409, 'NO_PREVIOUS_CHANNEL', 'There is no channel with the previous primary left to move');
+		}
+		const open = lfbw.previousPrimaryChannels(previous, channels).filter((c) => c.state === 'NORMAL');
+		if (open.length === 0) {
+			throw httpError(409, 'NO_PREVIOUS_CHANNEL', 'The channel with the previous primary is already closing');
+		}
+		const closed = [];
+		for (const c of open) {
+			this._log(id, `lightning-first: closing channel ${c.channelId} with the previous primary; its funds move into the home channel once the close confirms`);
+			await this._daemonCall(rec, 'POST', '/channel/close', { channelId: c.channelId });
+			closed.push(c.channelId);
+		}
+		return { closed, pubkey: previous.pubkey };
+	}
+
+	/**
+	 * Close the home channel. With `turnOff`, lightning-first is switched
+	 * off FIRST (the record loses its lfbw block and the daemon restarts on
+	 * the new posture, exactly as the Edit dialog would do it), and the close
+	 * runs on the restarted daemon; otherwise channelize would move the
+	 * payout straight back into a new channel with the primary after one
+	 * confirmation, and the close would have paid a fee to end up where it
+	 * started (umbrel #86).
+	 */
+	async closeHome(id, { channelId, turnOff = false } = {}) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		if (!lfbw.isLfbw(rec)) throw httpError(400, 'NOT_LFBW', 'Not a lightning-first wallet');
+		if (!channelId || typeof channelId !== 'string') throw httpError(400, 'INVALID_PARAMS', 'channelId required');
+		const rt = this.runtimeState(id);
+		if (!rt.proc || !rt.healthy) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
+		if (turnOff) {
+			this._log(id, 'lightning-first: turning lightning-first off before closing the home channel, so the payout stays on-chain');
+			rec.lfbw = null;
+			this.registry.upsert(rec);
+			await this._restartWallet(id);
+			await this._waitDaemonHealthy(rec);
+		}
+		await this._daemonCall(rec, 'POST', '/channel/close', { channelId });
+		return { closed: channelId, lfbwOff: !!turnOff, record: this.publicRecord(id) };
+	}
+
 	async channelizeNow(id) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');

@@ -238,6 +238,26 @@ async function main() {
 		})
 	);
 
+	// Re-pointing the primary leaves the old home channel open (umbrel #86):
+	// this closes it cooperatively so channelize can carry the funds into the
+	// new one once the payout confirms.
+	api.post(
+		'/wallets/:id/lfbw/move-home',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: await manager.moveHome(req.params.id) });
+		})
+	);
+
+	// Close the home channel, optionally turning lightning-first off first
+	// so the payout is not moved straight back into a new channel.
+	api.post(
+		'/wallets/:id/lfbw/close-home',
+		asyncHandler(async (req, res) => {
+			const { channelId, turnOff } = req.body || {};
+			res.json({ ok: true, result: await manager.closeHome(req.params.id, { channelId, turnOff: !!turnOff }) });
+		})
+	);
+
 	api.get('/wallets/:id/logs', (req, res) =>
 		res.json({ ok: true, result: manager.logs(req.params.id) })
 	);
