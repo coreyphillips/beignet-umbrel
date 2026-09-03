@@ -199,8 +199,46 @@ function normalizeLfbw(input, { network, selfId, getRecord, available, existing 
 		initialChannelOpened: samePrimary ? !!existing.initialChannelOpened : false,
 		setup: samePrimary ? existing.setup || 'pending' : 'pending',
 		setupError: samePrimary ? existing.setupError || null : null,
-		setupAt: samePrimary ? existing.setupAt || null : null
+		setupAt: samePrimary ? existing.setupAt || null : null,
+		previousPrimary: previousPrimaryAfterEdit(existing, block, samePrimary)
 	};
+}
+
+/**
+ * Re-pointing the primary does not close the channel with the old one: the
+ * simple view lists channels with the CURRENT primary only, so without a
+ * record of the old one its balance would vanish from "Your channel" while
+ * Total still counts it (umbrel #86). The old primary is remembered here
+ * until the wallet has no channel with it any more (previousPrimaryDone),
+ * so the Overview can show that channel and offer to move its funds.
+ *
+ * Switching back to the remembered primary forgets it (its channel is the
+ * home channel again); any other change replaces it, since the channel with
+ * an intermediate primary is what channelize will have been funding.
+ */
+function previousPrimaryAfterEdit(existing, block, samePrimary, now = Date.now()) {
+	if (!existing || !existing.enabled) return null;
+	if (samePrimary) return existing.previousPrimary || null;
+	if (!existing.primaryPubkey) return existing.previousPrimary || null;
+	if (block.primaryPubkey && block.primaryPubkey === existing.primaryPubkey) return null;
+	if (existing.previousPrimary && block.primaryPubkey === existing.previousPrimary.pubkey) return null;
+	return {
+		pubkey: existing.primaryPubkey,
+		walletId: existing.mode === 'internal' ? existing.primaryWalletId || null : null,
+		at: now
+	};
+}
+
+/** Whether the wallet has no live channel with its previous primary left. */
+function previousPrimaryDone(previousPrimary, channels) {
+	if (!previousPrimary || !previousPrimary.pubkey) return true;
+	return !(channels || []).some((c) => c.peerPubkey === previousPrimary.pubkey && isLive(c));
+}
+
+/** The live channels with the previous primary that a move should close: the usable ones. */
+function previousPrimaryChannels(previousPrimary, channels) {
+	if (!previousPrimary || !previousPrimary.pubkey) return [];
+	return (channels || []).filter((c) => c.peerPubkey === previousPrimary.pubkey && isLive(c));
 }
 
 /** The lightning-first wallets whose internal primary is `rec`. */
@@ -481,6 +519,9 @@ module.exports = {
 	parseNodeUri,
 	isLfbw,
 	normalizeLfbw,
+	previousPrimaryAfterEdit,
+	previousPrimaryDone,
+	previousPrimaryChannels,
 	dependentsOf,
 	normalizeJit,
 	providerEnv,

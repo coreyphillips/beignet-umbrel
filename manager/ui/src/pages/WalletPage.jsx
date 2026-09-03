@@ -49,6 +49,15 @@ const LFBW_TABS = [
 	['send', 'Send', SendTab]
 ];
 const ADVANCED_KEY = 'beignet-lfbw-advanced';
+
+/** Whether the edit form points the wallet at a different primary than its record holds. */
+function primaryChanged(form, current) {
+	if (!form || !current) return false;
+	if (form.primaryWalletId === 'external') {
+		return current.mode !== 'external' || (form.primaryUri || '').trim() !== (current.primaryUri || '');
+	}
+	return current.mode !== 'internal' || form.primaryWalletId !== current.primaryWalletId;
+}
 function readAdvanced() {
 	try {
 		return sessionStorage.getItem(ADVANCED_KEY) === '1';
@@ -658,6 +667,12 @@ function EditWalletModal({
 			{lfbwAvailable && !onchainOnly && (
 				<>
 					<LfbwFields value={lfbw} onChange={setLfbw} candidates={candidates} editing currentPrimary={currentPrimary} />
+					{lfbw.enabled && rec.lfbw?.enabled && primaryChanged(lfbw, rec.lfbw) && (
+						<div className="info-note">
+							The channel with your current primary stays open after the change. The Overview lists it as
+							your previous primary's channel and offers to move its funds into the new one.
+						</div>
+					)}
 					{lfbw.enabled !== !!rec.lfbw?.enabled && (
 						<div className="info-note">
 							{lfbw.enabled

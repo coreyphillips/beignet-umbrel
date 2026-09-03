@@ -921,12 +921,23 @@ function nodeId(id) {
 for (const w of store.wallets) {
 	if (w.lfbw && w.lfbw.mode === 'internal') w.lfbw.primaryPubkey = nodeId(w.lfbw.primaryWalletId);
 }
+// Spending was re-pointed from Savings to Main an hour ago: the channel
+// with Savings stays open until it is moved (umbrel #86).
+store.wallets.find((w) => w.id === 'demo-lfbw').lfbw.previousPrimary = {
+	pubkey: nodeId('demo-savings'),
+	walletId: 'demo-savings',
+	at: now - 60 * 60 * 1000
+};
 store.state['demo-lfbw'] = walletState({
 	blockHeight: 908214,
 	channels: (() => {
-		const chans = makeChannels([[500000, 40, 'NORMAL', true]]);
+		const chans = makeChannels([
+			[500000, 40, 'NORMAL', true],
+			[150000, 80, 'NORMAL', true]
+		]);
 		chans[0].peerPubkey = nodeId('demo-main');
 		chans[0].peerSupportsSplicing = true;
+		chans[1].peerPubkey = nodeId('demo-savings');
 		return chans;
 	})(),
 	txs: makeTxs(5, 908214),
@@ -1403,6 +1414,13 @@ function managerRequest(path, method, body) {
 			if (nextLfbw !== undefined) {
 				const was = w.lfbw;
 				w.lfbw = w.onchainOnly ? null : nextLfbw;
+				// The manager remembers the old primary while a channel with it
+				// exists (umbrel #86); switching back forgets it.
+				if (w.lfbw && was && was.enabled && was.primaryPubkey) {
+					if (w.lfbw.primaryPubkey === was.primaryPubkey) w.lfbw.previousPrimary = was.previousPrimary || null;
+					else if (was.previousPrimary && was.previousPrimary.pubkey === w.lfbw.primaryPubkey) w.lfbw.previousPrimary = null;
+					else w.lfbw.previousPrimary = { pubkey: was.primaryPubkey, walletId: was.mode === 'internal' ? was.primaryWalletId : null, at: Date.now() };
+				}
 				if (w.lfbw && (!was || was.setup !== 'ready' || w.lfbw.setup !== 'ready')) runDemoLfbwSetup(w);
 			}
 			if (body.liquidityProvider !== undefined) w.liquidityProvider = !!body.liquidityProvider;
@@ -1469,6 +1487,31 @@ function managerRequest(path, method, body) {
 			w.lfbwLast = { at: Date.now(), action: 'open', amountSats: amountSats - 1200 };
 		}
 		return { ...w.lfbwLast };
+	}
+	if (sub === 'lfbw/move-home' && method === 'POST') {
+		// Close every open channel with the previous primary; the payout
+		// moves into the home channel once it confirms (umbrel #86).
+		if (!w.lfbw || !w.lfbw.enabled) throw err('Not a lightning-first wallet', 'NOT_LFBW');
+		const previous = w.lfbw.previousPrimary;
+		if (!previous) throw err('This wallet has not changed its primary node', 'NO_PREVIOUS_PRIMARY');
+		const st = store.state[w.id];
+		const open = st.channels.filter((c) => c.peerPubkey === previous.pubkey && c.state === 'NORMAL');
+		if (open.length === 0) throw err('The channel with the previous primary is already closing', 'NO_PREVIOUS_CHANNEL');
+		for (const c of open) closeDemoChannel(w.id, c.channelId, false);
+		return { closed: open.map((c) => c.channelId), pubkey: previous.pubkey };
+	}
+	if (sub === 'lfbw/close-home' && method === 'POST') {
+		if (!w.lfbw || !w.lfbw.enabled) throw err('Not a lightning-first wallet', 'NOT_LFBW');
+		const st = store.state[w.id];
+		const c = st.channels.find((x) => x.channelId === body.channelId);
+		if (!c) throw err('Channel not found', 'INVALID_PARAMS');
+		if (body.turnOff) {
+			// Lightning-first off first, so the payout stays on-chain; the
+			// manager restarts the daemon on the new posture before closing.
+			w.lfbw = null;
+		}
+		closeDemoChannel(w.id, c.channelId, false);
+		return { closed: c.channelId, lfbwOff: !!body.turnOff, record: publicRecord(w) };
 	}
 	if (sub === 'lfbw/setup' && method === 'POST') {
 		// Like the manager: the call answers once setup has run its course.
@@ -1687,6 +1730,35 @@ function recoveryStatus(w, st) {
 		...(autoApply ? { autoApply } : {}),
 		...(r.capsuleEvent ? { restore: { inProgress: false, lastEvent: r.capsuleEvent } } : {})
 	};
+}
+
+/**
+ * Close a channel the way the daemon does: it negotiates for a moment,
+ * then disappears. Shared by POST /channel/close and the manager's
+ * lightning-first moves. Once the last channel with a previous primary is
+ * gone, the wallet forgets that primary, as the manager does.
+ */
+function closeDemoChannel(id, channelId, force) {
+	const st = store.state[id];
+	const c = st.channels.find((x) => x.channelId === channelId);
+	if (!c) throw err('Channel not found');
+	c.state = force ? 'FORCE_CLOSED' : 'NEGOTIATING_CLOSING';
+	c.htlcUsable = false;
+	recordChannelEvent(id, {
+		event: force ? 'channel:force-closing' : 'channel:pending-close',
+		channelId: c.channelId,
+		initiator: 'local'
+	});
+	setTimeout(() => {
+		store.state[id].channels = store.state[id].channels.filter((x) => x.channelId !== channelId);
+		recordChannelEvent(id, { event: 'channel:closed', channelId });
+		emit(id, 'channel:closed', {});
+		const w = store.wallets.find((x) => x.id === id);
+		const previous = w && w.lfbw && w.lfbw.previousPrimary;
+		if (previous && !store.state[id].channels.some((x) => x.peerPubkey === previous.pubkey)) {
+			w.lfbw.previousPrimary = null;
+		}
+	}, 6000);
 }
 
 function walletRequest(id, path, method, body) {
@@ -2499,20 +2571,8 @@ function walletRequest(id, path, method, body) {
 			const c = st.channels.find((x) => x.channelId === body.channelId);
 			if (!c) throw err('Channel not found');
 			const force = route.endsWith('forceclose');
-			c.state = force ? 'FORCE_CLOSED' : 'NEGOTIATING_CLOSING';
-			recordChannelEvent(id, {
-				event: force ? 'channel:force-closing' : 'channel:pending-close',
-				channelId: c.channelId,
-				initiator: 'local'
-			});
-			setTimeout(() => {
-				store.state[id].channels = store.state[id].channels.filter(
-					(x) => x.channelId !== body.channelId
-				);
-				recordChannelEvent(id, { event: 'channel:closed', channelId: body.channelId });
-				emit(id, 'channel:closed', {});
-			}, 6000);
-			return { ok: true };
+			closeDemoChannel(id, c.channelId, force);
+			return { ok: true, channelId: c.channelId };
 		}
 		case '/channel/splice-in':
 		case '/channel/splice-out': {

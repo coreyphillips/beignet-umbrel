@@ -441,3 +441,100 @@ test('a lightning-first wallet opens on Lightning and pays addresses from its ch
 	assert.ok(view.$$('.pill').find((b) => b.textContent.trim() === 'Lightning').className.includes('active'), 'opens on Lightning');
 	await view.unmount();
 });
+
+// A BOLT11 spec vector (no amount in the hrp; the daemon's decode names it).
+const SPEC_INVOICE =
+	'lnbc1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq9qrsgq357wnc5r2ueh7ck6q93dj32dlqnls087fxdwk8qakdyafkq3yap9us6v52vjjsrvywa6rt52cm9r9zqt8r2t7mlcwspyetp5h2tztugp9lfyql';
+const LFBW_PK = '03' + '22'.repeat(32);
+
+/** A lightning-first wallet's daemon: a home channel, and funds on the way. */
+function stubLfbwApi({ amountSats, utxos = [], balance, liquidity } = {}) {
+	const calls = [];
+	const home = { ...OPEN_CHANNEL, peerPubkey: LFBW_PK, localBalanceSats: 100_000, remoteBalanceSats: 400_000 };
+	return {
+		calls,
+		get: async (path) => {
+			calls.push(['GET', path]);
+			if (path === '/channels') return [home];
+			if (path === '/balance') return balance ?? { onchain: 100_000, lightning: 100_000, total: 200_000, splicingSats: 0 };
+			if (path === '/liquidity') return liquidity ?? { sendableSats: 100_000, totalLocalBalanceSats: 100_000 };
+			if (path === '/utxos') return utxos;
+			if (path === '/fees/estimates') return { fast: 18, normal: 7, slow: 2 };
+			return null;
+		},
+		post: async (path, body) => {
+			calls.push(['POST', path, body]);
+			if (path === '/invoice/decode') {
+				return { amountSats, payeeNodeKey: '02' + 'ab'.repeat(32), description: 'Rent', timestamp: Math.floor(Date.now() / 1000), expiry: 3600, warnings: [] };
+			}
+			if (path === '/invoice/estimate-fee') return { estimatedFeeSats: 3, successProbabilityPct: 90, hopCount: 2 };
+			if (path === '/invoice/pay-safe') return { status: 'COMPLETED', feeSats: 3 };
+			return null;
+		}
+	};
+}
+
+async function mountLfbwSend(api) {
+	const view = await render(ToastProvider, {
+		children: createElement(SendTab, {
+			id: 'w1',
+			api,
+			info: { onchainBalanceSats: 100_000, channelCount: 1 },
+			rec: { id: 'w1', network: 'mainnet', lfbw: { enabled: true, primaryPubkey: LFBW_PK, setup: 'ready' } },
+			tick: 0,
+			bump: () => {}
+		})
+	});
+	await settle(50);
+	return view;
+}
+
+test('a lightning-first wallet says what is arriving when an invoice exceeds Can send but not Total, and keeps it', async () => {
+	const api = stubLfbwApi({ amountSats: 150_000, utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 100_000, height: 908_000 }] });
+	const view = await mountLfbwSend(api);
+	try {
+		const box = view.$('textarea[placeholder^="lnbc"]');
+		await type(box, SPEC_INVOICE);
+		await settle(600);
+		const note = view.$('[data-testid="arriving-funds"]');
+		assert.ok(note, 'the arriving note is on screen');
+		assert.match(note.textContent, /50,000 sats more than you can send right now/);
+		assert.match(note.textContent, /100,000 sats are moving into your channel, about one block from now/);
+		assert.equal(view.$('textarea[placeholder^="lnbc"]').value, SPEC_INVOICE, 'the invoice stays in the box');
+		const pay = view.$$('button').find((b) => /^Pay/.test(b.textContent.trim()));
+		assert.equal(pay.disabled, true, 'nothing is attempted against funds that are not there yet');
+		assert.equal(view.$('[data-testid="over-total"]'), null);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a lightning-first wallet refuses an invoice above Total outright', async () => {
+	const api = stubLfbwApi({ amountSats: 250_000 });
+	const view = await mountLfbwSend(api);
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await settle(600);
+		assert.equal(view.$('[data-testid="arriving-funds"]'), null);
+		const over = view.$('[data-testid="over-total"]');
+		assert.ok(over);
+		assert.match(over.textContent, /more than this wallet holds in total/);
+		assert.equal(view.$$('button').find((b) => /^Pay/.test(b.textContent.trim())).disabled, true);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a lightning-first wallet pays an invoice within Can send without a note', async () => {
+	const api = stubLfbwApi({ amountSats: 50_000 });
+	const view = await mountLfbwSend(api);
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await settle(600);
+		assert.equal(view.$('[data-testid="arriving-funds"]'), null);
+		assert.equal(view.$('[data-testid="over-total"]'), null);
+		assert.equal(view.$$('button').find((b) => /^Pay/.test(b.textContent.trim())).disabled, false);
+	} finally {
+		await view.unmount();
+	}
+});

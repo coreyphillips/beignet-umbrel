@@ -31,6 +31,16 @@ export function homeChannel(channels, primaryPubkey) {
 }
 
 /**
+ * The wallet's live channels with its PREVIOUS primary (the manager records
+ * one when the primary is re-pointed and forgets it once these are gone):
+ * their balance is part of Total and must stay findable on the page.
+ */
+export function previousPrimaryChannels(channels, previousPrimary) {
+	if (!previousPrimary || !previousPrimary.pubkey) return [];
+	return primaryChannels(channels, previousPrimary.pubkey);
+}
+
+/**
  * Which invoice to mint. `plain` when the home channel can take the amount
  * as it stands, so a briefly offline primary does not block a receive the
  * channel already covers; `jit` when the primary has to provision inbound
@@ -38,15 +48,65 @@ export function homeChannel(channels, primaryPubkey) {
  * opens a channel when none exists and splices the existing one bigger
  * when the payment outgrows it); a refusal when nothing can be minted yet.
  */
-export function planInvoice({ wantedSats = 0, channels, primaryPubkey, setup, primaryRunning = true }) {
+export function planInvoice({
+	wantedSats = 0,
+	channels,
+	primaryPubkey,
+	setup,
+	primaryRunning = true,
+	primaryConnected = true
+}) {
 	if (setup !== 'ready' || !primaryPubkey) return { kind: 'refuse', code: 'NOT_READY' };
 	const inbound = primaryChannels(channels, primaryPubkey)
 		.filter(usable)
 		.reduce((sum, c) => sum + (c.remoteBalanceSats || 0), 0);
 	const covered = wantedSats > 0 ? inbound >= wantedSats : inbound > 0;
 	if (covered) return { kind: 'plain' };
-	if (!primaryRunning) return { kind: 'refuse', code: 'PRIMARY_DOWN' };
+	if (!primaryRunning) return { kind: 'refuse', code: 'PRIMARY_DOWN', reason: 'not-running' };
+	// A primary whose daemon is up but whose peer connection is down (a Tor
+	// reestablish window, say) cannot provision either: the intent never
+	// reaches it, and the invoice would be minted only to fail.
+	if (!primaryConnected) return { kind: 'refuse', code: 'PRIMARY_DOWN', reason: 'not-connected' };
 	return { kind: 'jit' };
+}
+
+/**
+ * What to say when a payment is larger than Can send but not larger than
+ * Total: the difference is arriving, and the figures say how (umbrel #89).
+ * Null when the amount is payable now or exceeds Total, which stays the
+ * plain refusal. `status` is lfbwStatus().
+ */
+export function arrivingFundsNote(amountSats, status) {
+	if (!status || !(amountSats > 0)) return null;
+	if (amountSats <= status.canSend || amountSats > status.total) return null;
+	const short = amountSats - status.canSend;
+	const parts = [];
+	if (status.unconfirmed > 0) {
+		parts.push(
+			`${fmt(status.unconfirmed)} sats are arriving on-chain: they need one confirmation, and then a move into your channel, so about two blocks`
+		);
+	}
+	if (status.confirmedOnchain > 0) {
+		parts.push(
+			status.feeWait
+				? `${fmt(status.confirmedOnchain)} sats have confirmed and are waiting on the fee rate; "Move now anyway" on the Overview moves them at today's fee, about one block`
+				: status.confirmedOnchain >= CHANNELIZE_FLOOR_SATS
+				? `${fmt(status.confirmedOnchain)} sats are moving into your channel, about one block from now`
+				: `${fmt(status.confirmedOnchain)} sats are waiting for more to arrive before they move (amounts under ${fmt(CHANNELIZE_FLOOR_SATS)} sats stay put)`
+		);
+	}
+	const openingSats = status.pendingChannels
+		? status.pendingChannels.reduce((s, c) => s + (c.localBalanceSats || 0), 0)
+		: 0;
+	if (openingSats > 0) {
+		parts.push(`${fmt(openingSats)} sats are in a channel that is still confirming, about one block from now`);
+	}
+	const splicing = Math.max(0, status.pending - status.unconfirmed - status.confirmedOnchain - openingSats);
+	if (splicing > 0) {
+		parts.push(`${fmt(splicing)} sats rejoin your balance when the current splice locks, about one block from now`);
+	}
+	const arriving = parts.length > 0 ? parts.join('; ') : `${fmt(status.pending)} sats are on their way into your channel`;
+	return `This asks for ${fmt(short)} sats more than you can send right now, but it is within your total balance. ${arriving}. Once that lands, you can pay this; the request stays here so you can try again.`;
 }
 
 /**
@@ -112,12 +172,20 @@ export function lfbwStatus({ rec, info, balance, liquidity, channels, utxos, pee
 
 	const primaryConnected = !!primaryPubkey && (peers || []).some((p) => p.pubkey === primaryPubkey && (p.state === 'connected' || p.state === 'ready' || p.connected === true));
 
+	// Re-pointed primary: the channel with the old one stays open until it
+	// is moved, and it is listed here so its balance is not a figure the
+	// user cannot find (umbrel #86).
+	const previousPrimary = (lf && lf.previousPrimary) || null;
+	const previousChannels = previousPrimaryChannels(channels, previousPrimary);
+
 	return {
 		lf,
 		primaryPubkey,
 		home,
 		pendingChannels,
 		channels: withPrimary,
+		previousPrimary,
+		previousChannels,
 		total,
 		canSend,
 		canReceive,

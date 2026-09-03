@@ -6,7 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { homeChannel, lfbwStatus, planInvoice } from './lfbw.js';
+import { arrivingFundsNote, homeChannel, lfbwStatus, planInvoice, previousPrimaryChannels } from './lfbw.js';
 
 const PK = '03' + '22'.repeat(32);
 const rec = (lf = {}) => ({ lfbw: { enabled: true, mode: 'internal', primaryPubkey: PK, setup: 'ready', ...lf } });
@@ -36,7 +36,7 @@ test('planInvoice mints plain when the home channel covers it, JIT when the prim
 	assert.deepEqual(planInvoice({ wantedSats: 0, channels: [home()], primaryPubkey: PK, setup: 'ready' }), { kind: 'plain' });
 	assert.deepEqual(
 		planInvoice({ wantedSats: 400_000, channels: [home()], primaryPubkey: PK, setup: 'ready', primaryRunning: false }),
-		{ kind: 'refuse', code: 'PRIMARY_DOWN' }
+		{ kind: 'refuse', code: 'PRIMARY_DOWN', reason: 'not-running' }
 	);
 	assert.deepEqual(
 		planInvoice({ wantedSats: 100_000, channels: [home()], primaryPubkey: PK, setup: 'ready', primaryRunning: false }),
@@ -123,4 +123,59 @@ test('without a liquidity snapshot the home channel\'s local balance stands in f
 	assert.equal(s.canSend, 200_000);
 	assert.equal(s.lightning, 200_000);
 	assert.equal(s.pending, 0);
+});
+
+test('planInvoice refuses when the primary is not connected, naming that rather than "not running"', () => {
+	const channels = [home({ remoteBalanceSats: 1000 })];
+	const base = { wantedSats: 50_000, channels, primaryPubkey: PK, setup: 'ready' };
+	assert.deepEqual(planInvoice({ ...base, primaryConnected: false }), { kind: 'refuse', code: 'PRIMARY_DOWN', reason: 'not-connected' });
+	assert.deepEqual(planInvoice({ ...base, primaryRunning: false, primaryConnected: false }), { kind: 'refuse', code: 'PRIMARY_DOWN', reason: 'not-running' });
+	assert.deepEqual(planInvoice({ ...base, primaryConnected: true }), { kind: 'jit' });
+	assert.deepEqual(planInvoice({ ...base, wantedSats: 500, primaryConnected: false }), { kind: 'plain' }, 'a covered amount never needs the primary');
+});
+
+test('previous-primary channels are listed on the status and excluded from the home channel', () => {
+	const OLD = '03' + '11'.repeat(32);
+	const channels = [home(), home({ channelId: 'old', peerPubkey: OLD, localBalanceSats: 120_000 }), home({ channelId: 'gone', peerPubkey: OLD, state: 'CLOSED' })];
+	const status = lfbwStatus({ rec: rec({ previousPrimary: { pubkey: OLD, walletId: 'p0', at: 1 } }), channels, balance: null, liquidity: null, utxos: [], peers: [] });
+	assert.deepEqual(status.previousChannels.map((c) => c.channelId), ['old']);
+	assert.equal(status.previousPrimary.pubkey, OLD);
+	assert.equal(status.home.channelId, 'c1');
+	assert.deepEqual(previousPrimaryChannels(channels, null), []);
+});
+
+test('arrivingFundsNote explains the shortfall from what is arriving, and only between Can send and Total', () => {
+	const status = (extra) => ({
+		canSend: 100_000,
+		total: 200_000,
+		pending: 100_000,
+		unconfirmed: 0,
+		confirmedOnchain: 0,
+		pendingChannels: [],
+		feeWait: null,
+		...extra
+	});
+	assert.equal(arrivingFundsNote(90_000, status()), null, 'payable now');
+	assert.equal(arrivingFundsNote(250_000, status()), null, 'above Total stays the plain refusal');
+	assert.equal(arrivingFundsNote(0, status()), null);
+
+	const moving = arrivingFundsNote(150_000, status({ confirmedOnchain: 100_000 }));
+	assert.match(moving, /asks for 50,000 sats more than you can send right now/);
+	assert.match(moving, /100,000 sats are moving into your channel, about one block from now/);
+	assert.match(moving, /the request stays here/);
+
+	const unconfirmed = arrivingFundsNote(150_000, status({ unconfirmed: 100_000 }));
+	assert.match(unconfirmed, /need one confirmation, and then a move into your channel, so about two blocks/);
+
+	const feeWait = arrivingFundsNote(150_000, status({ confirmedOnchain: 100_000, feeWait: { feeSats: 6000, amountSats: 100_000 } }));
+	assert.match(feeWait, /waiting on the fee rate; "Move now anyway"/);
+
+	const opening = arrivingFundsNote(150_000, status({ pendingChannels: [{ localBalanceSats: 100_000 }] }));
+	assert.match(opening, /in a channel that is still confirming/);
+
+	const splicing = arrivingFundsNote(150_000, status({ pending: 100_000 }));
+	assert.match(splicing, /rejoin your balance when the current splice locks/);
+
+	const small = arrivingFundsNote(110_000, status({ confirmedOnchain: 12_000, pending: 12_000, total: 112_000 }));
+	assert.match(small, /waiting for more to arrive before they move/);
 });

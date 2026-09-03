@@ -9,6 +9,7 @@ import { parsePayment } from '../../lib/payment-uri.js';
 import { describeFunding, fundingOutcome } from '../../lib/direct-funding.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import AddressSend from './lfbw/AddressSend.jsx';
+import { arrivingFundsNote, lfbwStatus } from '../../lib/lfbw.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 import { manager, walletApi } from '../../api.js';
 
@@ -192,6 +193,7 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 				<Lightning
 					api={api}
 					rec={rec}
+					info={info}
 					channels={channels}
 					bump={bump}
 					value={lnInput}
@@ -910,8 +912,31 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 // enough that a pasted one answers before the eye leaves the field.
 const DECODE_DEBOUNCE_MS = 300;
 
-function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bump }) {
+function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arrival, bump }) {
 	const toast = useToast();
+	// A lightning-first wallet often holds more than it can send: a deposit
+	// confirming, a confirmed one waiting to move, a channel funding or a
+	// splice not yet locked. The Overview tells them apart; this card reads
+	// the same reduction so a payment above Can send says what is arriving
+	// instead of failing at the daemon (umbrel #89).
+	const isLfbw = !!rec?.lfbw?.enabled;
+	const { data: lfbwData } = usePoll(
+		async () => {
+			if (!isLfbw) return null;
+			const [balance, liquidity, utxos] = await Promise.all([
+				api.get('/balance').catch(() => null),
+				api.get('/liquidity').catch(() => null),
+				api.get('/utxos').catch(() => null)
+			]);
+			return { balance, liquidity, utxos };
+		},
+		15000,
+		[api, isLfbw]
+	);
+	const lfbwState = useMemo(
+		() => (isLfbw && lfbwData ? lfbwStatus({ rec, info, channels, ...lfbwData }) : null),
+		[isLfbw, lfbwData, rec, info, channels]
+	);
 	const [decoded, setDecoded] = useState(null);
 	const [estimate, setEstimate] = useState(null);
 	const [error, setError] = useState(null);
@@ -1102,6 +1127,15 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 		.filter(usable)
 		.reduce((sum, c) => sum + (c.localBalanceSats || 0), 0);
 
+	// The amount this payment asks for, from the request or the box. A
+	// lightning-first wallet says what is arriving when it exceeds Can send
+	// but not Total, and refuses outright above Total; the request stays in
+	// the box either way, so a retry is a click and not a re-paste.
+	const askedSats = decoded ? decoded.amountSats || (needsAmount ? typedAmount : 0) : 0;
+	const arriving = lfbwState ? arrivingFundsNote(askedSats, lfbwState) : null;
+	const overTotal = lfbwState ? askedSats > 0 && askedSats > lfbwState.total : false;
+	const overCanSend = lfbwState ? askedSats > 0 && askedSats > lfbwState.canSend : false;
+
 	const pay = async () => {
 		setBusy(true);
 		setResult(null);
@@ -1258,6 +1292,16 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 							paid. Ask for a new one.
 						</div>
 					)}
+					{!expired && arriving && (
+						<div className="info-note" role="status" data-testid="arriving-funds" style={{ marginTop: 12 }}>
+							{arriving}
+						</div>
+					)}
+					{!expired && overTotal && (
+						<div className="error-note" role="alert" data-testid="over-total" style={{ marginTop: 12 }}>
+							This asks for {fmtSats(askedSats)}, more than this wallet holds in total ({fmtSats(lfbwState.total)}).
+						</div>
+					)}
 					</>
 				)}
 			</div>
@@ -1266,7 +1310,7 @@ function Lightning({ api, rec, channels, value, onChange, onOnchain, arrival, bu
 					variant="primary"
 					busy={busy}
 					onClick={pay}
-					disabled={!decoded || decoding || expired || (needsAmount && typedAmount <= 0)}
+					disabled={!decoded || decoding || expired || (needsAmount && typedAmount <= 0) || overTotal || overCanSend}
 				>
 					{decoded?.amountSats ? `Pay ${fmtSats(decoded.amountSats)}` : 'Pay'}
 				</Button>

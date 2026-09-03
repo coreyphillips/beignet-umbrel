@@ -127,7 +127,7 @@ test('Close asks for confirmation, then cooperatively closes the home channel', 
 	const view = await mount(api, rec());
 	try {
 		await click(view.$$('button').find((b) => b.textContent.trim() === 'Close'));
-		assert.match(view.text(), /moves back into Lightning by itself once it confirms/);
+		assert.match(view.text(), /moves\s+back into a new channel with the primary by itself after one confirmation/);
 		await click(view.$$('button').find((b) => b.textContent.trim() === 'Close channel'));
 		await settle(50);
 		const close = api.calls.find(([m, p]) => m === 'POST' && p === '/channel/close');
@@ -192,5 +192,101 @@ test('a deposit held for the fee is explained, and "Move now anyway" asks the ma
 		assert.equal(plain.$$('button').find((b) => b.textContent.trim() === 'Move now anyway'), undefined);
 	} finally {
 		await plain.unmount();
+	}
+});
+
+const OLD_PK = '03' + '11'.repeat(32);
+const OLD_CHANNEL = {
+	channelId: 'd'.repeat(64),
+	peerPubkey: OLD_PK,
+	state: 'NORMAL',
+	htlcUsable: true,
+	capacitySats: 150_000,
+	localBalanceSats: 120_000,
+	remoteBalanceSats: 30_000
+};
+
+/** The manager, answering the wallet list and the two lightning-first moves. */
+function stubManagerMoves({ moveHomeResult, closeHomeResult, error } = {}) {
+	const calls = [];
+	globalThis.fetch = async (url, opts = {}) => {
+		const body = opts.body ? JSON.parse(opts.body) : undefined;
+		calls.push([opts.method || 'GET', url, body]);
+		if (error && url.endsWith(error.on)) {
+			return { ok: false, status: 409, json: async () => ({ ok: false, error: { code: error.code, message: error.message } }) };
+		}
+		let result = null;
+		if (url === '/api/wallets') result = [{ id: 'p1', name: 'Main', status: 'running', network: 'mainnet' }];
+		else if (url === '/api/wallets/w1/lfbw/move-home') result = moveHomeResult ?? { closed: [OLD_CHANNEL.channelId], pubkey: OLD_PK };
+		else if (url === '/api/wallets/w1/lfbw/close-home') result = closeHomeResult ?? { closed: body.channelId, lfbwOff: true, record: {} };
+		return { ok: true, status: 200, json: async () => ({ ok: true, result }) };
+	};
+	return calls;
+}
+
+test('a re-pointed wallet lists the channel with its previous primary and offers to move its funds', async () => {
+	const calls = stubManagerMoves();
+	const api = stubApi({ channels: [HOME, OLD_CHANNEL] });
+	const view = await mount(api, rec({ previousPrimary: { pubkey: OLD_PK, walletId: 'p0', at: 1 } }));
+	try {
+		assert.match(view.text(), /Channel with your previous primary/);
+		assert.match(view.text(), /120,000 sats yours/, 'the old channel balance is findable');
+		assert.match(view.text(), /moves into your new channel once/);
+		await click(view.$$('button').find((b) => b.textContent.trim() === 'Move funds to the new primary'));
+		await settle(20);
+		assert.match(view.text(), /pays an on-chain\s+fee/, 'the confirm names the fee-paying close');
+		await click(view.$$('button').find((b) => b.textContent.trim() === 'Close and move'));
+		await settle(50);
+		assert.ok(calls.some(([m, u]) => m === 'POST' && u === '/api/wallets/w1/lfbw/move-home'), 'asked the manager to move');
+		assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/channel/close'), false, 'the page itself closes nothing');
+		assert.match(view.text(), /Closing the channel with your previous primary/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a closing channel with the previous primary reads as moving, without the button', async () => {
+	stubManagerMoves();
+	const view = await mount(
+		stubApi({ channels: [HOME, { ...OLD_CHANNEL, state: 'NEGOTIATING_CLOSING', htlcUsable: false }] }),
+		rec({ previousPrimary: { pubkey: OLD_PK, walletId: 'p0', at: 1 } })
+	);
+	try {
+		assert.match(view.text(), /moving/);
+		assert.match(view.text(), /closing; the funds move into your new channel/);
+		assert.equal(view.$$('button').some((b) => b.textContent.trim() === 'Move funds to the new primary'), false);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('without a previous primary the card is absent', async () => {
+	stubManagerMoves();
+	const view = await mount(stubApi({ channels: [HOME] }), rec());
+	try {
+		assert.doesNotMatch(view.text(), /previous primary/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('Close offers to turn lightning-first off in the same step, and that goes through the manager', async () => {
+	const calls = stubManagerMoves();
+	const api = stubApi();
+	const view = await mount(api, rec());
+	try {
+		await click(view.$$('button').find((b) => b.textContent.trim() === 'Close'));
+		await settle(20);
+		assert.match(view.text(), /moves\s+back into a new channel with the primary by itself after one confirmation/);
+		assert.match(view.text(), /pays a fee to end up where you started/);
+		await click(view.$$('button').find((b) => b.textContent.trim() === 'Close and turn lightning-first off'));
+		await settle(50);
+		const closeHome = calls.find(([m, u]) => m === 'POST' && u === '/api/wallets/w1/lfbw/close-home');
+		assert.ok(closeHome, 'the manager ran the close');
+		assert.deepEqual(closeHome[2], { channelId: HOME.channelId, turnOff: true });
+		assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/channel/close'), false, 'not closed by the page directly');
+		assert.match(view.text(), /Lightning-first is off/);
+	} finally {
+		await view.unmount();
 	}
 });
