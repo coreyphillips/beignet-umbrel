@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
-import { useSSE } from '../hooks/useSSE.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import {
@@ -39,13 +38,19 @@ const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
  * receive said nothing on: the figure changed on the next poll and nothing
  * pointed at it. Named per wallet, because more than one can be running.
  */
+// The list page announces receives by POLLING alone, never by holding an
+// event stream per wallet. A browser allows six connections per origin, and
+// an EventSource holds one open for as long as the page lives: with seven
+// running wallets every later request (creating a wallet, opening Settings,
+// the transaction polls themselves) queued behind the streams and the page
+// read as stuck. The wallet page holds the one stream for the wallet it
+// shows; here the watcher's ten-second poll is the whole of it.
 function ReceiveWatcher({ wallet }) {
 	const toast = useToast();
 	const api = useMemo(() => walletApi(wallet.id), [wallet.id]);
-	const { onEvent } = useReceiveWatch(api, true, (r) => {
+	useReceiveWatch(api, true, (r) => {
 		toast(describeReceive(r, wallet.name), 'success', { duration: 8000 });
 	});
-	useSSE(api.eventsUrl(), onEvent);
 	return null;
 }
 
