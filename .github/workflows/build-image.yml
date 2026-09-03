@@ -319,7 +319,18 @@ env:
   # The manager probes the bundled engine's OpenAPI module for the routes
   # and the dashboard hides the lightning-first controls when they are
   # absent, so an older bundle would still run as before.
-  BEIGNET_VERSION: "0.10.0"
+  # 0.11.0 is the follow-up round (beignet #686 to #692 evaluated, two
+  # built): GET /jit/quote prices a just-in-time receive before the invoice
+  # exists, with no intent registered (#687, #693), and a peer-storage wallet
+  # restores itself from its peers' checkpoints on an empty database when
+  # BEIGNET_RECOVERY_AUTO_APPLY is set, rebuilding in-process with no
+  # restart (#690 Piece 1, #694), plus the fix that makes that restore
+  # real: the journal now snapshots to the capsule budget, since one channel
+  # and one payment had already outgrown the 64 KB peer-storage ceiling
+  # (#695, #696). Surface vs 0.10.0: additive (one route, one env family,
+  # one SSE event). The manager probes for both and the dashboard hides the
+  # quote line and the auto-restore option when they are absent.
+  BEIGNET_VERSION: "0.11.0"
 
 jobs:
   build:
