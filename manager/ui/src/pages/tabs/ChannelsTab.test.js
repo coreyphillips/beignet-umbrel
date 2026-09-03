@@ -361,3 +361,168 @@ test('the routing policy is edited where it is read', async () => {
 	await view.unmount();
 	restore();
 });
+
+/**
+ * Part 2 of #75: the close itself, from the daemon's closeStatus (beignet
+ * 0.9.0+). Who closed and why, the transaction, an honest confirmation line,
+ * the funds timelock, and Rebroadcast exactly when it can help.
+ */
+function closedRow(closeStatus, state = 'FORCE_CLOSED') {
+	return {
+		channelId: CLOSED_ID,
+		peerPubkey: '02' + 'b'.repeat(64),
+		capacitySats: 650_000,
+		localBalanceSats: 189_825,
+		remoteBalanceSats: 460_175,
+		state,
+		closeStatus
+	};
+}
+
+/** A daemon stub whose closed channel carries closeStatus and whose tip is known. */
+function closeApi(closeStatus, { state, blockHeight = 908214, rebroadcast } = {}) {
+	const posts = [];
+	const base = stubApi({
+		channels: [closedRow(closeStatus, state)],
+		diagnostics: { state: state || 'FORCE_CLOSED', isPeerConnected: false, issues: [] }
+	});
+	return {
+		posts,
+		api: {
+			get: async (path) => (path === '/info' ? { blockHeight } : base.get(path)),
+			post: async (path, body) => {
+				posts.push([path, body]);
+				if (path === '/channel/rebroadcast-close') {
+					if (rebroadcast instanceof Error) throw rebroadcast;
+					return rebroadcast || { txid: body.channelId, broadcastOk: true };
+				}
+				return base.post(path, body);
+			}
+		}
+	};
+}
+
+async function openClosedDetail(r) {
+	await settle(50);
+	const closedPill = r.$$('button.pill').find((b) => /Closed \(1\)/i.test(b.textContent));
+	assert.ok(closedPill, 'closed view pill exists');
+	await click(closedPill);
+	await click(r.$('tr.row-clickable'));
+	await settle(50);
+}
+
+test('an unconfirmed watchdog force close tells who, why, and offers Rebroadcast', async () => {
+	const restoreFetch = stubManagerFetch();
+	const { api, posts } = closeApi({
+		closer: 'local',
+		reason: 'REESTABLISH_TIMEOUT_FORCE_CLOSED',
+		closingTxid: 'f'.repeat(64),
+		broadcast: true,
+		confirmationHeight: 0,
+		resolution: 'pending'
+	});
+	const r = await render(wrapped, { id: 'w1', api, rec: {}, tick: 0, bump: () => {} });
+	try {
+		await openClosedDetail(r);
+		const text = modalText(r);
+		assert.match(text, /Close/);
+		assert.match(text, /This wallet force-closed it: the peer stayed away past the reestablish deadline/);
+		assert.match(text, /Closing transaction/);
+		// Never a chain claim the daemon did not make.
+		assert.match(text, /confirmation not yet reported/);
+		assert.doesNotMatch(text, /confirmations\)/);
+		assert.match(text, /Nothing is being swept until the close confirms/);
+		// Still no live apparatus.
+		assert.doesNotMatch(text, /Reconnect/);
+
+		const button = r.$$('.detail button').find((b) => /Rebroadcast close/.test(b.textContent));
+		assert.ok(button, 'Rebroadcast offered for an unconfirmed close with a txid');
+		await click(button);
+		await settle(20);
+		assert.deepEqual(posts, [['/channel/rebroadcast-close', { channelId: CLOSED_ID }]]);
+	} finally {
+		await r.unmount();
+		restoreFetch();
+	}
+});
+
+test('a confirmed remote close counts confirmations and offers no Rebroadcast', async () => {
+	const restoreFetch = stubManagerFetch();
+	const { api } = closeApi(
+		{
+			closer: 'remote',
+			closingTxid: 'e'.repeat(64),
+			broadcast: true,
+			confirmationHeight: 908200,
+			resolution: 'resolved'
+		},
+		{ blockHeight: 908214 }
+	);
+	const r = await render(wrapped, { id: 'w1', api, rec: {}, tick: 0, bump: () => {} });
+	try {
+		await openClosedDetail(r);
+		const text = modalText(r);
+		assert.match(text, /The peer closed it/);
+		assert.match(text, /Confirmed at block 908200 \(15 confirmations\)/);
+		assert.match(text, /Every output of the close has been swept/);
+		assert.ok(
+			!r.$$('.detail button').some((b) => /Rebroadcast/.test(b.textContent)),
+			'nothing to rebroadcast for a confirmed close'
+		);
+	} finally {
+		await r.unmount();
+		restoreFetch();
+	}
+});
+
+test('our own force close counts down the timelock, and an already-known rebroadcast is a notice', async () => {
+	const restoreFetch = stubManagerFetch();
+	const { api } = closeApi(
+		{
+			closer: 'local',
+			reason: 'user',
+			closingTxid: 'd'.repeat(64),
+			broadcast: false,
+			confirmationHeight: 908100,
+			resolution: 'sweeping',
+			fundsAvailableHeight: 908244
+		},
+		{ blockHeight: 908214, rebroadcast: new Error('Transaction outputs already in utxo set') }
+	);
+	const r = await render(wrapped, { id: 'w1', api, rec: {}, tick: 0, bump: () => {} });
+	try {
+		await openClosedDetail(r);
+		const text = modalText(r);
+		assert.match(text, /You closed this channel\./);
+		assert.match(text, /spendable at block 908244, 30 blocks from now \(about 5 hours\)/);
+		assert.match(text, /Sweeping the close outputs/);
+		// broadcast:false keeps Rebroadcast on offer even after a confirmation
+		// report; the daemon's "already in utxo set" answer is then the calm
+		// notice, not an error toast.
+		const button = r.$$('.detail button').find((b) => /Rebroadcast close/.test(b.textContent));
+		assert.ok(button, 'Rebroadcast offered when the daemon never saw its broadcast succeed');
+		await click(button);
+		await settle(20);
+		const page = r.container.textContent;
+		assert.match(page, /The network already has the close transaction/);
+		assert.doesNotMatch(page, /utxo set/);
+	} finally {
+		await r.unmount();
+		restoreFetch();
+	}
+});
+
+test('a channel without closeStatus (older daemon) shows no Close section', async () => {
+	const restoreFetch = stubManagerFetch();
+	const r = await render(wrapped, tabProps());
+	try {
+		await openClosedDetail(r);
+		const text = modalText(r);
+		assert.doesNotMatch(text, /Closing transaction/);
+		assert.doesNotMatch(text, /Rebroadcast/);
+		assert.match(text, /History/);
+	} finally {
+		await r.unmount();
+		restoreFetch();
+	}
+});

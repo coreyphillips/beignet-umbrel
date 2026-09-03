@@ -169,3 +169,17 @@ test('a compaction failure is reported and does not destroy the file', (t) => {
 	const reloaded = new ChannelEventLog(dir);
 	assert.equal(reloaded.list().length, MAX_EVENTS, 'original file intact');
 });
+
+test('channel:resolved is recorded as the terminal event of a close', (t) => {
+	const dir = tmpdir(t);
+	const log = new ChannelEventLog(dir);
+	log.record('channel:closed', { channelId: 'dd', timestamp: 1 });
+	// Relayed since beignet 0.9.0: every on-chain output of the close swept.
+	const rec = log.record('channel:resolved', { channelId: 'dd', timestamp: 2 });
+	assert.ok(rec && rec.persisted, 'resolved is a lifecycle event and reaches disk');
+	const reloaded = new ChannelEventLog(dir);
+	assert.deepEqual(
+		reloaded.list({ channelId: 'dd' }).map((e) => e.event),
+		['channel:closed', 'channel:resolved']
+	);
+});

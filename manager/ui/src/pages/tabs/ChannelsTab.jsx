@@ -7,6 +7,7 @@ import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { withPeerHint } from '../../lib/hints.js';
 import { isClosedChannel, isClosedChannelState } from '../../lib/channels.js';
+import { closeStory, rebroadcastAlreadyDone } from '../../lib/close-story.js';
 import { watchChannelOpen } from '../../lib/channel-open.js';
 import { manager, walletApi } from '../../api.js';
 
@@ -927,8 +928,9 @@ function historyLabel(e) {
 			// would be a lie some of the time.
 			return 'Channel closed';
 		case 'channel:resolved':
-			// Not relayed by the daemon yet; recorded and rendered the day it is.
-			return 'All on-chain outputs resolved';
+			// The terminal event (beignet 0.9.0+): nothing of the close is left
+			// on chain, every output is irrevocably swept.
+			return 'Every output of the close swept';
 		case 'node:error':
 			return `${e.code}: ${e.message}`;
 		default:
@@ -1053,6 +1055,10 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 	const [policy, setPolicy] = useState(null);
 	const [historyState, setHistoryState] = useState({ status: 'loading', entries: [] });
 	const [reconnecting, setReconnecting] = useState(false);
+	const [rebroadcasting, setRebroadcasting] = useState(false);
+	// The chain tip, for counting a close's confirmations and the blocks left
+	// on its timelock. Only asked for when there is a close to describe.
+	const [tip, setTip] = useState(null);
 	// Bumped after a reconnect so the diagnostics (and the connected badge)
 	// re-fetch instead of showing the pre-reconnect answer.
 	const [diagTick, setDiagTick] = useState(0);
@@ -1072,6 +1078,11 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 		if (!isClosedChannel(channel)) {
 			api.get(`/channel/health${qs}`).then((d) => alive && setHealth(d)).catch(() => {});
 			api.get(`/channel/policy${qs}`).then((d) => alive && setPolicy(d)).catch(() => {});
+		}
+		// A closing or closed channel's story needs the tip: confirmations and
+		// the timelock countdown are the difference between two heights.
+		if (isClosedChannel(channel) || channel.closeStatus) {
+			api.get('/info').then((d) => alive && setTip(d?.blockHeight ?? null)).catch(() => {});
 		}
 		// The manager's durable record, not the daemon's: it survives daemon and
 		// app restarts, which is the point when the question is "what happened?".
@@ -1102,6 +1113,32 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 		}
 	};
 
+	// Ask the daemon to put the close transaction out again. Only a channel id
+	// crosses the wire: the daemon rebuilds the latest commitment itself, so a
+	// revoked state can never be selected here. A refusal that says the
+	// network already has it is the good news it sounds like, not an error.
+	const rebroadcast = async () => {
+		setRebroadcasting(true);
+		try {
+			const r = await api.post('/channel/rebroadcast-close', { channelId: channel.channelId });
+			if (r && r.broadcastOk === false) {
+				toast('The daemon rebuilt the close transaction but the network did not take it; it will keep retrying.', 'info');
+			} else {
+				toast(`Close transaction rebroadcast${r?.txid ? ` (${r.txid.slice(0, 12)}…)` : ''}.`, 'success');
+			}
+			setDiagTick((t) => t + 1);
+		} catch (e) {
+			if (rebroadcastAlreadyDone(e.message)) {
+				toast('The network already has the close transaction.', 'info');
+				setDiagTick((t) => t + 1);
+			} else {
+				toast(e.message, 'error');
+			}
+		} finally {
+			setRebroadcasting(false);
+		}
+	};
+
 	const local = diag?.localBalanceSats ?? channel.localBalanceSats;
 	const remote = diag?.remoteBalanceSats ?? channel.remoteBalanceSats;
 	const state = diag?.state || channel.state;
@@ -1117,6 +1154,11 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 	// badge shows: a stale NORMAL list row whose diagnostics answer
 	// FORCE_CLOSED must not show a red badge next to a Reconnect button.
 	const closed = isClosedChannelState(state);
+	// The close facts (beignet 0.9.0+): the freshest copy wins, the list row
+	// serves when diagnostics have not answered. Absent on older daemons and
+	// on channels that are not closing, and then the section is not shown.
+	const closeStatus = diag?.closeStatus || channel.closeStatus || null;
+	const story = closeStatus ? closeStory(closeStatus, tip) : null;
 
 	return (
 		<Modal title="Channel" onClose={onClose} origin={origin} wide>
@@ -1200,6 +1242,44 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 								{wrn}
 							</div>
 						))}
+					</DetailRow>
+				)}
+				{/* The close, as the daemon reports it: who, why, the transaction and
+				    where it stands, when the funds come back. Every line is the
+				    daemon's claim or an honest "not yet reported"; nothing here is
+				    inferred from the list row's state alone. */}
+				{story && (
+					<DetailRow label="Close">
+						<div className="wallet-meta" style={{ marginBottom: 4 }}>
+							{story.closer}
+						</div>
+						{story.closingTxid && (
+							<div style={{ marginBottom: 4 }}>
+								<span className="wallet-meta">Closing transaction </span>
+								<CopyText value={story.closingTxid} truncate />
+							</div>
+						)}
+						<div className="wallet-meta" style={{ marginBottom: 4 }}>
+							{story.confirmation}
+						</div>
+						<div className="wallet-meta" style={{ marginBottom: 4 }}>
+							{story.resolution}
+						</div>
+						{story.funds && (
+							<div className="wallet-meta" style={{ marginBottom: 4 }}>
+								{story.funds}
+							</div>
+						)}
+						{story.canRebroadcast && (
+							<div style={{ marginTop: 6 }}>
+								<Button className="sm" onClick={rebroadcast} disabled={rebroadcasting}>
+									{rebroadcasting ? 'Rebroadcasting…' : 'Rebroadcast close'}
+								</Button>
+								<div className="wallet-meta" style={{ marginTop: 4 }}>
+									Sends the close transaction to the network again. Harmless if it is already there.
+								</div>
+							</div>
+						)}
 					</DetailRow>
 				)}
 				{/* The channel's recorded story. Shown whenever there is one, and for
