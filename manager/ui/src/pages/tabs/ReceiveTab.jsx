@@ -5,10 +5,23 @@ import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
+import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
+import { manager } from '../../api.js';
+
+// A direct-funding request is re-minted when the amount changes (the
+// receiver signs the amount into it), after the hand has settled.
+const FUNDING_DEBOUNCE_MS = 400;
 
 export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 	const onchainOnly = !!rec?.onchainOnly;
+	// A lightning-first wallet's on-chain request also carries a direct-funding
+	// request, and its invoices are provisioned by the primary node just in
+	// time when the home channel cannot take the amount as it stands.
+	const isLfbw = !!rec?.lfbw?.enabled;
+	const lfbwReady = isLfbw && rec.lfbw.setup === 'ready';
 	const toast = useToast();
+	const [funding, setFunding] = useState(null);
+	const [jitInfo, setJitInfo] = useState(null);
 	const [address, setAddress] = useState('');
 	const [onchainAmount, setOnchainAmount] = useState('');
 	const [onchainMessage, setOnchainMessage] = useState('');
@@ -21,6 +34,11 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 		() => (onchainOnly ? Promise.resolve([]) : api.get('/invoices').catch(() => [])),
 		10000,
 		[id, tick, onchainOnly]
+	);
+	const { data: channels } = usePoll(
+		() => (isLfbw ? api.get('/channels').catch(() => null) : Promise.resolve(null)),
+		15000,
+		[id, tick, isLfbw]
 	);
 
 	const newAddress = async () => {
@@ -44,6 +62,38 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 	// address, which is what should be shared when nothing is being asked for.
 	const onchainSats = parseInt(onchainAmount, 10) || 0;
 	const trimmedMessage = onchainMessage.trim();
+
+	// The direct-funding request minted for this address and amount. Minted by
+	// the daemon (the receiver signs it), with the wallet's reachable address
+	// when it has one; without one, payers reach the wallet through the
+	// primary's relay. A mint that fails leaves a plain request, which is what
+	// the address is anyway.
+	useEffect(() => {
+		if (!lfbwReady || !address) {
+			setFunding(null);
+			return undefined;
+		}
+		let alive = true;
+		const t = setTimeout(() => {
+			const body = {};
+			if (rec.reach) {
+				body.host = rec.reach.host;
+				body.port = rec.reach.port;
+			}
+			if (onchainSats > 0) body.amountSats = onchainSats;
+			api
+				.post('/direct-funding/request', body)
+				.then((r) => alive && setFunding({ ...r, address, amountSats: onchainSats }))
+				.catch(() => alive && setFunding(null));
+		}, FUNDING_DEBOUNCE_MS);
+		return () => {
+			alive = false;
+			clearTimeout(t);
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [lfbwReady, address, onchainSats, rec?.reach?.host, rec?.reach?.port, api]);
+	const carriesFunding =
+		!!funding && funding.address === address && funding.amountSats === onchainSats && funding.expiresAt > Date.now();
 
 	// A request can carry the invoice from the card beside it, which makes it one
 	// thing to hand out that a payer can settle on either rail: the address for a
@@ -98,9 +148,10 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 				address,
 				amountSats: onchainSats,
 				message: trimmedMessage,
-				lightning: carriesInvoice ? invoice.bolt11 : undefined
+				lightning: carriesInvoice ? invoice.bolt11 : undefined,
+				funding: carriesFunding ? funding.request : undefined
 			}),
-		[address, onchainSats, trimmedMessage, carriesInvoice, invoice]
+		[address, onchainSats, trimmedMessage, carriesInvoice, invoice, carriesFunding, funding]
 	);
 	const isRequest = request !== address;
 
@@ -109,9 +160,56 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 		try {
 			const body = { description };
 			if (amount) body.amountSats = parseInt(amount, 10);
-			const r = await api.post('/invoice/create', body);
+			let r;
+			let jit = null;
+			if (isLfbw) {
+				// Provision inbound first when the home channel cannot take the
+				// amount: the invoice is payable through a channel the primary
+				// funds the moment the payment arrives (a zero-conf open, or a
+				// splice of the home channel), minus the fee it quotes.
+				const lf = rec.lfbw;
+				let primaryRunning = true;
+				if (lf.mode === 'internal' && lf.primaryWalletId) {
+					primaryRunning = await manager
+						.getWallet(lf.primaryWalletId)
+						.then((w) => w.status === 'running')
+						.catch(() => true);
+				}
+				const plan = planInvoice({
+					wantedSats: body.amountSats || 0,
+					channels: channels || (await api.get('/channels').catch(() => [])),
+					primaryPubkey: lf.primaryPubkey,
+					setup: lf.setup,
+					primaryRunning
+				});
+				if (plan.kind === 'refuse') {
+					throw new Error(
+						plan.code === 'PRIMARY_DOWN'
+							? 'Your primary node is not running, and this invoice needs it to provide inbound capacity. Start it, or ask for an amount the channel already covers.'
+							: 'The link to your primary node is not set up yet. Retry setup from the Overview tab.'
+					);
+				}
+				if (plan.kind === 'jit') {
+					r = await api.post('/jit/invoice', {
+						lspPubkey: lf.primaryPubkey,
+						...(body.amountSats ? { amountSats: body.amountSats } : {}),
+						description: body.description,
+						targetRemainingInboundSat: INBOUND_HEADROOM_SATS
+					});
+					jit = { flatFeeSat: r.flatFeeSat || 0, feePpm: r.feePpm || 0 };
+				}
+			}
+			if (!r) r = await api.post('/invoice/create', body);
 			setInvoice(r);
-			toast('Invoice created', 'success');
+			setJitInfo(jit);
+			toast(
+				jit
+					? jit.flatFeeSat > 0 || jit.feePpm > 0
+						? `Invoice created. Your primary node provides the capacity when it is paid, for ${fmtSats(jit.flatFeeSat)}${jit.feePpm > 0 ? ` plus ${jit.feePpm} ppm` : ''}.`
+						: 'Invoice created. Your primary node provides the capacity when it is paid.'
+					: 'Invoice created',
+				'success'
+			);
 			// The list below polls every ten seconds, which is a long time to look
 			// at a table that does not yet have the invoice you just made in it.
 			refresh();
@@ -125,7 +223,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 	return (
 		<div className={onchainOnly ? undefined : 'grid cols-2'}>
 			<Card
-				title="On-chain"
+				title={isLfbw ? 'Deposit bitcoin' : 'On-chain'}
 				actions={
 					<Button className="sm" onClick={newAddress}>
 						New address
@@ -172,10 +270,16 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 									: null,
 								carriesInvoice
 									? 'It also carries the Lightning invoice below, so whoever scans it can settle on either rail.'
+									: null,
+								carriesFunding
+									? 'It also carries a direct-funding request: a beignet wallet paying it funds your Lightning balance in one transaction, with no deposit to move afterwards.'
 									: null
 						  ]
 								.filter(Boolean)
 								.join(' ')}
+					{isLfbw && !isRequest
+						? ' Whatever lands here moves into your Lightning balance by itself once it confirms.'
+						: ''}
 				</div>
 				{invoice && !paid && (
 					<>
@@ -229,6 +333,14 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 							<div style={{ marginTop: 12 }}>
 								<CopyText value={invoice.bolt11} truncate />
 							</div>
+							{jitInfo && (
+								<div className="field-hint" style={{ marginTop: 10 }} role="status">
+									Payable now: your primary node provides the inbound capacity the moment this is paid
+									{jitInfo.flatFeeSat > 0 || jitInfo.feePpm > 0
+										? `, and takes ${fmtSats(jitInfo.flatFeeSat)}${jitInfo.feePpm > 0 ? ` plus ${jitInfo.feePpm} ppm` : ''} from the delivery for it.`
+										: ', at no charge.'}
+								</div>
+							)}
 						</m.div>
 					)}
 					{invoice && paid && (

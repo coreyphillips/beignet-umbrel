@@ -6,7 +6,9 @@ import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
 import { formatInvoiceWarning } from '../../lib/hints.js';
 import { parsePayment } from '../../lib/payment-uri.js';
+import { describeFunding, fundingOutcome } from '../../lib/direct-funding.js';
 import { useQuote } from '../../hooks/useQuote.js';
+import AddressSend from './lfbw/AddressSend.jsx';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 import { manager, walletApi } from '../../api.js';
 
@@ -19,7 +21,10 @@ const usable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
 const EMPTY_ONCHAIN = { input: '', request: null, amount: '', feeRate: '', maxMode: false };
 
 export default function SendTab({ id, api, info, rec, tick, bump }) {
-	const [mode, setMode] = useState('onchain');
+	// A lightning-first wallet's balance lives in its channel, so Lightning is
+	// the rail it opens on; "send to an address" is a splice-out of that channel.
+	const isLfbw = !!rec?.lfbw?.enabled;
+	const [mode, setMode] = useState(isLfbw ? 'lightning' : 'onchain');
 	// The whole of the on-chain form lives here rather than in the card below,
 	// because the card is unmounted every time the rail pill is touched, and what
 	// is pasted into one box regularly belongs to the other. A Lightning invoice
@@ -54,6 +59,11 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 	useEffect(() => {
 		if (!canLightning && mode !== 'onchain') setMode('onchain');
 	}, [canLightning, mode]);
+	// A lightning-first wallet has no keysend card: it is an apparatus of the
+	// Advanced view, and the pill row below does not offer it.
+	useEffect(() => {
+		if (isLfbw && mode === 'keysend') setMode('lightning');
+	}, [isLfbw, mode]);
 
 	// Handing a payment string to the rail it belongs on. The refusal is a return
 	// value rather than a thrown error: with no channel open there is nowhere for
@@ -131,20 +141,40 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 					setArrival(null);
 					setMode(next);
 				}}
-				options={[
-					['onchain', 'On-chain'],
-					['lightning', 'Lightning', !canLightning, splicingOnly ? 'A splice is confirming' : 'Open a channel first'],
-					['keysend', 'Keysend', !canLightning, splicingOnly ? 'A splice is confirming' : 'Open a channel first']
-				]}
+				options={
+					isLfbw
+						? [
+								['lightning', 'Lightning', !canLightning, splicingOnly ? 'A splice is confirming' : 'Nothing to send yet'],
+								['onchain', 'Bitcoin address']
+						  ]
+						: [
+								['onchain', 'On-chain'],
+								['lightning', 'Lightning', !canLightning, splicingOnly ? 'A splice is confirming' : 'Open a channel first'],
+								['keysend', 'Keysend', !canLightning, splicingOnly ? 'A splice is confirming' : 'Open a channel first']
+						  ]
+				}
 			/>
 			{channels && !canLightning && (
 				<div className="info-note" style={{ marginBottom: 14 }}>
 					{splicingOnly
 						? 'Your channel is mid-splice. Its funds are safe, and Lightning payments resume when the splice transaction confirms and locks.'
+						: isLfbw
+						? 'Nothing to send yet. Deposit bitcoin or receive a Lightning payment on the Receive tab, and your channel appears by itself.'
 						: 'Lightning payments need an open channel. Open one in the Channels tab.'}
 				</div>
 			)}
-			{mode === 'onchain' && (
+			{mode === 'onchain' && isLfbw && (
+				<AddressSend
+					id={id}
+					api={api}
+					rec={rec}
+					channels={channels}
+					bump={bump}
+					state={onchain}
+					patch={patchOnchain}
+				/>
+			)}
+			{mode === 'onchain' && !isLfbw && (
 				<OnChain
 					id={id}
 					api={api}
@@ -194,6 +224,11 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	const [busy, setBusy] = useState(false);
 	const [txid, setTxid] = useState('');
 	const [note, setNote] = useState(null);
+	// A pasted request may carry a direct-funding request from a beignet
+	// wallet: paid that way, this transaction IS the recipient's channel
+	// funding. On by default when present; the payer can decline it.
+	const [directFunding, setDirectFunding] = useState(true);
+	const [fundingResult, setFundingResult] = useState(null);
 	// The line the hand-off left, and the field the caret is owed.
 	const [arrived, setArrived] = useState(arrival?.note ?? null);
 	const inputRef = useRef(null);
@@ -305,7 +340,8 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 			amountSats: parsed.amountSats,
 			amountTaken: false,
 			message: parsed.message || parsed.label,
-			lightning: parsed.lightning
+			lightning: parsed.lightning,
+			funding: parsed.funding || null
 		});
 		// The payee's amount is not a preference for the form to reinterpret, so
 		// it is set directly rather than through setAmountManually, which would
@@ -544,10 +580,45 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 		}
 	};
 
+	// A direct funding spends a whole coin into the recipient's channel, so it
+	// takes a fixed amount, never a sweep.
+	const funding = request?.funding || null;
+	const payDirect = !!funding && directFunding && !maxMode;
+
 	const send = async () => {
 		setBusy(true);
 		setTxid('');
+		setFundingResult(null);
 		try {
+			if (payDirect) {
+				// The daemon rejects only before our witness leaves the device. A
+				// rejection, or a status from before that point, is the one place a
+				// plain send may follow; anything later is a payment out of our
+				// hands, shown as it stands, because a plain send after it would
+				// pay the recipient twice.
+				let answer;
+				try {
+					answer = await api.post('/direct-funding/send', {
+						request: funding.envelope,
+						amountSats: parseInt(amount, 10),
+						feeHeadroomSats: 1000
+					});
+				} catch (e) {
+					answer = e instanceof Error ? e : new Error(String(e));
+				}
+				const outcome = fundingOutcome(answer);
+				if (outcome.kind === 'sent') {
+					setFundingResult(outcome);
+					toast(outcome.failed ? describeFunding(outcome) : 'Sent as direct funding', outcome.failed ? 'error' : 'success');
+					setAmount('');
+					setRequest(null);
+					setNote(null);
+					if (dest !== 'custom') setDest('custom');
+					bump();
+					return;
+				}
+				toast(`Direct funding not taken (${outcome.reason}); paying the address instead.`, 'info');
+			}
 			// What was read, not what was typed. The box is kept canonical above, so
 			// the two agree; posting the parsed address is what makes that a
 			// guarantee rather than an arrangement, since this is the last place the
@@ -681,6 +752,26 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					)}
 				</div>
 			)}
+			{funding && parsed.kind === 'onchain' && (
+				<>
+					<div className="info-note" role="status">
+						This request comes from a beignet wallet
+						{funding.nodeId ? ` (node ${shortId(funding.nodeId)})` : ''}. Paid as direct funding, your
+						transaction becomes their Lightning channel funding in one step, with no deposit to move
+						afterwards; the recipient's node signs a receipt for it.
+						{maxMode ? ' A direct funding takes a fixed amount, so it is off while Max is on.' : ''}
+					</div>
+					<label className="checkbox field">
+						<input
+							type="checkbox"
+							checked={directFunding && !maxMode}
+							disabled={maxMode}
+							onChange={(e) => setDirectFunding(e.target.checked)}
+						/>
+						Pay as direct funding
+					</label>
+				</>
+			)}
 			{request?.message && (
 				<div className="field">
 					<span className="field-label">Message</span>
@@ -789,11 +880,26 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					requestTooLarge
 				}
 			>
-				{maxMode ? 'Send max' : 'Send'}
+				{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
 			</Button>
 			{txid && (
 				<div className="info-note" style={{ marginTop: 12 }}>
 					Broadcast: <span className="mono">{txid}</span>
+				</div>
+			)}
+			{fundingResult && (
+				<div className={fundingResult.failed ? 'error-note' : 'info-note'} style={{ marginTop: 12 }} role="status">
+					{describeFunding(fundingResult)}
+					{fundingResult.txid && (
+						<div>
+							Transaction: <span className="mono">{fundingResult.txid}</span>
+						</div>
+					)}
+					{fundingResult.receiptPreimageHex && (
+						<div>
+							Receipt: <span className="mono">{fundingResult.receiptPreimageHex}</span>
+						</div>
+					)}
 				</div>
 			)}
 		</Card>

@@ -38,6 +38,8 @@ async function request(path, { method = 'GET', body, timeoutMs } = {}) {
 		// The HTTP status rides along for the one case a route's absence is
 		// an answer: a 404 from a daemon that predates a feature.
 		err.status = res.status;
+		// Structured context on a refusal (which wallets depend on a primary).
+		err.details = (data.error && data.error.details) || null;
 		throw err;
 	}
 	return data.result;
@@ -58,6 +60,8 @@ export const manager = {
 	deleteWallet: (id, purge) =>
 		request(`/api/wallets/${id}${purge ? '?purge=true' : ''}`, { method: 'DELETE' }),
 	logs: (id) => request(`/api/wallets/${id}/logs`),
+	// Re-run a lightning-first wallet's setup with its primary node.
+	lfbwSetup: (id) => request(`/api/wallets/${id}/lfbw/setup`, { method: 'POST' }),
 	errors: (id, since) =>
 		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
 	channelEvents: (id, channelId) =>
