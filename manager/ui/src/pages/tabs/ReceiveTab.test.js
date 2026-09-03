@@ -226,15 +226,14 @@ test('an invoice the home channel covers is plain; one it cannot is provisioned 
 	} finally {
 		await view2.unmount();
 	}
-	// A home channel that is short: a plain invoice with CLTV headroom, so the
-	// primary splices the one channel rather than opening a second.
+	// A home channel that is short goes through the primary as well: the
+	// engine routes the invoice over the existing channel and splices it.
 	const api3 = stubLfbwApi();
 	const view3 = await mountLfbw(api3, lfbwRec());
 	try {
 		await createInvoice(view3, '80000');
-		const held = api3.calls.find(([m, p]) => m === 'POST' && p === '/invoice/create');
-		assert.deepEqual(held[2], { description: '', amountSats: 80000, minFinalCltvExpiry: 72 });
-		assert.equal(api3.calls.some(([m, p]) => m === 'POST' && p === '/jit/invoice'), false);
+		assert.ok(api3.calls.some(([m, p]) => m === 'POST' && p === '/jit/invoice'));
+		assert.equal(api3.calls.some(([m, p]) => m === 'POST' && p === '/invoice/create'), false);
 	} finally {
 		await view3.unmount();
 	}

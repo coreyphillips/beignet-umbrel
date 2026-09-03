@@ -5,7 +5,7 @@ import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
-import { HOLD_MIN_FINAL_CLTV, INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
+import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
 import { manager } from '../../api.js';
 
 // A direct-funding request is re-minted when the amount changes (the
@@ -197,12 +197,6 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 						targetRemainingInboundSat: INBOUND_HEADROOM_SATS
 					});
 					jit = { flatFeeSat: r.flatFeeSat || 0, feePpm: r.feePpm || 0 };
-				} else if (plan.kind === 'hold') {
-					// The channel exists but is short: a plain invoice with CLTV
-					// headroom, so the primary can hold the payment while it
-					// splices the home channel bigger rather than open a second.
-					r = await api.post('/invoice/create', { ...body, minFinalCltvExpiry: HOLD_MIN_FINAL_CLTV });
-					jit = { flatFeeSat: 0, feePpm: 0, hold: true };
 				}
 			}
 			if (!r) r = await api.post('/invoice/create', body);

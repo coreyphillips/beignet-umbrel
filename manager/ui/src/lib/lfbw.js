@@ -30,28 +30,23 @@ export function homeChannel(channels, primaryPubkey) {
 	return primaryChannels(channels, primaryPubkey).find(usable) || null;
 }
 
-// Final-CLTV headroom on an invoice the primary may settle through a splice
-// of the home channel: the held HTLC has to outlive the splice's broadcast.
-export const HOLD_MIN_FINAL_CLTV = 72;
-
 /**
  * Which invoice to mint. `plain` when the home channel can take the amount
  * as it stands, so a briefly offline primary does not block a receive the
- * channel already covers; `hold` when a home channel exists but is short
- * (a plain invoice with CLTV headroom, paid over the channel, held by the
- * primary while it splices the channel bigger, so the wallet keeps ONE
- * channel); `jit` when no channel exists yet (an intercept SCID in the
- * route hint, and the primary opens the channel when the payment arrives);
- * a refusal when nothing can be minted yet.
+ * channel already covers; `jit` when the primary has to provision inbound
+ * first (POST /jit/invoice registers the intent with the primary, which
+ * opens a channel when none exists and splices the existing one bigger
+ * when the payment outgrows it); a refusal when nothing can be minted yet.
  */
 export function planInvoice({ wantedSats = 0, channels, primaryPubkey, setup, primaryRunning = true }) {
 	if (setup !== 'ready' || !primaryPubkey) return { kind: 'refuse', code: 'NOT_READY' };
-	const live = primaryChannels(channels, primaryPubkey).filter(usable);
-	const inbound = live.reduce((sum, c) => sum + (c.remoteBalanceSats || 0), 0);
+	const inbound = primaryChannels(channels, primaryPubkey)
+		.filter(usable)
+		.reduce((sum, c) => sum + (c.remoteBalanceSats || 0), 0);
 	const covered = wantedSats > 0 ? inbound >= wantedSats : inbound > 0;
 	if (covered) return { kind: 'plain' };
 	if (!primaryRunning) return { kind: 'refuse', code: 'PRIMARY_DOWN' };
-	return { kind: live.length > 0 ? 'hold' : 'jit' };
+	return { kind: 'jit' };
 }
 
 /**
