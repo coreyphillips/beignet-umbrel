@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.13.0"
+version: "0.14.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,28 +30,39 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Channel backup. Every Lightning wallet now chooses what it keeps
-  beyond the seed: nothing (channels close on restore, the default),
-  encrypted checkpoints with the peers it has channels with, or an
-  encrypted journal on three guardian servers you set once in
-  Settings. With guardians, importing the seed elsewhere restores
-  the channels and resumes them instead of closing them, and strict
-  quorum mode fences the old device off so two copies can never act
-  on the same channels. The Overview tab states the tier plainly, and
-  the wallet header speaks up only when something is wrong.
+  Lightning-first wallets. A new kind of wallet with one balance, held
+  in a single channel with a primary node: one of your own wallets on
+  this Umbrel, or an external beignet node. Bitcoin that lands on its
+  deposit address moves into the channel by itself once it confirms,
+  invoices are payable before the channel even exists (the primary
+  provides the capacity the moment the payment arrives), and sending
+  to a bitcoin address spends straight from the channel. Three tabs,
+  one figure; an Advanced view shows the rest.
 
 
-  Restoring from guardians is a page, not a procedure: import the
-  seed with the same guardians and the wallet offers the restore,
-  follows each step, then follows each channel as it reconciles with
-  its peer. A channel that cannot prove its state is current closes
-  safely and its funds return on-chain, and the page says so rather
-  than reporting an error.
+  Direct funding, for every wallet. A deposit request from a
+  lightning-first wallet carries a signed request that lets a beignet
+  payer fund the recipient's channel in one transaction, with no
+  deposit to move afterwards. The Send tab of any wallet offers "Pay
+  as direct funding" when it reads such a request, and never pays
+  twice: a plain send follows only when the recipient declined before
+  anything was signed.
 
 
-  Peer storage checkpoints recover the funds of a lost wallet's
-  channels (the channels close safely); resuming them where they
-  were waits on the engine. beignet 0.9.3 is bundled.
+  Liquidity providers. A wallet chosen as an internal primary fronts
+  channel funding for its lightning-first wallets from its own
+  on-chain balance, within caps you set in its Edit dialog, and its
+  Overview shows what it has fronted and what is committed. A primary
+  in use cannot be deleted or parked.
+
+
+  beignet 0.10.0 is bundled: the whole of the lightning-first engine
+  work, plus fixes found running this app against real nodes
+  (CLN-initiated dual-funded opens now complete, JIT refusals carry
+  their reason, a wallet is never locked out of receiving by its own
+  unpaid invoices). The wallets page no longer holds an event stream
+  per wallet, which had left the page stuck with seven or more
+  wallets running.
 
 
 dependencies: []
