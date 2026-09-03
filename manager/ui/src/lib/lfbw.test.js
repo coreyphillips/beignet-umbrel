@@ -30,7 +30,8 @@ test('homeChannel is the usable channel with the primary and nothing else', () =
 
 test('planInvoice mints plain when the home channel covers it, JIT when the primary must provision', () => {
 	assert.deepEqual(planInvoice({ wantedSats: 100_000, channels: [home()], primaryPubkey: PK, setup: 'ready' }), { kind: 'plain' });
-	assert.deepEqual(planInvoice({ wantedSats: 400_000, channels: [home()], primaryPubkey: PK, setup: 'ready' }), { kind: 'jit' });
+	assert.deepEqual(planInvoice({ wantedSats: 400_000, channels: [home()], primaryPubkey: PK, setup: 'ready' }), { kind: 'hold' }, 'a short home channel is grown by a splice, not doubled');
+	assert.deepEqual(planInvoice({ wantedSats: 400_000, channels: [home({ htlcUsable: false, state: 'AWAITING_FUNDING_CONFIRMED' })], primaryPubkey: PK, setup: 'ready' }), { kind: 'jit' }, 'a channel that is not usable yet does not count');
 	assert.deepEqual(planInvoice({ wantedSats: 0, channels: [], primaryPubkey: PK, setup: 'ready' }), { kind: 'jit' });
 	assert.deepEqual(planInvoice({ wantedSats: 0, channels: [home()], primaryPubkey: PK, setup: 'ready' }), { kind: 'plain' });
 	assert.deepEqual(

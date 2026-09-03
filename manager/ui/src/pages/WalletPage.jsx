@@ -96,7 +96,9 @@ export default function WalletPage() {
 		}
 	};
 
-	const { data: polledRec, refresh: refreshRec } = usePoll(() => manager.getWallet(id), 5000, [id]);
+	// Re-read on every bump too: a tab that just changed the record (a
+	// lightning-first setup retry) must not wait out the poll to show it.
+	const { data: polledRec, refresh: refreshRec } = usePoll(() => manager.getWallet(id), 5000, [id, tick]);
 	// The list page hands the wallet summary over via navigation state, so the
 	// morphing header renders real content immediately instead of flashing.
 	const rec = polledRec || location.state?.wallet || null;

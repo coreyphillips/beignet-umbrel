@@ -226,6 +226,18 @@ test('an invoice the home channel covers is plain; one it cannot is provisioned 
 	} finally {
 		await view2.unmount();
 	}
+	// A home channel that is short: a plain invoice with CLTV headroom, so the
+	// primary splices the one channel rather than opening a second.
+	const api3 = stubLfbwApi();
+	const view3 = await mountLfbw(api3, lfbwRec());
+	try {
+		await createInvoice(view3, '80000');
+		const held = api3.calls.find(([m, p]) => m === 'POST' && p === '/invoice/create');
+		assert.deepEqual(held[2], { description: '', amountSats: 80000, minFinalCltvExpiry: 72 });
+		assert.equal(api3.calls.some(([m, p]) => m === 'POST' && p === '/jit/invoice'), false);
+	} finally {
+		await view3.unmount();
+	}
 });
 
 test('with the primary wallet stopped, an invoice it must provision is refused with directions', async () => {

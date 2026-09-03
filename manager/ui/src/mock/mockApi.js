@@ -1084,10 +1084,11 @@ function normalizeLfbw(input, w) {
 // beat, then ready, with the starting channel landing on the way.
 function runDemoLfbwSetup(w) {
 	const lf = w.lfbw;
-	if (!lf) return;
+	if (!lf) return Promise.resolve();
 	lf.setup = 'pending';
 	lf.setupError = null;
-	setTimeout(() => {
+	return new Promise((resolve) => setTimeout(() => {
+		resolve();
 		if (!store.wallets.includes(w) || !w.lfbw) return;
 		const st = store.state[w.id];
 		if (lf.mode === 'internal' && lf.initialChannelSats > 0 && !lf.initialChannelOpened) {
@@ -1105,7 +1106,7 @@ function runDemoLfbwSetup(w) {
 		lf.setup = 'ready';
 		lf.setupAt = new Date().toISOString();
 		delete directFundingPolicies[w.id];
-	}, 2500);
+	}, 2500));
 }
 
 // The manager's channel backup rules, mirrored so the dialogs' refusals are
@@ -1319,9 +1320,9 @@ function managerRequest(path, method, body) {
 		}
 	}
 	if (sub === 'lfbw/setup' && method === 'POST') {
+		// Like the manager: the call answers once setup has run its course.
 		if (!w.lfbw || !w.lfbw.enabled) throw err('Not a lightning-first wallet', 'NOT_LFBW');
-		runDemoLfbwSetup(w);
-		return publicRecord(w);
+		return runDemoLfbwSetup(w).then(() => publicRecord(w));
 	}
 	if (sub === 'start') {
 		w.status = 'starting';
