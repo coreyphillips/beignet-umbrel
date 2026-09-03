@@ -1747,6 +1747,32 @@ function walletRequest(id, path, method, body) {
 			const fees = { ...JIT_DEFAULTS, ...((lsp && lsp.jit) || {}) };
 			return { ...invoiceInfo(inv), flatFeeSat: fees.flatFeeSat, feePpm: fees.feePpm };
 		}
+		case '/jit/status': {
+			// The provider role as the daemon reports it (beignet 0.10+): the
+			// caps are the owner's policy, the exposure is what is committed.
+			const jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
+			const dependents = lfbwDependentsOf(w);
+			return {
+				enabled: !!w.liquidityProvider,
+				client: { maxFlatFeeSat: 10000, maxFeePpm: 50000 },
+				lsp: w.liquidityProvider
+					? {
+							flatFeeSat: jit.flatFeeSat,
+							feePpm: jit.feePpm,
+							maxClientFundingSats: jit.maxClientFundingSats,
+							maxConcurrentFundings: jit.maxConcurrentFundings,
+							maxTotalFundingSats: jit.maxTotalFundingSats,
+							maxLiveIntentsPerPeer: 2,
+							maxLiveIntents: 64,
+							reservedSats: 0,
+							frontedSats: dependents.length * 250000,
+							liveIntents: dependents.length,
+							heldParts: 0,
+							fundingsInFlight: 0
+					  }
+					: null
+			};
+		}
 		case '/direct-funding/config':
 			return { ...directFundingPolicy(w) };
 		case '/direct-funding/configure': {

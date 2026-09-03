@@ -7,6 +7,15 @@ import { isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
 
 export default function OverviewTab({ id, api, info, health, recovery, rec, tick }) {
+	// A liquidity provider fronts its own coins for lightning-first wallets;
+	// what it is willing to front and what it has committed is the one figure
+	// its owner cannot see anywhere else (GET /jit/status, beignet 0.10+).
+	const provider = !!rec?.liquidityProvider && !rec?.onchainOnly;
+	const { data: jit } = usePoll(
+		() => (provider ? api.get('/jit/status').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, provider]
+	);
 	const { data } = usePoll(
 		async () => {
 			const [balance, nodeUri, liquidity, fees, feeEst, channels] = await Promise.all([
@@ -130,6 +139,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 					</table>
 				</Card>
 
+				{provider && <ProviderCard jit={jit} rec={rec} />}
 				{!onchainOnly && (
 				<Card title="Liquidity">
 					{liq && (openCount ?? liq.channelCount) > 0 ? (
@@ -282,6 +292,56 @@ function ConnectCard({ id, info, rec, nodeUri }) {
 // Channel backup, the tier stated plainly: the daemon's recovery status
 // (null while it has not answered yet, state 'unsupported' when the engine
 // predates the feature) reduced to a line and a sentence.
+/**
+ * What this wallet fronts for lightning-first wallets (the JIT receive role)
+ * and what it has committed right now. The caps are the owner's own policy
+ * from the Edit dialog; the rest is the daemon's account of the exposure.
+ */
+function ProviderCard({ jit, rec }) {
+	const lsp = jit?.lsp || null;
+	const dependents = rec?.lfbwDependents || [];
+	return (
+		<Card title="Liquidity provider" className="grid-full">
+			<div className="wallet-meta" style={{ marginBottom: 10 }}>
+				This wallet funds channels for lightning-first wallets from its own on-chain balance
+				when a payment to them arrives
+				{dependents.length > 0 ? `: primary node of ${dependents.map((d) => `"${d.name}"`).join(', ')}` : ''}
+				. Any beignet wallet may ask; the caps bound what is committed.
+			</div>
+			{!jit ? (
+				<div className="wallet-meta">Reading the provider status…</div>
+			) : !lsp ? (
+				<div className="info-note">
+					The daemon is not running the provider role. It takes it on its next start
+					(the Edit dialog restarts the wallet), or the bundled engine predates the
+					status route.
+				</div>
+			) : (
+				<>
+					<div className="grid cols-4">
+						<Stat label="Fronted so far" num={lsp.frontedSats} suffix=" sats" sub="across restarts" />
+						<Stat label="Committed now" num={lsp.reservedSats} suffix=" sats" sub={`${lsp.fundingsInFlight} funding${lsp.fundingsInFlight === 1 ? '' : 's'} in flight`} />
+						<Stat label="Live intents" num={lsp.liveIntents} sub={`${lsp.heldParts} payment${lsp.heldParts === 1 ? '' : 's'} held`} />
+						<Stat
+							label="Fee"
+							value={`${fmtSats(lsp.flatFeeSat)}${lsp.feePpm > 0 ? ` + ${lsp.feePpm} ppm` : ''}`}
+							sub="taken from each delivery"
+						/>
+					</div>
+					<div className="wallet-meta" style={{ marginTop: 10 }}>
+						Caps: {fmtSats(lsp.maxClientFundingSats)} per client · {lsp.maxConcurrentFundings} funding
+						{lsp.maxConcurrentFundings === 1 ? '' : 's'} at once ·{' '}
+						{lsp.maxTotalFundingSats == null ? 'no lifetime budget' : `${fmtSats(lsp.maxTotalFundingSats)} lifetime budget`}
+						{lsp.maxTotalFundingSats != null && lsp.frontedSats + lsp.reservedSats >= lsp.maxTotalFundingSats
+							? ' (spent: nothing more is fronted until it is raised)'
+							: ''}
+					</div>
+				</>
+			)}
+		</Card>
+	);
+}
+
 function BackupRow({ recovery, rec }) {
 	if (!recovery) return <Row k="Backup" v="-" />;
 	const d = describeRecovery(recovery, rec || {});

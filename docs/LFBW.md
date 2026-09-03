@@ -121,11 +121,21 @@ CLN, direct funding (anonymous and paired), splice-out to an address, the
 delete guard, and an external primary. See the README there for the manager
 command line and the docker stack they expect.
 
+## Progress and exposure
+
+The daemon relays the progress of a funding it fronts (`jit:intent`,
+`jit:intercepted`, `jit:funding`, `jit:forwarded`, `jit:failed`) and of a
+direct funding it receives (`direct-funding:offer:accepted` with `paired`,
+`direct-funding:offer:declined`, `direct-funding:offer:failed`,
+`direct-funding:offer:completed`) over SSE (beignet #669). The dashboard
+toasts the ones a user acts on and the manager writes every one to the
+wallet's log, so the Logs tab tells the story of a just-in-time channel.
+
+A liquidity provider's Overview carries a card backed by `GET /jit/status`
+(beignet #668): sats fronted so far, sats committed right now with the
+fundings in flight, live intents and held payments, the fee, and the caps.
+
 ## Deferred
 
 - Peer failover: a lightning-first wallet has one primary. Re-pointing it is
   an edit; automatic failover to another provider is not built.
-- Progress events for JIT and direct funding over SSE (beignet #669); the
-  dashboard polls meanwhile.
-- Readback of a provider's effective caps and what it has fronted (beignet
-  #668).

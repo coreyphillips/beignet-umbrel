@@ -1021,6 +1021,12 @@ class WalletManager {
 				if (name.startsWith('recovery:')) {
 					this._log(id, `recovery ${name} ${JSON.stringify(data || {})}`);
 				}
+				// Lightning-first progress (beignet #669): a funding this daemon
+				// fronts or receives, one line each, so the Logs tab tells the
+				// story of a just-in-time channel or a direct funding.
+				if (name.startsWith('jit:') || name.startsWith('direct-funding:')) {
+					this._log(id, `${name} ${JSON.stringify(data || {})}`);
+				}
 				// A deposit arriving or confirming, or the home channel becoming
 				// usable, is exactly when a lightning-first wallet has something
 				// to move. The pass itself checks every UTXO has confirmed.

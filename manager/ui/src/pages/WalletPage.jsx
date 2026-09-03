@@ -68,13 +68,25 @@ const EVENT_LABELS = {
 	// Backup row to be noticed.
 	'recovery:fenced': "Another device took over this wallet's channels",
 	'recovery:guardian_unreachable': 'A recovery guardian is unreachable',
-	'recovery:backfill-lost': 'Recovery journal broken: channels are held'
+	'recovery:backfill-lost': 'Recovery journal broken: channels are held',
+	// Lightning-first progress (beignet #669). On a liquidity provider: a
+	// channel it is funding for a payment to one of its wallets, and the
+	// delivery. On a lightning-first wallet: a beignet payer's direct funding
+	// accepted, landed, or lost.
+	'jit:funding': 'Funding a channel for an incoming payment',
+	'jit:forwarded': 'Payment delivered through a just-in-time channel',
+	'jit:failed': 'A held payment could not be delivered',
+	'direct-funding:offer:accepted': 'A direct funding was accepted',
+	'direct-funding:offer:completed': 'Direct funding landed in your channel',
+	'direct-funding:offer:failed': 'A direct funding failed'
 };
 const ERROR_EVENTS = new Set([
 	'payment:failed',
 	'recovery:fenced',
 	'recovery:guardian_unreachable',
-	'recovery:backfill-lost'
+	'recovery:backfill-lost',
+	'jit:failed',
+	'direct-funding:offer:failed'
 ]);
 
 export default function WalletPage() {

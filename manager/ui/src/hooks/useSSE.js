@@ -51,7 +51,20 @@ export function useSSE(url, onEvent) {
 			'recovery:backfill-lost',
 			'recovery:guardian_unreachable',
 			'recovery:restore-progress',
-			'recovery:restored'
+			'recovery:restored',
+			// Lightning-first progress (beignet #669): a funding this wallet
+			// fronts for another (JIT, when it is a liquidity provider) or
+			// receives as a direct funding. Older daemons never send them.
+			'jit:intent',
+			'jit:intent-superseded',
+			'jit:intercepted',
+			'jit:funding',
+			'jit:forwarded',
+			'jit:failed',
+			'direct-funding:offer:accepted',
+			'direct-funding:offer:declined',
+			'direct-funding:offer:failed',
+			'direct-funding:offer:completed'
 		];
 		let es;
 		try {
