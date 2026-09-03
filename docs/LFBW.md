@@ -51,7 +51,7 @@ coreyphillips/beignet#532.
 | --- | --- | --- |
 | Record model and rules | `manager/server/lfbw.js` | Who may be a primary, the provider env, the direct-funding policy, reachability, the channelize decision. Pure and tested. |
 | Setup | `WalletManager.setupLfbw` | Runs on every healthy start: trust (both ways for a trusted internal pair), the direct-funding policy naming the primary as liquidity peer and relay, the peer connection, the starting channel once. |
-| Channelize | `WalletManager._lfbwChannelize` | Confirmed on-chain funds at or above 25,000 sats move into the home channel: a splice-in when it exists, a max open when it does not. Never while any UTXO is unconfirmed. Driven by the daemon's transaction and channel events with a one-minute backstop. |
+| Channelize | `WalletManager._lfbwChannelize` | Confirmed on-chain funds at or above 25,000 sats move into the home channel: a splice-in when it exists, a max open when it does not. Never while any UTXO is unconfirmed, and never while the daemon's quoted fee is more than a twentieth of the amount (`CHANNELIZE_FEE_MULTIPLE`): the funds wait for the rate to come down or for more to arrive, the Overview says so, and "Move now anyway" (`POST /api/wallets/:id/lfbw/channelize`) runs one pass past the fee wait, never past the channel minimums. The last decision rides on the record as `lfbw.lastChannelize`. Driven by the daemon's transaction and channel events with a one-minute backstop. |
 | Liquidity provider | `rec.liquidityProvider`, `rec.jit` | A wallet chosen as an internal primary runs the engine's JIT role (`BEIGNET_JIT_RECEIVE`, fee and exposure caps) and the direct-funding relay (`BEIGNET_DF_RELAY`). Editable in the Edit dialog. |
 | Dashboard reduction | `manager/ui/src/lib/lfbw.js` | One derivation of spendable, receivable and the arriving sats; which invoice to mint. |
 | Envelope reader | `manager/ui/src/lib/funding-envelope.js` | Reads the frozen head of a v3 request (node id, expiry, amount, chain) to show the payer who is asking. Fails closed. |
@@ -134,6 +134,38 @@ wallet's log, so the Logs tab tells the story of a just-in-time channel.
 A liquidity provider's Overview carries a card backed by `GET /jit/status`
 (beignet #668): sats fronted so far, sats committed right now with the
 fundings in flight, live intents and held payments, the fee, and the caps.
+
+## The price before the invoice
+
+A just-in-time receive costs what the primary charges, and the primary may
+not be able to front it at all right now (its on-chain balance short, its
+caps reached, the peer connection down). `GET /jit/quote` (beignet #687)
+asks the primary over the peer connection without registering anything, so
+the Receive tab prices the amount as it is typed: the fee it will take from
+the delivery, or the reason it cannot fund the invoice, in which case Create
+is held rather than minting an invoice that fails at the payer. This works
+for internal and external primaries alike, with no cross-wallet reads. The
+manager probes the bundled engine's OpenAPI module for the route
+(`jitQuoteAvailable`); older engines get the tab as it was.
+
+## Restoring by itself
+
+A peer-storage wallet's checkpoint rides with its channel peers, and the
+engine can apply the newest one by itself on an empty database (beignet
+#690, `BEIGNET_RECOVERY_AUTO_APPLY`). The import form asks the one question
+that makes this safe to automate, once: is the previous device stopped?
+Nothing fences the old device under peer storage, so the answer is the
+owner's. With it the daemon waits a moment for the storage peers to answer,
+applies the newest checkpoint, rebuilds the node on it in-process, and the
+channels come back held (no new payments in until each peer confirms them;
+a close needs the owner to accept that a peer may hold a newer state). The
+Backup row narrates the phases off `GET /recovery/status`'s `autoApply`, a
+channel the checkpoint did not carry is named as closing safely, and the
+checkpoint card steps aside. Without the answer the card offers both ways
+out: resume the channels through the daemon's exact restore (the manager
+restarts the wallet on the installed database), or recover the funds
+through the SCB path. The manager probes the engine's config module for the
+env name (`recoveryAutoApplyAvailable`).
 
 ## Deferred
 

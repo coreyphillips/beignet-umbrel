@@ -61,6 +61,16 @@ export function describeRecovery(status, rec = {}) {
 		};
 	}
 	if (status.state === 'restoring') {
+		// The daemon's own checkpoint restore rebuilds the node in-process
+		// and says restoring for that moment (beignet #690).
+		if (status.autoApply?.enabled) {
+			return {
+				tier: AUTO_APPLY_TIERS.applying,
+				detail: status.restore?.lastEvent?.detail || 'Rebuilding the node on the checkpoint.',
+				tone: 'yellow',
+				degraded: true
+			};
+		}
 		return {
 			tier: 'Restoring',
 			detail: status.restore?.lastEvent?.detail || 'Taking the channels over from the guardians.',
@@ -104,10 +114,19 @@ export function describeRecovery(status, rec = {}) {
 		};
 	}
 	if (status.mode === 'peer-storage') {
+		const auto = autoApplyState(status);
+		if (auto) {
+			return {
+				tier: AUTO_APPLY_TIERS[auto.phase] || AUTO_APPLY_TIERS.idle,
+				detail: auto.detail,
+				tone: auto.phase === 'refused' ? 'yellow' : auto.phase === 'applied' || auto.phase === 'idle' ? 'blue' : 'yellow',
+				degraded: auto.phase === 'settling' || auto.phase === 'applying' || auto.phase === 'refused'
+			};
+		}
 		return {
 			tier: 'Checkpoints via peer storage',
 			detail:
-				'Encrypted channel checkpoints ride with the peers that offer storage. Importing the seed elsewhere with peer storage and reconnecting to those peers offers a recovery from the newest checkpoint: with this engine the channels close safely and the funds return on-chain rather than resuming. There is no fencing between devices in this mode.',
+				'Encrypted channel checkpoints ride with the peers that offer storage. Importing the seed elsewhere with peer storage and reconnecting to those peers offers a recovery from the newest checkpoint: the funds return on-chain, or the channels come back held until each peer confirms them. There is no fencing between devices in this mode.',
 			tone: 'blue',
 			degraded: false
 		};
@@ -145,6 +164,45 @@ export function describeRecovery(status, rec = {}) {
 		tone: 'green',
 		degraded: false
 	};
+}
+
+const AUTO_APPLY_TIERS = {
+	idle: 'Checkpoints via peer storage, restored by itself',
+	settling: 'Checkpoint found, about to apply it',
+	applying: 'Applying the checkpoint',
+	applied: 'Restored from a peer checkpoint',
+	refused: 'Checkpoint found, not applied'
+};
+
+/**
+ * Where the daemon's own checkpoint restore stands (beignet #690): a
+ * peer-storage wallet whose owner answered, once, that the previous device
+ * is stopped applies the newest checkpoint its peers return by itself. The
+ * daemon reports that on the status route as `autoApply`. Returns null when
+ * the wallet did not opt in (or the engine predates it), else the phase,
+ * a sentence for it, and the daemon's reason when it refused.
+ */
+export function autoApplyState(status) {
+	const a = status?.autoApply;
+	if (!a || !a.enabled) return null;
+	const phase = a.phase || 'idle';
+	const last = status?.restore?.lastEvent || null;
+	const uncovered =
+		last && last.type === 'capsule:uncovered' && last.detail
+			? ` Channels the checkpoint did not carry close safely and their funds return on-chain: ${last.detail}`
+			: '';
+	const detail =
+		phase === 'settling'
+			? 'A peer returned a checkpoint. Waiting a moment for the other peers to answer, then the newest one is applied.'
+			: phase === 'applying'
+			? 'Applying the newest checkpoint. The wallet comes back on the restored state by itself.'
+			: phase === 'applied'
+			? 'The newest checkpoint was applied and the channels came back from it, held: they take no new payments in until each peer confirms them, and closing one means accepting that a peer may hold a newer state.' +
+			  uncovered
+			: phase === 'refused'
+			? `The checkpoint a peer returned was not applied${a.lastReason ? `: ${a.lastReason}` : ''}. Nothing was changed; the wallet runs on its own state.`
+			: 'Encrypted channel checkpoints ride with the peers that offer storage. When this wallet is empty and a peer returns one, the newest is applied by itself. Nothing fences the old device in this mode.';
+	return { phase, detail, lastReason: a.lastReason || null, settleUntil: a.settleUntil || null };
 }
 
 /**
@@ -259,6 +317,11 @@ export function restoreProgress(status) {
  */
 export function capsuleOffer(status, info) {
 	if (!status || status.mode !== 'peer-storage' || status.state !== 'running') return null;
+	// A wallet that applies checkpoints by itself needs no offer; the Backup
+	// row says where that stands. One whose daemon refused to apply it by
+	// itself (a checkpoint naming guardians, say) is offered the manual
+	// ways out, with the reason on the row.
+	if (status.autoApply?.enabled && status.autoApply.phase !== 'refused') return null;
 	const best = status.capsules?.best;
 	if (!best) return null;
 	const open = info ? info.openChannelCount ?? info.channelCount ?? 0 : 0;

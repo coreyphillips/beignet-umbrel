@@ -29,6 +29,7 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 	const lf = rec?.lfbw;
 	const [closing, setClosing] = useState(null);
 	const [retrying, setRetrying] = useState(false);
+	const [moving, setMoving] = useState(false);
 
 	const { data, refresh } = usePoll(
 		async () => {
@@ -76,6 +77,33 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 			toast(e.message, 'error');
 		} finally {
 			setRetrying(false);
+		}
+	};
+
+	// "Move now anyway": one channelize pass past the fee wait, for a deposit
+	// the owner wants in Lightning at any price. The channel minimums hold.
+	const moveNow = async () => {
+		setMoving(true);
+		try {
+			const r = await manager.lfbwChannelize(id);
+			if (r?.action === 'splice-in' || r?.action === 'open') {
+				toast(`Moving ${fmtSats(r.amountSats)} into your channel.`, 'success');
+			} else if (r?.action === 'wait') {
+				toast(
+					r.reason === 'quote-too-small'
+						? 'Too little to move: a channel has minimums and an on-chain fee to cover.'
+						: 'Nothing moved: the deposit is not ready yet.',
+					'info'
+				);
+			} else if (r?.action === 'busy') {
+				toast('A move is already in progress.', 'info');
+			}
+			bump();
+			refresh();
+		} catch (e) {
+			toast(e.message, 'error');
+		} finally {
+			setMoving(false);
 		}
 	};
 
@@ -127,6 +155,13 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 					{note}
 				</div>
 			))}
+			{status.feeWait && (
+				<div className="center-actions" style={{ marginTop: -6, marginBottom: 14 }}>
+					<Button className="sm" busy={moving} onClick={moveNow}>
+						Move now anyway
+					</Button>
+				</div>
+			)}
 
 			<div className="grid cols-2">
 				<Card title="Primary node">

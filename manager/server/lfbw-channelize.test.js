@@ -184,3 +184,75 @@ test('channelize is woken by a deposit arriving, one confirming, and the home ch
 	// transition, so a deposit first seen in a block never confirms again.
 	assert.deepEqual([...CHANNELIZE_EVENTS], ['transaction:received', 'transaction:confirmed', 'channel:ready']);
 });
+
+test('a fee above a twentieth of the deposit holds the move, is said once, and yields to "move now"', async () => {
+	const { m } = harness({
+		answers: {
+			'w1 GET /balance': { onchain: 50000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [usable],
+			'w1 GET /fees/estimates': { normal: 40 },
+			'w1 POST /channel/splice-quote': { maxAmountSats: 48000, feeSats: 4000 }
+		}
+	});
+	await m._lfbwChannelize('w1');
+	assert.equal(m.calls.some((c) => c.path === '/channel/splice-in'), false, 'nothing moved');
+	const rt = m.runtimeState('w1');
+	assert.equal(rt.lfbwLast.reason, 'fee-too-high');
+	assert.equal(rt.lfbwLast.feeSats, 4000);
+	assert.equal(rt.lfbwLast.amountSats, 48000);
+	assert.equal(m.logs.filter((l) => /wait to move/.test(l)).length, 1);
+	await m._lfbwChannelize('w1');
+	assert.equal(m.logs.filter((l) => /wait to move/.test(l)).length, 1, 'the wait is logged once, not every tick');
+	assert.equal(m.publicRecord('w1').lfbw.lastChannelize.reason, 'fee-too-high', 'the record says why');
+
+	const outcome = await m.channelizeNow('w1');
+	const splice = m.calls.find((c) => c.path === '/channel/splice-in');
+	assert.equal(splice.body.amountSats, 48000, 'forced past the fee wait');
+	assert.deepEqual({ action: outcome.action, amountSats: outcome.amountSats }, { action: 'splice-in', amountSats: 48000 });
+	assert.equal(rt.lfbwLast.action, 'splice-in');
+});
+
+test('"move now" runs at once through a backoff, but never past the channel minimums or another pass', async () => {
+	const { m } = harness({
+		answers: {
+			'w1 GET /balance': { onchain: 26000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [usable],
+			'w1 GET /fees/estimates': { normal: 40 },
+			'w1 POST /channel/splice-quote': { maxAmountSats: 21000, feeSats: 5000 }
+		}
+	});
+	const rt = m.runtimeState('w1');
+	rt.lfbwRetryAt = Date.now() + 60000;
+	const outcome = await m.channelizeNow('w1');
+	assert.deepEqual({ action: outcome.action, reason: outcome.reason }, { action: 'wait', reason: 'quote-too-small' });
+	assert.equal(m.calls.some((c) => c.path === '/channel/splice-in'), false);
+	rt.lfbwBusy = true;
+	assert.equal((await m.channelizeNow('w1')).action, 'busy');
+	rt.lfbwBusy = false;
+	rt.proc = null;
+	await assert.rejects(m.channelizeNow('w1'), (e) => e.code === 'NOT_RUNNING');
+});
+
+test('a wait below the floor and a failed attempt are recorded for the dashboard', async () => {
+	const small = harness({ answers: { 'w1 GET /balance': { onchain: 12000 } } });
+	await small.m._lfbwChannelize('w1');
+	assert.deepEqual(
+		{ action: small.m.runtimeState('w1').lfbwLast.action, reason: small.m.runtimeState('w1').lfbwLast.reason },
+		{ action: 'wait', reason: 'below-floor' }
+	);
+	const failing = harness({
+		answers: {
+			'w1 GET /balance': { onchain: 50000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [usable],
+			'w1 GET /fees/estimates': { normal: 7 },
+			'w1 POST /channel/splice-quote': { maxAmountSats: 48000, feeSats: 300 },
+			'w1 POST /channel/splice-in': new Error('peer disconnected')
+		}
+	});
+	await failing.m._lfbwChannelize('w1');
+	assert.equal(failing.m.runtimeState('w1').lfbwLast.action, 'failed');
+	await assert.rejects(failing.m.channelizeNow('w1'), (e) => e.code === 'CHANNELIZE_FAILED' && /peer disconnected/.test(e.message));
+});

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
+import { useQuote } from '../../hooks/useQuote.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
@@ -14,7 +15,7 @@ const FUNDING_DEBOUNCE_MS = 400;
 // A JIT invoice's lifetime, and with it the intent the primary holds open.
 const JIT_INVOICE_EXPIRY_SECS = 15 * 60;
 
-export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
+export default function ReceiveTab({ id, api, rec, tick, lastReceive, config }) {
 	const onchainOnly = !!rec?.onchainOnly;
 	// A lightning-first wallet's on-chain request also carries a direct-funding
 	// request, and its invoices are provisioned by the primary node just in
@@ -42,6 +43,86 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 		15000,
 		[id, tick, isLfbw]
 	);
+
+	// Which invoice the amount typed would mint, read off the polled channels
+	// so the price can be said before anything exists. The primary's
+	// running state is asked at creation, where it decides the refusal text.
+	const wantedSats = parseInt(amount, 10) || 0;
+	const plan = useMemo(
+		() =>
+			isLfbw && channels
+				? planInvoice({ wantedSats, channels, primaryPubkey: rec.lfbw.primaryPubkey, setup: rec.lfbw.setup })
+				: null,
+		[isLfbw, channels, wantedSats, rec?.lfbw?.primaryPubkey, rec?.lfbw?.setup]
+	);
+	// The price of a just-in-time receive, asked of the primary before the
+	// invoice exists (beignet #687): the quote registers nothing with it, so
+	// asking is free, and the answer says whether the primary would front
+	// this at all right now. Engines before the route get no line.
+	const jitQuote = useQuote(
+		api,
+		{
+			lspPubkey: rec?.lfbw?.primaryPubkey,
+			amountSats: wantedSats > 0 ? wantedSats : undefined,
+			targetRemainingInboundSat: INBOUND_HEADROOM_SATS
+		},
+		!!config?.jitQuoteAvailable && lfbwReady && plan?.kind === 'jit',
+		'/jit/quote',
+		'GET'
+	);
+	const quoteLine = useMemo(() => {
+		if (!config?.jitQuoteAvailable || !lfbwReady || plan?.kind !== 'jit') return null;
+		const { quote, error, errorCode } = jitQuote;
+		if (errorCode === 'PEER_NOT_CONNECTED') {
+			return { tone: 'error', blocks: true, text: 'Your primary node is not connected, and this invoice needs it to provide inbound capacity.' };
+		}
+		if (error && !quote) {
+			return { tone: 'error', blocks: false, text: `Could not get a price from your primary node: ${error}` };
+		}
+		if (!quote) return null;
+		if (quote.accepted === false) {
+			return {
+				tone: 'error',
+				blocks: true,
+				text: `Your primary cannot fund this invoice right now${quote.reason ? `: ${quote.reason}` : '.'}`
+			};
+		}
+		const flat = quote.flatFeeSat || 0;
+		const ppm = quote.feePpm || 0;
+		// The provider would front it, but at a price this wallet's own
+		// ceilings refuse (the daemon refuses the invoice on the same
+		// numbers), so it is a refusal with its own reason.
+		if (quote.withinCeilings === false) {
+			const c = quote.client || {};
+			return {
+				tone: 'error',
+				blocks: true,
+				text: `Your primary asks ${fmtSats(flat)}${ppm > 0 ? ` plus ${ppm} ppm` : ''} for this, more than this wallet accepts${
+					c.maxFlatFeeSat != null || c.maxFeePpm != null
+						? ` (up to ${fmtSats(c.maxFlatFeeSat || 0)}${c.maxFeePpm > 0 ? ` plus ${c.maxFeePpm} ppm` : ''})`
+						: ''
+				}.`
+			};
+		}
+		const terms = flat > 0 || ppm > 0 ? `${fmtSats(flat)}${ppm > 0 ? ` plus ${ppm} ppm` : ''}` : null;
+		if (wantedSats > 0) {
+			const fee = quote.feeSats ?? flat + Math.floor((wantedSats * ppm) / 1_000_000);
+			return {
+				tone: 'info',
+				blocks: false,
+				text: terms
+					? `Your primary will fund this receive for ${fmtSats(fee)} (${terms}), taken from the delivery.`
+					: 'Your primary will fund this receive at no charge.'
+			};
+		}
+		return {
+			tone: 'info',
+			blocks: false,
+			text: terms
+				? `Your primary funds what the channel cannot take for ${terms}, taken from the delivery.`
+				: 'Your primary funds what the channel cannot take, at no charge.'
+		};
+	}, [config?.jitQuoteAvailable, lfbwReady, plan, jitQuote, wantedSats]);
 
 	const newAddress = async () => {
 		try {
@@ -177,21 +258,21 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 						.then((w) => w.status === 'running')
 						.catch(() => true);
 				}
-				const plan = planInvoice({
+				const decided = planInvoice({
 					wantedSats: body.amountSats || 0,
 					channels: channels || (await api.get('/channels').catch(() => [])),
 					primaryPubkey: lf.primaryPubkey,
 					setup: lf.setup,
 					primaryRunning
 				});
-				if (plan.kind === 'refuse') {
+				if (decided.kind === 'refuse') {
 					throw new Error(
-						plan.code === 'PRIMARY_DOWN'
+						decided.code === 'PRIMARY_DOWN'
 							? 'Your primary node is not running, and this invoice needs it to provide inbound capacity. Start it, or ask for an amount the channel already covers.'
 							: 'The link to your primary node is not set up yet. Retry setup from the Overview tab.'
 					);
 				}
-				if (plan.kind === 'jit') {
+				if (decided.kind === 'jit') {
 					r = await api.post('/jit/invoice', {
 						lspPubkey: lf.primaryPubkey,
 						...(body.amountSats ? { amountSats: body.amountSats } : {}),
@@ -323,7 +404,12 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 				<Field label="Description">
 					<input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Coffee" />
 				</Field>
-				<Button variant="primary" busy={busy} onClick={createInvoice}>
+				{quoteLine && (
+					<div className={quoteLine.tone === 'error' ? 'error-note' : 'info-note'} role="status" data-testid="jit-quote">
+						{quoteLine.text}
+					</div>
+				)}
+				<Button variant="primary" busy={busy} disabled={!!quoteLine?.blocks} onClick={createInvoice}>
 					Create invoice
 				</Button>
 				<AnimatePresence mode="wait">

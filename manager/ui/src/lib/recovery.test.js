@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, RESTORE_STEPS } from './recovery.js';
+import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, autoApplyState, RESTORE_STEPS } from './recovery.js';
 
 const node = (extra = {}) => ({
 	gate: 'confirmed',
@@ -220,4 +220,59 @@ test('a capsule is offered only to a peer-storage wallet with nothing to lose', 
 	assert.equal(capsuleOffer({ ...status, capsules: { candidates: 0, best: null } }, { openChannelCount: 0 }), null);
 	assert.equal(capsuleOffer({ ...status, mode: 'quorum' }, { openChannelCount: 0 }), null, 'guardian modes restore through the guardians');
 	assert.equal(capsuleOffer({ mode: 'peer-storage', state: 'running', node: null }, { openChannelCount: 0 }), null, 'an engine without the capsules key offers nothing');
+	assert.equal(
+		capsuleOffer({ ...status, autoApply: { enabled: true, phase: 'settling' } }, { openChannelCount: 0 }),
+		null,
+		'a wallet that applies checkpoints by itself is not offered one'
+	);
+	assert.ok(capsuleOffer({ ...status, autoApply: { enabled: false, phase: 'idle' } }, { openChannelCount: 0 }), 'reported but not enabled is the old offer');
+	assert.ok(
+		capsuleOffer({ ...status, autoApply: { enabled: true, phase: 'refused', lastReason: 'the capsule names guardians' } }, { openChannelCount: 0 }),
+		'a daemon that refused to apply it by itself hands the choice back'
+	);
+});
+
+test('the in-process rebuild reads as applying, not as a guardian restore', () => {
+	const d = describeRecovery(
+		{ mode: 'peer-storage', state: 'restoring', node: null, capsules: { candidates: 1, best: null }, autoApply: { enabled: true, phase: 'applying' }, restore: { inProgress: true, lastEvent: { type: 'capsule:resuming', detail: 'rebuilding the node on the restored database' } } },
+		{}
+	);
+	assert.equal(d.tier, 'Applying the checkpoint');
+	assert.equal(d.detail, 'rebuilding the node on the restored database');
+	assert.equal(d.degraded, true);
+});
+
+test('the automatic checkpoint restore is narrated phase by phase in the Backup row', () => {
+	const ps = (autoApply, extra = {}) => ({
+		mode: 'peer-storage',
+		state: 'running',
+		node: node({ durability: 'local', gate: 'disabled' }),
+		capsules: { candidates: 0, best: null },
+		autoApply,
+		...extra
+	});
+	assert.equal(autoApplyState(ps(undefined)), null, 'an engine without the field');
+	assert.equal(autoApplyState(ps({ enabled: false, phase: 'idle' })), null, 'not answered at import');
+	const idle = describeRecovery(ps({ enabled: true, phase: 'idle' }), {});
+	assert.equal(idle.tier, 'Checkpoints via peer storage, restored by itself');
+	assert.match(idle.detail, /the newest is applied by itself/);
+	assert.equal(idle.degraded, false);
+	const settling = describeRecovery(ps({ enabled: true, phase: 'settling', settleUntil: 1 }), {});
+	assert.equal(settling.tier, 'Checkpoint found, about to apply it');
+	assert.equal(settling.tone, 'yellow');
+	assert.equal(settling.degraded, true, 'the header waves while it is happening');
+	assert.equal(describeRecovery(ps({ enabled: true, phase: 'applying' }), {}).tier, 'Applying the checkpoint');
+	const applied = describeRecovery(
+		ps({ enabled: true, phase: 'applied' }, { restore: { inProgress: false, lastEvent: { type: 'capsule:uncovered', detail: 'abcd (Bitrefill) closes safely' } } }),
+		{}
+	);
+	assert.equal(applied.tier, 'Restored from a peer checkpoint');
+	assert.match(applied.detail, /came back from it, held/);
+	assert.match(applied.detail, /did not carry close safely and their funds return on-chain: abcd \(Bitrefill\) closes safely/);
+	assert.equal(applied.tone, 'blue');
+	assert.equal(applied.degraded, false);
+	const refused = describeRecovery(ps({ enabled: true, phase: 'refused', lastReason: 'the capsule names guardians' }), {});
+	assert.equal(refused.tier, 'Checkpoint found, not applied');
+	assert.match(refused.detail, /was not applied: the capsule names guardians/);
+	assert.equal(refused.degraded, true);
 });

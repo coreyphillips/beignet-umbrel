@@ -22,7 +22,7 @@ const {
 	sameGuardianSet,
 	recoveryEnv
 } = require('./recovery');
-const { engineVersion, recoveryAvailable, lfbwAvailable } = require('./engine');
+const { engineVersion, recoveryAvailable, lfbwAvailable, jitQuoteAvailable, recoveryAutoApplyAvailable } = require('./engine');
 const lfbw = require('./lfbw');
 
 const HEALTH_TIMEOUT_MS = 45000;
@@ -33,6 +33,9 @@ const HEALTH_POLL_MS = 500;
 // every two seconds is cheap, and it is how soon the wallet reads running
 // once the restore has built the node.
 const RESTORE_HOLD_POLL_MS = 2000;
+// How many straight restore-pending answers a peer-storage daemon may give
+// while rebuilding on a checkpoint before it is read as holding after all.
+const CHECKPOINT_REBUILD_MAX_POLLS = 12;
 const MAX_LOG_LINES = 300;
 // Node-level errors kept per wallet. These carry the reason a channel open
 // failed, which the daemon reports only as a transient `node:error` event, so
@@ -111,6 +114,11 @@ class WalletManager {
 		// Lightning-first wallets need routes the engine gained after 0.9.3
 		// (JIT receive, direct funding); probed on the bundled engine itself.
 		this.lfbwSupported = lfbwAvailable();
+		// The two follow-ups probed the same way: a JIT fee quote (beignet
+		// #687) and the daemon applying a peer-storage checkpoint by itself
+		// (beignet #690).
+		this.jitQuoteSupported = jitQuoteAvailable();
+		this.recoveryAutoApplySupported = recoveryAutoApplyAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 	}
@@ -280,7 +288,9 @@ class WalletManager {
 				lfbwWatch: null,
 				lfbwTimer: null,
 				lfbwBusy: false,
-				lfbwRetryAt: 0
+				lfbwRetryAt: 0,
+				// What the last channelize pass decided (why a deposit waits).
+				lfbwLast: null
 			});
 		}
 		return this.runtime.get(id);
@@ -453,6 +463,14 @@ class WalletManager {
 		return this.lfbwSupported === true;
 	}
 
+	jitQuoteAvailable() {
+		return this.jitQuoteSupported === true;
+	}
+
+	recoveryAutoApplyAvailable() {
+		return this.recoveryAutoApplySupported === true;
+	}
+
 	recoveryAvailable() {
 		return recoveryAvailable(this.engineVersion);
 	}
@@ -506,20 +524,20 @@ class WalletManager {
 	 * frame refuses to run without its barrier, so the change would only
 	 * produce a wallet that cannot start).
 	 */
-	_normalizeRecovery(mode, existing) {
+	_normalizeRecovery(mode, existing, autoApply) {
 		const current = existing || { mode: 'off', guardians: [] };
-		if (mode === undefined) return { mode: current.mode || 'off', guardians: current.guardians || [] };
-		if (!isRecoveryMode(mode)) {
+		const resolvedMode = mode === undefined ? current.mode || 'off' : mode;
+		if (!isRecoveryMode(resolvedMode)) {
 			throw httpError(400, 'BAD_RECOVERY_MODE', `Unknown channel backup mode "${mode}".`);
 		}
-		if (mode !== 'off' && !this.recoveryAvailable()) {
+		if (mode !== undefined && mode !== 'off' && !this.recoveryAvailable()) {
 			throw httpError(
 				400,
 				'RECOVERY_UNSUPPORTED',
 				`The bundled beignet (${this.engineVersion || 'unknown version'}) predates channel backup.`
 			);
 		}
-		if (current.mode === 'quorum' && mode !== 'quorum') {
+		if (current.mode === 'quorum' && resolvedMode !== 'quorum') {
 			throw httpError(
 				409,
 				'RECOVERY_QUORUM_STICKY',
@@ -527,7 +545,7 @@ class WalletManager {
 			);
 		}
 		let guardians = current.guardians || [];
-		if (isGuardianMode(mode) && guardians.length === 0) {
+		if (isGuardianMode(resolvedMode) && guardians.length === 0) {
 			guardians = this.recoveryGuardians();
 			if (guardians.length === 0) {
 				throw httpError(
@@ -537,7 +555,22 @@ class WalletManager {
 				);
 			}
 		}
-		return { mode, guardians };
+		// The one-time answer to "is the previous device stopped?": with it
+		// the daemon applies the newest peer-storage checkpoint by itself on
+		// an empty database (beignet #690). It only means anything under peer
+		// storage; any other mode drops it, so the env never carries a flag
+		// the daemon would refuse to start with.
+		const wanted = autoApply === undefined ? current.autoApply === true : autoApply === true;
+		if (autoApply === true && !this.recoveryAutoApplyAvailable()) {
+			throw httpError(
+				400,
+				'RECOVERY_AUTO_APPLY_UNSUPPORTED',
+				`The bundled beignet (${this.engineVersion || 'unknown version'}) cannot apply a checkpoint by itself.`
+			);
+		}
+		const result = { mode: resolvedMode, guardians };
+		if (resolvedMode === 'peer-storage' && wanted) result.autoApply = true;
+		return result;
 	}
 
 	async createWallet({
@@ -549,6 +582,7 @@ class WalletManager {
 		announce,
 		onchainOnly,
 		recoveryMode,
+		recoveryAutoApply,
 		lfbw: lfbwInput
 	} = {}) {
 		const strength = Number(wordCount) === 12 ? 128 : 256;
@@ -562,6 +596,7 @@ class WalletManager {
 			announce,
 			onchainOnly,
 			recoveryMode,
+			recoveryAutoApply,
 			lfbw: lfbwInput
 		});
 	}
@@ -575,6 +610,7 @@ class WalletManager {
 		announce,
 		onchainOnly,
 		recoveryMode,
+		recoveryAutoApply,
 		lfbw: lfbwInput
 	} = {}) {
 		const normalized = String(mnemonic || '')
@@ -593,6 +629,7 @@ class WalletManager {
 			announce,
 			onchainOnly,
 			recoveryMode,
+			recoveryAutoApply,
 			lfbw: lfbwInput
 		});
 	}
@@ -606,13 +643,14 @@ class WalletManager {
 		announce,
 		onchainOnly,
 		recoveryMode,
+		recoveryAutoApply,
 		lfbw: lfbwInput
 	}) {
 		const net = this._validateNetwork(network);
 		const resolvedElectrum = this._resolveElectrum(electrum);
 		// Channel backup is a Lightning concern; an on-chain only wallet is
 		// created without it (the dashboard does not offer the choice there).
-		const recovery = this._normalizeRecovery(onchainOnly ? 'off' : recoveryMode, null);
+		const recovery = this._normalizeRecovery(onchainOnly ? 'off' : recoveryMode, null, recoveryAutoApply);
 		const id = crypto.randomUUID();
 		// Lightning-first is Lightning too: an on-chain only wallet has no
 		// home channel to keep, so the flag wins over the block.
@@ -688,7 +726,18 @@ class WalletManager {
 
 	async updateWallet(
 		id,
-		{ name, electrum, tor, announce, onchainOnly, recoveryMode, lfbw: lfbwInput, liquidityProvider, jit } = {}
+		{
+			name,
+			electrum,
+			tor,
+			announce,
+			onchainOnly,
+			recoveryMode,
+			recoveryAutoApply,
+			lfbw: lfbwInput,
+			liquidityProvider,
+			jit
+		} = {}
 	) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
@@ -705,7 +754,7 @@ class WalletManager {
 		}
 		// Validate before touching the record, so a refused mode leaves the
 		// wallet exactly as it was.
-		const recovery = this._normalizeRecovery(recoveryMode, rec.recovery);
+		const recovery = this._normalizeRecovery(recoveryMode, rec.recovery, recoveryAutoApply);
 		// A wallet other wallets depend on for their home channel cannot stop
 		// serving them by a flag flip: they would lose inbound, direct
 		// funding and their channelize path at once.
@@ -1076,7 +1125,7 @@ class WalletManager {
 		// A daemon holding for a guardian restore is up but has no node
 		// underneath it; it is neither healthy nor stalled, it is waiting.
 		if (probe.kind === 'restore-pending') {
-			this._enterRestoreHold(id, rt);
+			if (!this._rebuildingOnCheckpoint(rec, rt, id)) this._enterRestoreHold(id, rt);
 			rt.chainStallPolls = 0;
 			return;
 		}
@@ -1084,6 +1133,7 @@ class WalletManager {
 			await this._restartOnRestoredState(id, rt);
 			return;
 		}
+		if (health) rt.checkpointRebuildPolls = 0;
 		// healthy was set once by the startup poll and then never revisited, so a
 		// daemon that stopped answering mid-life (alive but its API deadlocked)
 		// kept reading healthy forever. Demote it after two straight silent polls
@@ -1198,6 +1248,14 @@ class WalletManager {
 				return;
 			}
 			if (probe.kind === 'restore-pending') {
+				// A peer-storage daemon rebuilding on a checkpoint it applied
+				// by itself answers this for a moment; that is a boot still
+				// in progress, not a hold.
+				if (this._rebuildingOnCheckpoint(rec, rt, id)) {
+					if (Date.now() >= deadline) return;
+					await sleep(HEALTH_POLL_MS);
+					continue;
+				}
 				// Up, holding, and staying that way until someone runs the
 				// restore: keep watching at a slower pace with no deadline,
 				// so the wallet reads running the moment the node boots.
@@ -1249,6 +1307,27 @@ class WalletManager {
 			/* unreachable or timed out */
 		}
 		return { kind: 'silent' };
+	}
+
+	/**
+	 * Whether a NODE_RESTORE_PENDING answer is the short window in which a
+	 * peer-storage daemon rebuilds its node in-process on a checkpoint it
+	 * applied by itself (beignet #690). Peer storage has no guardian hold to
+	 * be in, so there the answer can only mean that. Said once, tolerated
+	 * for a bounded run of polls; a rebuild that never ends falls through to
+	 * the hold so the wallet is not read as running forever.
+	 */
+	_rebuildingOnCheckpoint(rec, rt, id) {
+		if (!rec.recovery || rec.recovery.mode !== 'peer-storage') return false;
+		rt.checkpointRebuildPolls = (rt.checkpointRebuildPolls || 0) + 1;
+		if (rt.checkpointRebuildPolls === 1) {
+			this._log(id, 'applying a peer checkpoint: the node is being rebuilt on it');
+		}
+		if (rt.checkpointRebuildPolls > CHECKPOINT_REBUILD_MAX_POLLS) {
+			this._log(id, 'the rebuild on the checkpoint has not finished; treating the daemon as holding');
+			return false;
+		}
+		return true;
 	}
 
 	_enterRestoreHold(id, rt) {
@@ -1650,26 +1729,35 @@ class WalletManager {
 	 * the I/O around it. A failure backs off rather than retrying every
 	 * tick, and a pass never overlaps another.
 	 */
-	async _lfbwChannelize(id) {
+	async _lfbwChannelize(id, { force = false } = {}) {
 		const rec = this.registry.get(id);
 		const rt = this.runtimeState(id);
-		if (!rec || !lfbw.isLfbw(rec)) return;
+		if (!rec || !lfbw.isLfbw(rec)) return null;
 		const lf = rec.lfbw;
-		if (!rt.proc || !rt.healthy || rt.stopping) return;
-		if (lf.setup !== 'ready' || !lf.primaryPubkey) return;
-		if (rt.lfbwBusy || Date.now() < rt.lfbwRetryAt) return;
+		if (!rt.proc || !rt.healthy || rt.stopping) return null;
+		if (lf.setup !== 'ready' || !lf.primaryPubkey) return null;
+		if (rt.lfbwBusy) return { action: 'busy' };
+		if (!force && Date.now() < rt.lfbwRetryAt) return null;
 		rt.lfbwBusy = true;
+		// What the pass decided, kept on the runtime so the dashboard can say
+		// why a deposit waits (the fee, say) and offer to override it. Only a
+		// pass that reached a decision about real funds records one: an
+		// unreadable daemon says nothing new.
+		const decided = (outcome) => {
+			rt.lfbwLast = { at: Date.now(), ...outcome };
+			return rt.lfbwLast;
+		};
 		try {
 			const balance = await this._daemonCall(rec, 'GET', '/balance').catch(() => null);
-			if (!balance) return;
+			if (!balance) return null;
 			const onchainSats = balance.onchain || 0;
-			if (onchainSats < lfbw.CHANNELIZE_FLOOR_SATS) return;
+			if (onchainSats < lfbw.CHANNELIZE_FLOOR_SATS) return decided({ action: 'wait', reason: 'below-floor' });
 			const [utxos, channels] = await Promise.all([
 				this._daemonCall(rec, 'GET', '/utxos').catch(() => null),
 				this._daemonCall(rec, 'GET', '/channels').catch(() => [])
 			]);
 			const target = lfbw.channelizeTarget({ onchainSats, utxos, channels, primaryPubkey: lf.primaryPubkey });
-			if (target.action === 'wait') return;
+			if (target.action === 'wait') return decided(target);
 			const fees = await this._daemonCall(rec, 'GET', '/fees/estimates').catch(() => null);
 			const feeNormal = fees && fees.normal > 0 ? fees.normal : 0;
 			const perkw = lfbw.perkwFromSatVb(feeNormal > 0 ? feeNormal : 2);
@@ -1680,7 +1768,7 @@ class WalletManager {
 					direction: 'in',
 					feeratePerkw: perkw
 				}).catch(() => null);
-				order = lfbw.channelizeOrder(target, { spliceQuote, feeNormal });
+				order = lfbw.channelizeOrder(target, { spliceQuote, feeNormal, force });
 			} else {
 				const txQuote = await this._daemonCall(rec, 'POST', '/tx/quote', {
 					satsPerVbyte: feeNormal > 0 ? feeNormal : 2,
@@ -1695,14 +1783,23 @@ class WalletManager {
 					mode: lf.mode,
 					trusted: lf.trusted,
 					blockHeight: (info && info.blockHeight) || 0,
-					primary
+					primary,
+					force
 				});
 			}
-			if (order.action === 'wait') return;
+			if (order.action === 'wait') {
+				if (order.reason === 'fee-too-high' && !(rt.lfbwLast && rt.lfbwLast.reason === 'fee-too-high')) {
+					this._log(
+						id,
+						`lightning-first: ${order.amountSats} sats wait to move: the fee would be ${order.feeSats} sats, more than a twentieth of the amount`
+					);
+				}
+				return decided(order);
+			}
 			if (order.action === 'splice-in') {
 				this._log(id, `lightning-first: splicing ${order.body.amountSats} sats on-chain into the home channel`);
 				await this._daemonCall(rec, 'POST', '/channel/splice-in', order.body);
-				return;
+				return decided({ action: 'splice-in', amountSats: order.body.amountSats });
 			}
 			if (order.action === 'open-v2') {
 				this._log(
@@ -1719,12 +1816,32 @@ class WalletManager {
 			}
 			this._log(id, `lightning-first: moving ${order.body.amountSats} sats on-chain into a new channel with the primary`);
 			await this._daemonCall(rec, 'POST', '/channel/connect-and-open', order.body);
+			return decided({ action: 'open', amountSats: order.body.amountSats });
 		} catch (err) {
 			rt.lfbwRetryAt = Date.now() + lfbw.CHANNELIZE_RETRY_MS;
 			this._log(id, `lightning-first: channelize attempt failed: ${err.message}`);
+			return decided({ action: 'failed', error: err.message });
 		} finally {
 			rt.lfbwBusy = false;
 		}
+	}
+
+	/**
+	 * The dashboard's "Move now anyway": one channelize pass that skips the
+	 * fee wait (never the channel minimums), run at once whatever the
+	 * backoff says. Answers with what the pass decided.
+	 */
+	async channelizeNow(id) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		if (!lfbw.isLfbw(rec)) throw httpError(400, 'NOT_LFBW', 'Not a lightning-first wallet');
+		const rt = this.runtimeState(id);
+		if (!rt.proc || !rt.healthy) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
+		if (rec.lfbw.setup !== 'ready') throw httpError(409, 'LFBW_NOT_READY', 'The link to the primary node is not set up yet');
+		const outcome = await this._lfbwChannelize(id, { force: true });
+		if (!outcome) throw httpError(503, 'WALLET_UNRESPONSIVE', 'The wallet did not answer');
+		if (outcome.action === 'failed') throw httpError(502, 'CHANNELIZE_FAILED', outcome.error);
+		return outcome;
 	}
 
 	publicRecord(id) {
@@ -1745,7 +1862,8 @@ class WalletManager {
 			torCircuitOk: rec.tor ? this.torCircuitOk : null,
 			recovery: {
 				mode: (rec.recovery && rec.recovery.mode) || 'off',
-				guardians: (rec.recovery && rec.recovery.guardians) || []
+				guardians: (rec.recovery && rec.recovery.guardians) || [],
+				autoApply: !!(rec.recovery && rec.recovery.autoApply)
 			},
 			port: rec.port,
 			desiredRunning: !!rec.running,
@@ -1760,7 +1878,7 @@ class WalletManager {
 			nodeId: rec.nodeId || null,
 			listenPort: rec.onchainOnly ? null : this.listenPort(rec),
 			reach: rec.onchainOnly ? null : this._reach(rec),
-			lfbw: rec.lfbw ? { ...rec.lfbw } : null,
+			lfbw: rec.lfbw ? { ...rec.lfbw, lastChannelize: rt.lfbwLast || null } : null,
 			liquidityProvider: !!rec.liquidityProvider && !rec.onchainOnly,
 			jit: lfbw.normalizeJit(undefined, rec.jit),
 			lfbwDependents: this._dependents(rec).map((d) => ({ id: d.id, name: d.name }))

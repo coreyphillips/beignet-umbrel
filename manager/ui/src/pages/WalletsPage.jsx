@@ -19,6 +19,7 @@ import {
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
+import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
 
@@ -281,8 +282,15 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	// Channel backup defaults to seed only until peer-storage restore is
 	// reachable end to end; the choice is there for anyone opting in now.
 	const [recoveryMode, setRecoveryMode] = useState('off');
+	// The one-time answer a peer-storage import asks for: is the previous
+	// device stopped? With it the daemon applies the newest checkpoint its
+	// peers return by itself (beignet #690). Import only: a fresh wallet has
+	// nothing anywhere to restore.
+	const [recoveryAutoApply, setRecoveryAutoApply] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const guardiansConfigured = (config.recoveryGuardians || []).length === 3;
+	const asksAutoApply =
+		tab === 'import' && !onchainOnly && recoveryMode === 'peer-storage' && !!config.recoveryAutoApplyAvailable;
 
 	const submit = async () => {
 		setBusy(true);
@@ -313,6 +321,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					announce,
 					onchainOnly,
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
+					...(asksAutoApply ? { recoveryAutoApply } : {}),
 					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				toast('Wallet imported. It will sync in the background.', 'success');
@@ -423,6 +432,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					importing={tab === 'import'}
 				/>
 			)}
+			{asksAutoApply && <RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} />}
 
 			{config.lfbwAvailable && !onchainOnly && (
 				<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />

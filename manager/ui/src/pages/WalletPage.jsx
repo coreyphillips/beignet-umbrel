@@ -9,6 +9,7 @@ import { useToast } from '../components/Toast.jsx';
 import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
+import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
 import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
 import { shortId } from '../lib/format.js';
@@ -69,6 +70,7 @@ const EVENT_LABELS = {
 	'recovery:fenced': "Another device took over this wallet's channels",
 	'recovery:guardian_unreachable': 'A recovery guardian is unreachable',
 	'recovery:backfill-lost': 'Recovery journal broken: channels are held',
+	'recovery:capsule-retrieved': 'A peer returned a channel checkpoint',
 	// Lightning-first progress (beignet #669). On a liquidity provider: a
 	// channel it is funding for a payment to one of its wallets, and the
 	// delivery. On a lightning-first wallet: a beignet payer's direct funding
@@ -396,6 +398,7 @@ export default function WalletPage() {
 								tick={tick}
 								bump={bump}
 								lastReceive={lastReceive}
+								config={config}
 							/>
 						</m.div>
 					</AnimatePresence>
@@ -410,6 +413,7 @@ export default function WalletPage() {
 					torAvailable={!!config?.torAvailable}
 					onionAvailable={!!config?.onionAvailable}
 					recoveryAvailable={!!config?.recoveryAvailable}
+					recoveryAutoApplyAvailable={!!config?.recoveryAutoApplyAvailable}
 					lfbwAvailable={!!config?.lfbwAvailable}
 					settingsGuardians={config?.recoveryGuardians || []}
 					restoring={rec.status === 'restore-required' || recovery?.state === 'restoring'}
@@ -454,6 +458,7 @@ function EditWalletModal({
 	torAvailable,
 	onionAvailable,
 	recoveryAvailable = false,
+	recoveryAutoApplyAvailable = false,
 	lfbwAvailable = false,
 	settingsGuardians = [],
 	restoring = false,
@@ -501,6 +506,7 @@ function EditWalletModal({
 	const [announce, setAnnounce] = useState(!!rec.announce);
 	const [onchainOnly, setOnchainOnly] = useState(!!rec.onchainOnly);
 	const [recoveryMode, setRecoveryMode] = useState(rec.recovery?.mode || 'off');
+	const [recoveryAutoApply, setRecoveryAutoApply] = useState(!!rec.recovery?.autoApply);
 	const pinnedGuardians = rec.recovery?.guardians || [];
 	const [busy, setBusy] = useState(false);
 	// Whether this wallet has OPEN channels, asked the moment the modal opens.
@@ -534,6 +540,11 @@ function EditWalletModal({
 				// run without its barrier, so the mode is never sent as off
 				// just because Lightning is switched off.
 				recoveryMode,
+				// The automatic checkpoint restore is a peer-storage answer; the
+				// manager drops it under any other mode.
+				...(recoveryAutoApplyAvailable && recoveryMode === 'peer-storage'
+					? { recoveryAutoApply }
+					: {}),
 				electrum: {
 					host: electrum.host.trim(),
 					port: parseInt(electrum.port, 10),
@@ -620,12 +631,20 @@ function EditWalletModal({
 						settingsGuardians={settingsGuardians}
 						lockedToQuorum={rec.recovery?.mode === 'quorum'}
 					/>
+					{recoveryAutoApplyAvailable && recoveryMode === 'peer-storage' && (
+						<RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} disabled={restoring} />
+					)}
 					{restoring && (
 						<div className="info-note">
 							Channel backup cannot change while this wallet is waiting for, or running,
 							a restore from its guardians.
 						</div>
 					)}
+					{recoveryMode === (rec.recovery?.mode || 'off') &&
+						recoveryMode === 'peer-storage' &&
+						recoveryAutoApply !== !!rec.recovery?.autoApply && (
+							<div className="info-note">Changing this restarts the wallet.</div>
+						)}
 					{recoveryMode !== (rec.recovery?.mode || 'off') && (
 						<div className="info-note">
 							Changing channel backup restarts this wallet.

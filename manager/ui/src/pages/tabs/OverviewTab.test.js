@@ -167,6 +167,47 @@ test('the Backup row states the tier: seed only, quorum, fenced', async () => {
 	}
 });
 
+test('the Backup row narrates the automatic checkpoint restore', async () => {
+	const settling = await render(wrapped, {
+		...props([]),
+		recovery: {
+			mode: 'peer-storage',
+			state: 'running',
+			node: recoveryNode({ durability: 'local', gate: 'disabled' }),
+			guardians: [],
+			capsules: { candidates: 1, best: null },
+			autoApply: { enabled: true, phase: 'settling', settleUntil: 1 }
+		}
+	});
+	try {
+		await settle(50);
+		assert.match(backupRow(settling).textContent, /Checkpoint found, about to apply it/);
+		assert.match(backupRow(settling).textContent, /Waiting a moment for the other peers/);
+		assert.ok(backupRow(settling).querySelector('.badge.yellow'));
+	} finally {
+		await settling.unmount();
+	}
+	const applied = await render(wrapped, {
+		...props([ch('NORMAL')]),
+		recovery: {
+			mode: 'peer-storage',
+			state: 'running',
+			node: recoveryNode({ durability: 'local', gate: 'disabled' }),
+			guardians: [],
+			capsules: { candidates: 0, best: null },
+			autoApply: { enabled: true, phase: 'applied' }
+		}
+	});
+	try {
+		await settle(50);
+		assert.match(backupRow(applied).textContent, /Restored from a peer checkpoint/);
+		assert.match(backupRow(applied).textContent, /came back from it, held/);
+		assert.ok(backupRow(applied).querySelector('.badge.blue'));
+	} finally {
+		await applied.unmount();
+	}
+});
+
 test('an engine without the route reads as seed only, and a status not yet answered as a dash', async () => {
 	const old = await render(wrapped, { ...props([ch('NORMAL')]), recovery: { state: 'unsupported' } });
 	try {

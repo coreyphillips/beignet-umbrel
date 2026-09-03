@@ -25,9 +25,10 @@ const DEBOUNCE_MS = 250;
  * Returns { quote, error, pending }. `quote` is the last good answer, kept while
  * a new one is in flight so the figures on screen do not flicker to nothing.
  */
-export function useQuote(api, params, enabled = true, path = '/tx/quote') {
+export function useQuote(api, params, enabled = true, path = '/tx/quote', method = 'POST') {
 	const [quote, setQuote] = useState(null);
 	const [error, setError] = useState(null);
+	const [errorCode, setErrorCode] = useState(null);
 	const [pending, setPending] = useState(false);
 	// Only the newest request may write its answer: a slow one must not overwrite
 	// a fresher one that landed first.
@@ -38,17 +39,31 @@ export function useQuote(api, params, enabled = true, path = '/tx/quote') {
 		if (!enabled) {
 			setQuote(null);
 			setError(null);
+			setErrorCode(null);
 			return () => {};
 		}
 		const id = ++latest.current;
 		setPending(true);
 		const timer = setTimeout(() => {
-			api
-				.post(path, JSON.parse(key))
+			const body = JSON.parse(key);
+			// A GET quote (the daemon's read-only ones, /jit/quote say) carries
+			// its parameters in the query string; unset ones are left out.
+			const ask =
+				method === 'GET'
+					? api.get(
+							path +
+								'?' +
+								new URLSearchParams(
+									Object.entries(body).filter(([, v]) => v !== undefined && v !== null && v !== '')
+								).toString()
+					  )
+					: api.post(path, body);
+			ask
 				.then((res) => {
 					if (id !== latest.current) return;
 					setQuote(res);
 					setError(null);
+					setErrorCode(null);
 				})
 				.catch((e) => {
 					if (id !== latest.current) return;
@@ -56,13 +71,14 @@ export function useQuote(api, params, enabled = true, path = '/tx/quote') {
 					// balance cannot cover is a normal thing to type on the way to one
 					// it can.
 					setError(e.message);
+					setErrorCode(e.code || null);
 				})
 				.finally(() => {
 					if (id === latest.current) setPending(false);
 				});
 		}, DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [api, key, enabled, path]);
+	}, [api, key, enabled, path, method]);
 
-	return { quote, error, pending };
+	return { quote, error, errorCode, pending };
 }
