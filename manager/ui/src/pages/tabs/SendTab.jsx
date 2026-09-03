@@ -57,9 +57,13 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 		!rec?.onchainOnly &&
 		(channels ? channels.some(usable) : (info?.channelCount ?? 0) > 0);
 
+	// Demote to the on-chain rail only once the channel list has answered:
+	// before it loads canLightning reads false for every wallet, and a
+	// lightning-first wallet that opened on its Lightning rail would be
+	// parked on the address rail with nothing to flip it back.
 	useEffect(() => {
-		if (!canLightning && mode !== 'onchain') setMode('onchain');
-	}, [canLightning, mode]);
+		if (channels && !canLightning && mode !== 'onchain') setMode('onchain');
+	}, [channels, canLightning, mode]);
 	// A lightning-first wallet has no keysend card: it is an apparatus of the
 	// Advanced view, and the pill row below does not offer it.
 	useEffect(() => {
