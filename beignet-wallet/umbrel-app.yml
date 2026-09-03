@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.14.0"
+version: "0.15.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,39 +30,34 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Lightning-first wallets. A new kind of wallet with one balance, held
-  in a single channel with a primary node: one of your own wallets on
-  this Umbrel, or an external beignet node. Bitcoin that lands on its
-  deposit address moves into the channel by itself once it confirms,
-  invoices are payable before the channel even exists (the primary
-  provides the capacity the moment the payment arrives), and sending
-  to a bitcoin address spends straight from the channel. Three tabs,
-  one figure; an Advanced view shows the rest.
+  The price before the invoice. A lightning-first wallet now asks its
+  primary what a just-in-time receive will cost before the invoice is
+  created: the Receive tab shows the fee beside the amount, or says why
+  the primary cannot fund it right now (not enough on-chain funds, its
+  caps, or simply not connected) and holds the Create button until it
+  can. Nothing is reserved at the primary by asking.
 
 
-  Direct funding, for every wallet. A deposit request from a
-  lightning-first wallet carries a signed request that lets a beignet
-  payer fund the recipient's channel in one transaction, with no
-  deposit to move afterwards. The Send tab of any wallet offers "Pay
-  as direct funding" when it reads such a request, and never pays
-  twice: a plain send follows only when the recipient declined before
-  anything was signed.
+  Wallets that restore themselves. A wallet using peer storage can now
+  come back on its own: import the seed, tick "the previous device is
+  stopped", and once its channel peers hand back the encrypted
+  checkpoint the wallet installs it, rebuilds without a restart, and
+  its channels reconnect where they were. The checkpoint card offers
+  the same as a one-click step for wallets that keep the choice manual,
+  next to the funds-only recovery that was already there. beignet
+  0.11.0 makes the checkpoint fit: before it, a single channel with one
+  payment had outgrown the 64 KB peers hold.
 
 
-  Liquidity providers. A wallet chosen as an internal primary fronts
-  channel funding for its lightning-first wallets from its own
-  on-chain balance, within caps you set in its Edit dialog, and its
-  Overview shows what it has fronted and what is committed. A primary
-  in use cannot be deleted or parked.
+  Fees before moves. A lightning-first wallet no longer moves a deposit
+  into its channel when the transaction fee would take more than a
+  twentieth of it; the Overview says the funds are waiting for the fee
+  rate to come down or for more to arrive, and "Move now anyway" lets
+  you override for a deposit you want in Lightning at any price.
 
 
-  beignet 0.10.0 is bundled: the whole of the lightning-first engine
-  work, plus fixes found running this app against real nodes
-  (CLN-initiated dual-funded opens now complete, JIT refusals carry
-  their reason, a wallet is never locked out of receiving by its own
-  unpaid invoices). The wallets page no longer holds an event stream
-  per wallet, which had left the page stuck with seven or more
-  wallets running.
+  beignet 0.11.0 is bundled. The wallet pages, provider cards and
+  everything else from 0.14.0 are unchanged.
 
 
 dependencies: []
