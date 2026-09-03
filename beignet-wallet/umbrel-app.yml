@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.15.1"
+version: "0.15.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,34 +30,21 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Changing a lightning-first wallet's primary no longer strands its old
-  channel. The Overview lists "Channel with your previous primary" with
-  its balance until it is gone, and "Move funds to the new primary"
-  closes it cooperatively so the funds carry into the new home channel
-  once the close confirms. The Edit dialog says so when you pick a new
-  primary.
+  A closed channel tells its story. The channel detail view now has a
+  Close section for closing and closed channels: who closed it and why
+  (a cooperative close, the peer, or this wallet with the reason, such
+  as the reestablish watchdog), the closing transaction, whether the
+  daemon has seen it confirm and how many confirmations it has, how
+  the sweep is going, and for a force close of your own, when the
+  timelocked balance becomes spendable. While the close is broadcast
+  but not yet confirmed, a Rebroadcast button asks the daemon to send
+  it again. The History timeline gains the final entry, every output
+  of the close swept.
 
 
-  Close says what happens next. Closing the home channel returns the
-  funds on-chain, and a lightning-first wallet would move them straight
-  back into a channel with its primary after one confirmation. The
-  close modal now says so and offers "Close and turn lightning-first
-  off" as one action, which switches the wallet first so the payout
-  stays on-chain.
-
-
-  The Send tab explains arriving funds. When an invoice asks for more
-  than Can send but no more than Total, the Lightning card says what is
-  on its way (a deposit waiting to confirm, a confirmed deposit waiting
-  to move, a channel funding or splice not yet confirmed) and what that
-  means for this payment, and keeps the invoice in the box so you can
-  retry without pasting it again. A primary that is not connected is
-  refused before an invoice is created, not after.
-
-
-  Also fixed: a lightning-first wallet's Send tab opened on the address
-  rail while its channel list was still loading. beignet 0.11.0 remains
-  bundled.
+  Anything the daemon cannot say is said as such: a close whose
+  confirmation the daemon has not reported reads that way rather than
+  as a claim about the chain. beignet 0.11.0 remains bundled.
 
 
 dependencies: []
