@@ -13,9 +13,8 @@ const path = require('path');
 const MAX_EVENTS = 500;
 
 // The daemon SSE events that narrate a channel's lifecycle. channel:resolved
-// (every on-chain output of a close irrevocably swept) is listed even though
-// the daemon does not relay it yet, so the day it does, the record gains the
-// true terminal event without a manager change.
+// (every on-chain output of a close irrevocably swept, relayed since beignet
+// 0.9.0) is the terminal one: after it the story is complete.
 const LIFECYCLE_EVENTS = new Set([
 	'channel:opening',
 	'channel:ready',
