@@ -64,6 +64,10 @@ export const manager = {
 	lfbwSetup: (id) => request(`/api/wallets/${id}/lfbw/setup`, { method: 'POST' }),
 	// One channelize pass now, past the fee wait ("Move now anyway").
 	lfbwChannelize: (id) => request(`/api/wallets/${id}/lfbw/channelize`, { method: 'POST' }),
+	// Close the channel with the previous primary so its funds move home.
+	lfbwMoveHome: (id) => request(`/api/wallets/${id}/lfbw/move-home`, { method: 'POST' }),
+	// Close the home channel, optionally turning lightning-first off first.
+	lfbwCloseHome: (id, body) => request(`/api/wallets/${id}/lfbw/close-home`, { method: 'POST', body }),
 	errors: (id, since) =>
 		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
 	channelEvents: (id, channelId) =>

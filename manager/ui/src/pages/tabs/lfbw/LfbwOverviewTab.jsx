@@ -28,8 +28,11 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 	const toast = useToast();
 	const lf = rec?.lfbw;
 	const [closing, setClosing] = useState(null);
+	const [closingBusy, setClosingBusy] = useState(null);
 	const [retrying, setRetrying] = useState(false);
 	const [moving, setMoving] = useState(false);
+	const [movingHome, setMovingHome] = useState(false);
+	const [confirmMoveHome, setConfirmMoveHome] = useState(false);
 
 	const { data, refresh } = usePoll(
 		async () => {
@@ -107,15 +110,49 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 		}
 	};
 
-	const closeChannel = async (channel) => {
+	// Close the home channel. Plain: the payout returns on-chain and
+	// channelize moves it into a new channel with the primary after one
+	// confirmation. With turnOff: lightning-first is switched off first (the
+	// manager restarts the daemon on the new posture, then closes), so the
+	// funds stay on-chain (umbrel #86).
+	const closeChannel = async (channel, { turnOff = false } = {}) => {
+		setClosingBusy(turnOff ? 'off' : 'close');
 		try {
-			await api.post('/channel/close', { channelId: channel.channelId });
-			toast('Closing. Your balance returns on-chain.', 'success');
+			if (turnOff) {
+				await manager.lfbwCloseHome(id, { channelId: channel.channelId, turnOff: true });
+				toast('Lightning-first is off. Closing; your balance returns on-chain and stays there.', 'success');
+			} else {
+				await api.post('/channel/close', { channelId: channel.channelId });
+				toast('Closing. Your balance returns on-chain, and moves back into a channel with the primary once it confirms.', 'success');
+			}
 			setClosing(null);
 			bump();
 			refresh();
 		} catch (e) {
 			toast(e.message, 'error');
+		} finally {
+			setClosingBusy(null);
+		}
+	};
+
+	// "Move funds to the new primary": the manager closes the channel with
+	// the previous primary; channelize carries the payout into the home
+	// channel once it confirms.
+	const moveHome = async () => {
+		setMovingHome(true);
+		try {
+			const r = await manager.lfbwMoveHome(id);
+			toast(
+				`Closing ${r.closed.length === 1 ? 'the channel' : `${r.closed.length} channels`} with your previous primary. The funds move into your new channel once the close confirms.`,
+				'success'
+			);
+			setConfirmMoveHome(false);
+			bump();
+			refresh();
+		} catch (e) {
+			toast(e.message, 'error');
+		} finally {
+			setMovingHome(false);
 		}
 	};
 
@@ -233,6 +270,39 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 					)}
 				</Card>
 
+				{status.previousChannels.length > 0 && (
+					<Card title="Channel with your previous primary" className="grid-full">
+						<div className="wallet-meta" style={{ marginBottom: 10 }}>
+							You changed your primary node. This channel stays open with the previous one, and its
+							balance is part of your Total; it moves into your new channel once the channel below is
+							closed and the payout confirms.
+						</div>
+						{status.previousChannels.map((c) => {
+							const open = c.htlcUsable ?? c.state === 'NORMAL';
+							return (
+								<div key={c.channelId} style={{ marginBottom: 12 }} data-testid="previous-primary-channel">
+									<div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+										<Badge tone={open ? 'yellow' : 'muted'}>{open ? 'previous primary' : 'moving'}</Badge>
+										<span className="wallet-meta">
+											{shortId(c.peerPubkey)} · capacity {fmtSats(c.capacitySats)}
+										</span>
+									</div>
+									<BalanceBar local={c.localBalanceSats} remote={c.remoteBalanceSats} />
+									<div className="wallet-meta" style={{ marginTop: 4 }}>
+										{fmtSats(c.localBalanceSats)} yours / {fmtSats(c.remoteBalanceSats)} theirs
+										{!open && ' · closing; the funds move into your new channel once this confirms'}
+									</div>
+								</div>
+							);
+						})}
+						{status.previousChannels.some((c) => c.htlcUsable ?? c.state === 'NORMAL') && (
+							<Button className="sm" busy={movingHome} onClick={() => setConfirmMoveHome(true)}>
+								Move funds to the new primary
+							</Button>
+						)}
+					</Card>
+				)}
+
 				{hasClosed && status.channels.length === 0 && (
 					<RecoverCloseFunds
 						api={api}
@@ -250,14 +320,44 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 				<Modal title="Close the channel with your primary node" onClose={() => setClosing(null)}>
 					<p className="wallet-meta">
 						This cooperatively closes the channel. Your Lightning balance ({fmtSats(closing.localBalanceSats)})
-						returns to this wallet on-chain, and moves back into Lightning by itself once it confirms, into a
-						new channel with the primary.
+						returns to this wallet on-chain. While the wallet stays lightning-first, that balance moves
+						back into a new channel with the primary by itself after one confirmation, so a plain close
+						pays a fee to end up where you started. To keep the funds on-chain, close and turn
+						lightning-first off in one step: the wallet keeps its balance and gets the full tab set back.
 					</p>
 					<div className="center-actions">
-						<Button variant="primary" onClick={() => closeChannel(closing)}>
+						<Button
+							variant="primary"
+							busy={closingBusy === 'close'}
+							disabled={closingBusy === 'off'}
+							onClick={() => closeChannel(closing)}
+						>
 							Close channel
 						</Button>
+						<Button
+							busy={closingBusy === 'off'}
+							disabled={closingBusy === 'close'}
+							onClick={() => closeChannel(closing, { turnOff: true })}
+						>
+							Close and turn lightning-first off
+						</Button>
 						<Button onClick={() => setClosing(null)}>Cancel</Button>
+					</div>
+				</Modal>
+			)}
+			{confirmMoveHome && (
+				<Modal title="Move funds to the new primary" onClose={() => setConfirmMoveHome(false)}>
+					<p className="wallet-meta">
+						This cooperatively closes your channel with the previous primary, which pays an on-chain
+						fee. The balance ({fmtSats(status.previousChannels.reduce((s, c) => s + (c.localBalanceSats || 0), 0))})
+						returns to this wallet on-chain and moves into your channel with the new primary by itself
+						once the close confirms.
+					</p>
+					<div className="center-actions">
+						<Button variant="primary" busy={movingHome} onClick={moveHome}>
+							Close and move
+						</Button>
+						<Button onClick={() => setConfirmMoveHome(false)}>Cancel</Button>
 					</div>
 				</Modal>
 			)}

@@ -167,6 +167,37 @@ restarts the wallet on the installed database), or recover the funds
 through the SCB path. The manager probes the engine's config module for the
 env name (`recoveryAutoApplyAvailable`).
 
+## Re-pointing the primary, and what Close does
+
+Changing a lightning-first wallet's primary in the Edit dialog re-runs setup
+against the new node, but the channel with the old one stays open: closing
+it is a fee-paying act the user should take, not a side effect of an edit.
+The manager remembers the old primary on the record (`lfbw.previousPrimary`,
+set by `normalizeLfbw` when the primary changes, forgotten by the channelize
+pass once no live channel with that pubkey remains) and the Overview lists
+that channel as "Channel with your previous primary" with its balance, so
+Total stays findable, and offers "Move funds to the new primary": a
+cooperative close through `POST /api/wallets/:id/lfbw/move-home`, after
+which channelize carries the payout into the new home channel once it
+confirms, the way any deposit moves.
+
+The home channel's Close says what happens next: the balance returns
+on-chain and, while the wallet stays lightning-first, moves back into a
+channel with the primary after one confirmation. "Close and turn
+lightning-first off" (`POST /api/wallets/:id/lfbw/close-home` with
+`turnOff`) drops the lfbw block first, restarts the daemon on the plain
+posture, waits for it, and only then closes, so the payout cannot be
+recaptured; the wallet keeps its balance and gets the full tab set back.
+
+The Send tab reads the same figures as the Overview: a Lightning invoice
+above Can send but within Total is not refused blindly; the card says what
+is arriving (a deposit confirming, a confirmed one moving or waiting on the
+fee, a channel confirming, a splice locking) and roughly when, keeps the
+invoice in the box for a retry, and holds the Pay button until then. An
+amount above Total stays a plain refusal. The Receive tab also refuses to
+mint a just-in-time invoice while the primary's peer connection is down,
+which `/peers` reports, since the intent could not reach it.
+
 ## Deferred
 
 - Peer failover: a lightning-first wallet has one primary. Re-pointing it is

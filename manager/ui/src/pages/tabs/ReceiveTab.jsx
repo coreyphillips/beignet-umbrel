@@ -43,6 +43,25 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config }) 
 		15000,
 		[id, tick, isLfbw]
 	);
+	// Whether the primary is on the other end of a live peer connection: a
+	// primary whose daemon runs but whose connection is down cannot
+	// provision, so the invoice is refused before it is minted (umbrel #89).
+	const { data: peers } = usePoll(
+		() => (isLfbw ? api.get('/peers').catch(() => null) : Promise.resolve(null)),
+		15000,
+		[id, tick, isLfbw]
+	);
+	const primaryConnected = useMemo(
+		() =>
+			!isLfbw || !peers
+				? true
+				: peers.some(
+						(p) =>
+							p.pubkey === rec.lfbw.primaryPubkey &&
+							(p.state === 'connected' || p.state === 'ready' || p.connected === true)
+				  ),
+		[isLfbw, peers, rec?.lfbw?.primaryPubkey]
+	);
 
 	// Which invoice the amount typed would mint, read off the polled channels
 	// so the price can be said before anything exists. The primary's
@@ -51,9 +70,9 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config }) 
 	const plan = useMemo(
 		() =>
 			isLfbw && channels
-				? planInvoice({ wantedSats, channels, primaryPubkey: rec.lfbw.primaryPubkey, setup: rec.lfbw.setup })
+				? planInvoice({ wantedSats, channels, primaryPubkey: rec.lfbw.primaryPubkey, setup: rec.lfbw.setup, primaryConnected })
 				: null,
-		[isLfbw, channels, wantedSats, rec?.lfbw?.primaryPubkey, rec?.lfbw?.setup]
+		[isLfbw, channels, wantedSats, rec?.lfbw?.primaryPubkey, rec?.lfbw?.setup, primaryConnected]
 	);
 	// The price of a just-in-time receive, asked of the primary before the
 	// invoice exists (beignet #687): the quote registers nothing with it, so
@@ -71,6 +90,13 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config }) 
 		'GET'
 	);
 	const quoteLine = useMemo(() => {
+		if (lfbwReady && plan?.kind === 'refuse' && plan.code === 'PRIMARY_DOWN') {
+			return {
+				tone: 'error',
+				blocks: true,
+				text: 'Your primary node is not connected, and this invoice needs it to provide inbound capacity. Wait for it to reconnect, or ask for an amount the channel already covers.'
+			};
+		}
 		if (!config?.jitQuoteAvailable || !lfbwReady || plan?.kind !== 'jit') return null;
 		const { quote, error, errorCode } = jitQuote;
 		if (errorCode === 'PEER_NOT_CONNECTED') {
@@ -263,12 +289,15 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config }) 
 					channels: channels || (await api.get('/channels').catch(() => [])),
 					primaryPubkey: lf.primaryPubkey,
 					setup: lf.setup,
-					primaryRunning
+					primaryRunning,
+					primaryConnected
 				});
 				if (decided.kind === 'refuse') {
 					throw new Error(
 						decided.code === 'PRIMARY_DOWN'
-							? 'Your primary node is not running, and this invoice needs it to provide inbound capacity. Start it, or ask for an amount the channel already covers.'
+							? decided.reason === 'not-connected'
+								? 'Your primary node is not connected, and this invoice needs it to provide inbound capacity. Wait for it to reconnect, or ask for an amount the channel already covers.'
+								: 'Your primary node is not running, and this invoice needs it to provide inbound capacity. Start it, or ask for an amount the channel already covers.'
 							: 'The link to your primary node is not set up yet. Retry setup from the Overview tab.'
 					);
 				}
