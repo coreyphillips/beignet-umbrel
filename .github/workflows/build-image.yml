@@ -302,20 +302,24 @@ env:
   # restore (funds return on-chain), not POST /recovery/restore-capsule,
   # and the manager handles restart-required only as the correct reaction
   # to the daemon's state.
-  # Lightning-first wallets (docs/LFBW.md) need the engine's JIT receive,
-  # direct funding (with allowSplice on the policy, and the direct lane over
-  # an existing peer connection), the JIT exposure caps and address on
-  # splice-out, all on the engine's master after 0.9.3 (beignet #532, #667),
-  # plus the follow-ups merged 2026-09-03: typed JIT refusals (#671), a
-  # wallet's new intent superseding its own idle ones (#674), the floored
-  # interactive-tx fee minimum that lets CLN-initiated dual-funded opens
-  # complete (#670), the time floor on funding:missing (#672), GET
-  # /jit/status (#668) and the jit:* and direct-funding:offer:* events over
-  # SSE (#669), which the dashboard's provider card and toasts ride.
-  # The manager probes the bundled engine's OpenAPI module for the routes and
-  # the dashboard hides the controls until they are there, so this pin can
-  # move to the release that carries them without any further app change.
-  BEIGNET_VERSION: "0.9.3"
+  # 0.10.0 is the lightning-first release (docs/LFBW.md): the whole of
+  # beignet #532 (JIT channel receive, direct funding over BIP21 bgnq with
+  # external inputs in v2 opens and splices, address on splice-out,
+  # liquidity ads plumbing, wallet-credited coop-close payouts, routable
+  # offer invoices for unannounced nodes), the app-side follow-ups of #667
+  # (allowSplice on the direct-funding policy, the JIT exposure caps of
+  # #665, the direct lane over an existing peer connection, one channel
+  # under JIT), and the fixes found running the app against real daemons:
+  # typed JIT refusals (#671), a wallet's new intent superseding its own idle
+  # ones (#674), the floored interactive-tx fee minimum that lets
+  # CLN-initiated dual-funded opens complete (#670), the time floor on
+  # funding:missing (#672), GET /jit/status (#668), the jit:* and
+  # direct-funding:offer:* events over SSE (#669), and the funding txid in
+  # display order on channel:opening (#681). Surface vs 0.9.3: additive.
+  # The manager probes the bundled engine's OpenAPI module for the routes
+  # and the dashboard hides the lightning-first controls when they are
+  # absent, so an older bundle would still run as before.
+  BEIGNET_VERSION: "0.10.0"
 
 jobs:
   build:
