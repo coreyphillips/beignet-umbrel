@@ -43,6 +43,12 @@ const HEALTH_TIMEOUT_MS = 90000;
 const CHANNELIZE_POLL_MS = 60000;
 const CHANNELIZE_RETRY_MS = 2 * 60 * 1000;
 const CHANNELIZE_DEBOUNCE_MS = 2000;
+// The daemon events that mean a lightning-first wallet may have something to
+// move. transaction:received as well as transaction:confirmed: the engine
+// relays confirmed only on a transition, so a deposit first seen in a block
+// (a catch-up sync, a payment mined before the wallet noticed it) arrives
+// as received with confirmed true and never confirms again.
+const CHANNELIZE_EVENTS = Object.freeze(['transaction:received', 'transaction:confirmed', 'channel:ready']);
 // Price ceiling for inbound bought from an external primary (bLIP-51). The
 // open aborts if the LSP asks more; the engine budgets the lease fee out of
 // the contribution against exactly these numbers.
@@ -165,9 +171,13 @@ function normalizeLfbw(input, { network, selfId, getRecord, available, existing 
 			primaryWalletId: null,
 			primaryUri: parsed.uri,
 			primaryPubkey: parsed.pubkey,
-			// An external node has not agreed to trust us; zero-conf toward it
-			// is only ever what the user explicitly asks for.
-			trusted: input.trusted === true,
+			// The wallet's trust toward its primary is what lets the primary's
+			// zero-conf channel (a JIT open) be used the moment the payment
+			// arrives; without it the primary cannot provision inbound just in
+			// time (its open is refused as untrusted), only deposits and
+			// direct funding work, and they confirm first. On by default in
+			// both modes; the external node's trust toward us is its own.
+			trusted: input.trusted === undefined ? true : !!input.trusted,
 			// A starting channel is opened FROM the primary, which we cannot
 			// command on an external node.
 			initialChannelSats: 0
@@ -438,6 +448,7 @@ module.exports = {
 	CHANNELIZE_POLL_MS,
 	CHANNELIZE_RETRY_MS,
 	CHANNELIZE_DEBOUNCE_MS,
+	CHANNELIZE_EVENTS,
 	MAX_LEASE_RATES,
 	JIT_DEFAULTS,
 	OPERATOR_PASSTHROUGH,

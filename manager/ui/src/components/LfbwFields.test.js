@@ -77,6 +77,7 @@ test('ticking the box reveals the primary picker; a sibling shows trust and the 
 		assert.doesNotMatch(r.text(), /Starting channel/, 'a starting channel is opened FROM the primary, which is not ours to command');
 		await type(r.$('input[placeholder^="02abc"]'), `${PK}@lsp.example:9735`);
 		assert.match(r.text(), /Trust this node for zero-conf/);
+		assert.match(r.text(), /provide inbound capacity just in time for a payment/, 'trusted by default, and says what for');
 	} finally {
 		await r.unmount();
 	}

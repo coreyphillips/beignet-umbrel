@@ -1021,9 +1021,10 @@ class WalletManager {
 				if (name.startsWith('recovery:')) {
 					this._log(id, `recovery ${name} ${JSON.stringify(data || {})}`);
 				}
-				// A deposit confirming, or the home channel becoming usable, is
-				// exactly when a lightning-first wallet has something to move.
-				if (lfbw.isLfbw(rec) && (name === 'transaction:confirmed' || name === 'channel:ready')) {
+				// A deposit arriving or confirming, or the home channel becoming
+				// usable, is exactly when a lightning-first wallet has something
+				// to move. The pass itself checks every UTXO has confirmed.
+				if (lfbw.isLfbw(rec) && lfbw.CHANNELIZE_EVENTS.includes(name)) {
 					this._scheduleChannelize(id);
 				}
 				if (recorded && name !== 'node:error') {

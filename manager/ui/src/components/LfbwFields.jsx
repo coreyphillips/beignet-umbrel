@@ -126,10 +126,17 @@ export default function LfbwFields({ value, onChange, candidates, editing = fals
 						</>
 					)}
 					{choice === 'external' && (
-						<label className="checkbox field">
-							<input type="checkbox" checked={!!value.trusted} onChange={(e) => patch({ trusted: e.target.checked })} />
-							Trust this node for zero-conf channels
-						</label>
+						<>
+							<label className="checkbox field">
+								<input type="checkbox" checked={!!value.trusted} onChange={(e) => patch({ trusted: e.target.checked })} />
+								Trust this node for zero-conf channels
+							</label>
+							<div className="info-note">
+								{value.trusted
+									? 'A channel this node opens to you is usable the moment it is created, which is what lets it provide inbound capacity just in time for a payment. You trust it not to double-spend that funding before it confirms.'
+									: 'Without zero-conf trust the node cannot provide inbound capacity just in time: invoices it would have to provision fail. Deposits and direct funding still work, and confirm first.'}
+							</div>
+						</>
 					)}
 				</>
 			)}

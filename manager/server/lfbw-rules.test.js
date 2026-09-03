@@ -80,14 +80,14 @@ test('trust can be switched off for an internal primary', () => {
 	assert.equal(normalize({ enabled: true, primaryWalletId: 'p1', trusted: false }).trusted, false);
 });
 
-test('an external primary is a node URI, untrusted unless asked, with no starting channel', () => {
+test('an external primary is a node URI, trusted for zero-conf unless declined, with no starting channel', () => {
 	const block = normalize({ enabled: true, primaryUri: `${PK2}@lsp.example:9735`, initialChannelSats: 50000 });
 	assert.equal(block.mode, 'external');
 	assert.equal(block.primaryUri, `${PK2}@lsp.example:9735`);
 	assert.equal(block.primaryPubkey, PK2);
-	assert.equal(block.trusted, false);
+	assert.equal(block.trusted, true, 'a JIT open from the primary is refused by a wallet that does not trust it');
 	assert.equal(block.initialChannelSats, 0, 'a starting channel is opened FROM the primary, which we do not command');
-	assert.equal(normalize({ enabled: true, primaryUri: `${PK2}@lsp.example:9735`, trusted: true }).trusted, true);
+	assert.equal(normalize({ enabled: true, primaryUri: `${PK2}@lsp.example:9735`, trusted: false }).trusted, false);
 	assert.throws(
 		() => normalize({ enabled: true, primaryUri: 'garbage' }),
 		(err) => err.code === 'BAD_LFBW_PEER' && /pubkey@host:port/.test(err.message)

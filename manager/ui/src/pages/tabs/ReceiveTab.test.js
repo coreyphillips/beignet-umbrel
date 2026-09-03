@@ -220,7 +220,7 @@ test('an invoice the home channel covers is plain; one it cannot is provisioned 
 	try {
 		await createInvoice(view2, '30000');
 		const jit = api2.calls.find(([m, p]) => m === 'POST' && p === '/jit/invoice');
-		assert.deepEqual(jit[2], { lspPubkey: PK, amountSats: 30000, description: '', targetRemainingInboundSat: 10000 });
+		assert.deepEqual(jit[2], { lspPubkey: PK, amountSats: 30000, description: '', targetRemainingInboundSat: 10000, expirySecs: 900 });
 		assert.match(view2.text(), /your primary node provides the inbound capacity/);
 		assert.match(view2.text(), /at no charge/);
 	} finally {

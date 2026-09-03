@@ -168,28 +168,34 @@ test('a starting-channel call that throws still counts as opened, so a retry can
 	assert.equal(records.w1.lfbw.initialChannelOpened, true);
 });
 
-test('an external primary is trusted only when asked, gets no return trust, and is asked to sell inbound', async () => {
+test('an external primary is trusted by the wallet alone, gets no return trust, and is asked to sell inbound', async () => {
 	const wallet = walletRec({
 		mode: 'external',
 		primaryWalletId: null,
 		primaryUri: `${PK_X}@lsp.example:9735`,
 		primaryPubkey: PK_X,
-		trusted: false
+		trusted: true
 	});
 	const { m } = harness({ wallet, running: ['w1'] });
 	const out = await m.setupLfbw('w1');
 	assert.equal(out.lfbw.setup, 'ready', out.lfbw.setupError);
 	const seq = m.calls.map((c) => `${c.wallet} ${c.method} ${c.path}`);
-	assert.deepEqual(seq, ['w1 GET /info', 'w1 POST /direct-funding/configure', 'w1 POST /peer/connect']);
+	assert.deepEqual(seq, ['w1 GET /info', 'w1 POST /trusted-peer/add', 'w1 POST /direct-funding/configure', 'w1 POST /peer/connect']);
+	assert.deepEqual(m.calls.find((c) => c.path === '/trusted-peer/add').body, { pubkey: PK_X });
 	const cfg = m.calls.find((c) => c.path === '/direct-funding/configure').body;
 	assert.deepEqual(cfg, {
 		lspPubkey: PK_X,
 		lspHost: 'lsp.example',
 		lspPort: 9735,
 		targetInboundSat: 100000,
-		trusted: false,
+		trusted: true,
 		allowSplice: true
 	});
+	// Declined: no trust call at all, and no zero-conf on direct funding.
+	const declined = harness({ wallet: walletRec({ mode: 'external', primaryWalletId: null, primaryUri: `${PK_X}@lsp.example:9735`, primaryPubkey: PK_X, trusted: false }), running: ['w1'] });
+	await declined.m.setupLfbw('w1');
+	assert.equal(declined.m.calls.some((c) => c.path === '/trusted-peer/add'), false);
+	assert.equal(declined.m.calls.find((c) => c.path === '/direct-funding/configure').body.trusted, false);
 	assert.deepEqual(m.calls.find((c) => c.path === '/peer/connect').body, {
 		pubkey: PK_X,
 		host: 'lsp.example',

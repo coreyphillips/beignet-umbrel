@@ -1071,7 +1071,7 @@ function normalizeLfbw(input, w) {
 		primaryWalletId: null,
 		primaryUri: `${m[1].toLowerCase()}@${m[2]}:${m[3]}`,
 		primaryPubkey: m[1].toLowerCase(),
-		trusted: input.trusted === true,
+		trusted: input.trusted === undefined ? true : !!input.trusted,
 		initialChannelSats: 0,
 		initialChannelOpened: false,
 		setup: 'pending',

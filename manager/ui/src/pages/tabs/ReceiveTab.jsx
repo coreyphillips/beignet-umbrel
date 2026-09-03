@@ -11,6 +11,8 @@ import { manager } from '../../api.js';
 // A direct-funding request is re-minted when the amount changes (the
 // receiver signs the amount into it), after the hand has settled.
 const FUNDING_DEBOUNCE_MS = 400;
+// A JIT invoice's lifetime, and with it the intent the primary holds open.
+const JIT_INVOICE_EXPIRY_SECS = 15 * 60;
 
 export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 	const onchainOnly = !!rec?.onchainOnly;
@@ -194,7 +196,11 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive }) {
 						lspPubkey: lf.primaryPubkey,
 						...(body.amountSats ? { amountSats: body.amountSats } : {}),
 						description: body.description,
-						targetRemainingInboundSat: INBOUND_HEADROOM_SATS
+						targetRemainingInboundSat: INBOUND_HEADROOM_SATS,
+						// The primary holds an intent open for as long as the invoice
+						// lives and allows a few per wallet, so an unpaid invoice must
+						// not hold its slot for an hour (beignet #674).
+						expirySecs: JIT_INVOICE_EXPIRY_SECS
 					});
 					jit = { flatFeeSat: r.flatFeeSat || 0, feePpm: r.feePpm || 0 };
 				}

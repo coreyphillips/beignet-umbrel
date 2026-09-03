@@ -177,3 +177,10 @@ test('an external primary is asked to sell inbound first, then opened to plainly
 	assert.equal(open.body.trusted, false);
 	assert.match(m.logs.find((l) => /inbound purchase failed/.test(l)), /sells no liquidity/);
 });
+
+test('channelize is woken by a deposit arriving, one confirming, and the home channel becoming usable', () => {
+	const { CHANNELIZE_EVENTS } = require('./lfbw');
+	// transaction:received as well: the engine relays confirmed only on a
+	// transition, so a deposit first seen in a block never confirms again.
+	assert.deepEqual([...CHANNELIZE_EVENTS], ['transaction:received', 'transaction:confirmed', 'channel:ready']);
+});

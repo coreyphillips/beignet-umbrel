@@ -302,6 +302,13 @@ env:
   # restore (funds return on-chain), not POST /recovery/restore-capsule,
   # and the manager handles restart-required only as the correct reaction
   # to the daemon's state.
+  # Lightning-first wallets (docs/LFBW.md) need the engine's JIT receive,
+  # direct funding (with allowSplice on the policy, and the direct lane over
+  # an existing peer connection), the JIT exposure caps and address on
+  # splice-out, all on the engine's master after 0.9.3 (beignet #532, #667).
+  # The manager probes the bundled engine's OpenAPI module for the routes and
+  # the dashboard hides the controls until they are there, so this pin can
+  # move to the release that carries them without any further app change.
   BEIGNET_VERSION: "0.9.3"
 
 jobs:
