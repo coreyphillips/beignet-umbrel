@@ -52,6 +52,8 @@ export function useSSE(url, onEvent) {
 			'recovery:guardian_unreachable',
 			'recovery:restore-progress',
 			'recovery:restored',
+			// A storage peer returned a channel checkpoint (beignet #690).
+			'recovery:capsule-retrieved',
 			// Lightning-first progress (beignet #669): a funding this wallet
 			// fronts for another (JIT, when it is a liquidity provider) or
 			// receives as a direct funding. Older daemons never send them.

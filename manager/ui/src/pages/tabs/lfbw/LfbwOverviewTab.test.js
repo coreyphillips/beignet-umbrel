@@ -29,13 +29,14 @@ test.afterEach(() => {
 });
 
 /** The manager, answering the wallet list and recording a setup retry. */
-function stubManager({ primaryStatus = 'running', setupResult } = {}) {
+function stubManager({ primaryStatus = 'running', setupResult, channelizeResult } = {}) {
 	const calls = [];
 	globalThis.fetch = async (url, opts = {}) => {
 		calls.push([opts.method || 'GET', url]);
 		let result;
 		if (url === '/api/wallets') result = [{ id: 'p1', name: 'Main', status: primaryStatus, network: 'mainnet' }];
 		else if (url === '/api/wallets/w1/lfbw/setup') result = setupResult;
+		else if (url === '/api/wallets/w1/lfbw/channelize') result = channelizeResult;
 		else result = null;
 		return { ok: true, status: 200, json: async () => ({ ok: true, result }) };
 	};
@@ -163,5 +164,33 @@ test('a stopped primary wallet is said so beside the connection badge', async ()
 		assert.match(view.text(), /wallet stopped/);
 	} finally {
 		await view.unmount();
+	}
+});
+
+test('a deposit held for the fee is explained, and "Move now anyway" asks the manager for one pass past it', async () => {
+	const calls = stubManager({ channelizeResult: { at: 1, action: 'splice-in', amountSats: 28_000 } });
+	const api = stubApi({
+		balance: { onchain: 30_000, lightning: 200_000, total: 230_000, splicingSats: 0 },
+		utxos: [{ valueSats: 30_000, height: 100 }]
+	});
+	const view = await mount(api, rec({ lastChannelize: { at: 1, action: 'wait', reason: 'fee-too-high', feeSats: 2400, amountSats: 28_000 } }));
+	try {
+		assert.match(view.text(), /waiting for the fee rate to come down, or for more to arrive: moving them now would pay about 2,400 sats/);
+		const button = view.$$('button').find((b) => b.textContent.trim() === 'Move now anyway');
+		assert.ok(button);
+		await click(button);
+		await settle(50);
+		assert.ok(calls.some(([m, u]) => m === 'POST' && u === '/api/wallets/w1/lfbw/channelize'));
+		assert.match(view.text(), /Moving 28,000 sats into your channel/);
+	} finally {
+		await view.unmount();
+	}
+	// No fee wait, no button: a deposit that simply moves needs no override.
+	stubManager();
+	const plain = await mount(api, rec({ lastChannelize: { at: 1, action: 'splice-in', amountSats: 28_000 } }));
+	try {
+		assert.equal(plain.$$('button').find((b) => b.textContent.trim() === 'Move now anyway'), undefined);
+	} finally {
+		await plain.unmount();
 	}
 });

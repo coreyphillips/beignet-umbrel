@@ -62,6 +62,8 @@ export const manager = {
 	logs: (id) => request(`/api/wallets/${id}/logs`),
 	// Re-run a lightning-first wallet's setup with its primary node.
 	lfbwSetup: (id) => request(`/api/wallets/${id}/lfbw/setup`, { method: 'POST' }),
+	// One channelize pass now, past the fee wait ("Move now anyway").
+	lfbwChannelize: (id) => request(`/api/wallets/${id}/lfbw/channelize`, { method: 'POST' }),
 	errors: (id, since) =>
 		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
 	channelEvents: (id, channelId) =>

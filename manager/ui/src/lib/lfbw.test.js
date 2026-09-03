@@ -86,6 +86,38 @@ test('a deposit under the floor is said to be waiting, and nothing is said befor
 	assert.deepEqual(notReady.notes, []);
 });
 
+test('a confirmed deposit the manager holds for the fee is said so, and the override is offered while it lasts', () => {
+	const waiting = lfbwStatus({
+		rec: rec({ lastChannelize: { at: 1, action: 'wait', reason: 'fee-too-high', feeSats: 2400, amountSats: 28_000 } }),
+		balance: { onchain: 30_000, lightning: 200_000 },
+		channels: [home()],
+		utxos: [{ valueSats: 30_000, height: 100 }],
+		peers: []
+	});
+	assert.equal(waiting.notes.length, 1);
+	assert.match(waiting.notes[0], /30,000 sats have confirmed and are waiting for the fee rate to come down, or for more to arrive: moving them now would pay about 2,400 sats in fees/);
+	assert.deepEqual(waiting.feeWait, { feeSats: 2400, amountSats: 28_000 });
+	// The last decision is stale once the funds moved: nothing confirmed on-chain, no override.
+	const moved = lfbwStatus({
+		rec: rec({ lastChannelize: { at: 1, action: 'wait', reason: 'fee-too-high', feeSats: 2400, amountSats: 28_000 } }),
+		balance: { onchain: 0, lightning: 230_000 },
+		channels: [home()],
+		utxos: [],
+		peers: []
+	});
+	assert.equal(moved.feeWait, null);
+	assert.deepEqual(moved.notes, []);
+	const other = lfbwStatus({
+		rec: rec({ lastChannelize: { at: 1, action: 'wait', reason: 'below-floor' } }),
+		balance: { onchain: 30_000, lightning: 0 },
+		channels: [],
+		utxos: [{ valueSats: 30_000, height: 100 }],
+		peers: []
+	});
+	assert.equal(other.feeWait, null);
+	assert.match(other.notes[0], /30,000 sats have confirmed and are moving/);
+});
+
 test('without a liquidity snapshot the home channel\'s local balance stands in for spendable', () => {
 	const s = lfbwStatus({ rec: rec(), balance: null, info: { onchainBalanceSats: 0, lightningBalanceSats: 200_000 }, liquidity: null, channels: [home()], utxos: null, peers: null });
 	assert.equal(s.canSend, 200_000);

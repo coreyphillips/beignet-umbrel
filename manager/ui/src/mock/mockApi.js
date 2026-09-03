@@ -490,6 +490,20 @@ const store = {
 			announce: false,
 			recovery: { mode: 'peer-storage', guardians: [] },
 			createdAt: now - 120000
+		},
+		{
+			// The same import with the question answered (the previous device
+			// is stopped): the daemon applies the checkpoint by itself, and
+			// the Backup row narrates it (beignet #690).
+			id: 'demo-autorestore',
+			name: 'Restored phone (automatic)',
+			network: 'mainnet',
+			status: 'running',
+			electrum: { host: 'umbrel.local', port: 50001, tls: false },
+			tor: false,
+			announce: false,
+			recovery: { mode: 'peer-storage', guardians: [], autoApply: true },
+			createdAt: now - 30000
 		}
 	],
 	state: {}
@@ -654,6 +668,102 @@ function runDemoScbRecovery(w, st) {
 		emit(w.id, 'transaction:received', { ...tx });
 	}, 6000);
 	return { recovering: chans.map((c) => c.channelId), skipped: [], channelCount: capsule.channelCount };
+}
+
+// The daemon's own restore, scripted from the first look at the status
+// route: settling (waiting on the other peers), applying, applied with the
+// channels back and held, one of them not carried by the checkpoint.
+const autoPeer = pubkey();
+store.state['demo-autorestore'] = walletState({
+	blockHeight: 908214,
+	recovery: {
+		gate: 'disabled',
+		capsule: {
+			writerEpoch: '1',
+			latestSequence: '96',
+			inline: true,
+			channelCount: 2,
+			guardians: [],
+			fromPeer: autoPeer,
+			receivedAt: now - 5000
+		},
+		autoApply: { phase: 'settling', settleUntil: now + 8000, lastReason: null }
+	},
+	channels: [],
+	txs: makeTxs(3, 908214),
+	payments: [],
+	utxos: [],
+	invoices: [],
+	offers: [],
+	peers: [{ pubkey: autoPeer, host: 'ln.acinq.co', port: 9735, state: 'connected', alias: 'ACINQ' }]
+});
+let autoRestoreScripted = false;
+function runDemoAutoRestore(w, st) {
+	if (autoRestoreScripted) return;
+	autoRestoreScripted = true;
+	const r = st.recovery;
+	setTimeout(() => {
+		r.autoApply = { phase: 'applying', settleUntil: null, lastReason: null };
+		emit(w.id, 'recovery:capsule-retrieved', { fromPeer: autoPeer, writerEpoch: '1', latestSequence: '96', inline: true, channelCount: 2, candidates: 1 });
+		emit(w.id, 'recovery:restore-progress', { type: 'capsule:selecting', detail: 'selecting the newest of 1 checkpoint' });
+	}, 8000);
+	setTimeout(() => {
+		const chans = makeChannels([
+			[1500000, 58, 'NORMAL', false, 'ACINQ'],
+			[600000, 35, 'FORCE_CLOSED', false, 'Bitrefill']
+		]);
+		st.channels = chans;
+		r.channelStatuses[chans[0].channelId] = 'reestablishing';
+		r.channelStatuses[chans[1].channelId] = 'local_data_loss';
+		r.capsule = null;
+		r.autoApply = { phase: 'applied', settleUntil: null, lastReason: null };
+		// Kept apart from `restore`, which the status route reads as the
+		// guardian hold.
+		r.capsuleEvent = { type: 'capsule:uncovered', detail: `${chans[1].channelId.slice(0, 12)} (Bitrefill) was past the checkpoint's size and closes safely` };
+		emit(w.id, 'recovery:restore-progress', r.capsuleEvent);
+		setTimeout(() => {
+			r.capsuleEvent = { type: 'restore:complete', detail: 'restored database installed and the node rebuilt on it; 2 channel(s) resumed' };
+			emit(w.id, 'recovery:restore-progress', r.capsuleEvent);
+		}, 1500);
+		emit(w.id, 'recovery:restored', { exact: true, tier: 2, restartRequired: false, resumed: true, framesApplied: 96, guardiansRepaired: 0, epoch: '1' });
+		recordChannelEvent(w.id, { event: 'channel:closed', channelId: chans[1].channelId });
+	}, 12000);
+	setTimeout(() => {
+		const c = st.channels[0];
+		if (c) r.channelStatuses[c.channelId] = 'active';
+	}, 20000);
+}
+
+// The exact restore from the checkpoint the card offers (beignet 0.9.3+,
+// with #462/#463 landed): the daemon installs the restored database and
+// holds for a restart, the manager restarts the wallet, the channels come
+// back held (beignet #469) and reconcile as their peers are reached.
+function runDemoCapsuleRestore(w, st) {
+	const r = st.recovery;
+	const capsule = r.capsule;
+	r.capsule = null;
+	emit(w.id, 'recovery:restore-progress', { type: 'capsule:selecting', detail: 'selecting the newest of 1 checkpoint' });
+	emit(w.id, 'recovery:restore-progress', { type: 'capsule:installed', detail: 'restored database installed; restart the daemon to resume 2 channels' });
+	emit(w.id, 'recovery:restored', { exact: true, tier: 2, restartRequired: true, framesApplied: 412, guardiansRepaired: 0, epoch: '1' });
+	w.status = 'restarting';
+	setTimeout(() => {
+		const chans = makeChannels([
+			[1500000, 58, 'NORMAL', false, 'ACINQ'],
+			[600000, 35, 'NORMAL', false, 'Bitrefill']
+		]);
+		st.channels = chans;
+		chans.forEach((c) => {
+			r.channelStatuses[c.channelId] = 'reestablishing';
+		});
+		w.status = 'running';
+		emit(w.id, 'node:ready', {});
+	}, 4000);
+	setTimeout(() => {
+		st.channels.forEach((c) => {
+			r.channelStatuses[c.channelId] = 'active';
+		});
+	}, 12000);
+	return { tier: 2, restartRequired: true, channelCount: capsule.channelCount, writerEpoch: capsule.writerEpoch, latestSequence: capsule.latestSequence };
 }
 
 store.state['demo-restore'] = walletState({
@@ -1019,14 +1129,15 @@ function publicRecord(w) {
 	rec.onionAddress = w.announce ? (w.onionAddress ?? null) : null;
 	rec.recovery = {
 		mode: w.recovery?.mode || 'off',
-		guardians: (w.recovery?.guardians || []).slice()
+		guardians: (w.recovery?.guardians || []).slice(),
+		autoApply: !!w.recovery?.autoApply
 	};
 	rec.lastStartError = w.lastStartError || null;
 	// Lightning-first fields, in the manager's shape.
 	rec.nodeId = w.onchainOnly ? null : nodeId(w.id);
 	rec.listenPort = w.onchainOnly ? null : 9101 + store.wallets.indexOf(w);
 	rec.reach = !w.onchainOnly && rec.onionAddress ? { host: rec.onionAddress.split(':')[0], port: rec.listenPort } : null;
-	rec.lfbw = w.lfbw ? { ...w.lfbw } : null;
+	rec.lfbw = w.lfbw ? { ...w.lfbw, lastChannelize: w.lfbwLast || null } : null;
 	rec.liquidityProvider = !!w.liquidityProvider && !w.onchainOnly;
 	rec.jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
 	rec.lfbwDependents = lfbwDependentsOf(w);
@@ -1129,9 +1240,13 @@ function validateGuardianSet(list) {
 	}
 	return entries;
 }
-function normalizeRecovery(mode, existing) {
+function normalizeRecovery(mode, existing, autoApply) {
 	const current = existing || { mode: 'off', guardians: [] };
-	if (mode === undefined) return { mode: current.mode || 'off', guardians: (current.guardians || []).slice() };
+	// The automatic checkpoint restore is a peer-storage answer: kept while
+	// the mode stays peer storage, dropped the moment it leaves (beignet #690).
+	const wanted = autoApply === undefined ? current.autoApply === true : autoApply === true;
+	const withAuto = (r) => (r.mode === 'peer-storage' && wanted ? { ...r, autoApply: true } : r);
+	if (mode === undefined) return withAuto({ mode: current.mode || 'off', guardians: (current.guardians || []).slice() });
 	if (!RECOVERY_MODES.includes(mode)) throw err(`Unknown channel backup mode "${mode}".`, 'BAD_RECOVERY_MODE');
 	if (current.mode === 'quorum' && mode !== 'quorum') {
 		throw err(
@@ -1146,7 +1261,7 @@ function normalizeRecovery(mode, existing) {
 			throw err('Guardian modes need three guardians. Set them in Settings first.', 'NO_GUARDIANS');
 		}
 	}
-	return { mode, guardians };
+	return withAuto({ mode, guardians });
 }
 
 const ELECTRUM_PRESETS = [
@@ -1167,7 +1282,9 @@ function managerRequest(path, method, body) {
 			engineVersion: '0.10.0',
 			recoveryAvailable: true,
 			recoveryGuardians: store.settings.recoveryGuardians.slice(),
-			lfbwAvailable: true
+			lfbwAvailable: true,
+			jitQuoteAvailable: true,
+			recoveryAutoApplyAvailable: true
 		};
 	}
 	if (path === '/settings') {
@@ -1193,7 +1310,7 @@ function managerRequest(path, method, body) {
 			tor: !!body.tor,
 			announce: !!body.announce && !body.onchainOnly,
 			onchainOnly: !!body.onchainOnly,
-			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null),
+			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null, body.recoveryAutoApply),
 			createdAt: Date.now()
 		};
 		w.lfbw = body.onchainOnly ? null : normalizeLfbw(body.lfbw ? { ...body.lfbw, network: w.network } : null, null);
@@ -1224,7 +1341,7 @@ function managerRequest(path, method, body) {
 			tor: !!body.tor,
 			announce: !!body.announce && !body.onchainOnly,
 			onchainOnly: !!body.onchainOnly,
-			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null),
+			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null, body.recoveryAutoApply),
 			createdAt: Date.now()
 		};
 		// With the guardians a lost device used, the daemon finds the seed's
@@ -1261,7 +1378,7 @@ function managerRequest(path, method, body) {
 		if (method === 'GET') return publicRecord(w);
 		if (method === 'PATCH') {
 			// Validated first, so a refused mode leaves the record untouched.
-			const recovery = normalizeRecovery(body.recoveryMode, w.recovery);
+			const recovery = normalizeRecovery(body.recoveryMode, w.recovery, body.recoveryAutoApply);
 			const dependents = lfbwDependentsOf(w);
 			if (body.onchainOnly === true && !w.onchainOnly && dependents.length > 0) {
 				const e = err(`This wallet cannot be made on-chain only: it is the primary node of ${dependents.map((d) => `"${d.name}"`).join(', ')}.`, 'PRIMARY_IN_USE');
@@ -1318,6 +1435,40 @@ function managerRequest(path, method, body) {
 			delete store.state[w.id];
 			return { deleted: true };
 		}
+	}
+	if (sub === 'lfbw/channelize' && method === 'POST') {
+		// One channelize pass past the fee wait: the confirmed deposit moves
+		// into the home channel by a splice, which locks a moment later.
+		if (!w.lfbw || !w.lfbw.enabled) throw err('Not a lightning-first wallet', 'NOT_LFBW');
+		if (w.lfbw.setup !== 'ready') throw err('The link to the primary node is not set up yet', 'LFBW_NOT_READY');
+		const st = store.state[w.id];
+		const confirmed = st.utxos.filter((u) => u.height > 0);
+		const amountSats = confirmed.reduce((a, u) => a + u.valueSats, 0);
+		const home = st.channels.find((c) => c.peerPubkey === w.lfbw.primaryPubkey && c.state === 'NORMAL');
+		if (amountSats < 20000) {
+			w.lfbwLast = { at: Date.now(), action: 'wait', reason: 'quote-too-small' };
+			return { ...w.lfbwLast };
+		}
+		st.utxos = st.utxos.filter((u) => !(u.height > 0));
+		if (home) {
+			home.state = 'SPLICING';
+			home.payThroughSplice = true;
+			home.pendingSpliceLocalBalanceSats = home.localBalanceSats + amountSats - 1200;
+			setTimeout(() => {
+				home.state = 'NORMAL';
+				home.capacitySats += amountSats - 1200;
+				home.localBalanceSats = home.pendingSpliceLocalBalanceSats;
+				delete home.pendingSpliceLocalBalanceSats;
+				emit(w.id, 'channel:ready', {});
+			}, 6000);
+			w.lfbwLast = { at: Date.now(), action: 'splice-in', amountSats: amountSats - 1200 };
+		} else {
+			const c = makeChannels([[amountSats - 1200, 100, 'NORMAL', true]])[0];
+			c.peerPubkey = w.lfbw.primaryPubkey;
+			st.channels.push(c);
+			w.lfbwLast = { at: Date.now(), action: 'open', amountSats: amountSats - 1200 };
+		}
+		return { ...w.lfbwLast };
 	}
 	if (sub === 'lfbw/setup' && method === 'POST') {
 		// Like the manager: the call answers once setup has run its course.
@@ -1501,6 +1652,13 @@ function recoveryStatus(w, st) {
 			restore: { inProgress: !!r.restore?.inProgress, ...(r.restore?.lastEvent ? { lastEvent: r.restore.lastEvent } : {}) }
 		};
 	}
+	// The daemon's own checkpoint restore (beignet #690), when the owner
+	// answered the import question: where it stands, and the reason when it
+	// refused.
+	const autoApply =
+		mode === 'peer-storage'
+			? { enabled: !!w.recovery?.autoApply, phase: 'idle', settleUntil: null, lastReason: null, ...(w.recovery?.autoApply ? r.autoApply || {} : {}) }
+			: undefined;
 	const gate = isGuardianMode(mode) ? r.gate : 'disabled';
 	const channels = st.channels
 		.filter((c) => c.state !== 'CLOSED' && c.state !== 'FORCE_CLOSED')
@@ -1525,7 +1683,9 @@ function recoveryStatus(w, st) {
 		guardians,
 		state: node.fenced || gate === 'fenced' ? 'fenced' : 'running',
 		node,
-		capsules
+		capsules,
+		...(autoApply ? { autoApply } : {}),
+		...(r.capsuleEvent ? { restore: { inProgress: false, lastEvent: r.capsuleEvent } } : {})
 	};
 }
 
@@ -1556,7 +1716,18 @@ function walletRequest(id, path, method, body) {
 
 	switch (route) {
 		case '/recovery/status':
+			if (w.id === 'demo-autorestore') runDemoAutoRestore(w, st);
 			return recoveryStatus(w, st);
+		case '/recovery/restore-capsule':
+			if (body?.confirm !== true) {
+				throw err('Restoring from a peer-storage capsule adopts channels an old device may still act on; pass {"confirm": true} to proceed', 'INVALID_PARAMS');
+			}
+			if (w.recovery?.mode !== 'peer-storage') throw err('Capsule restore applies in peer-storage mode only', 'CAPSULE_RESTORE_UNSUPPORTED');
+			if (!st.recovery.capsule) throw err('No peer-storage capsule has been retrieved this session', 'CAPSULE_RESTORE_NO_CANDIDATES');
+			if (st.channels.some((c) => c.state !== 'CLOSED' && c.state !== 'FORCE_CLOSED')) {
+				throw err('The database already holds channels; a capsule restore needs an empty target', 'CAPSULE_RESTORE_TARGET_DIRTY');
+			}
+			return runDemoCapsuleRestore(w, st);
 		case '/backup/peer-retrieved':
 			if (!st.recovery.capsule) throw err('No peer-retrieved backup this session', 'NOT_FOUND');
 			return { encoded: 'beignet-scb-v1:' + hex(96), createdAt: st.recovery.capsule.receivedAt, fromPeer: st.recovery.capsule.fromPeer };
@@ -1746,6 +1917,44 @@ function walletRequest(id, path, method, body) {
 			const lsp = store.wallets.find((x) => nodeId(x.id) === body.lspPubkey);
 			const fees = { ...JIT_DEFAULTS, ...((lsp && lsp.jit) || {}) };
 			return { ...invoiceInfo(inv), flatFeeSat: fees.flatFeeSat, feePpm: fees.feePpm };
+		}
+		case '/jit/quote': {
+			// The price of a just-in-time receive, asked of the LSP over the
+			// peer connection without registering anything (beignet #687).
+			// The LSP answers what it would charge and whether it would front
+			// the funding at all right now.
+			const q = new URLSearchParams(query || '');
+			const lspPubkey = q.get('lspPubkey') || '';
+			if (!/^0[23][0-9a-fA-F]{64}$/.test(lspPubkey)) {
+				throw err('lspPubkey must be a 33-byte compressed public key (66 hex chars)', 'INVALID_PARAMS');
+			}
+			if (!st.peers.some((p) => p.pubkey === lspPubkey)) {
+				throw err('JIT receive needs the LSP connected as a peer', 'PEER_NOT_CONNECTED');
+			}
+			const amountSats = parseInt(q.get('amountSats'), 10) || 0;
+			const target = parseInt(q.get('targetRemainingInboundSat'), 10) || 0;
+			const lsp = store.wallets.find((x) => nodeId(x.id) === lspPubkey);
+			const fees = { ...JIT_DEFAULTS, ...((lsp && lsp.jit) || {}) };
+			const feeSats = fees.flatFeeSat + Math.floor((amountSats * fees.feePpm) / 1_000_000);
+			const fundingSats = Math.min(amountSats + target + 10000, fees.maxClientFundingSats);
+			const base = {
+				lspPubkey,
+				amountSats,
+				flatFeeSat: fees.flatFeeSat,
+				feePpm: fees.feePpm,
+				feeSats,
+				maxClientFundingSats: fees.maxClientFundingSats,
+				fundingSats,
+				withinCeilings: fees.flatFeeSat <= 10000 && fees.feePpm <= 50000,
+				client: { maxFlatFeeSat: 10000, maxFeePpm: 50000 }
+			};
+			if (amountSats > fees.maxClientFundingSats) {
+				return { ...base, accepted: false, fundingSats: 0, reason: `the provider fronts at most ${fees.maxClientFundingSats} sats per receive` };
+			}
+			if (lsp && onchainBalance(lsp.id) < fundingSats + 2000) {
+				return { ...base, accepted: false, fundingSats: 0, reason: 'the provider does not hold enough on-chain funds to front this receive right now' };
+			}
+			return { ...base, accepted: true, reason: null };
 		}
 		case '/jit/status': {
 			// The provider role as the daemon reports it (beignet 0.10+): the

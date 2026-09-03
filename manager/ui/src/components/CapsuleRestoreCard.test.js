@@ -1,9 +1,9 @@
 /**
  * Run with: npm test (from manager/ui).
  *
- * The checkpoint card: the checkpoint is described honestly (funds return
- * on-chain; no resume with this engine), the click hands the checkpoint's
- * embedded SCB to the SCB restore, a checkpoint that names guardians points
+ * The checkpoint card: the checkpoint is described honestly (resume held, or
+ * funds return on-chain), one click hands the checkpoint's embedded SCB to
+ * the SCB restore and the other runs the daemon's exact restore, a checkpoint that names guardians points
  * at the guardian path, and a refusal shows the daemon's reason.
  */
 import test from 'node:test';
@@ -50,7 +50,7 @@ test('the checkpoint is described honestly and the click runs the SCB recovery',
 	try {
 		assert.match(r.text(), /2 channels, sequence 412/);
 		assert.match(r.text(), /closes those channels safely and returns the funds on-chain/);
-		assert.match(r.text(), /cannot yet resume them/);
+		assert.match(r.text(), /brings them back where the checkpoint left them, held/);
 		await click(r.$$('button').find((b) => b.textContent.trim() === 'Recover channel funds'));
 		await settle(20);
 		assert.deepEqual(api.calls, [
@@ -85,5 +85,39 @@ test('a refusal shows the reason and keeps the button', async () => {
 		assert.ok(r.$$('button').find((b) => b.textContent.trim() === 'Recover channel funds'));
 	} finally {
 		await r.unmount();
+	}
+});
+
+test('Resume channels runs the exact restore with the confirmation, and says the wallet restarts held', async () => {
+	const api = stubApi({ answer: { tier: 2, restartRequired: true, channelCount: 2, writerEpoch: '1', latestSequence: '412' } });
+	const r = await mount(api, offer());
+	try {
+		await click(r.$$('button').find((b) => b.textContent.trim() === 'Resume channels'));
+		await settle(20);
+		assert.deepEqual(api.calls, [['POST', '/recovery/restore-capsule', { confirm: true }]], 'nothing but the confirmed restore');
+		assert.match(r.text(), /Checkpoint installed/);
+		assert.match(r.text(), /2 channels come back from the checkpoint, held/);
+		assert.match(r.text(), /restarts on the restored state by itself/);
+	} finally {
+		await r.unmount();
+	}
+	// A checkpoint that carried only the channel list falls back to the SCB path.
+	const tier1 = await mount(stubApi({ answer: { tier: 1, restartRequired: false, channelCount: 2 } }), offer({ inline: false }));
+	try {
+		await click(tier1.$$('button').find((b) => b.textContent.trim() === 'Resume channels'));
+		await settle(20);
+		assert.match(tier1.text(), /carried only the channel list/);
+	} finally {
+		await tier1.unmount();
+	}
+	const refused = await mount(stubApi({ answer: Object.assign(new Error('The database already holds channels'), { code: 'CAPSULE_RESTORE_TARGET_DIRTY' }) }), offer());
+	try {
+		await click(refused.$$('button').find((b) => b.textContent.trim() === 'Resume channels'));
+		await settle(20);
+		assert.match(refused.text(), /refused: The database already holds channels/);
+		assert.ok(refused.$$('button').find((b) => b.textContent.trim() === 'Resume channels'), 'both buttons stay');
+		assert.ok(refused.$$('button').find((b) => b.textContent.trim() === 'Recover channel funds'));
+	} finally {
+		await refused.unmount();
 	}
 });

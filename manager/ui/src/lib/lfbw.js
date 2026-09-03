@@ -77,6 +77,15 @@ export function lfbwStatus({ rec, info, balance, liquidity, channels, utxos, pee
 	const pending = unconfirmed + confirmedOnchain + openingSats + splicingSats;
 	const total = lightning + onchain + openingSats + splicingSats;
 
+	// The manager's last channelize decision rides on the record. A wait on
+	// the fee is the one the owner can override ("Move now anyway"); it is
+	// only current while confirmed funds are still sitting there.
+	const last = (lf && lf.lastChannelize) || null;
+	const feeWait =
+		last && last.reason === 'fee-too-high' && confirmedOnchain >= CHANNELIZE_FLOOR_SATS
+			? { feeSats: last.feeSats || 0, amountSats: last.amountSats || confirmedOnchain }
+			: null;
+
 	const notes = [];
 	if (lf && lf.setup === 'ready') {
 		if (unconfirmed > 0) {
@@ -86,7 +95,9 @@ export function lfbwStatus({ rec, info, balance, liquidity, channels, utxos, pee
 		}
 		if (confirmedOnchain > 0) {
 			notes.push(
-				confirmedOnchain >= CHANNELIZE_FLOOR_SATS
+				feeWait
+					? `${fmt(confirmedOnchain)} sats have confirmed and are waiting for the fee rate to come down, or for more to arrive: moving them now would pay about ${fmt(feeWait.feeSats)} sats in fees, more than a twentieth of the amount.`
+					: confirmedOnchain >= CHANNELIZE_FLOOR_SATS
 					? `${fmt(confirmedOnchain)} sats have confirmed and are moving into your Lightning balance.`
 					: `${fmt(confirmedOnchain)} sats are waiting: amounts under ${fmt(CHANNELIZE_FLOOR_SATS)} sats stay put until more arrives, because a channel has minimums and an on-chain fee to cover.`
 			);
@@ -116,6 +127,7 @@ export function lfbwStatus({ rec, info, balance, liquidity, channels, utxos, pee
 		unconfirmed,
 		confirmedOnchain,
 		notes,
+		feeWait,
 		primaryConnected,
 		setup: lf ? lf.setup : null
 	};
