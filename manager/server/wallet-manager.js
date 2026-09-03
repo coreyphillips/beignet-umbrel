@@ -22,7 +22,8 @@ const {
 	sameGuardianSet,
 	recoveryEnv
 } = require('./recovery');
-const { engineVersion, recoveryAvailable } = require('./engine');
+const { engineVersion, recoveryAvailable, lfbwAvailable } = require('./engine');
+const lfbw = require('./lfbw');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -107,6 +108,11 @@ class WalletManager {
 		// The bundled engine's version (null when it cannot be read), which
 		// decides whether the dashboard offers features the engine predates.
 		this.engineVersion = engineVersion();
+		// Lightning-first wallets need routes the engine gained after 0.9.3
+		// (JIT receive, direct funding); probed on the bundled engine itself.
+		this.lfbwSupported = lfbwAvailable();
+		// Lightning-first setups in flight, one per wallet at a time.
+		this.lfbwSetupRunning = new Set();
 	}
 
 	async init() {
@@ -264,7 +270,17 @@ class WalletManager {
 				lastStallRestartAt: 0,
 				// The daemon's own reason for a failed start (its START_FAILED
 				// line), kept so a wallet stuck restarting can say why.
-				lastStartError: null
+				lastStartError: null,
+				// The env the running daemon was spawned with, so a record edit
+				// that changes the daemon's role can tell whether a restart is
+				// due (lightning-first liquidity provider).
+				spawnedEnv: null,
+				// Lightning-first channelize: the backstop interval, the
+				// event-driven debounce timer, and the in-flight/backoff guards.
+				lfbwWatch: null,
+				lfbwTimer: null,
+				lfbwBusy: false,
+				lfbwRetryAt: 0
 			});
 		}
 		return this.runtime.get(id);
@@ -433,6 +449,10 @@ class WalletManager {
 		return Array.isArray(list) ? list.slice() : [];
 	}
 
+	lfbwAvailable() {
+		return this.lfbwSupported === true;
+	}
+
 	recoveryAvailable() {
 		return recoveryAvailable(this.engineVersion);
 	}
@@ -528,7 +548,8 @@ class WalletManager {
 		tor,
 		announce,
 		onchainOnly,
-		recoveryMode
+		recoveryMode,
+		lfbw: lfbwInput
 	} = {}) {
 		const strength = Number(wordCount) === 12 ? 128 : 256;
 		const mnemonic = bip39.generateMnemonic(strength);
@@ -540,7 +561,8 @@ class WalletManager {
 			tor,
 			announce,
 			onchainOnly,
-			recoveryMode
+			recoveryMode,
+			lfbw: lfbwInput
 		});
 	}
 
@@ -552,7 +574,8 @@ class WalletManager {
 		tor,
 		announce,
 		onchainOnly,
-		recoveryMode
+		recoveryMode,
+		lfbw: lfbwInput
 	} = {}) {
 		const normalized = String(mnemonic || '')
 			.trim()
@@ -569,7 +592,8 @@ class WalletManager {
 			tor,
 			announce,
 			onchainOnly,
-			recoveryMode
+			recoveryMode,
+			lfbw: lfbwInput
 		});
 	}
 
@@ -581,7 +605,8 @@ class WalletManager {
 		tor,
 		announce,
 		onchainOnly,
-		recoveryMode
+		recoveryMode,
+		lfbw: lfbwInput
 	}) {
 		const net = this._validateNetwork(network);
 		const resolvedElectrum = this._resolveElectrum(electrum);
@@ -589,6 +614,9 @@ class WalletManager {
 		// created without it (the dashboard does not offer the choice there).
 		const recovery = this._normalizeRecovery(onchainOnly ? 'off' : recoveryMode, null);
 		const id = crypto.randomUUID();
+		// Lightning-first is Lightning too: an on-chain only wallet has no
+		// home channel to keep, so the flag wins over the block.
+		const lfbwBlock = onchainOnly ? null : this._normalizeLfbw(lfbwInput, { network: net, selfId: id });
 		const port = this._allocatePort();
 		const rec = {
 			id,
@@ -601,6 +629,12 @@ class WalletManager {
 			announce: !!announce && !onchainOnly,
 			onchainOnly: !!onchainOnly,
 			recovery,
+			lfbw: lfbwBlock,
+			// A wallet becomes a liquidity provider when a lightning-first
+			// sibling picks it as primary (setupLfbw flips this), or when the
+			// operator turns it on to serve external wallets.
+			liquidityProvider: false,
+			jit: lfbw.normalizeJit(undefined),
 			port,
 			running: true,
 			createdAt: nowIso()
@@ -617,10 +651,45 @@ class WalletManager {
 
 		this.registry.upsert(rec);
 		await this.startWallet(id);
+		// Lightning-first setup (trust, the direct-funding policy, the peer
+		// connection, the optional first channel) needs a healthy daemon; the
+		// startup health poll kicks it off and the dashboard reads progress
+		// off the record's lfbw.setup field.
 		return { record: this.publicRecord(id), mnemonic };
 	}
 
-	async updateWallet(id, { name, electrum, tor, announce, onchainOnly, recoveryMode } = {}) {
+	_normalizeLfbw(input, { network, selfId, existing }) {
+		return lfbw.normalizeLfbw(input, {
+			network,
+			selfId,
+			existing,
+			available: this.lfbwAvailable(),
+			getRecord: (id) => this.registry.get(id)
+		});
+	}
+
+	/** The lightning-first wallets whose internal primary this wallet is. */
+	_dependents(rec) {
+		return lfbw.dependentsOf(rec, this.registry.list());
+	}
+
+	_refuseIfPrimaryInUse(rec, what) {
+		const dependents = this._dependents(rec);
+		if (dependents.length === 0) return;
+		const names = dependents.map((d) => `"${d.name}"`).join(', ');
+		const err = httpError(
+			409,
+			'PRIMARY_IN_USE',
+			`${what}: it is the primary node of ${names}. Change their primary node or delete them first.`
+		);
+		err.details = { dependents: dependents.map((d) => ({ id: d.id, name: d.name })) };
+		throw err;
+	}
+
+	async updateWallet(
+		id,
+		{ name, electrum, tor, announce, onchainOnly, recoveryMode, lfbw: lfbwInput, liquidityProvider, jit } = {}
+	) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		const rt = this.runtimeState(id);
@@ -637,6 +706,23 @@ class WalletManager {
 		// Validate before touching the record, so a refused mode leaves the
 		// wallet exactly as it was.
 		const recovery = this._normalizeRecovery(recoveryMode, rec.recovery);
+		// A wallet other wallets depend on for their home channel cannot stop
+		// serving them by a flag flip: they would lose inbound, direct
+		// funding and their channelize path at once.
+		if (onchainOnly === true && !rec.onchainOnly) {
+			this._refuseIfPrimaryInUse(rec, 'This wallet cannot be made on-chain only');
+		}
+		if (liquidityProvider === false && rec.liquidityProvider) {
+			this._refuseIfPrimaryInUse(rec, 'This wallet cannot stop providing liquidity');
+		}
+		const nextJit = jit !== undefined ? lfbw.normalizeJit(jit, rec.jit) : undefined;
+		const nextLfbw =
+			lfbwInput !== undefined
+				? this._normalizeLfbw(lfbwInput, { network: rec.network, selfId: rec.id, existing: rec.lfbw })
+				: undefined;
+		if (nextLfbw && (onchainOnly === true || (onchainOnly === undefined && rec.onchainOnly))) {
+			throw httpError(400, 'BAD_LFBW_PEER', 'An on-chain only wallet cannot be lightning-first');
+		}
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
 		if (tor !== undefined) rec.tor = !!tor;
@@ -655,16 +741,25 @@ class WalletManager {
 		// a parked quorum wallet still has to boot with its barrier, or it
 		// does not boot at all.
 		rec.recovery = recovery;
+		if (nextLfbw !== undefined) rec.lfbw = nextLfbw;
+		if (rec.onchainOnly) rec.lfbw = null;
+		if (liquidityProvider !== undefined) rec.liquidityProvider = !!liquidityProvider;
+		if (nextJit !== undefined) rec.jit = nextJit;
 		this.registry.upsert(rec);
 		// Restart a running daemon so it reconnects with the new Electrum config.
-		if (rt.proc) {
-			rt.stopping = true;
-			await this._killProc(rt.proc);
-			rt.proc = null;
-			rt.stopping = false;
-			await this.startWallet(id);
-		}
+		if (rt.proc) await this._restartWallet(id);
 		return this.publicRecord(id);
+	}
+
+	/** Kill a running daemon and start it again with the record as it is now. */
+	async _restartWallet(id) {
+		const rt = this.runtimeState(id);
+		if (!rt.proc) return;
+		rt.stopping = true;
+		await this._killProc(rt.proc);
+		rt.proc = null;
+		rt.stopping = false;
+		await this.startWallet(id);
 	}
 
 	/**
@@ -720,6 +815,12 @@ class WalletManager {
 		// watches its channels, and a journal that promised quorum refuses to
 		// run without its barrier.
 		Object.assign(env, recoveryEnv(rec.recovery));
+		// Operator-level engine policy (routing fees, liquidity ads, the
+		// direct-funding minimum) passes through from the manager's own env,
+		// and a wallet that provides liquidity to lightning-first wallets runs
+		// the engine's JIT role with its fee and exposure caps, plus the blind
+		// relay for direct-funding frames. Everyone else sees nothing new.
+		Object.assign(env, lfbw.operatorEnv(), lfbw.providerEnv(rec));
 		return env;
 	}
 
@@ -825,6 +926,7 @@ class WalletManager {
 
 		const proc = spawn(cmd, args, { env, cwd: p.home });
 		rt.proc = proc;
+		rt.spawnedEnv = env;
 		rt.startedAt = Date.now();
 
 		const emit = (buf) =>
@@ -847,6 +949,7 @@ class WalletManager {
 				clearInterval(rt.chainWatch);
 				rt.chainWatch = null;
 			}
+			this._stopLfbwWatch(rt);
 			this._stopEvents(rt);
 			this._log(id, `exited code=${code} signal=${signal}`);
 			this._maybeRestart(id, rt);
@@ -863,8 +966,27 @@ class WalletManager {
 		rt.chainWatch = setInterval(() => {
 			this._checkChainStall(id).catch(() => {});
 		}, CHAIN_WATCH_POLL_MS);
+		// Lightning-first: on-chain arrivals move into the home channel. The
+		// event stream drives it (transaction:confirmed); this is the backstop
+		// for an event missed while the stream reconnects.
+		if (lfbw.isLfbw(rec)) {
+			rt.lfbwWatch = setInterval(() => {
+				this._lfbwChannelize(id).catch(() => {});
+			}, lfbw.CHANNELIZE_POLL_MS);
+		}
 
 		this._pollHealth(id).catch(() => {});
+	}
+
+	_stopLfbwWatch(rt) {
+		if (rt.lfbwWatch) {
+			clearInterval(rt.lfbwWatch);
+			rt.lfbwWatch = null;
+		}
+		if (rt.lfbwTimer) {
+			clearTimeout(rt.lfbwTimer);
+			rt.lfbwTimer = null;
+		}
 	}
 
 	// Subscribe to the daemon's event stream. The reason a channel open failed
@@ -898,6 +1020,11 @@ class WalletManager {
 				// the story even when no browser was watching.
 				if (name.startsWith('recovery:')) {
 					this._log(id, `recovery ${name} ${JSON.stringify(data || {})}`);
+				}
+				// A deposit confirming, or the home channel becoming usable, is
+				// exactly when a lightning-first wallet has something to move.
+				if (lfbw.isLfbw(rec) && (name === 'transaction:confirmed' || name === 'channel:ready')) {
+					this._scheduleChannelize(id);
 				}
 				if (recorded && name !== 'node:error') {
 					this._log(
@@ -1060,6 +1187,7 @@ class WalletManager {
 					rt.status === 'restore-required' ? 'healthy (restore finished, node running)' : 'healthy'
 				);
 				rt.status = 'running';
+				this._onHealthy(id).catch((err) => this._log(id, `post-start setup failed: ${err.message}`));
 				return;
 			}
 			if (probe.kind === 'restore-pending') {
@@ -1191,6 +1319,7 @@ class WalletManager {
 		rec.running = false;
 		this.registry.upsert(rec);
 		this._stopEvents(rt);
+		this._stopLfbwWatch(rt);
 		if (rt.proc) {
 			await this._killProc(rt.proc);
 			rt.proc = null;
@@ -1227,7 +1356,12 @@ class WalletManager {
 	}
 
 	async deleteWallet(id, { purge = false } = {}) {
-		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		// Deleting a primary would orphan its lightning-first wallets: no
+		// inbound, no direct funding, no channelize, and a channel whose
+		// counterparty is gone for good.
+		this._refuseIfPrimaryInUse(rec, 'This wallet cannot be deleted');
 		await this.stopWallet(id).catch(() => {});
 		const p = this.paths(id);
 		this.registry.remove(id);
@@ -1235,6 +1369,354 @@ class WalletManager {
 		this.channelLogs.delete(id);
 		if (purge) {
 			fs.rmSync(p.base, { recursive: true, force: true });
+		}
+	}
+
+	// ── Lightning-first wallets ──
+
+	/**
+	 * Runs once the startup poll sees a daemon healthy: record its node id,
+	 * then bring every lightning-first link this daemon is part of back up.
+	 * Zero-conf trust and the direct-funding policy live in daemon memory
+	 * and die with the process, so they are re-applied on every start.
+	 */
+	async _onHealthy(id) {
+		await this._captureNodeId(id);
+		await this._restoreLfbwLinks(id);
+	}
+
+	// A direct call to a wallet daemon with its bearer token. The reverse
+	// proxy serves the browser; the manager talks to daemons itself for
+	// lightning-first setup and channelize.
+	async _daemonCall(rec, method, apiPath, body) {
+		const token = this.token(rec.id);
+		const res = await fetch(`http://127.0.0.1:${rec.port}${apiPath}`, {
+			method,
+			headers: {
+				Authorization: `Bearer ${token}`,
+				...(body ? { 'Content-Type': 'application/json' } : {})
+			},
+			body: body ? JSON.stringify(body) : undefined,
+			signal: AbortSignal.timeout(lfbw.CALL_TIMEOUT_MS)
+		});
+		let data = {};
+		try {
+			data = await res.json();
+		} catch (_) {
+			/* non-JSON body */
+		}
+		if (!res.ok || data.ok === false) {
+			const err = new Error((data.error && data.error.message) || `${apiPath} failed (${res.status})`);
+			err.code = (data.error && data.error.code) || 'DAEMON_ERROR';
+			throw err;
+		}
+		// The splice routes answer 200 with the refusal inside the result.
+		if (apiPath.startsWith('/channel/splice') && data.result && data.result.ok === false) {
+			const err = new Error(data.result.error || data.result.message || `${apiPath} refused`);
+			err.code = data.result.code || 'SPLICE_REFUSED';
+			throw err;
+		}
+		return data.result;
+	}
+
+	async _waitDaemonHealthy(rec, timeoutMs = lfbw.HEALTH_TIMEOUT_MS) {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			if (!this.runtimeState(rec.id).proc) throw new Error(`wallet "${rec.name}" is not running`);
+			const probe = await this._probeHealth(rec, 2000);
+			if (probe.kind === 'ok') return;
+			await sleep(1000);
+		}
+		throw new Error(`wallet "${rec.name}" did not become healthy in time`);
+	}
+
+	// Persist the wallet's Lightning node id on its record once the daemon
+	// reports it, so wallet lists can map peer pubkeys back to wallet names
+	// and a sibling can be named as a primary before its daemon is asked.
+	async _captureNodeId(id) {
+		const rec = this.registry.get(id);
+		if (!rec || rec.onchainOnly) return;
+		const info = await this._daemonCall(rec, 'GET', '/info').catch(() => null);
+		if (info && info.nodeId && rec.nodeId !== info.nodeId) {
+			rec.nodeId = info.nodeId;
+			this.registry.upsert(rec);
+		}
+	}
+
+	/**
+	 * The primary as something to connect to and to sign into requests. An
+	 * internal primary is reached on loopback inside this container (Umbrel
+	 * publishes no Lightning ports), and payers off-box reach it through its
+	 * onion when it announces one; an external primary is its URI.
+	 */
+	async _primaryEndpoint(lf) {
+		if (lf.mode === 'internal') {
+			const primaryRec = this.registry.get(lf.primaryWalletId);
+			if (!primaryRec) throw new Error('the selected primary node no longer exists');
+			if (primaryRec.onchainOnly) throw new Error(`primary node "${primaryRec.name}" is on-chain only`);
+			if (!this.runtimeState(primaryRec.id).proc) {
+				throw new Error(`primary node "${primaryRec.name}" is not running`);
+			}
+			await this._waitDaemonHealthy(primaryRec);
+			await this._captureNodeId(primaryRec.id);
+			if (!primaryRec.nodeId) throw new Error('primary node did not report a node id');
+			const listen = this.listenPort(primaryRec);
+			const onion = this.onionAddress(primaryRec);
+			const relay = lfbw.walletReach({
+				onionAddress: onion,
+				listenPort: listen,
+				publicHost: process.env.PUBLIC_HOST
+			});
+			return {
+				pubkey: primaryRec.nodeId,
+				connectHost: '127.0.0.1',
+				connectPort: listen,
+				relayHost: relay ? relay.host : '127.0.0.1',
+				relayPort: relay ? relay.port : listen,
+				rec: primaryRec
+			};
+		}
+		const parsed = lfbw.parseNodeUri(lf.primaryUri);
+		return {
+			pubkey: parsed.pubkey,
+			connectHost: parsed.host,
+			connectPort: parsed.port,
+			relayHost: parsed.host,
+			relayPort: parsed.port,
+			rec: null
+		};
+	}
+
+	/**
+	 * Make a sibling wallet a liquidity provider: flag the record, and if its
+	 * daemon is running with an env that lacks the role, restart it so the
+	 * JIT engine and the relay come up. One restart per role change; a
+	 * daemon already spawned as a provider is left alone.
+	 */
+	async _ensureProviderRole(primaryRec) {
+		if (!primaryRec.liquidityProvider) {
+			primaryRec.liquidityProvider = true;
+			this.registry.upsert(primaryRec);
+		}
+		const rt = this.runtimeState(primaryRec.id);
+		if (rt.proc && lfbw.providerRoleChanged(rt.spawnedEnv, primaryRec)) {
+			this._log(primaryRec.id, 'restarting as a liquidity provider (JIT receive, direct-funding relay)');
+			await this._restartWallet(primaryRec.id);
+		}
+		await this._waitDaemonHealthy(primaryRec);
+	}
+
+	/**
+	 * Brings a lightning-first wallet's relationship with its primary node
+	 * up: the primary as a liquidity provider, zero-conf trust (mutual for a
+	 * trusted internal pair), the direct-funding policy naming the primary,
+	 * a peer connection, and (once, on first success) the starting channel
+	 * opened from the primary. Idempotent, so it is safe to run again after
+	 * a failure or a daemon restart, which is exactly when it runs.
+	 */
+	async setupLfbw(id) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		if (!lfbw.isLfbw(rec)) throw httpError(400, 'NOT_LFBW', 'Not a lightning-first wallet');
+		if (!this.runtimeState(id).proc) throw httpError(503, 'NOT_RUNNING', 'Wallet is not running');
+		if (this.lfbwSetupRunning.has(id)) return this.publicRecord(id);
+		this.lfbwSetupRunning.add(id);
+		const lf = rec.lfbw;
+		lf.setup = 'pending';
+		lf.setupError = null;
+		this.registry.upsert(rec);
+		try {
+			await this._waitDaemonHealthy(rec);
+			await this._captureNodeId(id);
+			if (!rec.nodeId) throw new Error('the wallet did not report a node id');
+			const primary = await this._primaryEndpoint(lf);
+			lf.primaryPubkey = primary.pubkey;
+			this.registry.upsert(rec);
+
+			if (primary.rec) await this._ensureProviderRole(primary.rec);
+
+			// The wallet trusts its chosen primary for zero-conf: a JIT open or
+			// a zero-conf splice arrives as an unconfirmed funding FROM the
+			// primary, and the wallet accepted that risk by pairing with it.
+			// An internal primary trusts the wallet back (we run both nodes),
+			// so zero-conf works in both directions and a direct-funding
+			// payment from the wallet counts as paired.
+			if (lf.trusted) {
+				await this._daemonCall(rec, 'POST', '/trusted-peer/add', { pubkey: primary.pubkey });
+				if (primary.rec) {
+					await this._daemonCall(primary.rec, 'POST', '/trusted-peer/add', { pubkey: rec.nodeId });
+				}
+			}
+
+			// Arm direct funding: a beignet sender's on-chain payment becomes
+			// this wallet's channel funding, negotiated with the primary, and
+			// the primary's address is signed into requests as the relay for
+			// senders who cannot reach the wallet directly.
+			await this._daemonCall(
+				rec,
+				'POST',
+				'/direct-funding/configure',
+				lfbw.directFundingConfig(lf, primary, { allowSpliceSupported: this.lfbwAvailable() })
+			);
+
+			// An already-connected peer can make /peer/connect complain; that
+			// is success by another name, so check the live peer list before
+			// treating it as a failure.
+			try {
+				await this._daemonCall(rec, 'POST', '/peer/connect', {
+					pubkey: primary.pubkey,
+					host: primary.connectHost,
+					port: primary.connectPort
+				});
+			} catch (err) {
+				const peers = await this._daemonCall(rec, 'GET', '/peers').catch(() => []);
+				const connected = (peers || []).some((p) => p.pubkey === primary.pubkey);
+				if (!connected) throw err;
+			}
+
+			if (primary.rec && lf.initialChannelSats > 0 && !lf.initialChannelOpened) {
+				this._log(
+					id,
+					`lightning-first: opening a ${lf.initialChannelSats} sat${lf.trusted ? ' zero-conf' : ''} channel from "${primary.rec.name}"`
+				);
+				// Marked opened before the call resolves: a retry after a
+				// timeout must never open a second starting channel.
+				lf.initialChannelOpened = true;
+				this.registry.upsert(rec);
+				await this._daemonCall(primary.rec, 'POST', '/channel/connect-and-open', {
+					pubkey: rec.nodeId,
+					host: '127.0.0.1',
+					port: this.listenPort(rec),
+					amountSats: lf.initialChannelSats,
+					trusted: lf.trusted === true
+				});
+			}
+
+			lf.setup = 'ready';
+			lf.setupError = null;
+			lf.setupAt = nowIso();
+			this.registry.upsert(rec);
+			this._log(id, 'lightning-first: setup complete');
+			this._scheduleChannelize(id);
+		} catch (err) {
+			lf.setup = 'failed';
+			lf.setupError = err.message;
+			this.registry.upsert(rec);
+			this._log(id, `lightning-first: setup failed: ${err.message}`);
+		} finally {
+			this.lfbwSetupRunning.delete(id);
+		}
+		return this.publicRecord(id);
+	}
+
+	// Re-apply every lightning-first link a daemon is part of once it is up:
+	// the wallet's own, and every lightning-first wallet whose primary it is
+	// (their trust toward it and its trust toward them both died with it).
+	async _restoreLfbwLinks(id) {
+		const rec = this.registry.get(id);
+		if (!rec) return;
+		const jobs = [];
+		if (lfbw.isLfbw(rec)) jobs.push(rec.id);
+		for (const dep of this._dependents(rec)) {
+			if (this.runtimeState(dep.id).proc) jobs.push(dep.id);
+		}
+		for (const walletId of jobs) {
+			await this.setupLfbw(walletId).catch(() => {});
+		}
+	}
+
+	// Coalesce a burst of triggers (a confirmation, then channel:ready a
+	// moment later) into one channelize pass.
+	_scheduleChannelize(id) {
+		const rt = this.runtimeState(id);
+		if (rt.lfbwTimer) clearTimeout(rt.lfbwTimer);
+		rt.lfbwTimer = setTimeout(() => {
+			rt.lfbwTimer = null;
+			this._lfbwChannelize(id).catch(() => {});
+		}, lfbw.CHANNELIZE_DEBOUNCE_MS);
+	}
+
+	/**
+	 * Move a lightning-first wallet's confirmed on-chain funds into its
+	 * channel with the primary: a splice-in when the home channel exists, a
+	 * max open when nothing does. The decision is pure (lfbw.js); this is
+	 * the I/O around it. A failure backs off rather than retrying every
+	 * tick, and a pass never overlaps another.
+	 */
+	async _lfbwChannelize(id) {
+		const rec = this.registry.get(id);
+		const rt = this.runtimeState(id);
+		if (!rec || !lfbw.isLfbw(rec)) return;
+		const lf = rec.lfbw;
+		if (!rt.proc || !rt.healthy || rt.stopping) return;
+		if (lf.setup !== 'ready' || !lf.primaryPubkey) return;
+		if (rt.lfbwBusy || Date.now() < rt.lfbwRetryAt) return;
+		rt.lfbwBusy = true;
+		try {
+			const balance = await this._daemonCall(rec, 'GET', '/balance').catch(() => null);
+			if (!balance) return;
+			const onchainSats = balance.onchain || 0;
+			if (onchainSats < lfbw.CHANNELIZE_FLOOR_SATS) return;
+			const [utxos, channels] = await Promise.all([
+				this._daemonCall(rec, 'GET', '/utxos').catch(() => null),
+				this._daemonCall(rec, 'GET', '/channels').catch(() => [])
+			]);
+			const target = lfbw.channelizeTarget({ onchainSats, utxos, channels, primaryPubkey: lf.primaryPubkey });
+			if (target.action === 'wait') return;
+			const fees = await this._daemonCall(rec, 'GET', '/fees/estimates').catch(() => null);
+			const feeNormal = fees && fees.normal > 0 ? fees.normal : 0;
+			const perkw = lfbw.perkwFromSatVb(feeNormal > 0 ? feeNormal : 2);
+			let order;
+			if (target.action === 'splice-in') {
+				const spliceQuote = await this._daemonCall(rec, 'POST', '/channel/splice-quote', {
+					channelId: target.channelId,
+					direction: 'in',
+					feeratePerkw: perkw
+				}).catch(() => null);
+				order = lfbw.channelizeOrder(target, { spliceQuote, feeNormal });
+			} else {
+				const txQuote = await this._daemonCall(rec, 'POST', '/tx/quote', {
+					satsPerVbyte: feeNormal > 0 ? feeNormal : 2,
+					max: true,
+					channelFunding: true
+				}).catch(() => null);
+				const primary = await this._primaryEndpoint(lf);
+				const info = lf.mode === 'external' ? await this._daemonCall(rec, 'GET', '/info').catch(() => null) : null;
+				order = lfbw.channelizeOrder(target, {
+					txQuote,
+					feeNormal,
+					mode: lf.mode,
+					trusted: lf.trusted,
+					blockHeight: (info && info.blockHeight) || 0,
+					primary
+				});
+			}
+			if (order.action === 'wait') return;
+			if (order.action === 'splice-in') {
+				this._log(id, `lightning-first: splicing ${order.body.amountSats} sats on-chain into the home channel`);
+				await this._daemonCall(rec, 'POST', '/channel/splice-in', order.body);
+				return;
+			}
+			if (order.action === 'open-v2') {
+				this._log(
+					id,
+					`lightning-first: dual-funded open of ${order.body.amountSats} sats, buying ${order.body.requestFunds.requestedSats} sats inbound from the primary`
+				);
+				try {
+					await this._daemonCall(rec, 'POST', '/channel/open-v2', order.body);
+					return;
+				} catch (err) {
+					this._log(id, `lightning-first: inbound purchase failed (${err.message}); opening without it`);
+					order = order.fallback;
+				}
+			}
+			this._log(id, `lightning-first: moving ${order.body.amountSats} sats on-chain into a new channel with the primary`);
+			await this._daemonCall(rec, 'POST', '/channel/connect-and-open', order.body);
+		} catch (err) {
+			rt.lfbwRetryAt = Date.now() + lfbw.CHANNELIZE_RETRY_MS;
+			this._log(id, `lightning-first: channelize attempt failed: ${err.message}`);
+		} finally {
+			rt.lfbwBusy = false;
 		}
 	}
 
@@ -1263,8 +1745,27 @@ class WalletManager {
 			status: rt.status,
 			healthy: rt.healthy,
 			lastStartError: rt.lastStartError,
-			createdAt: rec.createdAt
+			createdAt: rec.createdAt,
+			// Lightning-first: the node id lets the dashboard name sibling
+			// peers; listenPort and reach are what a payment request can
+			// advertise; lfbw is the primary-node block; the provider fields
+			// say what this wallet fronts for lightning-first wallets.
+			nodeId: rec.nodeId || null,
+			listenPort: rec.onchainOnly ? null : this.listenPort(rec),
+			reach: rec.onchainOnly ? null : this._reach(rec),
+			lfbw: rec.lfbw ? { ...rec.lfbw } : null,
+			liquidityProvider: !!rec.liquidityProvider && !rec.onchainOnly,
+			jit: lfbw.normalizeJit(undefined, rec.jit),
+			lfbwDependents: this._dependents(rec).map((d) => ({ id: d.id, name: d.name }))
 		};
+	}
+
+	_reach(rec) {
+		return lfbw.walletReach({
+			onionAddress: this.onionAddress(rec),
+			listenPort: this.listenPort(rec),
+			publicHost: process.env.PUBLIC_HOST
+		});
 	}
 
 	list() {

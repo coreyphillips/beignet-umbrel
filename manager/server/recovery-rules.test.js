@@ -27,6 +27,7 @@ function managerWith({ guardians = [], engine = '0.9.2', records = {} } = {}) {
 	m.engineVersion = engine;
 	m.registry = {
 		get: (id) => records[id],
+		list: () => Object.values(records),
 		upsert: (rec) => {
 			records[rec.id] = rec;
 		}

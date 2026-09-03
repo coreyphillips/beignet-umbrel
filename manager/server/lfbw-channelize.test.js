@@ -1,0 +1,179 @@
+'use strict';
+
+/**
+ * Run with: npm test (from manager/).
+ *
+ * Channelize's I/O shell around the pure decision: what it reads, what it
+ * calls, that it never overlaps itself, backs off after a failure, and
+ * coalesces a burst of triggers into one pass.
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { WalletManager } = require('./wallet-manager');
+
+const PK_P = '03' + '22'.repeat(32);
+
+function harness({ answers = {}, lf = {} } = {}) {
+	const rec = {
+		id: 'w1',
+		name: 'Spending',
+		network: 'regtest',
+		port: 3902,
+		nodeId: '02' + '11'.repeat(32),
+		lfbw: {
+			enabled: true,
+			mode: 'internal',
+			primaryWalletId: 'p1',
+			primaryPubkey: PK_P,
+			trusted: true,
+			setup: 'ready',
+			...lf
+		}
+	};
+	const primary = { id: 'p1', name: 'Primary', network: 'regtest', port: 3901, nodeId: PK_P, onchainOnly: false };
+	const m = Object.create(WalletManager.prototype);
+	const store = { w1: rec, p1: primary };
+	m.registry = { get: (id) => store[id], list: () => Object.values(store), upsert: () => {} };
+	m.runtime = new Map();
+	m.runtimeState('w1').proc = { pid: 1 };
+	m.runtimeState('w1').healthy = true;
+	m.runtimeState('p1').proc = { pid: 2 };
+	m.logs = [];
+	m._log = (_id, line) => m.logs.push(line);
+	m.onionAddress = () => null;
+	m._waitDaemonHealthy = async () => {};
+	m.calls = [];
+	m._daemonCall = async (r, method, path, body) => {
+		m.calls.push({ wallet: r.id, method, path, body });
+		const key = `${r.id} ${method} ${path}`;
+		if (answers[key] instanceof Error) throw answers[key];
+		if (answers[key] !== undefined) return answers[key];
+		if (path === '/info') return { nodeId: r.nodeId, blockHeight: 100 };
+		return {};
+	};
+	return { m, rec };
+}
+
+const usable = { channelId: 'c1', peerPubkey: PK_P, state: 'NORMAL', htlcUsable: true };
+const confirmed = [{ height: 90 }];
+
+test('a confirmed deposit with a home channel becomes a splice-in at the daemon quote', async () => {
+	const { m } = harness({
+		answers: {
+			'w1 GET /balance': { onchain: 50000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [usable],
+			'w1 GET /fees/estimates': { normal: 7 },
+			'w1 POST /channel/splice-quote': { maxAmountSats: 48000 }
+		}
+	});
+	await m._lfbwChannelize('w1');
+	const splice = m.calls.find((c) => c.path === '/channel/splice-in');
+	assert.deepEqual(splice.body, { channelId: 'c1', amountSats: 48000, feeratePerkw: 1750 });
+	assert.deepEqual(m.calls.find((c) => c.path === '/channel/splice-quote').body, {
+		channelId: 'c1',
+		direction: 'in',
+		feeratePerkw: 1750
+	});
+});
+
+test('with no channel yet the whole balance opens one to the primary, zero-conf for a trusted pair', async () => {
+	const { m } = harness({
+		answers: {
+			'w1 GET /balance': { onchain: 50000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [],
+			'w1 GET /fees/estimates': { normal: 7 },
+			'w1 POST /tx/quote': { maxSendSats: 49000 }
+		}
+	});
+	await m._lfbwChannelize('w1');
+	const open = m.calls.find((c) => c.path === '/channel/connect-and-open');
+	assert.deepEqual(open.body, {
+		pubkey: PK_P,
+		host: '127.0.0.1',
+		port: 3901 + 6000,
+		amountSats: 49000,
+		satsPerVbyte: 7,
+		max: true,
+		trusted: true
+	});
+	assert.deepEqual(m.calls.find((c) => c.path === '/tx/quote').body, { satsPerVbyte: 7, max: true, channelFunding: true });
+});
+
+test('nothing moves while a UTXO is unconfirmed, below the floor, or when setup is not ready', async () => {
+	const unconfirmed = harness({
+		answers: { 'w1 GET /balance': { onchain: 50000 }, 'w1 GET /utxos': [{ height: null }], 'w1 GET /channels': [usable] }
+	});
+	await unconfirmed.m._lfbwChannelize('w1');
+	assert.equal(unconfirmed.m.calls.some((c) => c.method === 'POST'), false);
+
+	const small = harness({ answers: { 'w1 GET /balance': { onchain: 12000 } } });
+	await small.m._lfbwChannelize('w1');
+	assert.deepEqual(small.m.calls.map((c) => c.path), ['/balance'], 'the floor is checked before anything else is read');
+
+	const notReady = harness({ lf: { setup: 'failed' }, answers: { 'w1 GET /balance': { onchain: 50000 } } });
+	await notReady.m._lfbwChannelize('w1');
+	assert.deepEqual(notReady.m.calls, []);
+});
+
+test('a failed attempt backs off, and a pass never overlaps another', async () => {
+	const { m } = harness({
+		answers: {
+			'w1 GET /balance': { onchain: 50000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [usable],
+			'w1 GET /fees/estimates': { normal: 7 },
+			'w1 POST /channel/splice-quote': { maxAmountSats: 48000 },
+			'w1 POST /channel/splice-in': new Error('peer disconnected')
+		}
+	});
+	await m._lfbwChannelize('w1');
+	const rt = m.runtimeState('w1');
+	assert.ok(rt.lfbwRetryAt > Date.now(), 'backing off');
+	assert.match(m.logs.at(-1), /peer disconnected/);
+	const before = m.calls.length;
+	await m._lfbwChannelize('w1');
+	assert.equal(m.calls.length, before, 'no call during the backoff');
+	rt.lfbwRetryAt = 0;
+	rt.lfbwBusy = true;
+	await m._lfbwChannelize('w1');
+	assert.equal(m.calls.length, before, 'no call while another pass runs');
+});
+
+test('a burst of triggers coalesces into one pass', async () => {
+	const { m } = harness();
+	let passes = 0;
+	m._lfbwChannelize = async () => {
+		passes++;
+	};
+	m._scheduleChannelize('w1');
+	m._scheduleChannelize('w1');
+	m._scheduleChannelize('w1');
+	assert.ok(m.runtimeState('w1').lfbwTimer);
+	await new Promise((r) => setTimeout(r, 2200));
+	assert.equal(passes, 1);
+	assert.equal(m.runtimeState('w1').lfbwTimer, null);
+});
+
+test('an external primary is asked to sell inbound first, then opened to plainly when it refuses', async () => {
+	const PK_X = '02' + '33'.repeat(32);
+	const { m } = harness({
+		lf: { mode: 'external', primaryWalletId: null, primaryUri: `${PK_X}@lsp.example:9735`, primaryPubkey: PK_X, trusted: false },
+		answers: {
+			'w1 GET /balance': { onchain: 200000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [],
+			'w1 GET /fees/estimates': { normal: 7 },
+			'w1 POST /tx/quote': { maxSendSats: 200000 },
+			'w1 POST /channel/open-v2': new Error('peer sells no liquidity')
+		}
+	});
+	await m._lfbwChannelize('w1');
+	const v2 = m.calls.find((c) => c.path === '/channel/open-v2');
+	assert.equal(v2.body.requestFunds.blockheight, 100);
+	const open = m.calls.find((c) => c.path === '/channel/connect-and-open');
+	assert.equal(open.body.host, 'lsp.example');
+	assert.equal(open.body.trusted, false);
+	assert.match(m.logs.find((l) => /inbound purchase failed/.test(l)), /sells no liquidity/);
+});

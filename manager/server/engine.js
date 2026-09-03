@@ -58,4 +58,24 @@ function recoveryAvailable(version) {
 	return atLeast(version, RECOVERY_MIN_VERSION);
 }
 
-module.exports = { engineVersion, recoveryAvailable, RECOVERY_MIN_VERSION };
+// The routes and the policy field lightning-first wallets consume. Probed
+// on the bundled engine's OpenAPI module rather than gated on a version
+// number: they landed on the engine's master well before a release carried
+// them, and a checkout run through BEIGNET_BIN reports the last released
+// version whatever it contains.
+const LFBW_ROUTE_MARKERS = ["'/jit/invoice'", "'/direct-funding/send'", 'allowSplice'];
+
+/** True when the engine behind `bin` serves JIT receive and direct funding. */
+function lfbwAvailable(bin = process.env.BEIGNET_BIN) {
+	if (!bin) return false;
+	const openapi = path.join(path.dirname(path.resolve(bin)), 'openapi.js');
+	let text;
+	try {
+		text = fs.readFileSync(openapi, 'utf8');
+	} catch (_) {
+		return false;
+	}
+	return LFBW_ROUTE_MARKERS.every((marker) => text.includes(marker));
+}
+
+module.exports = { engineVersion, recoveryAvailable, lfbwAvailable, RECOVERY_MIN_VERSION, LFBW_ROUTE_MARKERS };
