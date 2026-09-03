@@ -519,7 +519,9 @@ const mainChannels = makeChannels([
 	// cooperative close and a force close (the latter waiting out its CSV
 	// delay). Neither counts toward balances or liquidity.
 	[1500000, 30, 'CLOSED', false, 'Sparky'],
-	[650000, 45, 'FORCE_CLOSED', false, 'endurance']
+	[650000, 45, 'FORCE_CLOSED', false, 'endurance'],
+	// A close the peer made, long since swept: the quiet end of a channel.
+	[900000, 52, 'CLOSED', false, 'Kraken']
 ]);
 // True to life: eclair splices, LND does not, and the daemon reads it off each
 // peer's init (beignet 0.8.2+). The WalletOfSatoshi channel demos the Channels
@@ -527,6 +529,33 @@ const mainChannels = makeChannels([
 // channel says nothing, the shape an old daemon or a disconnected peer leaves.
 mainChannels[0].peerSupportsSplicing = true;
 mainChannels[1].peerSupportsSplicing = false;
+// The close story (beignet 0.9.0+ closeStatus): Sparky was closed
+// cooperatively by this wallet and is sweeping its outputs; endurance is the
+// watchdog force close whose commitment the daemon put out but has not seen
+// confirm, so the detail view offers Rebroadcast.
+mainChannels[4].closeStatus = {
+	closer: 'cooperative',
+	reason: 'user',
+	closingTxid: hex(64),
+	broadcast: true,
+	confirmationHeight: 908214 - 863,
+	resolution: 'sweeping'
+};
+mainChannels[5].closeStatus = {
+	closer: 'local',
+	reason: 'REESTABLISH_TIMEOUT_FORCE_CLOSED',
+	closingTxid: hex(64),
+	broadcast: true,
+	confirmationHeight: 0,
+	resolution: 'pending'
+};
+mainChannels[6].closeStatus = {
+	closer: 'remote',
+	closingTxid: hex(64),
+	broadcast: true,
+	confirmationHeight: 908214 - 2200,
+	resolution: 'resolved'
+};
 
 store.state['demo-main'] = walletState({
 	blockHeight: 908214,
@@ -869,7 +898,13 @@ function recordChannelEvent(walletId, entry) {
 	const acinq = chans[0];
 	const sparky = chans[4];
 	const endurance = chans[5];
+	const kraken = chans[6];
 	channelEvents['demo-main'] = [
+		{ timestamp: now - 90 * day, event: 'channel:opening', channelId: kraken.channelId, fundingTxid: hex(64) },
+		{ timestamp: now - 90 * day + 1500000, event: 'channel:ready', channelId: kraken.channelId },
+		{ timestamp: now - 16 * day, event: 'channel:force-closing', channelId: kraken.channelId, initiator: 'remote' },
+		{ timestamp: now - 16 * day + 600000, event: 'channel:closed', channelId: kraken.channelId },
+		{ timestamp: now - 15 * day, event: 'channel:resolved', channelId: kraken.channelId },
 		{ timestamp: now - 41 * day, event: 'channel:opening', channelId: sparky.channelId, fundingTxid: hex(64) },
 		{ timestamp: now - 41 * day + 3600000, event: 'channel:ready', channelId: sparky.channelId },
 		{ timestamp: now - 30 * day, event: 'channel:opening', channelId: endurance.channelId, fundingTxid: hex(64) },
@@ -2566,6 +2601,19 @@ function walletRequest(id, path, method, body) {
 		case '/trusted-peer/remove':
 			trustedPeers[id] = (trustedPeers[id] || []).filter((p) => p !== body.pubkey);
 			return { pubkey: body.pubkey, trusted: false };
+		case '/channel/rebroadcast-close': {
+			const c = st.channels.find((x) => x.channelId === body.channelId);
+			if (!c) throw err('Channel not found', 'NOT_FOUND');
+			if (!c.closeStatus || !c.closeStatus.closingTxid) {
+				throw err('No close transaction recorded for this channel', 'REBROADCAST_FAILED');
+			}
+			if (c.closeStatus.confirmationHeight > 0) {
+				// What the daemon answers for a close the network already has.
+				throw err('Transaction outputs already in utxo set', 'REBROADCAST_FAILED');
+			}
+			c.closeStatus.broadcast = true;
+			return { txid: c.closeStatus.closingTxid, broadcastOk: true };
+		}
 		case '/channel/close':
 		case '/channel/forceclose': {
 			const c = st.channels.find((x) => x.channelId === body.channelId);

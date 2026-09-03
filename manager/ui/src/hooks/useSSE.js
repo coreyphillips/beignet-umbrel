@@ -40,6 +40,9 @@ export function useSSE(url, onEvent) {
 			'transaction:confirmed',
 			'channel:ready',
 			'channel:closed',
+			// Every on-chain output of a close swept (beignet 0.9.0+): the
+			// terminal event of a closed channel's story.
+			'channel:resolved',
 			'peer:connect',
 			'peer:disconnect',
 			'node:ready',
