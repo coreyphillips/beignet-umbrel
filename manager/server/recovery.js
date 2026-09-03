@@ -103,6 +103,12 @@ function recoveryEnv(recovery) {
 		env.BEIGNET_RECOVERY_GUARDIANS = (recovery.guardians || []).join(',');
 		env.BEIGNET_RECOVERY_PROFILE = RECOVERY_PROFILE;
 	}
+	// The daemon applying a peer-storage checkpoint by itself on an empty
+	// database (beignet #690). Peer storage only: the daemon refuses to
+	// start with the flag under any other mode, so it never rides there.
+	if (mode === 'peer-storage' && recovery.autoApply === true) {
+		env.BEIGNET_RECOVERY_AUTO_APPLY = 'true';
+	}
 	return env;
 }
 

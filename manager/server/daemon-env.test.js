@@ -167,3 +167,24 @@ test('operator engine policy passes through from the manager env', () => {
 		Object.assign(process.env, prev);
 	}
 });
+
+test('the automatic checkpoint restore rides with peer storage only', () => {
+	const on = bareManager()._daemonEnv(
+		rec({ recovery: { mode: 'peer-storage', guardians: [], autoApply: true } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(on.BEIGNET_RECOVERY_MODE, 'peer-storage');
+	assert.equal(on.BEIGNET_RECOVERY_AUTO_APPLY, 'true');
+	const off = bareManager()._daemonEnv(rec({ recovery: { mode: 'peer-storage', guardians: [] } }), PATHS, 's', 't');
+	assert.equal(off.BEIGNET_RECOVERY_AUTO_APPLY, undefined, 'absent unless answered');
+	const G = [`${'a'.repeat(64)}@http://127.0.0.1:8101`, `${'b'.repeat(64)}@http://127.0.0.1:8102`, `${'c'.repeat(64)}@https://g.example`];
+	const quorum = bareManager()._daemonEnv(
+		rec({ recovery: { mode: 'quorum', guardians: G, autoApply: true } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(quorum.BEIGNET_RECOVERY_AUTO_APPLY, undefined, 'the daemon refuses the flag under a guardian mode');
+});

@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { engineVersion, recoveryAvailable, lfbwAvailable } = require('./engine');
+const { engineVersion, recoveryAvailable, lfbwAvailable, jitQuoteAvailable, recoveryAutoApplyAvailable } = require('./engine');
 
 function fakeInstall(version) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'beignet-engine-'));
@@ -74,4 +74,29 @@ test('lightning-first support is probed on the engine, not its version', () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 	assert.equal(lfbwAvailable(undefined), false);
+});
+
+test('the JIT quote and the automatic checkpoint restore are probed the same way', () => {
+	const { root, bin } = fakeInstall('0.10.0');
+	try {
+		const openapi = path.join(path.dirname(bin), 'openapi.js');
+		fs.writeFileSync(openapi, "paths: { '/jit/invoice': {}, '/jit/status': {} }");
+		assert.equal(jitQuoteAvailable(bin), false, '0.10.0 has status and invoice, no quote');
+		fs.writeFileSync(openapi, "paths: { '/jit/invoice': {}, '/jit/status': {}, '/jit/quote': {} }");
+		assert.equal(jitQuoteAvailable(bin), true);
+
+		assert.equal(recoveryAutoApplyAvailable(bin), false, 'no config module at all');
+		const config = path.join(path.dirname(bin), 'config.js');
+		fs.writeFileSync(config, "env.BEIGNET_RECOVERY_MODE; env.BEIGNET_RECOVERY_GUARDIANS;");
+		assert.equal(recoveryAutoApplyAvailable(bin), false);
+		fs.writeFileSync(config, "env.BEIGNET_RECOVERY_MODE; env.BEIGNET_RECOVERY_AUTO_APPLY;");
+		assert.equal(recoveryAutoApplyAvailable(bin), true);
+		fs.writeFileSync(config, "env.BEIGNET_RECOVERY_MODE;");
+		fs.writeFileSync(openapi, "description: 'BEIGNET_RECOVERY_AUTO_APPLY applies the newest capsule'");
+		assert.equal(recoveryAutoApplyAvailable(bin), true, 'the OpenAPI module documenting the env is proof too');
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	assert.equal(jitQuoteAvailable(undefined), false);
+	assert.equal(recoveryAutoApplyAvailable(undefined), false);
 });

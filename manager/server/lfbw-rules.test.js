@@ -308,3 +308,34 @@ test('an external primary is first asked to sell inbound in a dual-funded open, 
 test('a wait target passes through an order unchanged', () => {
 	assert.deepEqual(lfbw.channelizeOrder({ action: 'wait', reason: 'below-floor' }, {}), { action: 'wait', reason: 'below-floor' });
 });
+
+test('a move waits while the quoted fee is more than a twentieth of the amount, unless forced', () => {
+	const target = { action: 'splice-in', channelId: 'c1' };
+	const pricey = { maxAmountSats: 48000, feeSats: 3000 };
+	assert.deepEqual(lfbw.channelizeOrder(target, { spliceQuote: pricey, feeNormal: 40 }), {
+		action: 'wait',
+		reason: 'fee-too-high',
+		feeSats: 3000,
+		amountSats: 48000
+	});
+	assert.equal(lfbw.CHANNELIZE_FEE_MULTIPLE, 20);
+	assert.equal(lfbw.channelizeOrder(target, { spliceQuote: { maxAmountSats: 60000, feeSats: 3000 }, feeNormal: 40 }).action, 'splice-in', 'exactly twenty times passes');
+	assert.equal(lfbw.channelizeOrder(target, { spliceQuote: pricey, feeNormal: 40, force: true }).action, 'splice-in', 'the owner can override the wait');
+	assert.equal(lfbw.channelizeOrder(target, { spliceQuote: { maxAmountSats: 48000 }, feeNormal: 40 }).action, 'splice-in', 'a quote without a fee cannot be judged');
+	const primary = { pubkey: PK, connectHost: '127.0.0.1', connectPort: 9101 };
+	const open = lfbw.channelizeOrder({ action: 'open' }, { txQuote: { maxSendSats: 30000, feeSats: 2000 }, feeNormal: 40, mode: 'internal', trusted: true, primary });
+	assert.deepEqual(open, { action: 'wait', reason: 'fee-too-high', feeSats: 2000, amountSats: 30000 });
+	assert.equal(
+		lfbw.channelizeOrder({ action: 'open' }, { txQuote: { maxSendSats: 30000, feeSats: 2000 }, feeNormal: 40, mode: 'internal', trusted: true, primary, force: true }).action,
+		'open'
+	);
+	// Forcing skips the fee wait, never the channel minimums.
+	assert.deepEqual(
+		lfbw.channelizeOrder({ action: 'open' }, { txQuote: { maxSendSats: 19999, feeSats: 100 }, feeNormal: 40, mode: 'internal', trusted: true, primary, force: true }),
+		{ action: 'wait', reason: 'quote-too-small' }
+	);
+	assert.deepEqual(lfbw.channelizeOrder(target, { spliceQuote: { maxAmountSats: 22000, feeSats: 100 }, feeNormal: 7, force: true }), {
+		action: 'wait',
+		reason: 'quote-too-small'
+	});
+});

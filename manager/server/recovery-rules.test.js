@@ -17,7 +17,7 @@ const K = (c) => c.repeat(64);
 const G = [`${K('a')}@http://127.0.0.1:8101`, `${K('b')}@http://127.0.0.1:8102`, `${K('c')}@https://g.example`];
 const OTHER = [`${K('d')}@http://127.0.0.1:8201`, `${K('e')}@http://127.0.0.1:8202`, `${K('f')}@https://h.example`];
 
-function managerWith({ guardians = [], engine = '0.9.2', records = {} } = {}) {
+function managerWith({ guardians = [], engine = '0.9.2', records = {}, autoApply = true } = {}) {
 	const m = Object.create(WalletManager.prototype);
 	const data = { defaultNetwork: 'regtest', defaultElectrum: null, recoveryGuardians: guardians };
 	m.settings = {
@@ -25,6 +25,7 @@ function managerWith({ guardians = [], engine = '0.9.2', records = {} } = {}) {
 		update: (patch) => Object.assign(data, patch)
 	};
 	m.engineVersion = engine;
+	m.recoveryAutoApplySupported = autoApply;
 	m.registry = {
 		get: (id) => records[id],
 		list: () => Object.values(records),
@@ -75,6 +76,13 @@ test('recoveryEnv is empty for off and whole for a guardian mode', () => {
 	assert.deepEqual(recoveryEnv(undefined), {});
 	assert.deepEqual(recoveryEnv({ mode: 'off' }), {});
 	assert.deepEqual(recoveryEnv({ mode: 'peer-storage' }), { BEIGNET_RECOVERY_MODE: 'peer-storage' });
+	assert.deepEqual(
+		recoveryEnv({ mode: 'peer-storage', autoApply: true }),
+		{ BEIGNET_RECOVERY_MODE: 'peer-storage', BEIGNET_RECOVERY_AUTO_APPLY: 'true' },
+		'the automatic checkpoint restore rides only with peer storage'
+	);
+	assert.equal(recoveryEnv({ mode: 'quorum', guardians: G, autoApply: true }).BEIGNET_RECOVERY_AUTO_APPLY, undefined);
+	assert.equal(recoveryEnv({ mode: 'off', autoApply: true }).BEIGNET_RECOVERY_AUTO_APPLY, undefined);
 	assert.deepEqual(recoveryEnv({ mode: 'async-remote', guardians: G }), {
 		BEIGNET_RECOVERY_MODE: 'async-remote',
 		BEIGNET_RECOVERY_GUARDIANS: G.join(','),
@@ -113,13 +121,13 @@ test('a wallet pins the set it first enables with and keeps it afterwards', asyn
 	};
 	const m = managerWith({ guardians: G, records });
 	let rec = await m.updateWallet('w1', { recoveryMode: 'async-remote' });
-	assert.deepEqual(rec.recovery, { mode: 'async-remote', guardians: G });
+	assert.deepEqual(rec.recovery, { mode: 'async-remote', guardians: G, autoApply: false });
 	// Settings move on; the wallet does not.
 	m.updateSettings({ recoveryGuardians: OTHER });
 	rec = await m.updateWallet('w1', { recoveryMode: 'quorum' });
-	assert.deepEqual(rec.recovery, { mode: 'quorum', guardians: G }, 'the pinned set rides into quorum');
+	assert.deepEqual(rec.recovery, { mode: 'quorum', guardians: G, autoApply: false }, 'the pinned set rides into quorum');
 	rec = await m.updateWallet('w1', { name: 'renamed' });
-	assert.deepEqual(rec.recovery, { mode: 'quorum', guardians: G }, 'a patch without a mode changes nothing');
+	assert.deepEqual(rec.recovery, { mode: 'quorum', guardians: G, autoApply: false }, 'a patch without a mode changes nothing');
 });
 
 test('leaving quorum is refused, and the record is untouched by a refused edit', async () => {
@@ -131,7 +139,7 @@ test('leaving quorum is refused, and the record is untouched by a refused edit',
 	await assert.rejects(m.updateWallet('w1', { recoveryMode: 'off' }), (err) => err.code === 'RECOVERY_QUORUM_STICKY');
 	assert.equal(records.w1.name, 'w', 'the rename in the refused patch did not land');
 	const rec = await m.updateWallet('w1', { recoveryMode: 'quorum', onchainOnly: true });
-	assert.deepEqual(rec.recovery, { mode: 'quorum', guardians: G }, 'parking keeps the barrier config');
+	assert.deepEqual(rec.recovery, { mode: 'quorum', guardians: G, autoApply: false }, 'parking keeps the barrier config');
 	assert.equal(rec.onchainOnly, true);
 });
 
@@ -146,4 +154,37 @@ test('an edit mid-restore is refused; an edit while merely holding is not', asyn
 	m._restoreInFlight = async () => false;
 	const rec = await m.updateWallet('w1', { name: 'x' });
 	assert.equal(rec.name, 'x');
+});
+
+test('the automatic checkpoint restore is a peer-storage answer, kept until the mode leaves peer storage', async () => {
+	const records = {
+		w1: { id: 'w1', name: 'w', network: 'regtest', electrum: {}, running: false, recovery: { mode: 'off', guardians: [] } }
+	};
+	const m = managerWith({ guardians: G, records });
+	assert.deepEqual(m._normalizeRecovery('peer-storage', null, true), { mode: 'peer-storage', guardians: [], autoApply: true });
+	assert.deepEqual(m._normalizeRecovery('peer-storage', null, false), { mode: 'peer-storage', guardians: [] });
+	assert.deepEqual(m._normalizeRecovery('off', null, true), { mode: 'off', guardians: [] }, 'dropped outside peer storage');
+	assert.deepEqual(m._normalizeRecovery('quorum', null, true), { mode: 'quorum', guardians: G });
+	let rec = await m.updateWallet('w1', { recoveryMode: 'peer-storage', recoveryAutoApply: true });
+	assert.deepEqual(rec.recovery, { mode: 'peer-storage', guardians: [], autoApply: true });
+	rec = await m.updateWallet('w1', { name: 'renamed' });
+	assert.equal(rec.recovery.autoApply, true, 'a patch that says nothing keeps the answer');
+	rec = await m.updateWallet('w1', { recoveryAutoApply: false });
+	assert.equal(rec.recovery.autoApply, false, 'and the answer can be withdrawn');
+	rec = await m.updateWallet('w1', { recoveryAutoApply: true });
+	rec = await m.updateWallet('w1', { recoveryMode: 'async-remote' });
+	assert.equal(rec.recovery.autoApply, false, 'leaving peer storage drops it');
+	rec = await m.updateWallet('w1', { recoveryMode: 'peer-storage' });
+	assert.equal(rec.recovery.autoApply, false, 'and coming back does not resurrect it');
+});
+
+test('an engine that cannot apply a checkpoint by itself refuses the answer rather than losing it', () => {
+	const m = managerWith({ autoApply: false });
+	rejects(() => m._normalizeRecovery('peer-storage', null, true), 'RECOVERY_AUTO_APPLY_UNSUPPORTED');
+	assert.deepEqual(m._normalizeRecovery('peer-storage', null, false), { mode: 'peer-storage', guardians: [] });
+	assert.deepEqual(
+		m._normalizeRecovery(undefined, { mode: 'peer-storage', guardians: [], autoApply: true }),
+		{ mode: 'peer-storage', guardians: [], autoApply: true },
+		'a record that already carries it keeps it; only a fresh request is refused'
+	);
 });

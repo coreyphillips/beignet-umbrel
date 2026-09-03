@@ -39,6 +39,11 @@ const INBOUND_HEADROOM_SATS = 10000;
 const CALL_TIMEOUT_MS = 20000;
 // How long setup waits for a daemon to answer /health.
 const HEALTH_TIMEOUT_MS = 90000;
+// A move pays a real transaction fee. Below this multiple of the quoted
+// fee the funds wait for the rate to come down or for more to arrive, so
+// the fee stays under a twentieth of what moves (umbrel #88). The owner
+// can override the wait for a deposit they want in Lightning at any price.
+const CHANNELIZE_FEE_MULTIPLE = 20;
 // Channelize backstop cadence and the pause after a failed attempt.
 const CHANNELIZE_POLL_MS = 60000;
 const CHANNELIZE_RETRY_MS = 2 * 60 * 1000;
@@ -386,13 +391,18 @@ function channelizeTarget({ onchainSats, utxos, channels, primaryPubkey }) {
  * the funding margin budgeted out of the contribution, and the plain open is
  * the fallback the manager runs if that is refused.
  */
-function channelizeOrder(target, { spliceQuote, txQuote, feeNormal, mode, trusted, blockHeight, primary } = {}) {
+function channelizeOrder(
+	target,
+	{ spliceQuote, txQuote, feeNormal, mode, trusted, blockHeight, primary, force = false } = {}
+) {
 	const satsPerVbyte = feeNormal > 0 ? feeNormal : 2;
 	if (target.action === 'splice-in') {
 		const amount = spliceQuote ? spliceQuote.maxAmountSats : 0;
 		if (!amount || amount < CHANNELIZE_FLOOR_SATS - FUNDING_FEE_MARGIN_SATS) {
 			return { action: 'wait', reason: 'quote-too-small' };
 		}
+		const feeWait = feeTooHigh(amount, spliceQuote.feeSats, force);
+		if (feeWait) return feeWait;
 		return {
 			action: 'splice-in',
 			body: { channelId: target.channelId, amountSats: amount, feeratePerkw: perkwFromSatVb(satsPerVbyte) }
@@ -401,6 +411,8 @@ function channelizeOrder(target, { spliceQuote, txQuote, feeNormal, mode, truste
 	if (target.action === 'open') {
 		const amount = txQuote && txQuote.maxSendSats;
 		if (!amount || amount < MIN_CHANNEL_SATS) return { action: 'wait', reason: 'quote-too-small' };
+		const feeWait = feeTooHigh(amount, txQuote.feeSats, force);
+		if (feeWait) return feeWait;
 		const open = {
 			pubkey: primary.pubkey,
 			host: primary.connectHost,
@@ -436,9 +448,23 @@ function channelizeOrder(target, { spliceQuote, txQuote, feeNormal, mode, truste
 	return target;
 }
 
+/**
+ * The fee rule: the amount a move carries must be at least the multiple of
+ * the fee the daemon quoted for it, unless the owner forces the move. The
+ * channel minimums above are never forced past; only the fee wait is. A
+ * quote that carries no fee (an older daemon) cannot be judged and passes.
+ */
+function feeTooHigh(amountSats, feeSats, force) {
+	const fee = Number(feeSats) || 0;
+	if (force || fee <= 0) return null;
+	if (amountSats >= CHANNELIZE_FEE_MULTIPLE * fee) return null;
+	return { action: 'wait', reason: 'fee-too-high', feeSats: fee, amountSats };
+}
+
 module.exports = {
 	NODE_URI_RE,
 	CHANNELIZE_FLOOR_SATS,
+	CHANNELIZE_FEE_MULTIPLE,
 	MIN_CHANNEL_SATS,
 	FUNDING_FEE_MARGIN_SATS,
 	DEFAULT_INBOUND_SATS,

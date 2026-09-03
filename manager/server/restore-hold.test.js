@@ -15,9 +15,9 @@ const { WalletManager } = require('./wallet-manager');
 
 const realFetch = globalThis.fetch;
 
-function managerWith(rt) {
+function managerWith(rt, rec = {}) {
 	const m = Object.create(WalletManager.prototype);
-	m.registry = { get: () => ({ id: 'w1', port: 3001, electrum: {} }) };
+	m.registry = { get: () => ({ id: 'w1', port: 3001, electrum: {}, ...rec }) };
 	m.runtime = new Map([['w1', rt]]);
 	m.logs = [];
 	m._log = (_id, line) => m.logs.push(line);
@@ -190,4 +190,55 @@ test('a START_FAILED line from the daemon is kept as the wallet\'s last start er
 	assert.match(rt.lastStartError.message, /exactly 3 guardians/);
 	m._noteStartFailure(rt, JSON.stringify({ ok: true, result: {} }));
 	assert.match(rt.lastStartError.message, /exactly 3 guardians/, 'an unrelated line does not clear it');
+});
+
+// A peer-storage daemon that applied a checkpoint by itself (beignet #690)
+// rebuilds its node in-process, and for that moment answers every route
+// with NODE_RESTORE_PENDING. Peer storage has no guardian hold to be in, so
+// the manager reads that as a boot in progress, not a hold.
+test('a peer-storage daemon rebuilding on a checkpoint is not parked in the hold, and comes back running', async () => {
+	const rt = state({ status: 'running', healthy: true });
+	const m = managerWith(rt, { recovery: { mode: 'peer-storage', guardians: [], autoApply: true } });
+	holding();
+	await m._checkChainStall('w1');
+	await m._checkChainStall('w1');
+	assert.equal(rt.status, 'running', 'not parked');
+	assert.equal(m.logs.filter((l) => l.includes('holding for a guardian restore')).length, 0, 'no guardian talk');
+	assert.equal(m.logs.filter((l) => l.includes('being rebuilt')).length, 1, 'said once');
+	answers();
+	await m._checkChainStall('w1');
+	assert.equal(rt.status, 'running');
+	assert.equal(rt.healthy, true);
+	assert.equal(rt.checkpointRebuildPolls, 0, 'the run is reset by an answer');
+	// A guardian-mode wallet still gets the hold on the same answer.
+	const g = state({ status: 'running', healthy: true });
+	const gm = managerWith(g, { recovery: { mode: 'quorum', guardians: ['a', 'b', 'c'] } });
+	holding();
+	await gm._checkChainStall('w1');
+	assert.equal(g.status, 'restore-required');
+});
+
+test('a rebuild that never ends falls through to the hold', async () => {
+	const rt = state({ status: 'running', healthy: true });
+	const m = managerWith(rt, { recovery: { mode: 'peer-storage', guardians: [] } });
+	holding();
+	for (let i = 0; i < 13; i++) await m._checkChainStall('w1');
+	assert.equal(rt.status, 'restore-required');
+	assert.ok(m.logs.some((l) => l.includes('has not finished')));
+});
+
+test('the startup poll keeps polling through the rebuild rather than entering the hold', async () => {
+	const rt = state();
+	const m = managerWith(rt, { recovery: { mode: 'peer-storage', guardians: [], autoApply: true } });
+	m._onHealthy = async () => {};
+	let calls = 0;
+	globalThis.fetch = async () => {
+		calls += 1;
+		if (calls < 3) return { ok: false, status: 503, json: async () => ({ ok: false, error: { code: 'NODE_RESTORE_PENDING', message: 'rebuilding' } }) };
+		return { ok: true, json: async () => ({ result: { electrumConnected: true, blockHeight: 100 } }) };
+	};
+	await m._pollHealth('w1');
+	assert.equal(rt.status, 'running');
+	assert.equal(rt.healthy, true);
+	assert.equal(m.logs.filter((l) => l.includes('holding for a guardian restore')).length, 0);
 });

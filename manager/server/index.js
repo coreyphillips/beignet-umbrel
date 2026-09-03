@@ -138,7 +138,12 @@ async function main() {
 				recoveryGuardians: settings.recoveryGuardians,
 				// Lightning-first wallets need JIT receive and direct funding,
 				// which the engine gained after 0.9.3; probed on the bundle.
-				lfbwAvailable: manager.lfbwAvailable()
+				lfbwAvailable: manager.lfbwAvailable(),
+				// A fee quote before a just-in-time invoice exists (beignet
+				// #687) and the daemon applying a peer-storage checkpoint by
+				// itself (beignet #690), both probed on the bundle.
+				jitQuoteAvailable: manager.jitQuoteAvailable(),
+				recoveryAutoApplyAvailable: manager.recoveryAutoApplyAvailable()
 			}
 		});
 	});
@@ -220,6 +225,16 @@ async function main() {
 		'/wallets/:id/lfbw/setup',
 		asyncHandler(async (req, res) => {
 			res.json({ ok: true, result: await manager.setupLfbw(req.params.id) });
+		})
+	);
+
+	// One channelize pass now, skipping the fee wait: the dashboard's
+	// "Move now anyway" for a deposit the owner wants in Lightning at any
+	// price. The channel minimums still hold.
+	api.post(
+		'/wallets/:id/lfbw/channelize',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: await manager.channelizeNow(req.params.id) });
 		})
 	);
 
