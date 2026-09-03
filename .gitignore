@@ -6,3 +6,5 @@ dist/
 manager/public/
 data/
 .idea/
+# Local engine tarballs for image builds against unreleased engine work.
+vendor/*.tgz

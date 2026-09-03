@@ -19,6 +19,7 @@ import {
 	satsToBtcString,
 	tooShortToJudge
 } from './payment-uri.js';
+import { encodeFundingEnvelope } from './funding-envelope.js';
 
 /* ------------------------------------------------------------------ money */
 
@@ -730,4 +731,73 @@ test('every refusal carries a sentence a person can act on', () => {
 		seen.add(r.code);
 	}
 	assert.equal(seen.size, inputs.length, 'each of those is a different refusal');
+});
+
+/* ---------------------------------------------------------- direct funding */
+
+const NODE = '02' + 'ab'.repeat(32);
+const FUTURE = Date.now() + 3_600_000;
+const PAST = Date.now() - 1;
+const REQ = encodeFundingEnvelope({ nodeId: NODE, expiresAt: FUTURE, amountSats: 250_000 });
+const REQ_ANY = encodeFundingEnvelope({ nodeId: NODE, expiresAt: FUTURE });
+const BC1 = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+
+test('buildBip21 writes a direct-funding request last, and only a base64url one', () => {
+	assert.equal(buildBip21({ address: BC1, amountSats: 250000, funding: REQ }), `bitcoin:${BC1}?amount=0.0025&bgnq=${REQ}`);
+	assert.equal(buildBip21({ address: BC1, funding: REQ_ANY }), `bitcoin:${BC1}?bgnq=${REQ_ANY}`);
+	assert.equal(buildBip21({ address: BC1, funding: 'not base64url=' }), BC1, 'garbage is not handed to payers');
+	assert.equal(buildBip21({ address: BC1, funding: '  ' }), BC1);
+	const both = buildBip21({ address: BC1, message: 'Coffee', lightning: 'lnbc1abc', funding: REQ_ANY });
+	assert.equal(both, `bitcoin:${BC1}?message=Coffee&lightning=lnbc1abc&bgnq=${REQ_ANY}`);
+});
+
+test('parsePayment reads the funding request back and holds its amount to the request', () => {
+	const r = parsePayment(buildBip21({ address: BC1, amountSats: 250000, funding: REQ }), { network: 'mainnet' });
+	assert.equal(r.kind, 'onchain');
+	assert.equal(r.isRequest, true);
+	assert.equal(r.amountSats, 250000);
+	assert.equal(r.funding.nodeId, NODE);
+	assert.equal(r.funding.amountSats, 250000);
+	assert.equal(r.funding.expiresAt, FUTURE);
+	assert.equal(r.funding.envelope, REQ);
+	assert.deepEqual(r.warnings, []);
+	// The request's own amount fills in when the URI names none.
+	const only = parsePayment(buildBip21({ address: BC1, funding: REQ }), { network: 'mainnet' });
+	assert.equal(only.amountSats, 250000);
+	// And an amountless request leaves the figure to the payer.
+	const any = parsePayment(buildBip21({ address: BC1, funding: REQ_ANY }), { network: 'mainnet' });
+	assert.equal(any.amountSats, null);
+	assert.equal(any.funding.amountSats, null);
+	// A plain address carries no funding field.
+	assert.equal(parsePayment(BC1).funding, null);
+});
+
+test('two amounts that disagree are refused, whichever half names the wrong one', () => {
+	const r = parsePayment(buildBip21({ address: BC1, amountSats: 100000, funding: REQ }), { network: 'mainnet' });
+	assert.equal(r.kind, 'invalid');
+	assert.equal(r.code, 'AMOUNT_CONFLICT');
+});
+
+test('an unreadable, expired or foreign-chain request is dropped with a warning, and the address stays payable', () => {
+	const unreadable = parsePayment(`bitcoin:${BC1}?bgnq=AAAA`, { network: 'mainnet' });
+	assert.equal(unreadable.kind, 'onchain');
+	assert.equal(unreadable.funding, null);
+	assert.deepEqual(unreadable.warnings.map((w) => w.code), ['FUNDING_UNREADABLE']);
+
+	const expired = parsePayment(buildBip21({ address: BC1, funding: encodeFundingEnvelope({ nodeId: NODE, expiresAt: PAST }) }), { network: 'mainnet' });
+	assert.equal(expired.funding, null);
+	assert.deepEqual(expired.warnings.map((w) => w.code), ['FUNDING_EXPIRED']);
+	assert.match(expired.warnings[0].message, /address is still good/);
+
+	const foreign = parsePayment(buildBip21({ address: BC1, funding: encodeFundingEnvelope({ nodeId: NODE, expiresAt: FUTURE, network: 'regtest' }) }), { network: 'mainnet' });
+	assert.equal(foreign.funding, null);
+	assert.deepEqual(foreign.warnings.map((w) => w.code), ['FUNDING_WRONG_CHAIN']);
+	// With no network to check against, the chain is not judged.
+	assert.equal(parsePayment(buildBip21({ address: BC1, funding: encodeFundingEnvelope({ nodeId: NODE, expiresAt: FUTURE, network: 'regtest' }) })).funding?.nodeId, NODE);
+});
+
+test('bgnq is a known field, so its case is held to the same rule as amount', () => {
+	const r = parsePayment(`bitcoin:${BC1}?BGNQ=${REQ_ANY}`);
+	assert.equal(r.kind, 'invalid');
+	assert.equal(r.code, 'PARAM_CASE_MISMATCH');
 });

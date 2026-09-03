@@ -119,3 +119,51 @@ test('a parked quorum wallet still boots with its barrier', () => {
 	assert.equal(env.BEIGNET_RECOVERY_MODE, 'quorum');
 	assert.equal(env.BEIGNET_RECOVERY_GUARDIANS, G.join(','));
 });
+
+// Lightning-first: a wallet that provides liquidity to lightning-first
+// siblings runs the engine's JIT role and the direct-funding relay; the
+// lightning-first wallet itself, and everyone else, sees nothing new.
+test('only a liquidity provider gets the JIT role and the relay', () => {
+	const m = bareManager();
+	const plain = m._daemonEnv(rec(), PATHS, 's', 't');
+	assert.equal(plain.BEIGNET_JIT_RECEIVE, undefined);
+	assert.equal(plain.BEIGNET_DF_RELAY, undefined);
+	const client = m._daemonEnv(
+		rec({ lfbw: { enabled: true, mode: 'internal', primaryWalletId: 'p1' } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(client.BEIGNET_JIT_RECEIVE, undefined, 'a lightning-first wallet is a client, not an LSP');
+	assert.equal(client.BEIGNET_LISTEN_PORT, String(3001 + 6000), 'and it listens like any Lightning wallet');
+	const provider = m._daemonEnv(
+		rec({ liquidityProvider: true, jit: { flatFeeSat: 100, maxTotalFundingSats: 2000000 } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(provider.BEIGNET_JIT_RECEIVE, 'true');
+	assert.equal(provider.BEIGNET_DF_RELAY, 'true');
+	assert.equal(provider.BEIGNET_JIT_FLAT_FEE_SAT, '100');
+	assert.equal(provider.BEIGNET_JIT_FEE_PPM, '0');
+	assert.equal(provider.BEIGNET_JIT_MAX_CLIENT_FUNDING_SAT, '1000000');
+	assert.equal(provider.BEIGNET_JIT_MAX_CONCURRENT_FUNDINGS, '3');
+	assert.equal(provider.BEIGNET_JIT_MAX_TOTAL_FUNDING_SAT, '2000000');
+	const parkedProvider = m._daemonEnv(rec({ liquidityProvider: true, onchainOnly: true }), PATHS, 's', 't');
+	assert.equal(parkedProvider.BEIGNET_JIT_RECEIVE, undefined, 'an on-chain only wallet fronts nothing');
+});
+
+test('operator engine policy passes through from the manager env', () => {
+	const prev = { ...process.env };
+	process.env.BEIGNET_FEE_PPM = '250';
+	process.env.BEIGNET_DF_MIN_AMOUNT = '';
+	try {
+		const env = bareManager()._daemonEnv(rec(), PATHS, 's', 't');
+		assert.equal(env.BEIGNET_FEE_PPM, '250');
+		assert.equal(env.BEIGNET_DF_MIN_AMOUNT, undefined, 'an empty value is not a policy');
+	} finally {
+		delete process.env.BEIGNET_FEE_PPM;
+		delete process.env.BEIGNET_DF_MIN_AMOUNT;
+		Object.assign(process.env, prev);
+	}
+});

@@ -10,6 +10,7 @@ import {
 	convertBits,
 	parseBolt11Hrp
 } from '../lib/payment-uri.js';
+import { decodeFundingEnvelope, encodeFundingEnvelope } from '../lib/funding-envelope.js';
 
 const HEX = '0123456789abcdef';
 let seedCounter = 7;
@@ -356,7 +357,61 @@ const store = {
 			// Strict quorum: every channel step waits for two guardians, and
 			// a restore elsewhere resumes the channels and fences this device.
 			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
+			// The primary node of the lightning-first demo wallets below: it
+			// fronts their inbound capacity (JIT receive) and relays their
+			// payment requests.
+			liquidityProvider: true,
 			createdAt: now - 90 * DAY
+		},
+		{
+			// Lightning-first: one balance, one channel with Main, deposits
+			// that move into it by themselves.
+			id: 'demo-lfbw',
+			name: 'Spending',
+			network: 'mainnet',
+			status: 'running',
+			electrum: { host: 'umbrel.local', port: 50001, tls: false },
+			tor: false,
+			announce: false,
+			lfbw: {
+				enabled: true,
+				mode: 'internal',
+				primaryWalletId: 'demo-main',
+				primaryUri: null,
+				primaryPubkey: null, // filled in once node ids exist below
+				trusted: true,
+				initialChannelSats: 200000,
+				initialChannelOpened: true,
+				setup: 'ready',
+				setupError: null,
+				setupAt: new Date(now - 5 * DAY).toISOString()
+			},
+			createdAt: now - 5 * DAY
+		},
+		{
+			// Lightning-first, created a minute ago against a primary that did
+			// not answer in time: the overview offers a retry.
+			id: 'demo-lfbw-setup',
+			name: 'New phone',
+			network: 'mainnet',
+			status: 'running',
+			electrum: { host: 'umbrel.local', port: 50001, tls: false },
+			tor: false,
+			announce: false,
+			lfbw: {
+				enabled: true,
+				mode: 'internal',
+				primaryWalletId: 'demo-main',
+				primaryUri: null,
+				primaryPubkey: null,
+				trusted: true,
+				initialChannelSats: 0,
+				initialChannelOpened: false,
+				setup: 'failed',
+				setupError: 'wallet "Main" did not become healthy in time',
+				setupAt: null
+			},
+			createdAt: now - 60000
 		},
 		{
 			id: 'demo-savings',
@@ -750,6 +805,69 @@ function nodeId(id) {
 	return nodeIds[id];
 }
 
+// The lightning-first demo wallets, seeded once node ids exist: their home
+// channel's peer IS Main, so the overview names it and the Send tab's
+// splice-out and the Receive tab's JIT invoice have a channel to work with.
+for (const w of store.wallets) {
+	if (w.lfbw && w.lfbw.mode === 'internal') w.lfbw.primaryPubkey = nodeId(w.lfbw.primaryWalletId);
+}
+store.state['demo-lfbw'] = walletState({
+	blockHeight: 908214,
+	channels: (() => {
+		const chans = makeChannels([[500000, 40, 'NORMAL', true]]);
+		chans[0].peerPubkey = nodeId('demo-main');
+		chans[0].peerSupportsSplicing = true;
+		return chans;
+	})(),
+	txs: makeTxs(5, 908214),
+	payments: makePayments(6),
+	// One deposit under the channelize floor, waiting for more; one arriving.
+	utxos: [
+		{ txid: hex(64), vout: 0, address: demoAddress('mainnet'), valueSats: 12000, height: 908100 },
+		{ txid: hex(64), vout: 1, address: demoAddress('mainnet'), valueSats: 60000, height: null }
+	],
+	invoices: [],
+	offers: [],
+	peers: [{ pubkey: nodeId('demo-main'), host: '127.0.0.1', port: 9101, state: 'connected' }]
+});
+store.state['demo-lfbw-setup'] = walletState({
+	blockHeight: 908214,
+	channels: [],
+	txs: [],
+	payments: [],
+	utxos: [],
+	invoices: [],
+	offers: [],
+	peers: []
+});
+// The receiver-side direct-funding policy each wallet's daemon holds. A
+// lightning-first wallet arms it at setup; anyone else serves no offers.
+const directFundingPolicies = {};
+function directFundingPolicy(w) {
+	if (!directFundingPolicies[w.id]) {
+		const lf = w.lfbw && w.lfbw.enabled && w.lfbw.setup === 'ready' ? w.lfbw : null;
+		directFundingPolicies[w.id] = lf
+			? {
+					lspPubkey: lf.primaryPubkey,
+					lspHost: '127.0.0.1',
+					lspPort: 9101,
+					targetInboundSat: lf.mode === 'external' ? 100000 : 0,
+					trusted: !!lf.trusted,
+					allowSplice: true,
+					minAmountSat: 5000
+			  }
+			: { lspPubkey: null, lspHost: null, lspPort: null, targetInboundSat: 0, trusted: false, allowSplice: false, minAmountSat: 5000 };
+	}
+	return directFundingPolicies[w.id];
+}
+const trustedPeers = {};
+function lfbwDependentsOf(w) {
+	return store.wallets
+		.filter((o) => o.id !== w.id && o.lfbw && o.lfbw.enabled && o.lfbw.mode === 'internal' && o.lfbw.primaryWalletId === w.id)
+		.map((o) => ({ id: o.id, name: o.name }));
+}
+const JIT_DEFAULTS = { flatFeeSat: 0, feePpm: 0, maxClientFundingSats: 1000000, maxConcurrentFundings: 3, maxTotalFundingSats: null };
+
 function onchainBalance(id) {
 	return store.state[id].utxos.reduce((a, u) => a + u.valueSats, 0);
 }
@@ -904,7 +1022,91 @@ function publicRecord(w) {
 		guardians: (w.recovery?.guardians || []).slice()
 	};
 	rec.lastStartError = w.lastStartError || null;
+	// Lightning-first fields, in the manager's shape.
+	rec.nodeId = w.onchainOnly ? null : nodeId(w.id);
+	rec.listenPort = w.onchainOnly ? null : 9101 + store.wallets.indexOf(w);
+	rec.reach = !w.onchainOnly && rec.onionAddress ? { host: rec.onionAddress.split(':')[0], port: rec.listenPort } : null;
+	rec.lfbw = w.lfbw ? { ...w.lfbw } : null;
+	rec.liquidityProvider = !!w.liquidityProvider && !w.onchainOnly;
+	rec.jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
+	rec.lfbwDependents = lfbwDependentsOf(w);
 	return rec;
+}
+
+// The manager's lightning-first rules, mirrored so the create form's and
+// the edit dialog's refusals are demoable.
+function normalizeLfbw(input, w) {
+	if (!input || !input.enabled) return null;
+	if (input.primaryWalletId) {
+		const peer = store.wallets.find((x) => x.id === input.primaryWalletId);
+		if (!peer) throw err('The selected primary node does not exist', 'BAD_LFBW_PEER');
+		if (w && peer.id === w.id) throw err('A wallet cannot be its own primary node', 'BAD_LFBW_PEER');
+		if (peer.network !== (w ? w.network : input.network)) {
+			throw err(`The selected primary node is on ${peer.network}, not ${w ? w.network : input.network}`, 'BAD_LFBW_PEER');
+		}
+		if (peer.onchainOnly) throw err('The selected primary node is on-chain only; a primary must run Lightning', 'BAD_LFBW_PEER');
+		if (peer.lfbw && peer.lfbw.enabled) throw err("A lightning-first wallet cannot be another wallet's primary node", 'BAD_LFBW_PEER');
+		peer.liquidityProvider = true;
+		const sats = parseInt(input.initialChannelSats, 10);
+		const same = w && w.lfbw && w.lfbw.enabled && w.lfbw.mode === 'internal' && w.lfbw.primaryWalletId === peer.id;
+		return {
+			enabled: true,
+			mode: 'internal',
+			primaryWalletId: peer.id,
+			primaryUri: null,
+			primaryPubkey: nodeId(peer.id),
+			trusted: input.trusted === undefined ? true : !!input.trusted,
+			initialChannelSats: sats > 0 ? sats : 0,
+			initialChannelOpened: same ? !!w.lfbw.initialChannelOpened : false,
+			setup: same ? w.lfbw.setup : 'pending',
+			setupError: same ? w.lfbw.setupError : null,
+			setupAt: same ? w.lfbw.setupAt : null
+		};
+	}
+	const m = String(input.primaryUri || '').trim().match(/^([0-9a-fA-F]{66})@([^:\s]+):(\d+)$/);
+	if (!m) throw err('External node URI must be pubkey@host:port', 'BAD_LFBW_PEER');
+	return {
+		enabled: true,
+		mode: 'external',
+		primaryWalletId: null,
+		primaryUri: `${m[1].toLowerCase()}@${m[2]}:${m[3]}`,
+		primaryPubkey: m[1].toLowerCase(),
+		trusted: input.trusted === undefined ? true : !!input.trusted,
+		initialChannelSats: 0,
+		initialChannelOpened: false,
+		setup: 'pending',
+		setupError: null,
+		setupAt: null
+	};
+}
+
+// Setup runs in the background after create (and on Retry): pending for a
+// beat, then ready, with the starting channel landing on the way.
+function runDemoLfbwSetup(w) {
+	const lf = w.lfbw;
+	if (!lf) return Promise.resolve();
+	lf.setup = 'pending';
+	lf.setupError = null;
+	return new Promise((resolve) => setTimeout(() => {
+		resolve();
+		if (!store.wallets.includes(w) || !w.lfbw) return;
+		const st = store.state[w.id];
+		if (lf.mode === 'internal' && lf.initialChannelSats > 0 && !lf.initialChannelOpened) {
+			const c = makeChannels([[lf.initialChannelSats, 0, 'NORMAL', true]])[0];
+			c.peerPubkey = lf.primaryPubkey;
+			c.remoteBalanceSats = lf.initialChannelSats;
+			c.localBalanceSats = 0;
+			st.channels.push(c);
+			lf.initialChannelOpened = true;
+			emit(w.id, 'channel:ready', {});
+		}
+		if (lf.primaryPubkey && !st.peers.some((p) => p.pubkey === lf.primaryPubkey)) {
+			st.peers.push({ pubkey: lf.primaryPubkey, host: '127.0.0.1', port: 9101, state: 'connected' });
+		}
+		lf.setup = 'ready';
+		lf.setupAt = new Date().toISOString();
+		delete directFundingPolicies[w.id];
+	}, 2500));
 }
 
 // The manager's channel backup rules, mirrored so the dialogs' refusals are
@@ -962,9 +1164,10 @@ function managerRequest(path, method, body) {
 			electrumPresets: ELECTRUM_PRESETS,
 			torAvailable: true,
 			onionAvailable: true,
-			engineVersion: '0.9.2',
+			engineVersion: '0.10.0',
 			recoveryAvailable: true,
-			recoveryGuardians: store.settings.recoveryGuardians.slice()
+			recoveryGuardians: store.settings.recoveryGuardians.slice(),
+			lfbwAvailable: true
 		};
 	}
 	if (path === '/settings') {
@@ -993,6 +1196,7 @@ function managerRequest(path, method, body) {
 			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null),
 			createdAt: Date.now()
 		};
+		w.lfbw = body.onchainOnly ? null : normalizeLfbw(body.lfbw ? { ...body.lfbw, network: w.network } : null, null);
 		store.wallets.push(w);
 		store.state[id] = walletState({
 			blockHeight: 908214,
@@ -1004,6 +1208,7 @@ function managerRequest(path, method, body) {
 			offers: [],
 			peers: []
 		});
+		runDemoLfbwSetup(w);
 		return { record: publicRecord(w), mnemonic: mnemonic(body.wordCount || 24) };
 	}
 	if (path === '/wallets/import' && method === 'POST') {
@@ -1025,7 +1230,9 @@ function managerRequest(path, method, body) {
 		// With the guardians a lost device used, the daemon finds the seed's
 		// namespace on them and holds for the restore.
 		if (isGuardianMode(w.recovery.mode)) w.status = 'restore-required';
+		w.lfbw = body.onchainOnly ? null : normalizeLfbw(body.lfbw ? { ...body.lfbw, network: w.network } : null, null);
 		store.wallets.push(w);
+		if (w.status === 'running') runDemoLfbwSetup(w);
 		store.state[id] = walletState({
 			blockHeight: 908214,
 			channels: [],
@@ -1055,6 +1262,18 @@ function managerRequest(path, method, body) {
 		if (method === 'PATCH') {
 			// Validated first, so a refused mode leaves the record untouched.
 			const recovery = normalizeRecovery(body.recoveryMode, w.recovery);
+			const dependents = lfbwDependentsOf(w);
+			if (body.onchainOnly === true && !w.onchainOnly && dependents.length > 0) {
+				const e = err(`This wallet cannot be made on-chain only: it is the primary node of ${dependents.map((d) => `"${d.name}"`).join(', ')}.`, 'PRIMARY_IN_USE');
+				e.details = { dependents };
+				throw e;
+			}
+			if (body.liquidityProvider === false && w.liquidityProvider && dependents.length > 0) {
+				const e = err(`This wallet cannot stop providing liquidity: it is the primary node of ${dependents.map((d) => `"${d.name}"`).join(', ')}.`, 'PRIMARY_IN_USE');
+				e.details = { dependents };
+				throw e;
+			}
+			const nextLfbw = body.lfbw !== undefined ? normalizeLfbw(body.lfbw, w) : undefined;
 			if (body.name) w.name = body.name;
 			if (body.electrum) w.electrum = body.electrum;
 			if (body.tor !== undefined) w.tor = !!body.tor;
@@ -1064,13 +1283,46 @@ function managerRequest(path, method, body) {
 				if (w.onchainOnly) w.announce = false;
 			}
 			w.recovery = recovery;
+			if (nextLfbw !== undefined) {
+				const was = w.lfbw;
+				w.lfbw = w.onchainOnly ? null : nextLfbw;
+				if (w.lfbw && (!was || was.setup !== 'ready' || w.lfbw.setup !== 'ready')) runDemoLfbwSetup(w);
+			}
+			if (body.liquidityProvider !== undefined) w.liquidityProvider = !!body.liquidityProvider;
+			if (body.jit) {
+				const jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
+				for (const k of Object.keys(JIT_DEFAULTS)) {
+					if (!(k in body.jit)) continue;
+					const raw = body.jit[k];
+					if (raw === null || raw === '') {
+						if (k === 'maxTotalFundingSats') jit[k] = null;
+						else throw err(`${k} must be a whole number`, 'BAD_JIT');
+						continue;
+					}
+					const n = Number(raw);
+					if (!Number.isInteger(n) || n < 0) throw err(`${k} must be a whole number`, 'BAD_JIT');
+					jit[k] = n;
+				}
+				w.jit = jit;
+			}
 			return publicRecord(w);
 		}
 		if (method === 'DELETE') {
+			const dependents = lfbwDependentsOf(w);
+			if (dependents.length > 0) {
+				const e = err(`This wallet cannot be deleted: it is the primary node of ${dependents.map((d) => `"${d.name}"`).join(', ')}. Change their primary node or delete them first.`, 'PRIMARY_IN_USE');
+				e.details = { dependents };
+				throw e;
+			}
 			store.wallets = store.wallets.filter((x) => x.id !== w.id);
 			delete store.state[w.id];
 			return { deleted: true };
 		}
+	}
+	if (sub === 'lfbw/setup' && method === 'POST') {
+		// Like the manager: the call answers once setup has run its course.
+		if (!w.lfbw || !w.lfbw.enabled) throw err('Not a lightning-first wallet', 'NOT_LFBW');
+		return runDemoLfbwSetup(w).then(() => publicRecord(w));
 	}
 	if (sub === 'start') {
 		w.status = 'starting';
@@ -1443,9 +1695,13 @@ function walletRequest(id, path, method, body) {
 				maxSatsPerVbyte: Math.floor(balance / 2 / vsize)
 			};
 		}
-		case '/address/new':
+		case '/address/new': {
 			st.addressN += 1;
-			return { address: demoAddress(w.network) };
+			const address = demoAddress(w.network);
+			// Remembered so a payment from a sibling wallet to it lands here.
+			st.addresses = (st.addresses || []).concat(address);
+			return { address };
+		}
 		case '/invoice/create': {
 			const amountSats = body.amountSats || null;
 			const inv = {
@@ -1462,6 +1718,158 @@ function walletRequest(id, path, method, body) {
 		}
 		case '/invoices':
 			return st.invoices.map(invoiceInfo);
+		case '/jit/invoice': {
+			// The wallet asks the LSP over the peer connection for an intercept
+			// SCID and a fee quote, refusing a quote above its own ceilings
+			// before any invoice exists. Here the primary answers at once.
+			if (!/^0[23][0-9a-fA-F]{64}$/.test(String(body.lspPubkey || ''))) {
+				throw err('lspPubkey must be a 33-byte compressed public key (66 hex chars)', 'INVALID_PARAMS');
+			}
+			if (!st.peers.some((p) => p.pubkey === body.lspPubkey)) {
+				throw err('JIT receive needs the LSP connected as a peer', 'PEER_NOT_CONNECTED');
+			}
+			const amountSats = body.amountSats || null;
+			if (amountSats > 1000000) {
+				throw err('The LSP quoted more than this wallet accepts: max fundable is 1000000 sats', 'JIT_REFUSED');
+			}
+			const inv = {
+				paymentHash: hex(64),
+				bolt11: demoInvoice(w.network, amountSats),
+				amountSats,
+				description: body.description || '',
+				createdAt: inSeconds(Date.now()),
+				expiry: INVOICE_EXPIRY_SECONDS,
+				paid: false,
+				jit: true
+			};
+			st.invoices.unshift(inv);
+			const lsp = store.wallets.find((x) => nodeId(x.id) === body.lspPubkey);
+			const fees = { ...JIT_DEFAULTS, ...((lsp && lsp.jit) || {}) };
+			return { ...invoiceInfo(inv), flatFeeSat: fees.flatFeeSat, feePpm: fees.feePpm };
+		}
+		case '/jit/status': {
+			// The provider role as the daemon reports it (beignet 0.10+): the
+			// caps are the owner's policy, the exposure is what is committed.
+			const jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
+			const dependents = lfbwDependentsOf(w);
+			return {
+				enabled: !!w.liquidityProvider,
+				client: { maxFlatFeeSat: 10000, maxFeePpm: 50000 },
+				lsp: w.liquidityProvider
+					? {
+							flatFeeSat: jit.flatFeeSat,
+							feePpm: jit.feePpm,
+							maxClientFundingSats: jit.maxClientFundingSats,
+							maxConcurrentFundings: jit.maxConcurrentFundings,
+							maxTotalFundingSats: jit.maxTotalFundingSats,
+							maxLiveIntentsPerPeer: 2,
+							maxLiveIntents: 64,
+							reservedSats: 0,
+							frontedSats: dependents.length * 250000,
+							liveIntents: dependents.length,
+							heldParts: 0,
+							fundingsInFlight: 0
+					  }
+					: null
+			};
+		}
+		case '/direct-funding/config':
+			return { ...directFundingPolicy(w) };
+		case '/direct-funding/configure': {
+			// A MERGE, never a replace: a field the body does not name keeps
+			// its value, and minAmountSat clamps up to the protocol floor.
+			const policy = directFundingPolicy(w);
+			for (const k of ['lspPubkey', 'lspHost', 'lspPort', 'targetInboundSat', 'trusted', 'allowSplice']) {
+				if (body[k] !== undefined) policy[k] = body[k];
+			}
+			if (body.minAmountSat !== undefined) policy.minAmountSat = Math.max(5000, parseInt(body.minAmountSat, 10) || 0);
+			return { ...policy };
+		}
+		case '/direct-funding/request': {
+			if (!directFundingPolicy(w).lspPubkey) throw err('No liquidity peer configured', 'DF_NOT_CONFIGURED');
+			const expiresAt = Date.now() + 3600000;
+			return {
+				paymentHash: hex(64),
+				expiresAt,
+				request: encodeFundingEnvelope({
+					nodeId: nodeId(id),
+					expiresAt,
+					amountSats: body.amountSats || null,
+					network: w.network,
+					transports: body.host ? [{ host: body.host, port: body.port || 9735 }] : []
+				})
+			};
+		}
+		case '/direct-funding/send': {
+			// Rejects only before our witness leaves the device; after that it
+			// resolves with the status as it stands. The demo spends a confirmed
+			// coin of ours into the recipient's channel: a splice of their home
+			// channel when they have one, else a new channel that confirms.
+			const env = decodeFundingEnvelope(String(body.request || ''));
+			if (!env) throw err('request is not a direct-funding envelope', 'INVALID_PARAMS');
+			if (env.expiresAt <= Date.now()) throw err('The payment request has expired', 'DF_REQUEST_EXPIRED');
+			const amount = env.amountSats ?? body.amountSats;
+			if (!amount) throw err('amountSats is required when the request fixes none', 'INVALID_PARAMS');
+			if (env.amountSats != null && body.amountSats && body.amountSats !== env.amountSats) {
+				throw err('amountSats contradicts the amount the request fixes', 'INVALID_PARAMS');
+			}
+			const coin = st.utxos.find((u) => u.height > 0 && u.valueSats >= amount + 1000);
+			if (!coin) throw err('No confirmed coin covers the amount plus the fee headroom', 'INSUFFICIENT_FUNDS');
+			st.utxos = st.utxos.filter((u) => u !== coin);
+			const fundingTxid = hex(64);
+			const change = coin.valueSats - amount - 500;
+			if (change > 546) st.utxos.push({ txid: fundingTxid, vout: 1, address: demoAddress(w.network), valueSats: change, height: null });
+			st.txs.unshift({
+				txid: fundingTxid,
+				type: 'sent',
+				valueSats: -(amount + 500),
+				feeSats: 500,
+				satsPerVbyte: 3,
+				address: 'direct funding',
+				height: null,
+				timestamp: Date.now(),
+				confirmTimestamp: null
+			});
+			// Credit the receiver, when it is one of the demo wallets.
+			const receiver = store.wallets.find((x) => nodeId(x.id) === env.nodeId);
+			const paired = !!receiver && (trustedPeers[receiver.id] || []).includes(nodeId(id));
+			if (receiver && store.state[receiver.id]) {
+				const rst = store.state[receiver.id];
+				const primary = receiver.lfbw && receiver.lfbw.primaryPubkey;
+				const home = rst.channels.find((c) => c.peerPubkey === primary && c.state === 'NORMAL');
+				if (home && paired) {
+					home.capacitySats += amount;
+					home.localBalanceSats += amount;
+					emit(receiver.id, 'transaction:received', { txid: fundingTxid, valueSats: amount, type: 'received', confirmed: false });
+				} else {
+					const c = makeChannels([[amount, 100, 'AWAITING_FUNDING_CONFIRMED', true]])[0];
+					c.peerPubkey = primary || nodeId('demo-main');
+					c.localBalanceSats = amount;
+					c.remoteBalanceSats = 0;
+					c.htlcUsable = false;
+					rst.channels.push(c);
+					setTimeout(() => {
+						c.state = 'NORMAL';
+						c.htlcUsable = true;
+						emit(receiver.id, 'channel:ready', {});
+					}, 9000);
+				}
+			}
+			return {
+				offerId: hex(64),
+				spentTxid: coin.txid,
+				spentVout: coin.vout,
+				amountSat: amount,
+				fundingTxid,
+				attested: true,
+				receiptPreimageHex: hex(64),
+				status: 'MEMPOOL_SEEN'
+			};
+		}
+		case '/recover-fallback-funds':
+			return { amountSat: 0 };
+		case '/trusted-peers':
+			return (trustedPeers[id] || []).map((pubkey) => ({ pubkey, trusted: true }));
 		case '/invoice/decode': {
 			// The daemon reads the invoice it is given. So does this: the same
 			// string must decode to the same thing every time, and an invoice one
@@ -1870,9 +2278,13 @@ function walletRequest(id, path, method, body) {
 			return c;
 		}
 		case '/trusted-peer/add':
-			// The daemon records the pubkey in its zero-conf trusted set; the demo
-			// only needs the call to succeed so a trusted open can proceed.
-			return { ok: true };
+			// The daemon records the pubkey in its zero-conf trusted set, which
+			// is also what makes a direct-funding payer "paired".
+			trustedPeers[id] = Array.from(new Set([...(trustedPeers[id] || []), body.pubkey]));
+			return { pubkey: body.pubkey, trusted: true };
+		case '/trusted-peer/remove':
+			trustedPeers[id] = (trustedPeers[id] || []).filter((p) => p !== body.pubkey);
+			return { pubkey: body.pubkey, trusted: false };
 		case '/channel/close':
 		case '/channel/forceclose': {
 			const c = st.channels.find((x) => x.channelId === body.channelId);
@@ -1905,7 +2317,31 @@ function walletRequest(id, path, method, body) {
 				if (amt > c.localBalanceSats) throw err('Amount exceeds local balance');
 				c.capacitySats -= amt;
 				c.localBalanceSats -= amt;
-				st.utxos.push({ txid: hex(64), vout: 0, address: demoAddress(w.network), valueSats: amt, height: null });
+				const txid = hex(64);
+				if (body.address) {
+					// Paid out to the address named (beignet 0.10+): the coins leave
+					// this wallet, which sees the splice as a send.
+					st.txs.unshift({
+						txid,
+						type: 'sent',
+						valueSats: -amt,
+						feeSats: Math.round((body.feeratePerkw || 253) * 0.8),
+						satsPerVbyte: Math.round((body.feeratePerkw || 253) / 250),
+						address: body.address,
+						height: null,
+						timestamp: Date.now(),
+						confirmTimestamp: null
+					});
+					// A sibling wallet receives it.
+					const to = store.wallets.find((x) => store.state[x.id] && store.state[x.id].addresses && store.state[x.id].addresses.includes(body.address));
+					if (to) {
+						store.state[to.id].utxos.push({ txid, vout: 0, address: body.address, valueSats: amt, height: null });
+						emit(to.id, 'transaction:received', { txid, valueSats: amt, type: 'received', confirmed: false });
+					}
+				} else {
+					st.utxos.push({ txid, vout: 0, address: demoAddress(w.network), valueSats: amt, height: null });
+				}
+				return { ok: true, txid };
 			}
 			return { ok: true };
 		}

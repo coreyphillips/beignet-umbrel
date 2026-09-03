@@ -14,7 +14,9 @@ import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
 import { shortId } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
 import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
+import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import OverviewTab from './tabs/OverviewTab.jsx';
+import LfbwOverviewTab from './tabs/lfbw/LfbwOverviewTab.jsx';
 import ReceiveTab from './tabs/ReceiveTab.jsx';
 import SendTab from './tabs/SendTab.jsx';
 import ChannelsTab from './tabs/ChannelsTab.jsx';
@@ -38,6 +40,22 @@ const TABS = [
 	['console', 'Console', ConsoleTab]
 ];
 
+// A lightning-first wallet's whole surface: one balance, receive, send. The
+// full tab set is a toggle away, for looking under the hood.
+const LFBW_TABS = [
+	['overview', 'Overview', LfbwOverviewTab],
+	['receive', 'Receive', ReceiveTab],
+	['send', 'Send', SendTab]
+];
+const ADVANCED_KEY = 'beignet-lfbw-advanced';
+function readAdvanced() {
+	try {
+		return sessionStorage.getItem(ADVANCED_KEY) === '1';
+	} catch (_) {
+		return false;
+	}
+}
+
 // Receives are absent deliberately: they are announced by the receive watcher
 // below, which knows the amount and catches the ones the stream missed.
 const EVENT_LABELS = {
@@ -50,13 +68,25 @@ const EVENT_LABELS = {
 	// Backup row to be noticed.
 	'recovery:fenced': "Another device took over this wallet's channels",
 	'recovery:guardian_unreachable': 'A recovery guardian is unreachable',
-	'recovery:backfill-lost': 'Recovery journal broken: channels are held'
+	'recovery:backfill-lost': 'Recovery journal broken: channels are held',
+	// Lightning-first progress (beignet #669). On a liquidity provider: a
+	// channel it is funding for a payment to one of its wallets, and the
+	// delivery. On a lightning-first wallet: a beignet payer's direct funding
+	// accepted, landed, or lost.
+	'jit:funding': 'Funding a channel for an incoming payment',
+	'jit:forwarded': 'Payment delivered through a just-in-time channel',
+	'jit:failed': 'A held payment could not be delivered',
+	'direct-funding:offer:accepted': 'A direct funding was accepted',
+	'direct-funding:offer:completed': 'Direct funding landed in your channel',
+	'direct-funding:offer:failed': 'A direct funding failed'
 };
 const ERROR_EVENTS = new Set([
 	'payment:failed',
 	'recovery:fenced',
 	'recovery:guardian_unreachable',
-	'recovery:backfill-lost'
+	'recovery:backfill-lost',
+	'jit:failed',
+	'direct-funding:offer:failed'
 ]);
 
 export default function WalletPage() {
@@ -67,8 +97,20 @@ export default function WalletPage() {
 	const api = useMemo(() => walletApi(id), [id]);
 	const [tick, setTick] = useState(0);
 	const bump = useCallback(() => setTick((t) => t + 1), []);
+	const [advanced, setAdvanced] = useState(readAdvanced);
+	const toggleAdvanced = () => {
+		const next = !advanced;
+		setAdvanced(next);
+		try {
+			sessionStorage.setItem(ADVANCED_KEY, next ? '1' : '0');
+		} catch (_) {
+			/* no storage, no memory of the choice */
+		}
+	};
 
-	const { data: polledRec, refresh: refreshRec } = usePoll(() => manager.getWallet(id), 5000, [id]);
+	// Re-read on every bump too: a tab that just changed the record (a
+	// lightning-first setup retry) must not wait out the poll to show it.
+	const { data: polledRec, refresh: refreshRec } = usePoll(() => manager.getWallet(id), 5000, [id, tick]);
 	// The list page hands the wallet summary over via navigation state, so the
 	// morphing header renders real content immediately instead of flashing.
 	const rec = polledRec || location.state?.wallet || null;
@@ -153,10 +195,19 @@ export default function WalletPage() {
 	// absent ones. A URL pointing at a withheld tab falls back to Overview the
 	// same way an unknown tab always has.
 	const LIGHTNING_TABS = ['channels', 'peers', 'offers'];
-	const tabs = rec?.onchainOnly
+	const isLfbw = !!rec?.lfbw?.enabled;
+	const simple = isLfbw && !advanced;
+	const tabs = simple
+		? LFBW_TABS
+		: rec?.onchainOnly
 		? TABS.filter(([key]) => !LIGHTNING_TABS.includes(key))
 		: TABS;
 	const ActiveTab = (tabs.find((t) => t[0] === tab) || tabs[0])[2];
+	// A URL pointing at a tab the simple view withholds lands on Overview,
+	// and the address bar says so.
+	useEffect(() => {
+		if (simple && !tabs.some((t) => t[0] === tab)) navigate(`/w/${id}/overview`, { replace: true });
+	}, [simple, tab, tabs, id, navigate]);
 
 	return (
 		<div className="container">
@@ -179,6 +230,12 @@ export default function WalletPage() {
 					)}
 					{rec && <Badge tone="blue">{rec.network}</Badge>}
 					{rec?.onchainOnly && <Badge tone="muted">on-chain only</Badge>}
+					{isLfbw && <Badge tone="blue">lightning first</Badge>}
+					{rec?.lfbwDependents?.length > 0 && (
+						<Badge tone="muted">
+							primary for {rec.lfbwDependents.length}
+						</Badge>
+					)}
 					{health && (
 						<Badge tone={health.electrumConnected ? 'green' : 'red'}>
 							{health.electrumConnected ? 'electrum ok' : 'electrum down'}
@@ -194,10 +251,25 @@ export default function WalletPage() {
 				<div className="wallet-meta">
 					{info ? (
 						<>
-							<AnimatedNumber value={info.onchainBalanceSats} suffix=" sats" /> on-chain ·{' '}
-							{!rec?.onchainOnly && (
+							{simple ? (
+								// One balance: a lightning-first wallet does not present its
+								// two rails as two figures, the arriving part is said on its
+								// Overview instead.
 								<>
-									<AnimatedNumber value={info.lightningBalanceSats} suffix=" sats" /> lightning ·{' '}
+									<AnimatedNumber
+										value={(info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0)}
+										suffix=" sats"
+									/>{' '}
+									·{' '}
+								</>
+							) : (
+								<>
+									<AnimatedNumber value={info.onchainBalanceSats} suffix=" sats" /> on-chain ·{' '}
+									{!rec?.onchainOnly && (
+										<>
+											<AnimatedNumber value={info.lightningBalanceSats} suffix=" sats" /> lightning ·{' '}
+										</>
+									)}
 								</>
 							)}
 							node <CopyText value={info.nodeId} label={shortId(info.nodeId)} /> · height{' '}
@@ -295,9 +367,16 @@ export default function WalletPage() {
 								{label}
 							</NavLink>
 						))}
-						<a href={`/swagger.html?id=${id}`} target="_blank" rel="noreferrer">
-							Raw API ↗
-						</a>
+						{!simple && (
+							<a href={`/swagger.html?id=${id}`} target="_blank" rel="noreferrer">
+								Raw API ↗
+							</a>
+						)}
+						{isLfbw && (
+							<button type="button" className="wnav-toggle" onClick={toggleAdvanced}>
+								{advanced ? 'Simple view' : 'Advanced view'}
+							</button>
+						)}
 					</nav>
 					<AnimatePresence mode="wait" initial={false}>
 						<m.div
@@ -331,6 +410,7 @@ export default function WalletPage() {
 					torAvailable={!!config?.torAvailable}
 					onionAvailable={!!config?.onionAvailable}
 					recoveryAvailable={!!config?.recoveryAvailable}
+					lfbwAvailable={!!config?.lfbwAvailable}
 					settingsGuardians={config?.recoveryGuardians || []}
 					restoring={rec.status === 'restore-required' || recovery?.state === 'restoring'}
 					onClose={() => setEditing(null)}
@@ -374,6 +454,7 @@ function EditWalletModal({
 	torAvailable,
 	onionAvailable,
 	recoveryAvailable = false,
+	lfbwAvailable = false,
 	settingsGuardians = [],
 	restoring = false,
 	onClose,
@@ -381,6 +462,40 @@ function EditWalletModal({
 }) {
 	const toast = useToast();
 	const [name, setName] = useState(rec.name);
+	// Lightning-first: the primary node this wallet pairs with, and whether
+	// this wallet provides liquidity to others. Sibling candidates come from
+	// the wallet list, asked once the dialog opens.
+	const [lfbw, setLfbw] = useState(() =>
+		rec.lfbw?.enabled
+			? {
+					enabled: true,
+					primaryWalletId: rec.lfbw.mode === 'internal' ? rec.lfbw.primaryWalletId : 'external',
+					primaryUri: rec.lfbw.primaryUri || '',
+					trusted: !!rec.lfbw.trusted,
+					initialChannelSats: ''
+			  }
+			: { ...EMPTY_LFBW }
+	);
+	const [provider, setProvider] = useState(!!rec.liquidityProvider);
+	const [jit, setJit] = useState(() => ({ ...(rec.jit || {}) }));
+	const [wallets, setWallets] = useState([]);
+	useEffect(() => {
+		if (!lfbwAvailable) return undefined;
+		let alive = true;
+		manager
+			.listWallets()
+			.then((list) => alive && setWallets(list))
+			.catch(() => {});
+		return () => {
+			alive = false;
+		};
+	}, [lfbwAvailable]);
+	const candidates = primaryCandidates(wallets, { network: rec.network, selfId: rec.id });
+	const dependents = rec.lfbwDependents || [];
+	const currentPrimary =
+		rec.lfbw?.mode === 'internal'
+			? wallets.find((w) => w.id === rec.lfbw.primaryWalletId)?.name || null
+			: rec.lfbw?.primaryUri || null;
 	const [electrum, setElectrum] = useState({ ...rec.electrum });
 	const [tor, setTor] = useState(!!rec.tor);
 	const [announce, setAnnounce] = useState(!!rec.announce);
@@ -410,7 +525,7 @@ function EditWalletModal({
 	const save = async () => {
 		setBusy(true);
 		try {
-			await manager.updateWallet(rec.id, {
+			const body = {
 				name,
 				tor,
 				announce: onchainOnly ? false : announce,
@@ -424,7 +539,13 @@ function EditWalletModal({
 					port: parseInt(electrum.port, 10),
 					tls: !!electrum.tls
 				}
-			});
+			};
+			if (lfbwAvailable) {
+				body.lfbw = onchainOnly ? { enabled: false } : lfbwBody(lfbw);
+				body.liquidityProvider = onchainOnly ? rec.liquidityProvider : provider;
+				body.jit = jit;
+			}
+			await manager.updateWallet(rec.id, body);
 			onSaved();
 		} catch (e) {
 			toast(e.message, 'error');
@@ -452,10 +573,17 @@ function EditWalletModal({
 				<input
 					type="checkbox"
 					checked={!onchainOnly}
+					disabled={dependents.length > 0}
 					onChange={(e) => setOnchainOnly(!e.target.checked)}
 				/>
 				Lightning enabled
 			</label>
+			{dependents.length > 0 && (
+				<div className="info-note">
+					Lightning stays on: this wallet is the primary node of{' '}
+					{dependents.map((d) => `"${d.name}"`).join(', ')}.
+				</div>
+			)}
 			{parkingChannels && (
 				<div className="error-note">
 					{openChannels > 0
@@ -508,6 +636,21 @@ function EditWalletModal({
 					)}
 				</>
 			)}
+			{lfbwAvailable && !onchainOnly && (
+				<>
+					<LfbwFields value={lfbw} onChange={setLfbw} candidates={candidates} editing currentPrimary={currentPrimary} />
+					{lfbw.enabled !== !!rec.lfbw?.enabled && (
+						<div className="info-note">
+							{lfbw.enabled
+								? 'The wallet pairs with its primary node on its next start: mutual zero-conf trust when the primary is your own wallet, direct funding armed, and its confirmed on-chain balance moves into the channel from then on. Its existing channels are untouched.'
+								: 'The wallet keeps its channels and its balance; only the lightning-first behaviour stops (no automatic channel funding, the full tab set back).'}
+						</div>
+					)}
+					{!lfbw.enabled && (
+						<ProviderFields value={provider} jit={jit} onChange={setProvider} onJit={setJit} dependents={dependents} />
+					)}
+				</>
+			)}
 			{(torAvailable || onionAvailable) && (
 				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 					Tor
@@ -529,7 +672,7 @@ function EditWalletModal({
 				{/* The consequence rides the button: saving while parking channels
 				    is a deliberate act, named at the moment of the click rather
 				    than behind a second dialog. */}
-				<Button variant="primary" busy={busy} onClick={save} disabled={!electrum.host}>
+				<Button variant="primary" busy={busy} onClick={save} disabled={!electrum.host || !lfbwComplete(lfbw)}>
 					{parkingChannels && openChannels > 0
 						? `Save and park ${openChannels} channel${openChannels === 1 ? '' : 's'}`
 						: 'Save changes'}

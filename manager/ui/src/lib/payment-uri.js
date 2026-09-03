@@ -22,6 +22,8 @@
  * largest amount that can exist (2.1e15 sats) is still an exact integer.
  */
 
+import { decodeFundingEnvelope } from './funding-envelope.js';
+
 // The most satoshis that can ever exist. Anything above it is a typo or a
 // hostile string, never a payment.
 const MAX_MONEY_SATS = 2100000000000000n;
@@ -117,7 +119,13 @@ const WARNINGS = {
 	CASE_FOLDED_FROM_QR: 'This arrived in capitals, as QR codes often are. It was converted back to lower case.',
 	PUNCTUATION_STRIPPED: 'Punctuation around it was dropped, as it is not part of the address.',
 	WHITESPACE_REPAIRED: 'Line breaks inside this were removed, as they are not part of it.',
-	AMOUNT_ZERO: 'This request asks for an amount of zero, which means the payer chooses. No amount was filled in.'
+	AMOUNT_ZERO: 'This request asks for an amount of zero, which means the payer chooses. No amount was filled in.',
+	FUNDING_UNREADABLE:
+		'This request carries a direct-funding request this wallet cannot read, so it will be paid as an ordinary transaction.',
+	FUNDING_EXPIRED:
+		'The direct-funding request this carries has expired, so it will be paid as an ordinary transaction. The address is still good.',
+	FUNDING_WRONG_CHAIN:
+		'The direct-funding request this carries is for a different network, so it will be paid as an ordinary transaction.'
 };
 
 /* ------------------------------------------------------------------ money */
@@ -415,7 +423,7 @@ export function parseBolt11Hrp(invoice) {
  * and unescaped because bech32 is alphanumeric throughout, which is also what
  * keeps a QR of it in the alphanumeric mode.
  */
-export function buildBip21({ address, amountSats, label, message, lightning } = {}) {
+export function buildBip21({ address, amountSats, label, message, lightning, funding } = {}) {
 	if (!address) return '';
 	const params = [];
 	// The same ceiling btcStringToSats enforces on the way in. Without it the two
@@ -432,12 +440,18 @@ export function buildBip21({ address, amountSats, label, message, lightning } = 
 	if (trimmedMessage) params.push(`message=${encodeURIComponent(trimmedMessage)}`);
 	const trimmedLightning = String(lightning ?? '').trim();
 	if (trimmedLightning) params.push(`lightning=${trimmedLightning}`);
+	// A direct-funding request (beignet envelope v3, BIP21 parameter bgnq): a
+	// beignet payer's on-chain payment becomes this wallet's channel funding.
+	// Base64url throughout, so it needs no escaping either; anything else is
+	// not an envelope and is left out rather than handed to payers.
+	const trimmedFunding = String(funding ?? '').trim();
+	if (trimmedFunding && /^[A-Za-z0-9_-]+$/.test(trimmedFunding)) params.push(`bgnq=${trimmedFunding}`);
 	return params.length ? `bitcoin:${address}?${params.join('&')}` : address;
 }
 
 /* ------------------------------------------------------------------ parse */
 
-const KNOWN_PARAMS = new Set(['amount', 'label', 'message', 'lightning']);
+const KNOWN_PARAMS = new Set(['amount', 'label', 'message', 'lightning', 'bgnq']);
 const TRAILING_PUNCTUATION = /[.,;:!?)'"\]}»›>]+$/;
 const WRAPPERS = [
 	['<', '>'],
@@ -570,6 +584,7 @@ function parseAddress(token, warnings, opts) {
 		label: '',
 		message: '',
 		lightning: null,
+		funding: null,
 		warnings
 	};
 }
@@ -685,6 +700,30 @@ function parseBip21(text, warnings, opts) {
 		else warn(warnings, 'LN_PAYLOAD_UNPARSEABLE');
 	}
 
+	// A direct-funding request may ride alongside the address (beignet envelope
+	// v3 under `bgnq`). Read here to show the payer who is asking and to hold
+	// the amounts to each other; a request that cannot be read, has expired or
+	// names another chain is dropped with a warning and the address is paid
+	// as an ordinary transaction, which is what the request's author expects
+	// of a wallet that cannot honor it.
+	let funding = null;
+	const fundingValue = params.get('bgnq');
+	if (fundingValue) {
+		const env = decodeFundingEnvelope(fundingValue);
+		if (!env) warn(warnings, 'FUNDING_UNREADABLE');
+		else if (opts.network && env.network && env.network !== opts.network) warn(warnings, 'FUNDING_WRONG_CHAIN');
+		else if (env.expiresAt <= (opts.now ?? Date.now())) warn(warnings, 'FUNDING_EXPIRED');
+		else {
+			funding = {
+				envelope: fundingValue,
+				nodeId: env.nodeId,
+				network: env.network,
+				expiresAt: env.expiresAt,
+				amountSats: env.amountSats
+			};
+		}
+	}
+
 	const address = squeeze(addressPart, warnings);
 	if (!address) {
 		// `bitcoin:?lightning=lnbc…` is the ordinary shape of a Lightning-only QR.
@@ -704,14 +743,21 @@ function parseBip21(text, warnings, opts) {
 	if (amountSats != null && lightning?.amountSats != null && lightning.amountSats !== amountSats) {
 		return refuse('AMOUNT_CONFLICT');
 	}
+	// The same rule for the funding request: its fixed amount is signed by the
+	// receiver, and the daemon refuses a send that contradicts it, so a request
+	// whose two halves disagree is refused here rather than paid short.
+	if (amountSats != null && funding?.amountSats != null && funding.amountSats !== amountSats) {
+		return refuse('AMOUNT_CONFLICT');
+	}
 
 	return {
 		...onchain,
 		isRequest: true,
-		amountSats,
+		amountSats: amountSats ?? funding?.amountSats ?? null,
 		label: params.get('label') || '',
 		message: params.get('message') || '',
-		lightning
+		lightning,
+		funding
 	};
 }
 

@@ -197,3 +197,65 @@ test('an on-chain only wallet has no Backup row', async () => {
 		await r.unmount();
 	}
 });
+
+// A liquidity provider's exposure is the one figure its owner cannot see
+// anywhere else: what the daemon is willing to front and what it has
+// committed (GET /jit/status, beignet 0.10+).
+test('a liquidity provider gets a card with its exposure, caps and dependents', async () => {
+	const api = stubApi({ channels: [ch('NORMAL')] });
+	const get = api.get;
+	api.get = async (path) => {
+		if (path === '/jit/status') {
+			return {
+				enabled: true,
+				client: { maxFlatFeeSat: 10000, maxFeePpm: 50000 },
+				lsp: {
+					flatFeeSat: 0,
+					feePpm: 0,
+					maxClientFundingSats: 1_000_000,
+					maxConcurrentFundings: 3,
+					maxTotalFundingSats: null,
+					maxLiveIntentsPerPeer: 2,
+					maxLiveIntents: 100,
+					reservedSats: 50_000,
+					frontedSats: 590_000,
+					liveIntents: 2,
+					heldParts: 1,
+					fundingsInFlight: 1
+				}
+			};
+		}
+		return get(path);
+	};
+	const r = await render(ToastProvider, {
+		children: createElement(OverviewTab, {
+			...props([ch('NORMAL')]),
+			api,
+			rec: { liquidityProvider: true, lfbwDependents: [{ id: 'l1', name: 'Spending' }] }
+		})
+	});
+	try {
+		await settle(50);
+		const text = r.text();
+		assert.match(text, /Liquidity provider/);
+		assert.match(text, /primary node of "Spending"/);
+		assert.match(text, /Fronted so far/);
+		assert.match(text, /Committed now/);
+		assert.match(text, /1 funding in flight/);
+		assert.match(text, /1 payment held/);
+		assert.match(text, /1,000,000 sats per client/);
+		assert.match(text, /no lifetime budget/);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a wallet that is not a provider has no such card', async () => {
+	const r = await render(ToastProvider, { children: createElement(OverviewTab, props([ch('NORMAL')])) });
+	try {
+		await settle(50);
+		assert.doesNotMatch(r.text(), /Liquidity provider/);
+	} finally {
+		await r.unmount();
+	}
+});

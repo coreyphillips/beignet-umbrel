@@ -341,3 +341,103 @@ test('a refusal is held while the field is still being typed into', async () => 
 	assert.match(view.text(), /address|payment/i, 'a finished string gets an answer');
 	await view.unmount();
 });
+
+/* ---------------------------------------------------------- direct funding */
+
+import { buildBip21 } from '../../lib/payment-uri.js';
+import { encodeFundingEnvelope } from '../../lib/funding-envelope.js';
+
+const REQUEST = encodeFundingEnvelope({ nodeId: '02' + 'ab'.repeat(32), expiresAt: Date.now() + 3_600_000, amountSats: 25_000 });
+
+/** The plain stub plus the direct-funding route, answering as told. */
+function stubFundingApi(sendAnswer) {
+	const api = stubApi();
+	const post = api.post;
+	api.post = async (path, body) => {
+		if (path === '/direct-funding/send') {
+			api.calls.push(['POST', path, body]);
+			if (sendAnswer instanceof Error) throw sendAnswer;
+			return sendAnswer;
+		}
+		return post(path, body);
+	};
+	return api;
+}
+
+const sendButton = (view) => view.$$('button').find((b) => /^(Send|Send max|Pay as direct funding)$/.test(b.textContent.trim()));
+
+test('a request carrying a direct-funding request offers to pay it that way, and posts the envelope', async () => {
+	const api = stubFundingApi({ status: 'MEMPOOL_SEEN', fundingTxid: 'f'.repeat(64), attested: true, receiptPreimageHex: 'b'.repeat(64) });
+	const view = await mountSend(api);
+	const box = view.$('input[placeholder^="bc1"]');
+	await type(box, buildBip21({ address: ADDR, funding: REQUEST }));
+	await settle(400);
+	assert.equal(box.value, ADDR);
+	assert.match(view.text(), /asks for 25,000 sats/, 'the request\'s own amount fills in');
+	assert.match(view.text(), /This request comes from a beignet wallet/);
+	assert.equal(sendButton(view).textContent.trim(), 'Pay as direct funding');
+	await click(sendButton(view));
+	await settle(50);
+	const sent = api.calls.find(([m, p]) => m === 'POST' && p === '/direct-funding/send');
+	assert.deepEqual(sent[2], { request: REQUEST, amountSats: 25_000, feeHeadroomSats: 1000 });
+	assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/send'), false);
+	assert.match(view.text(), /signed a receipt/);
+	assert.match(view.text(), /Receipt: b{64}/);
+	await view.unmount();
+});
+
+test('declining direct funding pays the address plainly, and Max turns it off', async () => {
+	const api = stubFundingApi({ status: 'MEMPOOL_SEEN' });
+	const view = await mountSend(api);
+	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+	await settle(400);
+	await click(view.$('input[type="checkbox"]'));
+	assert.equal(sendButton(view).textContent.trim(), 'Send');
+	await click(sendButton(view));
+	await settle(50);
+	assert.ok(api.calls.some(([m, p]) => m === 'POST' && p === '/send'));
+	assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/direct-funding/send'), false);
+	await view.unmount();
+});
+
+test('a rejected direct funding falls back to the plain send; a signed one never does', async () => {
+	const rejected = stubFundingApi(new Error('request expired'));
+	let view = await mountSend(rejected);
+	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+	await settle(400);
+	await click(sendButton(view));
+	await settle(50);
+	assert.ok(rejected.calls.some(([m, p]) => m === 'POST' && p === '/send'), 'the plain payment followed the rejection');
+	assert.match(view.text(), /Direct funding not taken \(request expired\)/);
+	await view.unmount();
+
+	const signed = stubFundingApi({ status: 'SIGNED_PENDING', spentTxid: 'a'.repeat(64) });
+	view = await mountSend(signed);
+	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+	await settle(400);
+	await click(sendButton(view));
+	await settle(50);
+	assert.equal(signed.calls.some(([m, p]) => m === 'POST' && p === '/send'), false, 'the witness is out: a plain send would pay twice');
+	assert.match(view.text(), /signed and on its way/);
+	await view.unmount();
+});
+
+test('a lightning-first wallet opens on Lightning and pays addresses from its channel', async () => {
+	const api = stubApi({ channels: [{ ...OPEN_CHANNEL, peerPubkey: '03' + '22'.repeat(32) }] });
+	const view = await render(ToastProvider, {
+		children: createElement(SendTab, {
+			id: 'w1',
+			api,
+			info: { onchainBalanceSats: 0, channelCount: 1 },
+			rec: { id: 'w1', network: 'mainnet', lfbw: { enabled: true, primaryPubkey: '03' + '22'.repeat(32), setup: 'ready' } },
+			tick: 0,
+			bump: () => {}
+		})
+	});
+	await settle(50);
+	const pills = view.$$('.pill').map((b) => b.textContent.trim());
+	assert.ok(pills.includes('Bitcoin address'), pills.join(','));
+	assert.equal(pills.includes('Keysend'), false, 'keysend belongs to the Advanced view');
+	assert.ok(view.$$('.pill').find((b) => b.textContent.trim() === 'Lightning').className.includes('active'), 'opens on Lightning');
+	await view.unmount();
+});

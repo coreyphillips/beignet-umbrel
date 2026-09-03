@@ -135,7 +135,10 @@ async function main() {
 				// carries its surface; older engines get no controls for it.
 				engineVersion: manager.engineVersion,
 				recoveryAvailable: manager.recoveryAvailable(),
-				recoveryGuardians: settings.recoveryGuardians
+				recoveryGuardians: settings.recoveryGuardians,
+				// Lightning-first wallets need JIT receive and direct funding,
+				// which the engine gained after 0.9.3; probed on the bundle.
+				lfbwAvailable: manager.lfbwAvailable()
 			}
 		});
 	});
@@ -207,6 +210,16 @@ async function main() {
 		asyncHandler(async (req, res) => {
 			await manager.deleteWallet(req.params.id, { purge: req.query.purge === 'true' });
 			res.json({ ok: true, result: { deleted: true } });
+		})
+	);
+
+	// Re-run a lightning-first wallet's setup (trust, direct-funding policy,
+	// peer connection, the first channel). It runs by itself on every start;
+	// this is the dashboard's Retry after a failure.
+	api.post(
+		'/wallets/:id/lfbw/setup',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: await manager.setupLfbw(req.params.id) });
 		})
 	);
 
@@ -288,7 +301,13 @@ async function main() {
 		if (status >= 500) console.error(err);
 		res.status(status).json({
 			ok: false,
-			error: { code: err.code || 'ERROR', message: err.message }
+			error: {
+				code: err.code || 'ERROR',
+				message: err.message,
+				// Structured context for a refusal the dashboard can act on
+				// (which wallets depend on a primary, say).
+				...(err.details ? { details: err.details } : {})
+			}
 		});
 	});
 

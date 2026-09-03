@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { engineVersion, recoveryAvailable } = require('./engine');
+const { engineVersion, recoveryAvailable, lfbwAvailable } = require('./engine');
 
 function fakeInstall(version) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'beignet-engine-'));
@@ -54,4 +54,24 @@ test('recovery needs 0.9.1 or later', () => {
 	assert.equal(recoveryAvailable('1.0.0'), true);
 	assert.equal(recoveryAvailable(null), false);
 	assert.equal(recoveryAvailable('garbage'), false);
+});
+
+// Lightning-first wallets need routes the engine gained after its last
+// release; the only honest source is the OpenAPI module beside the binary.
+test('lightning-first support is probed on the engine, not its version', () => {
+	const { root, bin } = fakeInstall('0.9.3');
+	try {
+		assert.equal(lfbwAvailable(bin), false, 'no openapi module at all');
+		const openapi = path.join(path.dirname(bin), 'openapi.js');
+		fs.writeFileSync(openapi, "paths: { '/invoice/create': {}, '/jit/invoice': {} }");
+		assert.equal(lfbwAvailable(bin), false, 'JIT alone is not the whole surface');
+		fs.writeFileSync(
+			openapi,
+			"paths: { '/jit/invoice': {}, '/direct-funding/send': {} }, allowSplice: 'boolean?'"
+		);
+		assert.equal(lfbwAvailable(bin), true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	assert.equal(lfbwAvailable(undefined), false);
 });

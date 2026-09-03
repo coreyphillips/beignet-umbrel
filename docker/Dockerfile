@@ -22,7 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY manager/package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund
-RUN npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet "beignet@${BEIGNET_VERSION}"
+# A local engine tarball (vendor/beignet-local.tgz, gitignored) wins over the
+# published version: `npm pack` in an engine checkout and copy the tarball in
+# to build an image against unreleased engine work. Release builds never have
+# one, so they install exactly BEIGNET_VERSION from npm.
+COPY vendor/ /vendor/
+RUN if [ -f /vendor/beignet-local.tgz ]; then       npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet /vendor/beignet-local.tgz;     else       npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet "beignet@${BEIGNET_VERSION}";     fi
 
 # ---- runtime ----
 FROM ${NODE_IMAGE}

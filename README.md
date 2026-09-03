@@ -19,6 +19,7 @@ Beignet runs one or many self-custodial wallets on your Umbrel:
 - **Bring your own Electrum server**: no full node needed. Point at any Electrum server, or connect to your Umbrel's Electrs/Fulcrum with a one-click preset. Set an app-wide default and override it per wallet.
 - A per-wallet **API explorer** (Swagger UI) over the full beignet JSON API.
 - **Channel backup** per wallet, through beignet's Recovery Protocol (see below).
+- **Lightning-first wallets**: one balance held in a single channel with a primary node (one of your own wallets, or an external beignet node). Deposits move into the channel by themselves once they confirm, invoices are payable before the channel exists (the primary provides the capacity when the payment arrives), a beignet payer's transaction can fund the channel directly, and sending to a bitcoin address spends from the channel. See [docs/LFBW.md](docs/LFBW.md). Needs an engine newer than 0.9.3; the controls stay hidden until the bundled engine carries the routes.
 
 ### Channel backup
 

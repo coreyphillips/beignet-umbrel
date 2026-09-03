@@ -671,6 +671,26 @@ tbody tr:hover {
 	color: var(--text);
 }
 
+/* The lightning-first view toggle sits in the nav like a link, pushed to the
+   far end so it reads as a mode switch rather than a tab. */
+.wnav-toggle {
+	margin-left: auto;
+	background: none;
+	border: 1px solid var(--border);
+	color: var(--muted);
+	padding: 7px 12px;
+	border-radius: var(--r-sm);
+	font-size: 12.5px;
+	font-weight: 500;
+	cursor: pointer;
+	transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.wnav-toggle:hover {
+	color: var(--text);
+	border-color: var(--text);
+}
+
 .wnav a.active {
 	color: var(--text);
 }

@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
-import { useSSE } from '../hooks/useSSE.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import {
@@ -18,6 +17,7 @@ import {
 	staggerItem
 } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
+import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
@@ -38,13 +38,19 @@ const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
  * receive said nothing on: the figure changed on the next poll and nothing
  * pointed at it. Named per wallet, because more than one can be running.
  */
+// The list page announces receives by POLLING alone, never by holding an
+// event stream per wallet. A browser allows six connections per origin, and
+// an EventSource holds one open for as long as the page lives: with seven
+// running wallets every later request (creating a wallet, opening Settings,
+// the transaction polls themselves) queued behind the streams and the page
+// read as stuck. The wallet page holds the one stream for the wallet it
+// shows; here the watcher's ten-second poll is the whole of it.
 function ReceiveWatcher({ wallet }) {
 	const toast = useToast();
 	const api = useMemo(() => walletApi(wallet.id), [wallet.id]);
-	const { onEvent } = useReceiveWatch(api, true, (r) => {
+	useReceiveWatch(api, true, (r) => {
 		toast(describeReceive(r, wallet.name), 'success', { duration: 8000 });
 	});
-	useSSE(api.eventsUrl(), onEvent);
 	return null;
 }
 
@@ -159,7 +165,14 @@ export default function WalletsPage() {
 									<div className="wallet-meta">
 										{w.network} · {w.electrum.host}:{w.electrum.port}
 										{w.onchainOnly ? ' · on-chain only' : ''}
+										{w.lfbw?.enabled ? ' · lightning first' : ''}
+										{w.lfbwDependents?.length > 0
+											? ` · primary for ${w.lfbwDependents.length}`
+											: ''}
 									</div>
+									{w.lfbw?.enabled && w.lfbw.setup === 'failed' && (
+										<div className="wallet-meta">Primary node setup failed: {w.lfbw.setupError}</div>
+									)}
 									{w.status === 'restore-required' && (
 										<div className="wallet-meta">Channels waiting to be restored from guardians</div>
 									)}
@@ -224,7 +237,7 @@ export default function WalletsPage() {
 					<ReceiveWatcher key={w.id} wallet={w} />
 				))}
 			{hasWallets && walletsCard}
-			<NewWallet config={config} onDone={refresh} onSeed={(s) => setModal(s)} onOpen={openWallet} />
+			<NewWallet config={config} wallets={wallets} onDone={refresh} onSeed={(s) => setModal(s)} onOpen={openWallet} />
 			{!hasWallets && walletsCard}
 
 			{modal?.type === 'seed' && (
@@ -252,9 +265,10 @@ function emptyElectrum(config) {
 		: { host: '', port: 50001, tls: false };
 }
 
-function NewWallet({ config, onDone, onSeed, onOpen }) {
+function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	const toast = useToast();
 	const [tab, setTab] = useState('create');
+	const [lfbw, setLfbw] = useState({ ...EMPTY_LFBW });
 	const [name, setName] = useState('');
 	const [network, setNetwork] = useState(config.defaultNetwork);
 	const [wordCount, setWordCount] = useState(24);
@@ -285,7 +299,8 @@ function NewWallet({ config, onDone, onSeed, onOpen }) {
 					tor,
 					announce,
 					onchainOnly,
-					recoveryMode: onchainOnly ? 'off' : recoveryMode
+					recoveryMode: onchainOnly ? 'off' : recoveryMode,
+					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
 			} else {
@@ -297,7 +312,8 @@ function NewWallet({ config, onDone, onSeed, onOpen }) {
 					tor,
 					announce,
 					onchainOnly,
-					recoveryMode: onchainOnly ? 'off' : recoveryMode
+					recoveryMode: onchainOnly ? 'off' : recoveryMode,
+					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				toast('Wallet imported. It will sync in the background.', 'success');
 				// A guardian-mode import may land in the restore hold (the
@@ -313,6 +329,7 @@ function NewWallet({ config, onDone, onSeed, onOpen }) {
 			}
 			setName('');
 			setMnemonic('');
+			setLfbw({ ...EMPTY_LFBW });
 			onDone();
 		} catch (e) {
 			toast(e.message, 'error');
@@ -407,6 +424,10 @@ function NewWallet({ config, onDone, onSeed, onOpen }) {
 				/>
 			)}
 
+			{config.lfbwAvailable && !onchainOnly && (
+				<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />
+			)}
+
 			{(config.torAvailable || config.onionAvailable) && !onchainOnly && (
 				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 					Tor
@@ -425,7 +446,7 @@ function NewWallet({ config, onDone, onSeed, onOpen }) {
 				</label>
 			)}
 
-			<Button variant="primary" busy={busy} onClick={submit}>
+			<Button variant="primary" busy={busy} onClick={submit} disabled={!onchainOnly && !lfbwComplete(lfbw)}>
 				{tab === 'create' ? 'Create wallet' : 'Import wallet'}
 			</Button>
 		</Card>
@@ -475,12 +496,21 @@ function DeleteModal({ wallet, origin, onClose, onDeleted }) {
 	const toast = useToast();
 	const [purge, setPurge] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const [refused, setRefused] = useState(null);
+	const dependents = refused?.dependents || wallet.lfbwDependents || [];
 	return (
 		<Modal title={`Delete "${wallet.name}"`} onClose={onClose} origin={origin}>
 			<div className="error-note">
 				Deleting removes this wallet from Beignet. If you also erase its data and have not backed
 				up the seed, any funds will be lost permanently.
 			</div>
+			{dependents.length > 0 && (
+				<div className="error-note" role="alert">
+					This wallet is the primary node of {dependents.map((d) => `"${d.name}"`).join(', ')}: their
+					home channel, inbound capacity and deposits all run through it. Change their primary node
+					or delete them first.
+				</div>
+			)}
 			<label className="checkbox field">
 				<input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
 				Also erase wallet data (seed, database) from disk
@@ -495,10 +525,12 @@ function DeleteModal({ wallet, origin, onClose, onDeleted }) {
 							await manager.deleteWallet(wallet.id, purge);
 							onDeleted();
 						} catch (e) {
+							if (e.code === 'PRIMARY_IN_USE') setRefused(e.details || { dependents: [] });
 							toast(e.message, 'error');
 							setBusy(false);
 						}
 					}}
+					disabled={dependents.length > 0}
 				>
 					Delete wallet
 				</Button>
