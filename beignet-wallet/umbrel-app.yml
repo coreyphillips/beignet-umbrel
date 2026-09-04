@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.15.3"
+version: "0.16.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,22 +30,34 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Wallets no longer go quiet for a minute every hour. On a mainnet-sized
-  gossip graph, the engine's hourly prune of stale network data deleted
-  each row in its own database commit, which held the wallet daemon's
-  only thread for the whole pass. The wallet stopped answering, the
-  dashboard read it as unhealthy, and its Lightning peers dropped the
-  connection on their ping timeout. The prune now does the whole pass in
-  one commit.
+  Any beignet node can now be a recovery guardian. Tick "Serve as a
+  guardian for other beignet nodes" on a Lightning wallet (create form
+  or Edit) and its daemon hosts the guardian at the wallet's own
+  Lightning address, over Tor when the wallet announces one. Other
+  beignet wallets pin it as one of their three guardians and keep an
+  encrypted journal of their channel state there, which this node
+  cannot read. The Overview tab gains a card with what it holds, how
+  much, and the address to hand out.
 
 
-  Wallets also start faster. That same one-row-at-a-time pass ran during
-  startup, before the daemon could accept connections, which is what put
-  minutes between starting a wallet and its node coming up.
+  Adding a guardian got simpler: paste a node's Lightning address
+  (<node id>@host:port) into a guardian slot in Settings and it
+  resolves to a guardian entry, or pick a serving wallet from this
+  Umbrel. Three independent operators is the point, so pair with other
+  Umbrels; a wallet on the same box protects against nothing this box
+  can suffer. A wallet still pins the set it first registers with and
+  cannot move to another, so choose guardians you expect to keep.
 
 
-  This is a bundled engine upgrade to beignet 0.11.1. Nothing in the
-  dashboard changes.
+  Settings also keeps a partial guardian list now, so a set can be
+  collected one node at a time; a wallet needs all three before it can
+  turn a guardian mode on.
+
+
+  A serving wallet keeps answering guardian traffic even while its own
+  channel backup is waiting for its guardians to confirm it, so a group
+  of Umbrels guarding each other can all restart at once. This bundles
+  beignet 0.12.0.
 
 
 dependencies: []
