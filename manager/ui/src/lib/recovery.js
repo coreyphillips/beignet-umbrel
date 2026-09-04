@@ -186,7 +186,8 @@ export function describeRecovery(status, rec = {}) {
 			tier: `Continuity: quorum, durable to seq ${seq}`,
 			detail:
 				'Every channel step waits until two of the three guardians have stored it. Importing the seed with the same guardians restores the channels exactly and fences this device.' +
-				waitingNote,
+				waitingNote +
+				barrierLatencyNote(node?.barrierLatency),
 			tone: 'green',
 			degraded: false
 		};
@@ -199,6 +200,29 @@ export function describeRecovery(status, rec = {}) {
 		tone: 'green',
 		degraded: false
 	};
+}
+
+/**
+ * What the quorum barrier has cost on this node (beignet #702): the waits
+ * that actually parked a channel step, and how long the guardians took to
+ * release them. Nothing until a step has waited; the steps that were
+ * already durable never waited and are not counted.
+ */
+export function barrierLatencyNote(latency) {
+	if (!latency || !latency.sampled) {
+		return latency && latency.refused
+			? ` ${latency.refused} step${latency.refused === 1 ? '' : 's'} timed out waiting for the guardians and had to be withheld.`
+			: '';
+	}
+	const ms = (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
+	const refused = latency.refused
+		? ` ${latency.refused} step${latency.refused === 1 ? '' : 's'} timed out and had to be withheld.`
+		: '';
+	return (
+		` Guardian receipts have held ${latency.released} step${latency.released === 1 ? '' : 's'} so far,` +
+		` typically ${ms(latency.p50Ms)} each (95% within ${ms(latency.p95Ms)}, the last one ${ms(latency.lastMs)}).` +
+		refused
+	);
 }
 
 const AUTO_APPLY_TIERS = {

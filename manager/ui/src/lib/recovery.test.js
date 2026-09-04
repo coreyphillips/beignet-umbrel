@@ -46,6 +46,32 @@ test('peer storage says what it does and what it cannot do yet', () => {
 	assert.equal(d.degraded, false);
 });
 
+test('quorum mode says what the barrier has cost once a step has waited', () => {
+	const quiet = describeRecovery({ mode: 'quorum', state: 'running', node: node({ barrierLatency: null }) }, {});
+	assert.doesNotMatch(quiet.detail, /Guardian receipts have held/);
+	const fresh = describeRecovery(
+		{ mode: 'quorum', state: 'running', node: node({ barrierLatency: { released: 0, refused: 0, sampled: 0, lastMs: null, meanMs: null, p50Ms: null, p95Ms: null, maxMs: null } }) },
+		{}
+	);
+	assert.doesNotMatch(fresh.detail, /Guardian receipts have held/);
+	const measured = describeRecovery(
+		{
+			mode: 'quorum',
+			state: 'running',
+			node: node({ barrierLatency: { released: 41, refused: 1, sampled: 41, lastMs: 610, meanMs: 700, p50Ms: 640, p95Ms: 1150, maxMs: 2900 } })
+		},
+		{}
+	);
+	assert.match(measured.detail, /held 41 steps so far, typically 640 ms each \(95% within 1\.1 s, the last one 610 ms\)/);
+	assert.match(measured.detail, /1 step timed out and had to be withheld/);
+	// Async mode never parks a step, so it never speaks of the barrier.
+	const a = describeRecovery(
+		{ mode: 'async-remote', state: 'running', node: node({ durability: 'async-remote', barrierLatency: null }) },
+		{}
+	);
+	assert.doesNotMatch(a.detail, /Guardian receipts/);
+});
+
 test('the guardian tiers carry the durable sequence untouched', () => {
 	const big = '18446744073709551617'; // past Number's exact range, a string on the wire
 	const q = describeRecovery(
