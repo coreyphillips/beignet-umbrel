@@ -12,7 +12,9 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 		config.defaultElectrum || { host: '', port: 50001, tls: false }
 	);
 	// Three guardian slots, shown as three inputs; blank ones are dropped
-	// before the save so "all three or none" is the server's rule to state.
+	// before the save. A partial list saves as it stands: a set is often
+	// collected one server at a time, and the all-three rule only has to
+	// hold when a wallet turns a guardian mode on.
 	const [guardians, setGuardians] = useState(() => {
 		const list = (config.recoveryGuardians || []).slice(0, 3);
 		while (list.length < 3) list.push('');
@@ -66,9 +68,10 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 					</div>
 					<div className="info-note">
 						Three servers that hold an encrypted journal of channel state for wallets
-						using a guardian backup mode. All three or none. A wallet pins the set it
-						first registers with and cannot move to another set later, so choose servers
-						you expect to keep.
+						using a guardian backup mode. Fill in as many as you have and come back for
+						the rest; a wallet needs all three before it can use a guardian mode. A
+						wallet pins the set it first registers with and cannot move to another set
+						later, so choose servers you expect to keep.
 					</div>
 					{guardians.map((g, i) => (
 						<Field key={i} label={`Guardian ${i + 1}`}>

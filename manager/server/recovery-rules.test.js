@@ -11,7 +11,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { WalletManager } = require('./wallet-manager');
-const { validateGuardianSet, parseGuardianEntry, sameGuardianSet, recoveryEnv } = require('./recovery');
+const {
+	validateGuardianDraft,
+	validateGuardianSet,
+	parseGuardianEntry,
+	sameGuardianSet,
+	recoveryEnv
+} = require('./recovery');
 
 const K = (c) => c.repeat(64);
 const G = [`${K('a')}@http://127.0.0.1:8101`, `${K('b')}@http://127.0.0.1:8102`, `${K('c')}@https://g.example`];
@@ -61,6 +67,16 @@ test('guardian entries are pubkey@url with an http(s) URL', () => {
 	assert.throws(() => parseGuardianEntry(`${K('a')}@ftp://x`), /http or https/);
 });
 
+test('a guardian draft is up to three distinct entries', () => {
+	assert.deepEqual(validateGuardianDraft([]), []);
+	assert.deepEqual(validateGuardianDraft(G.slice(0, 1)), G.slice(0, 1));
+	assert.deepEqual(validateGuardianDraft(['', G[0], ' ']), [G[0]], 'blank slots are not entries');
+	assert.throws(() => validateGuardianDraft([G[0], G[0]]), /distinct/);
+	assert.throws(() => validateGuardianDraft([...G, OTHER[0]]), /at most 3/);
+	assert.throws(() => validateGuardianDraft([G[0], 'junk']), /separator/);
+	assert.throws(() => validateGuardianDraft('nope'), /list/);
+});
+
 test('a guardian set is three distinct entries or none', () => {
 	assert.deepEqual(validateGuardianSet([]), []);
 	assert.deepEqual(validateGuardianSet(['', ' ']), [], 'blank entries are no entries');
@@ -90,14 +106,33 @@ test('recoveryEnv is empty for off and whole for a guardian mode', () => {
 	});
 });
 
-test('settings accept a full set, refuse a partial or malformed one, and clear on empty', () => {
+test('settings save a partial draft, refuse a malformed one, and clear on empty', () => {
 	const m = managerWith();
 	assert.deepEqual(m.updateSettings({ recoveryGuardians: G }).recoveryGuardians, G);
-	rejects(() => m.updateSettings({ recoveryGuardians: G.slice(0, 2) }), 'BAD_GUARDIANS');
+	assert.deepEqual(
+		m.updateSettings({ recoveryGuardians: G.slice(0, 1) }).recoveryGuardians,
+		G.slice(0, 1),
+		'one guardian saves as one guardian, to be finished later'
+	);
+	assert.deepEqual(m.updateSettings({ recoveryGuardians: G.slice(0, 2) }).recoveryGuardians, G.slice(0, 2));
 	rejects(() => m.updateSettings({ recoveryGuardians: [G[0], G[1], 'junk'] }), 'BAD_GUARDIANS');
-	assert.deepEqual(m.getSettings().recoveryGuardians, G, 'a refused patch leaves the set alone');
+	rejects(() => m.updateSettings({ recoveryGuardians: [G[0], G[0]] }), 'BAD_GUARDIANS');
+	rejects(() => m.updateSettings({ recoveryGuardians: [...G, OTHER[0]] }), 'BAD_GUARDIANS');
+	assert.deepEqual(
+		m.getSettings().recoveryGuardians,
+		G.slice(0, 2),
+		'a refused patch leaves the draft alone'
+	);
 	assert.deepEqual(m.updateSettings({ recoveryGuardians: [] }).recoveryGuardians, []);
 	assert.deepEqual(m.updateSettings({ recoveryGuardians: null }).recoveryGuardians, []);
+});
+
+test('a guardian mode needs the draft finished', () => {
+	rejects(() => managerWith({ guardians: G.slice(0, 2) })._normalizeRecovery('quorum', null), 'NO_GUARDIANS');
+	assert.deepEqual(managerWith({ guardians: G })._normalizeRecovery('quorum', null), {
+		mode: 'quorum',
+		guardians: G
+	});
 });
 
 test('an unknown mode, an old engine, and a guardian mode with no set are refused', () => {

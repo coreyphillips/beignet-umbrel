@@ -58,25 +58,40 @@ function parseGuardianEntry(input) {
 }
 
 /**
- * A guardian set is all or nothing: an empty list (no guardians configured)
- * or exactly three distinct entries, the crash-v1 profile's only shape.
- * Returns the normalized entries.
+ * The app-level list of guardians, which is allowed to be unfinished: up to
+ * three distinct, well formed entries. Guardians are collected one at a
+ * time (a set often arrives over days, one server at a time), so a partial
+ * list is a saveable draft rather than an error. Returns the normalized
+ * entries.
  */
-function validateGuardianSet(list) {
+function validateGuardianDraft(list) {
 	if (!Array.isArray(list)) throw new Error('guardians must be a list');
 	const entries = list.map((g) => String(g || '').trim()).filter((g) => g.length > 0);
+	if (entries.length > GUARDIAN_SET_SIZE) {
+		throw new Error(`a guardian set is at most ${GUARDIAN_SET_SIZE} entries; got ${entries.length}`);
+	}
+	const parsed = entries.map(parseGuardianEntry);
+	const keys = new Set(parsed.map((g) => g.pubkey));
+	if (keys.size !== parsed.length) {
+		throw new Error('guardian entries must have distinct pubkeys');
+	}
+	return parsed.map((g) => g.entry);
+}
+
+/**
+ * A guardian set at the point a wallet uses it is all or nothing: an empty
+ * list (no guardians configured) or exactly three distinct entries, the
+ * crash-v1 profile's only shape. Returns the normalized entries.
+ */
+function validateGuardianSet(list) {
+	const entries = validateGuardianDraft(list);
 	if (entries.length === 0) return [];
 	if (entries.length !== GUARDIAN_SET_SIZE) {
 		throw new Error(
 			`a guardian set is exactly ${GUARDIAN_SET_SIZE} entries (crash-v1 is 2-of-3); got ${entries.length}`
 		);
 	}
-	const parsed = entries.map(parseGuardianEntry);
-	const keys = new Set(parsed.map((g) => g.pubkey));
-	if (keys.size !== parsed.length) {
-		throw new Error('guardian entries must have three distinct pubkeys');
-	}
-	return parsed.map((g) => g.entry);
+	return entries;
 }
 
 /** True when two guardian sets name the same keys, in any order. */
@@ -119,6 +134,7 @@ module.exports = {
 	isRecoveryMode,
 	isGuardianMode,
 	parseGuardianEntry,
+	validateGuardianDraft,
 	validateGuardianSet,
 	sameGuardianSet,
 	recoveryEnv

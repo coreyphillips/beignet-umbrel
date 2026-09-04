@@ -1267,19 +1267,19 @@ function runDemoLfbwSetup(w) {
 }
 
 // The manager's channel backup rules, mirrored so the dialogs' refusals are
-// demoable: a guardian set is three entries or none, a wallet pins the set it
-// first enables a guardian mode with, and strict quorum is never left.
+// demoable: settings hold a guardian draft (up to three, saved as far as it
+// got), a wallet needs the full three to enable a guardian mode, a wallet
+// pins the set it first enables one with, and strict quorum is never left.
 const RECOVERY_MODES = ['off', 'peer-storage', 'async-remote', 'quorum'];
 const isGuardianMode = (m) => m === 'async-remote' || m === 'quorum';
 function guardianEntryOk(g) {
 	const at = String(g).indexOf('@');
 	return at === 64 && /^[0-9a-f]{64}$/i.test(String(g).slice(0, 64)) && /^https?:\/\//.test(String(g).slice(65));
 }
-function validateGuardianSet(list) {
+function validateGuardianDraft(list) {
 	const entries = (Array.isArray(list) ? list : []).map((g) => String(g || '').trim()).filter(Boolean);
-	if (entries.length === 0) return [];
-	if (entries.length !== 3) {
-		throw err(`a guardian set is exactly 3 entries (crash-v1 is 2-of-3); got ${entries.length}`, 'BAD_GUARDIANS');
+	if (entries.length > 3) {
+		throw err(`a guardian set is at most 3 entries; got ${entries.length}`, 'BAD_GUARDIANS');
 	}
 	for (const g of entries) {
 		if (!guardianEntryOk(g)) throw err(`guardian entry "${g}" is not <64-hex pubkey>@<http(s) url>`, 'BAD_GUARDIANS');
@@ -1303,8 +1303,13 @@ function normalizeRecovery(mode, existing, autoApply) {
 	let guardians = (current.guardians || []).slice();
 	if (isGuardianMode(mode) && guardians.length === 0) {
 		guardians = store.settings.recoveryGuardians.slice();
-		if (guardians.length === 0) {
-			throw err('Guardian modes need three guardians. Set them in Settings first.', 'NO_GUARDIANS');
+		if (guardians.length !== 3) {
+			throw err(
+				guardians.length === 0
+					? 'Guardian modes need three guardians. Set them in Settings first.'
+					: `Guardian modes need three guardians. Settings has ${guardians.length}: add the rest first.`,
+				'NO_GUARDIANS'
+			);
 		}
 	}
 	return withAuto({ mode, guardians });
@@ -1337,7 +1342,7 @@ function managerRequest(path, method, body) {
 		if (method === 'PUT') {
 			const patch = { ...body };
 			if (patch.recoveryGuardians !== undefined) {
-				patch.recoveryGuardians = validateGuardianSet(patch.recoveryGuardians);
+				patch.recoveryGuardians = validateGuardianDraft(patch.recoveryGuardians);
 			}
 			Object.assign(store.settings, patch);
 			return store.settings;

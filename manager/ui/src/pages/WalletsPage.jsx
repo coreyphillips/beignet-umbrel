@@ -429,6 +429,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					value={recoveryMode}
 					onChange={setRecoveryMode}
 					guardiansConfigured={guardiansConfigured}
+					settingsGuardians={config.recoveryGuardians || []}
 					importing={tab === 'import'}
 				/>
 			)}

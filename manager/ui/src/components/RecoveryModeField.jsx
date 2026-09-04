@@ -42,9 +42,11 @@ export default function RecoveryModeField({
 }) {
 	const pinned = pinnedGuardians.length > 0;
 	const guardiansUsable = pinned || guardiansConfigured;
+	// Only a finished set in Settings can be a different set; a draft on its
+	// way to three is not one yet.
 	const differs =
 		pinned &&
-		settingsGuardians.length > 0 &&
+		settingsGuardians.length === 3 &&
 		pinnedGuardians
 			.map((g) => String(g).slice(0, 64).toLowerCase())
 			.sort()
@@ -86,7 +88,11 @@ export default function RecoveryModeField({
 			</Field>
 			<div className="info-note">{NOTES[value] || NOTES.off}</div>
 			{!guardiansUsable && !disabled && (
-				<div className="info-note">Set three guardians in Settings to use the guardian modes.</div>
+				<div className="info-note">
+					{settingsGuardians.length > 0
+						? `Settings has ${settingsGuardians.length} of 3 guardians. Add the rest to use the guardian modes.`
+						: 'Set three guardians in Settings to use the guardian modes.'}
+				</div>
 			)}
 			{importing && guardiansUsable && (
 				<div className="info-note">

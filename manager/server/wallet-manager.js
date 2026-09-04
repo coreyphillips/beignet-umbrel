@@ -16,9 +16,10 @@ const { probeSocksConnect } = require('./socks-probe');
 const { subscribeToEvents } = require('./node-events');
 const { ChannelEventLog } = require('./channel-events');
 const {
+	GUARDIAN_SET_SIZE,
 	isRecoveryMode,
 	isGuardianMode,
-	validateGuardianSet,
+	validateGuardianDraft,
 	sameGuardianSet,
 	recoveryEnv
 } = require('./recovery');
@@ -502,8 +503,12 @@ class WalletManager {
 					: this._normalizeElectrum(patch.defaultElectrum);
 		}
 		if (patch.recoveryGuardians !== undefined) {
+			// A draft, not a set: settings hold however many guardians are
+			// known so far, so a set can be collected one server at a time.
+			// The all-three rule belongs to the wallet that enables a
+			// guardian mode, which is where _normalizeRecovery states it.
 			try {
-				next.recoveryGuardians = validateGuardianSet(
+				next.recoveryGuardians = validateGuardianDraft(
 					patch.recoveryGuardians === null ? [] : patch.recoveryGuardians
 				);
 			} catch (err) {
@@ -547,11 +552,13 @@ class WalletManager {
 		let guardians = current.guardians || [];
 		if (isGuardianMode(resolvedMode) && guardians.length === 0) {
 			guardians = this.recoveryGuardians();
-			if (guardians.length === 0) {
+			if (guardians.length !== GUARDIAN_SET_SIZE) {
 				throw httpError(
 					400,
 					'NO_GUARDIANS',
-					'Guardian modes need three guardians. Set them in Settings first.'
+					guardians.length === 0
+						? 'Guardian modes need three guardians. Set them in Settings first.'
+						: `Guardian modes need three guardians. Settings has ${guardians.length}: add the rest first.`
 				);
 			}
 		}
