@@ -18,6 +18,7 @@ import {
 } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
+import GuardianServeField from '../components/GuardianServeField.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
@@ -287,6 +288,11 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	// peers return by itself (beignet #690). Import only: a fresh wallet has
 	// nothing anywhere to restore.
 	const [recoveryAutoApply, setRecoveryAutoApply] = useState(false);
+	// Serve the reference guardian to other beignet nodes at this wallet's
+	// Lightning address (beignet #699). Off by default: it is an obligation
+	// to stay online for whoever pins this node.
+	const [guardianServe, setGuardianServe] = useState(false);
+	const asksGuardianServe = !!config.guardianHostingAvailable && !onchainOnly;
 	const [busy, setBusy] = useState(false);
 	const guardiansConfigured = (config.recoveryGuardians || []).length === 3;
 	const asksAutoApply =
@@ -308,6 +314,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					announce,
 					onchainOnly,
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
+					...(asksGuardianServe ? { guardianServe } : {}),
 					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
@@ -322,6 +329,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					onchainOnly,
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
 					...(asksAutoApply ? { recoveryAutoApply } : {}),
+					...(asksGuardianServe ? { guardianServe } : {}),
 					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				toast('Wallet imported. It will sync in the background.', 'success');
@@ -429,10 +437,12 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					value={recoveryMode}
 					onChange={setRecoveryMode}
 					guardiansConfigured={guardiansConfigured}
+					settingsGuardians={config.recoveryGuardians || []}
 					importing={tab === 'import'}
 				/>
 			)}
 			{asksAutoApply && <RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} />}
+			{asksGuardianServe && <GuardianServeField value={guardianServe} onChange={setGuardianServe} announce={announce} />}
 
 			{config.lfbwAvailable && !onchainOnly && (
 				<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />

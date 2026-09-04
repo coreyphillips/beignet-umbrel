@@ -16,6 +16,14 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 		10000,
 		[id, tick, provider]
 	);
+	// A wallet serving as a guardian for other beignet nodes (beignet #699):
+	// what it holds for whom, and the address to hand out.
+	const serving = !!rec?.guardianServe && !rec?.onchainOnly;
+	const { data: guardian } = usePoll(
+		() => (serving ? api.get('/guardian/status').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, serving]
+	);
 	const { data } = usePoll(
 		async () => {
 			const [balance, nodeUri, liquidity, fees, feeEst, channels] = await Promise.all([
@@ -140,6 +148,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 				</Card>
 
 				{provider && <ProviderCard jit={jit} rec={rec} />}
+				{serving && <GuardianCard guardian={guardian} rec={rec} info={info} />}
 				{!onchainOnly && (
 				<Card title="Liquidity">
 					{liq && (openCount ?? liq.channelCount) > 0 ? (
@@ -336,6 +345,73 @@ function ProviderCard({ jit, rec }) {
 							? ' (spent: nothing more is fronted until it is raised)'
 							: ''}
 					</div>
+				</>
+			)}
+		</Card>
+	);
+}
+
+function fmtBytes(n) {
+	const v = Number(n) || 0;
+	if (v >= 1024 * 1024 * 1024) return `${(v / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+	if (v >= 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MiB`;
+	if (v >= 1024) return `${(v / 1024).toFixed(0)} KiB`;
+	return `${v} B`;
+}
+
+/**
+ * The guardian this wallet serves to other beignet nodes (beignet #699):
+ * the sets it holds, how much, how many sessions are up, and the address
+ * another wallet pastes into its Settings to pin this node.
+ */
+function GuardianCard({ guardian, rec, info }) {
+	const sets = guardian?.sets || [];
+	const namespaces = sets.reduce((n, s) => n + (s.namespaces || 0), 0);
+	const bytes = sets.reduce((n, s) => n + (s.bytes || 0), 0);
+	const onionUri = info?.nodeId && rec?.onionAddress ? `${info.nodeId}@${rec.onionAddress}` : null;
+	const localUri = info?.nodeId && rec?.listenPort ? `${info.nodeId}@127.0.0.1:${rec.listenPort}` : null;
+	return (
+		<Card title="Guardian for other nodes" className="grid-full">
+			<div className="wallet-meta" style={{ marginBottom: 10 }}>
+				This wallet holds an encrypted journal of channel state for beignet nodes that pinned it
+				as one of their three guardians. The journal is opaque to it; a full quota refuses new
+				writes rather than deleting anything.
+			</div>
+			{!guardian ? (
+				<div className="wallet-meta">Reading the guardian status…</div>
+			) : guardian.serving === false ? (
+				<div className="info-note">
+					The daemon is not serving yet. It takes the role on its next start (the Edit dialog
+					restarts the wallet), or the bundled engine predates the guardian surface.
+				</div>
+			) : (
+				<>
+					<div className="grid cols-4">
+						<Stat label="Sets served" num={sets.length} sub={`of ${guardian.limits?.maxSets ?? '-'} allowed`} />
+						<Stat label="Nodes guarded" num={namespaces} sub="namespaces registered" />
+						<Stat label="Stored" value={fmtBytes(bytes)} sub={`up to ${fmtBytes(guardian.limits?.maxBytesPerSet)} per set`} />
+						<Stat label="Sessions" num={guardian.sessions || 0} sub="open right now" />
+					</div>
+					<div className="wallet-meta" style={{ marginTop: 10 }}>
+						Guardian id: <code>{guardian.guardianId}</code>
+					</div>
+					<div className="field-label" style={{ marginTop: 10, marginBottom: 6 }}>
+						Address to share
+					</div>
+					{onionUri ? (
+						<>
+							<CopyText value={onionUri} />
+							<div className="wallet-meta" style={{ marginTop: 4 }}>
+								Another beignet wallet pastes this into its Settings guardians; it resolves to a
+								guardian entry over Tor, no port forwarding needed.
+							</div>
+						</>
+					) : (
+						<div className="info-note">
+							Turn on the Tor address in Edit so nodes outside this Umbrel can reach this guardian.
+							{localUri ? ` Wallets on this Umbrel can use ${localUri}.` : ''}
+						</div>
+					)}
 				</>
 			)}
 		</Card>

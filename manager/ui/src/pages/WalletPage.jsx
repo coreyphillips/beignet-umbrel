@@ -10,6 +10,7 @@ import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../compon
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
+import GuardianServeField from '../components/GuardianServeField.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
 import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
 import { shortId } from '../lib/format.js';
@@ -423,6 +424,7 @@ export default function WalletPage() {
 					onionAvailable={!!config?.onionAvailable}
 					recoveryAvailable={!!config?.recoveryAvailable}
 					recoveryAutoApplyAvailable={!!config?.recoveryAutoApplyAvailable}
+					guardianHostingAvailable={!!config?.guardianHostingAvailable}
 					lfbwAvailable={!!config?.lfbwAvailable}
 					settingsGuardians={config?.recoveryGuardians || []}
 					restoring={rec.status === 'restore-required' || recovery?.state === 'restoring'}
@@ -468,6 +470,7 @@ function EditWalletModal({
 	onionAvailable,
 	recoveryAvailable = false,
 	recoveryAutoApplyAvailable = false,
+	guardianHostingAvailable = false,
 	lfbwAvailable = false,
 	settingsGuardians = [],
 	restoring = false,
@@ -516,6 +519,7 @@ function EditWalletModal({
 	const [onchainOnly, setOnchainOnly] = useState(!!rec.onchainOnly);
 	const [recoveryMode, setRecoveryMode] = useState(rec.recovery?.mode || 'off');
 	const [recoveryAutoApply, setRecoveryAutoApply] = useState(!!rec.recovery?.autoApply);
+	const [guardianServe, setGuardianServe] = useState(!!rec.guardianServe);
 	const pinnedGuardians = rec.recovery?.guardians || [];
 	const [busy, setBusy] = useState(false);
 	// Whether this wallet has OPEN channels, asked the moment the modal opens.
@@ -554,6 +558,9 @@ function EditWalletModal({
 				...(recoveryAutoApplyAvailable && recoveryMode === 'peer-storage'
 					? { recoveryAutoApply }
 					: {}),
+				// Serving a guardian rides the Lightning listener; parking
+				// Lightning drops it, and the manager drops it too.
+				...(guardianHostingAvailable ? { guardianServe: onchainOnly ? false : guardianServe } : {}),
 				electrum: {
 					host: electrum.host.trim(),
 					port: parseInt(electrum.port, 10),
@@ -659,6 +666,19 @@ function EditWalletModal({
 							Changing channel backup restarts this wallet.
 							{pinnedGuardians.length === 0 && isGuardianMode(recoveryMode)
 								? ' A guardian mode registers the wallet with the guardians in Settings on its next start, and that set stays with the wallet from then on.'
+								: ''}
+						</div>
+					)}
+				</>
+			)}
+			{guardianHostingAvailable && !onchainOnly && (
+				<>
+					<GuardianServeField value={guardianServe} onChange={setGuardianServe} announce={announce} />
+					{guardianServe !== !!rec.guardianServe && (
+						<div className="info-note">
+							Changing this restarts the wallet.
+							{!guardianServe && rec.guardianServe
+								? ' Nodes that pinned this wallet as a guardian lose one of their three until it serves again; their sets cannot be changed.'
 								: ''}
 						</div>
 					)}

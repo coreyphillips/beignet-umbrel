@@ -72,6 +72,11 @@ const JIT_QUOTE_MARKERS = ['/jit/quote'];
 // database (beignet #690). The env name is a literal in the engine's config
 // module, which is the one file certain to carry it.
 const RECOVERY_AUTO_APPLY_MARKERS = ['BEIGNET_RECOVERY_AUTO_APPLY'];
+// Node-hosted guardians (beignet #699): a wallet serves the reference
+// guardian at its Lightning address, and a node's Lightning URI resolves to
+// a guardian entry through the daemon. Both routes are literals in the
+// OpenAPI module of an engine that carries the feature.
+const GUARDIAN_HOSTING_MARKERS = ["'/guardian/status'", "'/recovery/resolve-guardian'"];
 
 /** The text of a module beside the daemon binary, or null when absent. */
 function siblingModule(bin, file) {
@@ -105,14 +110,21 @@ function recoveryAutoApplyAvailable(bin = process.env.BEIGNET_BIN) {
 	return probe(bin, 'config.js', RECOVERY_AUTO_APPLY_MARKERS) || probe(bin, 'openapi.js', RECOVERY_AUTO_APPLY_MARKERS);
 }
 
+/** True when the engine behind `bin` can host a guardian and resolve node URIs. */
+function guardianHostingAvailable(bin = process.env.BEIGNET_BIN) {
+	return probe(bin, 'openapi.js', GUARDIAN_HOSTING_MARKERS);
+}
+
 module.exports = {
 	engineVersion,
 	recoveryAvailable,
 	lfbwAvailable,
 	jitQuoteAvailable,
 	recoveryAutoApplyAvailable,
+	guardianHostingAvailable,
 	RECOVERY_MIN_VERSION,
 	LFBW_ROUTE_MARKERS,
 	JIT_QUOTE_MARKERS,
-	RECOVERY_AUTO_APPLY_MARKERS
+	RECOVERY_AUTO_APPLY_MARKERS,
+	GUARDIAN_HOSTING_MARKERS
 };

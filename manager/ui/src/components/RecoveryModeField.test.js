@@ -32,6 +32,48 @@ test('without a guardian set the guardian modes are listed but disabled, with di
 	}
 });
 
+test('an unfinished guardian draft says how far along it is', async () => {
+	const r = await render(Harness, {
+		value: 'off',
+		onChange: () => {},
+		guardiansConfigured: false,
+		settingsGuardians: G.slice(0, 2)
+	});
+	try {
+		assert.match(r.text(), /Settings has 2 of 3 guardians/);
+		assert.equal(r.$$('option').find((o) => o.value === 'quorum').disabled, true);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a pinned wallet calls Settings a different set only once that set is whole', async () => {
+	const partial = await render(Harness, {
+		value: 'quorum',
+		onChange: () => {},
+		guardiansConfigured: false,
+		pinnedGuardians: G,
+		settingsGuardians: ['d'.repeat(64) + '@http://127.0.0.1:8104']
+	});
+	try {
+		assert.doesNotMatch(partial.text(), /a different set/);
+	} finally {
+		await partial.unmount();
+	}
+	const whole = await render(Harness, {
+		value: 'quorum',
+		onChange: () => {},
+		guardiansConfigured: true,
+		pinnedGuardians: G,
+		settingsGuardians: G.map((g) => g.replace(/^./, 'd'))
+	});
+	try {
+		assert.match(whole.text(), /a different set/);
+	} finally {
+		await whole.unmount();
+	}
+});
+
 test('the selected mode explains itself, and quorum says it is permanent', async () => {
 	let value = 'off';
 	const r = await render(Harness, { value, onChange: (v) => (value = v), guardiansConfigured: true });

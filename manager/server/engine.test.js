@@ -12,7 +12,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { engineVersion, recoveryAvailable, lfbwAvailable, jitQuoteAvailable, recoveryAutoApplyAvailable } = require('./engine');
+const { engineVersion, recoveryAvailable, lfbwAvailable, jitQuoteAvailable, recoveryAutoApplyAvailable,
+	guardianHostingAvailable
+} = require('./engine');
 
 function fakeInstall(version) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'beignet-engine-'));
@@ -99,4 +101,19 @@ test('the JIT quote and the automatic checkpoint restore are probed the same way
 	}
 	assert.equal(jitQuoteAvailable(undefined), false);
 	assert.equal(recoveryAutoApplyAvailable(undefined), false);
+});
+
+test('guardian hosting is probed on the OpenAPI module (beignet #699)', () => {
+	const { root, bin } = fakeInstall('0.11.0');
+	try {
+		assert.equal(guardianHostingAvailable(bin), false, 'no openapi module at all');
+		const openapi = path.join(path.dirname(bin), 'openapi.js');
+		fs.writeFileSync(openapi, "paths: { '/recovery/status': {}, '/guardian/status': {} }");
+		assert.equal(guardianHostingAvailable(bin), false, 'the status route alone is not the whole surface');
+		fs.writeFileSync(openapi, "paths: { '/guardian/status': {}, '/recovery/resolve-guardian': {} }");
+		assert.equal(guardianHostingAvailable(bin), true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	assert.equal(guardianHostingAvailable(undefined), false);
 });

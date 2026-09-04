@@ -188,3 +188,15 @@ test('the automatic checkpoint restore rides with peer storage only', () => {
 	);
 	assert.equal(quorum.BEIGNET_RECOVERY_AUTO_APPLY, undefined, 'the daemon refuses the flag under a guardian mode');
 });
+
+test('serving as a guardian rides the Lightning listener (beignet #699)', () => {
+	const m = bareManager();
+	const serving = m._daemonEnv(rec({ guardianServe: true }), PATHS, 's', 't');
+	assert.equal(serving.BEIGNET_GUARDIAN_SERVE, 'true');
+	assert.equal(serving.BEIGNET_LISTEN_PORT, String(3001 + 6000), 'a guardian is reached at the listen port');
+	assert.equal(serving.BEIGNET_GUARDIAN_TOKEN, undefined, 'open by default: the pool needs strangers to register');
+	const quiet = m._daemonEnv(rec(), PATHS, 's', 't');
+	assert.equal(quiet.BEIGNET_GUARDIAN_SERVE, undefined, 'off contributes nothing an older engine would trip on');
+	const parked = m._daemonEnv(rec({ guardianServe: true, onchainOnly: true }), PATHS, 's', 't');
+	assert.equal(parked.BEIGNET_GUARDIAN_SERVE, undefined, 'no listener, no guardian');
+});

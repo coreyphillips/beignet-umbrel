@@ -333,7 +333,8 @@ function walletState({ blockHeight, channels, txs, payments, utxos, invoices, of
 // guardians, two of which must answer): the user's own Umbrel guardian, an
 // LSP's onion guardian and an independent one, the reference arrangement.
 const DEMO_GUARDIANS = [
-	`${hex(64)}@http://127.0.0.1:8701`,
+	// A friend's Umbrel serving as a guardian at its Lightning address (#699).
+	`${hex(64)}@bolt8://02${hex(64)}@${hex(28)}friendumbrelexample.onion:9101`,
 	`${hex(64)}@http://${hex(28)}guardianexample.onion`,
 	`${hex(64)}@https://guardian.example.net`
 ];
@@ -357,6 +358,8 @@ const store = {
 			// Strict quorum: every channel step waits for two guardians, and
 			// a restore elsewhere resumes the channels and fences this device.
 			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
+			// Serves as a guardian for other beignet nodes in turn (#699).
+			guardianServe: true,
 			// The primary node of the lightning-first demo wallets below: it
 			// fronts their inbound capacity (JIT receive) and relays their
 			// payment requests.
@@ -945,6 +948,13 @@ linkChannelPeers(store.state['demo-testnet']);
 linkChannelPeers(store.state['demo-fresh']);
 
 const nodeIds = {};
+/** The guardian id a serving demo wallet reports, stable per wallet. */
+function guardianIdOf(id) {
+	let h = 0;
+	for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+	return (h.toString(16).padStart(8, '0') + hex(56)).slice(0, 64);
+}
+
 function nodeId(id) {
 	if (!nodeIds[id]) nodeIds[id] = pubkey();
 	return nodeIds[id];
@@ -1179,6 +1189,7 @@ function publicRecord(w) {
 		autoApply: !!w.recovery?.autoApply
 	};
 	rec.lastStartError = w.lastStartError || null;
+	rec.guardianServe = !!w.guardianServe && !w.onchainOnly;
 	// Lightning-first fields, in the manager's shape.
 	rec.nodeId = w.onchainOnly ? null : nodeId(w.id);
 	rec.listenPort = w.onchainOnly ? null : 9101 + store.wallets.indexOf(w);
@@ -1267,19 +1278,23 @@ function runDemoLfbwSetup(w) {
 }
 
 // The manager's channel backup rules, mirrored so the dialogs' refusals are
-// demoable: a guardian set is three entries or none, a wallet pins the set it
-// first enables a guardian mode with, and strict quorum is never left.
+// demoable: settings hold a guardian draft (up to three, saved as far as it
+// got), a wallet needs the full three to enable a guardian mode, a wallet
+// pins the set it first enables one with, and strict quorum is never left.
 const RECOVERY_MODES = ['off', 'peer-storage', 'async-remote', 'quorum'];
 const isGuardianMode = (m) => m === 'async-remote' || m === 'quorum';
 function guardianEntryOk(g) {
 	const at = String(g).indexOf('@');
-	return at === 64 && /^[0-9a-f]{64}$/i.test(String(g).slice(0, 64)) && /^https?:\/\//.test(String(g).slice(65));
+	if (at !== 64 || !/^[0-9a-f]{64}$/i.test(String(g).slice(0, 64))) return false;
+	const url = String(g).slice(65);
+	// An HTTP guardian service, or a beignet node hosting one (beignet #699).
+	return /^https?:\/\//.test(url) || /^bolt8:\/\/[0-9a-f]{66}@[^\s@/]+:\d+$/i.test(url);
 }
-function validateGuardianSet(list) {
+const isNodeUri = (t) => /^[0-9a-fA-F]{66}@[^:\s@/]+:\d{1,5}$/.test(String(t || '').trim());
+function validateGuardianDraft(list) {
 	const entries = (Array.isArray(list) ? list : []).map((g) => String(g || '').trim()).filter(Boolean);
-	if (entries.length === 0) return [];
-	if (entries.length !== 3) {
-		throw err(`a guardian set is exactly 3 entries (crash-v1 is 2-of-3); got ${entries.length}`, 'BAD_GUARDIANS');
+	if (entries.length > 3) {
+		throw err(`a guardian set is at most 3 entries; got ${entries.length}`, 'BAD_GUARDIANS');
 	}
 	for (const g of entries) {
 		if (!guardianEntryOk(g)) throw err(`guardian entry "${g}" is not <64-hex pubkey>@<http(s) url>`, 'BAD_GUARDIANS');
@@ -1303,8 +1318,13 @@ function normalizeRecovery(mode, existing, autoApply) {
 	let guardians = (current.guardians || []).slice();
 	if (isGuardianMode(mode) && guardians.length === 0) {
 		guardians = store.settings.recoveryGuardians.slice();
-		if (guardians.length === 0) {
-			throw err('Guardian modes need three guardians. Set them in Settings first.', 'NO_GUARDIANS');
+		if (guardians.length !== 3) {
+			throw err(
+				guardians.length === 0
+					? 'Guardian modes need three guardians. Set them in Settings first.'
+					: `Guardian modes need three guardians. Settings has ${guardians.length}: add the rest first.`,
+				'NO_GUARDIANS'
+			);
 		}
 	}
 	return withAuto({ mode, guardians });
@@ -1325,19 +1345,49 @@ function managerRequest(path, method, body) {
 			electrumPresets: ELECTRUM_PRESETS,
 			torAvailable: true,
 			onionAvailable: true,
-			engineVersion: '0.10.0',
+			engineVersion: '0.12.0',
 			recoveryAvailable: true,
 			recoveryGuardians: store.settings.recoveryGuardians.slice(),
 			lfbwAvailable: true,
 			jitQuoteAvailable: true,
-			recoveryAutoApplyAvailable: true
+			recoveryAutoApplyAvailable: true,
+			guardianHostingAvailable: true
 		};
+	}
+	if (path === '/recovery/resolve-guardian' && method === 'POST') {
+		// The daemon opens a bolt8 session to the node and asks its guardian
+		// for its id (#699). A sibling wallet on this box answers with the id
+		// its own /guardian/status reports; anyone else gets a fresh one.
+		const uri = String(body?.uri || '').trim();
+		if (!isNodeUri(uri)) throw err('uri required (<node id>@host:port)', 'INVALID_PARAMS');
+		const [node, address] = uri.split('@');
+		const sibling = store.wallets.find((w) => w.guardianServe && !w.onchainOnly && nodeId(w.id) === node.toLowerCase());
+		if (!sibling && /:1$/.test(address)) throw err(`no guardian answered at bolt8://${node}@${address}: guardian request timed out`, 'GUARDIAN_UNREACHABLE');
+		const guardianId = sibling ? guardianIdOf(sibling.id) : hex(64);
+		const url = `bolt8://${node.toLowerCase()}@${address.toLowerCase()}`;
+		return { guardianId, url, entry: `${guardianId}@${url}`, guardianSetIds: sibling ? [hex(64)] : [], maxCiphertextBytes: 4194304 };
+	}
+	if (path === '/guardians/candidates') {
+		return store.wallets
+			.filter((w) => w.guardianServe && !w.onchainOnly)
+			.map((w) => {
+				const rec = publicRecord(w);
+				return {
+					id: w.id,
+					name: w.name,
+					network: w.network,
+					nodeId: rec.nodeId,
+					running: w.status === 'running',
+					onionUri: rec.onionAddress ? `${rec.nodeId}@${rec.onionAddress}` : null,
+					localUri: `${rec.nodeId}@127.0.0.1:${rec.listenPort}`
+				};
+			});
 	}
 	if (path === '/settings') {
 		if (method === 'PUT') {
 			const patch = { ...body };
 			if (patch.recoveryGuardians !== undefined) {
-				patch.recoveryGuardians = validateGuardianSet(patch.recoveryGuardians);
+				patch.recoveryGuardians = validateGuardianDraft(patch.recoveryGuardians);
 			}
 			Object.assign(store.settings, patch);
 			return store.settings;
@@ -1357,6 +1407,7 @@ function managerRequest(path, method, body) {
 			announce: !!body.announce && !body.onchainOnly,
 			onchainOnly: !!body.onchainOnly,
 			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null, body.recoveryAutoApply),
+			guardianServe: !!body.guardianServe && !body.onchainOnly,
 			createdAt: Date.now()
 		};
 		w.lfbw = body.onchainOnly ? null : normalizeLfbw(body.lfbw ? { ...body.lfbw, network: w.network } : null, null);
@@ -1388,6 +1439,7 @@ function managerRequest(path, method, body) {
 			announce: !!body.announce && !body.onchainOnly,
 			onchainOnly: !!body.onchainOnly,
 			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null, body.recoveryAutoApply),
+			guardianServe: !!body.guardianServe && !body.onchainOnly,
 			createdAt: Date.now()
 		};
 		// With the guardians a lost device used, the daemon finds the seed's
@@ -1445,6 +1497,8 @@ function managerRequest(path, method, body) {
 				w.onchainOnly = !!body.onchainOnly;
 				if (w.onchainOnly) w.announce = false;
 			}
+			if (body.guardianServe !== undefined) w.guardianServe = !!body.guardianServe;
+			if (w.onchainOnly) w.guardianServe = false;
 			w.recovery = recovery;
 			if (nextLfbw !== undefined) {
 				const was = w.lfbw;
@@ -1825,6 +1879,27 @@ function walletRequest(id, path, method, body) {
 		case '/recovery/status':
 			if (w.id === 'demo-autorestore') runDemoAutoRestore(w, st);
 			return recoveryStatus(w, st);
+		case '/guardian/status': {
+			// The guardian this wallet serves to other nodes (#699).
+			if (!w.guardianServe || w.onchainOnly) return { serving: false };
+			const setId = hex(64);
+			return {
+				serving: true,
+				guardianId: guardianIdOf(w.id),
+				authRequired: false,
+				sessions: 2,
+				sets: [
+					{
+						setId,
+						members: [guardianIdOf(w.id), hex(64), hex(64)],
+						namespaces: 2,
+						bytes: 3_145_728,
+						registeredAt: now - 12 * DAY
+					}
+				],
+				limits: { maxCiphertextBytes: 4194304, maxBytesPerSet: 268435456, maxSets: 16 }
+			};
+		}
 		case '/recovery/restore-capsule':
 			if (body?.confirm !== true) {
 				throw err('Restoring from a peer-storage capsule adopts channels an old device may still act on; pass {"confirm": true} to proceed', 'INVALID_PARAMS');

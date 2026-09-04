@@ -68,6 +68,11 @@ export const manager = {
 	lfbwMoveHome: (id) => request(`/api/wallets/${id}/lfbw/move-home`, { method: 'POST' }),
 	// Close the home channel, optionally turning lightning-first off first.
 	lfbwCloseHome: (id, body) => request(`/api/wallets/${id}/lfbw/close-home`, { method: 'POST', body }),
+	// A beignet node's Lightning URI to a guardian entry, asked through any
+	// running wallet's daemon (beignet #699). Adopts nothing.
+	resolveGuardian: (uri) => request('/api/recovery/resolve-guardian', { method: 'POST', body: { uri } }),
+	// The wallets on this Umbrel that serve as guardians, with their addresses.
+	guardianCandidates: () => request('/api/guardians/candidates'),
 	errors: (id, since) =>
 		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
 	channelEvents: (id, channelId) =>
