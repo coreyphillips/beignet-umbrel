@@ -338,7 +338,17 @@ env:
   # dropped its peers on their ping timeout, and it ran during startup
   # before the daemon could listen, adding minutes to every start
   # (beignet #703). Neither the manager nor the dashboard changes.
-  BEIGNET_VERSION: "0.11.1"
+  # 0.12.0 lets any beignet node serve as a recovery guardian (beignet
+  # #699, PR #700): a guardian entry may name a node by its Lightning
+  # address (<64-hex>@bolt8://<node id>@host:port), reached over a
+  # dedicated BOLT 8 session the writer opens under a fresh key; the
+  # daemon hosts the reference guardian with BEIGNET_GUARDIAN_SERVE (needs
+  # BEIGNET_LISTEN_PORT; _TOKEN, _MAX_BYTES, _MAX_SETS, _MAX_CIPHERTEXT_BYTES
+  # tune it), keeps serving while its own writer lease is quarantined, and
+  # answers GET /guardian/status and POST /recovery/resolve-guardian. The
+  # manager's per-wallet "serve as guardian" flag and the Settings resolver
+  # are probed on these routes, so the controls appear with this pin.
+  BEIGNET_VERSION: "0.12.0"
 
 jobs:
   build:
