@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.17.0"
+version: "0.17.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,26 +30,17 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Guardians can be rotated. A running wallet in a guardian mode can
-  replace one guardian or all three from its Edit dialog, without
-  stopping: three slots start as the current set, each takes a guardian
-  entry or a beignet node's Lightning address, and one button rotates.
-  The wallet registers with the new set, copies its journal across while
-  the channels keep running, switches over, and retires the old set for
-  good. A seed restore handed the old set follows the rotation to the
-  live one on its own, and a previous device still running on the old
-  set stops itself the moment it sees the new one. A rotation the wallet
-  cannot finish is refused before anything changes.
+  A wallet that takes longer than 45 seconds to boot now finishes its
+  setup. On a busy box, a slow first boot (a large gossip load, several
+  wallets starting at once) was promoted to healthy after the startup
+  window without the setup that follows a normal start: its node id was
+  not captured and, for a lightning-first wallet or its primary, the
+  zero-conf trust and direct-funding policy its links depend on were
+  never re-applied, since the engine keeps those in memory. The setup
+  now runs once per boot however long the boot took.
 
 
-  The Node status card now says what strict quorum costs. Once a channel
-  step has waited for its guardians, the quorum tier reports how many
-  steps have been held, the typical wait, the slowest five percent and
-  the last one, and any step that timed out. Nothing is estimated; the
-  numbers are what this wallet actually paid.
-
-
-  This bundles beignet 0.13.0.
+  No engine change; this still bundles beignet 0.13.0.
 
 dependencies: []
 path: ""
