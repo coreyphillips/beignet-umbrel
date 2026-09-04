@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.15.2"
+version: "0.15.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,21 +30,22 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A closed channel tells its story. The channel detail view now has a
-  Close section for closing and closed channels: who closed it and why
-  (a cooperative close, the peer, or this wallet with the reason, such
-  as the reestablish watchdog), the closing transaction, whether the
-  daemon has seen it confirm and how many confirmations it has, how
-  the sweep is going, and for a force close of your own, when the
-  timelocked balance becomes spendable. While the close is broadcast
-  but not yet confirmed, a Rebroadcast button asks the daemon to send
-  it again. The History timeline gains the final entry, every output
-  of the close swept.
+  Wallets no longer go quiet for a minute every hour. On a mainnet-sized
+  gossip graph, the engine's hourly prune of stale network data deleted
+  each row in its own database commit, which held the wallet daemon's
+  only thread for the whole pass. The wallet stopped answering, the
+  dashboard read it as unhealthy, and its Lightning peers dropped the
+  connection on their ping timeout. The prune now does the whole pass in
+  one commit.
 
 
-  Anything the daemon cannot say is said as such: a close whose
-  confirmation the daemon has not reported reads that way rather than
-  as a claim about the chain. beignet 0.11.0 remains bundled.
+  Wallets also start faster. That same one-row-at-a-time pass ran during
+  startup, before the daemon could accept connections, which is what put
+  minutes between starting a wallet and its node coming up.
+
+
+  This is a bundled engine upgrade to beignet 0.11.1. Nothing in the
+  dashboard changes.
 
 
 dependencies: []
