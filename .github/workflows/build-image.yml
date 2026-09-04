@@ -348,7 +348,17 @@ env:
   # answers GET /guardian/status and POST /recovery/resolve-guardian. The
   # manager's per-wallet "serve as guardian" flag and the Settings resolver
   # are probed on these routes, so the controls appear with this pin.
-  BEIGNET_VERSION: "0.12.0"
+  # 0.13.0 adds guardian-set rotation (beignet #701, PR #705): POST
+  # /recovery/rotate-guardians replaces one guardian or all three with the
+  # channels running, registering under the current lease at the next
+  # generation, backfilling, switching, and retiring the old set; a boot
+  # with old entries follows the rotation by itself and a stale device
+  # fences on the higher generation. GET /recovery/status gains
+  # generation, configuredSetStale and rotation, and node.barrierLatency
+  # (beignet #702, PR #706): what the quorum barrier has cost, measured.
+  # The manager's rotate route is probed on the new route, so the Edit
+  # dialog's rotation slots appear with this pin.
+  BEIGNET_VERSION: "0.13.0"
 
 jobs:
   build:
