@@ -1837,6 +1837,13 @@ function recoveryStatus(w, st) {
 		awaitingDurabilityCount: r.awaitingDurabilityCount,
 		fenced: r.fenced,
 		backfillLost: r.backfillLost,
+		// What the barrier has cost (beignet #702): only quorum mode ever
+		// parks a step, and the demo's guardians sit a few hundred
+		// milliseconds away over Tor.
+		barrierLatency:
+			mode === 'quorum'
+				? { released: 412, refused: 0, sampled: 256, lastMs: 610, meanMs: 680, p50Ms: 640, p95Ms: 1150, maxMs: 2900 }
+				: null,
 		channels
 	};
 	return {
