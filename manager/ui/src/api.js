@@ -73,6 +73,9 @@ export const manager = {
 	resolveGuardian: (uri) => request('/api/recovery/resolve-guardian', { method: 'POST', body: { uri } }),
 	// The wallets on this Umbrel that serve as guardians, with their addresses.
 	guardianCandidates: () => request('/api/guardians/candidates'),
+	// Move a wallet to a new guardian set with its channels running (beignet #701).
+	rotateGuardians: (id, guardians) =>
+		request(`/api/wallets/${id}/recovery/rotate`, { method: 'POST', body: { guardians } }),
 	errors: (id, since) =>
 		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
 	channelEvents: (id, channelId) =>

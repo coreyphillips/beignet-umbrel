@@ -77,6 +77,9 @@ const RECOVERY_AUTO_APPLY_MARKERS = ['BEIGNET_RECOVERY_AUTO_APPLY'];
 // a guardian entry through the daemon. Both routes are literals in the
 // OpenAPI module of an engine that carries the feature.
 const GUARDIAN_HOSTING_MARKERS = ["'/guardian/status'", "'/recovery/resolve-guardian'"];
+// Guardian-set rotation (beignet #701): a wallet moves to a new set with
+// the channels running. The route is a literal in the OpenAPI module.
+const GUARDIAN_ROTATION_MARKERS = ["'/recovery/rotate-guardians'"];
 
 /** The text of a module beside the daemon binary, or null when absent. */
 function siblingModule(bin, file) {
@@ -115,6 +118,11 @@ function guardianHostingAvailable(bin = process.env.BEIGNET_BIN) {
 	return probe(bin, 'openapi.js', GUARDIAN_HOSTING_MARKERS);
 }
 
+/** True when the engine behind `bin` rotates guardian sets (beignet #701). */
+function guardianRotationAvailable(bin = process.env.BEIGNET_BIN) {
+	return probe(bin, 'openapi.js', GUARDIAN_ROTATION_MARKERS);
+}
+
 module.exports = {
 	engineVersion,
 	recoveryAvailable,
@@ -122,9 +130,11 @@ module.exports = {
 	jitQuoteAvailable,
 	recoveryAutoApplyAvailable,
 	guardianHostingAvailable,
+	guardianRotationAvailable,
 	RECOVERY_MIN_VERSION,
 	LFBW_ROUTE_MARKERS,
 	JIT_QUOTE_MARKERS,
 	RECOVERY_AUTO_APPLY_MARKERS,
-	GUARDIAN_HOSTING_MARKERS
+	GUARDIAN_HOSTING_MARKERS,
+	GUARDIAN_ROTATION_MARKERS
 };

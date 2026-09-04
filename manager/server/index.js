@@ -146,7 +146,10 @@ async function main() {
 				recoveryAutoApplyAvailable: manager.recoveryAutoApplyAvailable(),
 				// Wallets hosting a guardian for other beignet nodes, and node
 				// URIs resolving to guardian entries (beignet #699).
-				guardianHostingAvailable: manager.guardianHostingAvailable()
+				guardianHostingAvailable: manager.guardianHostingAvailable(),
+				// A wallet moving to a new guardian set with its channels running
+				// (beignet #701).
+				guardianRotationAvailable: manager.guardianRotationAvailable()
 			}
 		});
 	});
@@ -274,6 +277,16 @@ async function main() {
 		asyncHandler(async (req, res) => {
 			const { channelId, turnOff } = req.body || {};
 			res.json({ ok: true, result: await manager.closeHome(req.params.id, { channelId, turnOff: !!turnOff }) });
+		})
+	);
+
+	// Move a wallet to a new guardian set with its channels running (beignet
+	// #701): the daemon rotates, the record follows.
+	api.post(
+		'/wallets/:id/recovery/rotate',
+		asyncHandler(async (req, res) => {
+			const { guardians } = req.body || {};
+			res.json({ ok: true, result: await manager.rotateGuardians(req.params.id, guardians) });
 		})
 	);
 
