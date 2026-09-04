@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.16.0"
+version: "0.17.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,35 +30,26 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Any beignet node can now be a recovery guardian. Tick "Serve as a
-  guardian for other beignet nodes" on a Lightning wallet (create form
-  or Edit) and its daemon hosts the guardian at the wallet's own
-  Lightning address, over Tor when the wallet announces one. Other
-  beignet wallets pin it as one of their three guardians and keep an
-  encrypted journal of their channel state there, which this node
-  cannot read. The Overview tab gains a card with what it holds, how
-  much, and the address to hand out.
+  Guardians can be rotated. A running wallet in a guardian mode can
+  replace one guardian or all three from its Edit dialog, without
+  stopping: three slots start as the current set, each takes a guardian
+  entry or a beignet node's Lightning address, and one button rotates.
+  The wallet registers with the new set, copies its journal across while
+  the channels keep running, switches over, and retires the old set for
+  good. A seed restore handed the old set follows the rotation to the
+  live one on its own, and a previous device still running on the old
+  set stops itself the moment it sees the new one. A rotation the wallet
+  cannot finish is refused before anything changes.
 
 
-  Adding a guardian got simpler: paste a node's Lightning address
-  (<node id>@host:port) into a guardian slot in Settings and it
-  resolves to a guardian entry, or pick a serving wallet from this
-  Umbrel. Three independent operators is the point, so pair with other
-  Umbrels; a wallet on the same box protects against nothing this box
-  can suffer. A wallet still pins the set it first registers with and
-  cannot move to another, so choose guardians you expect to keep.
+  The Node status card now says what strict quorum costs. Once a channel
+  step has waited for its guardians, the quorum tier reports how many
+  steps have been held, the typical wait, the slowest five percent and
+  the last one, and any step that timed out. Nothing is estimated; the
+  numbers are what this wallet actually paid.
 
 
-  Settings also keeps a partial guardian list now, so a set can be
-  collected one node at a time; a wallet needs all three before it can
-  turn a guardian mode on.
-
-
-  A serving wallet keeps answering guardian traffic even while its own
-  channel backup is waiting for its guardians to confirm it, so a group
-  of Umbrels guarding each other can all restart at once. This bundles
-  beignet 0.12.0.
-
+  This bundles beignet 0.13.0.
 
 dependencies: []
 path: ""
