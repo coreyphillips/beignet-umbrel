@@ -330,7 +330,15 @@ env:
   # (#695, #696). Surface vs 0.10.0: additive (one route, one env family,
   # one SSE event). The manager probes for both and the dashboard hides the
   # quote line and the auto-restore option when they are absent.
-  BEIGNET_VERSION: "0.11.0"
+  # 0.11.1 is a fix release with a byte-identical daemon surface: the
+  # hourly gossip prune and the boot restore now delete their stale rows
+  # in one transaction instead of one commit, and one fsync, per row. On
+  # a mainnet-sized graph the old loop held the daemon's only thread long
+  # enough to stop answering /health for about a minute every hour, which
+  # dropped its peers on their ping timeout, and it ran during startup
+  # before the daemon could listen, adding minutes to every start
+  # (beignet #703). Neither the manager nor the dashboard changes.
+  BEIGNET_VERSION: "0.11.1"
 
 jobs:
   build:
