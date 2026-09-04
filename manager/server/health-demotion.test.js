@@ -89,6 +89,50 @@ test('a slow boot that answers after the startup window is promoted to running',
 	assert.ok(m.logs.some((l) => l.includes('after the startup poll window')));
 });
 
+test('a slow boot still gets its post-start setup, once per process', async () => {
+	// The setup used to hang off the startup poll alone: a wallet promoted
+	// here read healthy with its node id uncaptured and its lightning-first
+	// links never re-applied.
+	const rt = runningState();
+	rt.status = 'starting';
+	rt.healthy = false;
+	rt.postStartFor = null;
+	const m = managerWith(rt);
+	const ran = [];
+	m._onHealthy = async (id) => {
+		ran.push(id);
+	};
+	answers();
+	await m._checkChainStall('w1');
+	assert.deepEqual(ran, ['w1']);
+	// Later polls of the same child do not run it again.
+	await m._checkChainStall('w1');
+	assert.deepEqual(ran, ['w1']);
+	// A new child does.
+	rt.proc = { pid: 2 };
+	rt.status = 'starting';
+	await m._checkChainStall('w1');
+	assert.deepEqual(ran, ['w1', 'w1']);
+});
+
+test('the startup poll and the stall poll never double up on the setup', async () => {
+	const rt = runningState();
+	rt.status = 'starting';
+	rt.healthy = false;
+	rt.postStartFor = null;
+	const m = managerWith(rt);
+	const ran = [];
+	m._onHealthy = async (id) => {
+		ran.push(id);
+	};
+	// The startup poll got there first.
+	m._runPostStart('w1', rt);
+	answers();
+	rt.status = 'starting';
+	await m._checkChainStall('w1');
+	assert.deepEqual(ran, ['w1']);
+});
+
 test('a daemon still starting is not demoted; startup owns that window', async () => {
 	const rt = runningState();
 	rt.status = 'starting';

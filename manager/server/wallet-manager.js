@@ -294,6 +294,10 @@ class WalletManager {
 				chainStallPolls: 0,
 				healthFailPolls: 0,
 				lastStallRestartAt: 0,
+				// The child the post-start setup (node id capture, lightning-first
+				// links) has run for, so a boot promoted by either poll runs it
+				// exactly once per process.
+				postStartFor: null,
 				// The daemon's own reason for a failed start (its START_FAILED
 				// line), kept so a wallet stuck restarting can say why.
 				lastStartError: null,
@@ -1241,9 +1245,11 @@ class WalletManager {
 			if (rt.proc && !rt.stopping && rt.status === 'starting') {
 				rt.status = 'running';
 				this._log(id, 'healthy (after the startup poll window)');
+				this._runPostStart(id, rt);
 			} else if (rt.proc && !rt.stopping && rt.status === 'restore-required') {
 				rt.status = 'running';
 				this._log(id, 'healthy (restore finished, node running)');
+				this._runPostStart(id, rt);
 			}
 			rt.healthy = true;
 			rt.healthFailPolls = 0;
@@ -1334,7 +1340,7 @@ class WalletManager {
 					rt.status === 'restore-required' ? 'healthy (restore finished, node running)' : 'healthy'
 				);
 				rt.status = 'running';
-				this._onHealthy(id).catch((err) => this._log(id, `post-start setup failed: ${err.message}`));
+				this._runPostStart(id, rt);
 				return;
 			}
 			if (probe.kind === 'restore-pending') {
@@ -1559,6 +1565,23 @@ class WalletManager {
 	async _onHealthy(id) {
 		await this._captureNodeId(id);
 		await this._restoreLfbwLinks(id);
+	}
+
+	/**
+	 * Run the post-start setup once for the child that just came up. Two
+	 * polls can be the one to notice a daemon is healthy: the startup poll,
+	 * and the chain-stall poll when a slow boot (a mainnet gossip chew, a
+	 * large restore, N daemons booting at once) outlasts the startup
+	 * window. The setup used to hang off the startup poll alone, so a slow
+	 * boot read healthy with its node id uncaptured and its lightning-first
+	 * links never re-applied; the daemon keeps zero-conf trust and the
+	 * direct-funding policy in memory, so "never" meant until the next fast
+	 * start.
+	 */
+	_runPostStart(id, rt) {
+		if (!rt.proc || rt.postStartFor === rt.proc) return;
+		rt.postStartFor = rt.proc;
+		this._onHealthy(id).catch((err) => this._log(id, `post-start setup failed: ${err.message}`));
 	}
 
 	// A direct call to a wallet daemon with its bearer token. The reverse
