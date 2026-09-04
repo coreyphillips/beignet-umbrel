@@ -16,7 +16,8 @@ const {
 	validateGuardianSet,
 	parseGuardianEntry,
 	sameGuardianSet,
-	recoveryEnv
+	recoveryEnv,
+	isNodeUri
 } = require('./recovery');
 
 const K = (c) => c.repeat(64);
@@ -59,12 +60,71 @@ const rejects = (fn, code) => {
 	assert.fail(`expected ${code}`);
 };
 
-test('guardian entries are pubkey@url with an http(s) URL', () => {
+test('guardian entries are pubkey@url with an http(s) or bolt8 URL', () => {
 	assert.equal(parseGuardianEntry(` ${K('A')}@http://127.0.0.1:8101 `).pubkey, K('a'));
+	assert.equal(parseGuardianEntry(`${K('a')}@http://127.0.0.1:8101`).bolt8, false);
 	assert.throws(() => parseGuardianEntry(`${K('a')}http://x`), /separator/);
 	assert.throws(() => parseGuardianEntry(`abc@http://x`), /64-hex/);
 	assert.throws(() => parseGuardianEntry(`${K('a')}@not a url`), /not a valid URL/);
-	assert.throws(() => parseGuardianEntry(`${K('a')}@ftp://x`), /http or https/);
+	assert.throws(() => parseGuardianEntry(`${K('a')}@ftp://x`), /http, https or bolt8/);
+});
+
+test('a bolt8 entry names a beignet node by its Lightning address (beignet #699)', () => {
+	const node = '02' + K('B');
+	const parsed = parseGuardianEntry(`${K('A')}@bolt8://${node}@Guardian.Example:9735`);
+	assert.equal(parsed.pubkey, K('a'));
+	assert.equal(parsed.bolt8, true);
+	assert.equal(parsed.url, `bolt8://${node.toLowerCase()}@guardian.example:9735`);
+	assert.equal(parsed.entry, `${K('a')}@${parsed.url}`);
+	// The onion form a pool of Umbrels actually uses.
+	assert.equal(parseGuardianEntry(`${K('a')}@bolt8://${node}@${'a'.repeat(56)}.onion:9101`).bolt8, true);
+	assert.throws(() => parseGuardianEntry(`${K('a')}@bolt8://${K('b')}@h:1`), /66-hex node id/);
+	assert.throws(() => parseGuardianEntry(`${K('a')}@bolt8://${node}:secret@h:1`), /nothing else/);
+	assert.throws(() => parseGuardianEntry(`${K('a')}@bolt8://${node}@h`), /host and a port/);
+	assert.throws(() => parseGuardianEntry(`${K('a')}@bolt8://${node}@h:1/path`), /must not carry a path/);
+	// A plain node URI is not an entry yet: it resolves to one through the daemon.
+	assert.equal(isNodeUri(`${node}@umbrel.local:9101`), true);
+	assert.equal(isNodeUri(`${node}@${'a'.repeat(56)}.onion:9101`), true);
+	assert.equal(isNodeUri(`${K('a')}@http://x`), false);
+	assert.equal(isNodeUri(`${K('a')}@bolt8://${node}@h:1`), false);
+	// Drafts and sets accept bolt8 entries beside http ones.
+	const mixed = [G[0], `${K('b')}@bolt8://${node}@h:9735`, G[2]];
+	assert.deepEqual(validateGuardianSet(mixed), [G[0], `${K('b')}@bolt8://${node.toLowerCase()}@h:9735`, G[2]]);
+});
+
+test('serving as a guardian needs the engine surface and a Lightning listener', () => {
+	const m = managerWith({});
+	m.guardianHostingSupported = false;
+	assert.equal(m._normalizeGuardianServe(undefined, false), false);
+	assert.equal(m._normalizeGuardianServe(false, false), false);
+	rejects(() => m._normalizeGuardianServe(true, false), 'GUARDIAN_HOSTING_UNSUPPORTED');
+	m.guardianHostingSupported = true;
+	assert.equal(m._normalizeGuardianServe(true, false), true);
+	rejects(() => m._normalizeGuardianServe(true, true), 'GUARDIAN_SERVE_NEEDS_LIGHTNING');
+});
+
+test('guardian candidates are the serving wallets with the addresses to reach them', () => {
+	const node = '02' + K('c');
+	const m = managerWith({
+		records: {
+			a: { id: 'a', name: 'Main', network: 'mainnet', port: 3101, running: true, guardianServe: true, nodeId: node, announce: true },
+			b: { id: 'b', name: 'Quiet', network: 'mainnet', port: 3102, running: true, guardianServe: false, nodeId: node },
+			c: { id: 'c', name: 'Parked', network: 'mainnet', port: 3103, running: true, guardianServe: true, onchainOnly: true, nodeId: node },
+			d: { id: 'd', name: 'Fresh', network: 'mainnet', port: 3104, running: true, guardianServe: true }
+		}
+	});
+	m.listenPort = (rec) => rec.port + 6000;
+	m.runtimeState = () => ({ healthy: true });
+	m.onionAddress = (rec) => (rec.announce ? `${'x'.repeat(56)}.onion:${rec.port + 6000}` : null);
+	const candidates = m.guardianCandidates();
+	assert.deepEqual(
+		candidates.map((c) => c.id),
+		['a'],
+		'not serving, on-chain only, and no node id yet are all left out'
+	);
+	assert.equal(candidates[0].onionUri, `${node}@${'x'.repeat(56)}.onion:9101`);
+	assert.equal(candidates[0].localUri, `${node}@127.0.0.1:9101`);
+	assert.equal(candidates[0].running, true);
 });
 
 test('a guardian draft is up to three distinct entries', () => {

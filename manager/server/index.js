@@ -143,7 +143,10 @@ async function main() {
 				// #687) and the daemon applying a peer-storage checkpoint by
 				// itself (beignet #690), both probed on the bundle.
 				jitQuoteAvailable: manager.jitQuoteAvailable(),
-				recoveryAutoApplyAvailable: manager.recoveryAutoApplyAvailable()
+				recoveryAutoApplyAvailable: manager.recoveryAutoApplyAvailable(),
+				// Wallets hosting a guardian for other beignet nodes, and node
+				// URIs resolving to guardian entries (beignet #699).
+				guardianHostingAvailable: manager.guardianHostingAvailable()
 			}
 		});
 	});
@@ -157,6 +160,22 @@ async function main() {
 		asyncHandler(async (req, res) => {
 			res.json({ ok: true, result: manager.updateSettings(req.body || {}) });
 		})
+	);
+
+	// A beignet node's Lightning URI to a guardian entry, asked through any
+	// running Lightning wallet's daemon; adopts nothing (beignet #699).
+	api.post(
+		'/recovery/resolve-guardian',
+		asyncHandler(async (req, res) => {
+			const { uri } = req.body || {};
+			res.json({ ok: true, result: await manager.resolveGuardianUri(uri) });
+		})
+	);
+
+	// The wallets on this Umbrel that serve as guardians, with the addresses
+	// to reach them at.
+	api.get('/guardians/candidates', (req, res) =>
+		res.json({ ok: true, result: manager.guardianCandidates() })
 	);
 
 	api.get('/wallets', (req, res) => res.json({ ok: true, result: manager.list() }));

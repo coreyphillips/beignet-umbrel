@@ -25,19 +25,29 @@ function isGuardianMode(mode) {
 	return mode === 'async-remote' || mode === 'quorum';
 }
 
+/** A Lightning node URI, `<66-hex compressed node id>@host:port`, as a wallet pastes it. */
+const NODE_URI = /^([0-9a-fA-F]{66})@(\[[0-9a-fA-F:]+\]|[^:\s@/]+):(\d{1,5})$/;
+
+/** True when `input` is a plain node URI rather than a guardian entry. */
+function isNodeUri(input) {
+	return NODE_URI.test(String(input || '').trim());
+}
+
 /**
- * One guardian entry, `<64-hex-x-only-pubkey>@<http(s) url>`. Returns the
- * normalized entry (lowercase key, URL as given) or throws with a message
- * that names what is wrong. Whether the key is a valid x-only secp256k1
- * point is left to the daemon; the manager has no curve library and a key
- * copied from a guardian is a point.
+ * One guardian entry, `<64-hex-x-only-pubkey>@<url>`, where the URL is
+ * `http(s)://...` for a guardian service or `bolt8://<66-hex node id>@host:port`
+ * for a guardian hosted by a beignet node (beignet #699, wire 2.7). Returns
+ * the normalized entry (lowercase keys, URL as given or canonical for bolt8)
+ * or throws with a message that names what is wrong. Whether the keys are
+ * valid secp256k1 points is left to the daemon; the manager has no curve
+ * library and a key copied from a guardian is a point.
  */
 function parseGuardianEntry(input) {
 	const entry = String(input || '').trim();
 	const at = entry.indexOf('@');
 	if (at < 0) {
 		throw new Error(
-			`guardian entry "${entry}" is missing the pubkey@url separator; expected <64-hex-x-only-pubkey>@<http(s) url>`
+			`guardian entry "${entry}" is missing the pubkey@url separator; expected <64-hex-x-only-pubkey>@<url>`
 		);
 	}
 	const pubkey = entry.slice(0, at);
@@ -51,10 +61,25 @@ function parseGuardianEntry(input) {
 	} catch (_) {
 		throw new Error(`guardian URL "${url}" is not a valid URL`);
 	}
-	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-		throw new Error(`guardian URL "${url}" must use http or https`);
+	if (parsed.protocol === 'bolt8:') {
+		// The userinfo position carries the host node's id, by design (the key
+		// BOLT 8 authenticates the server by); a credential never rides here.
+		if (!/^[0-9a-fA-F]{66}$/.test(parsed.username) || parsed.password !== '') {
+			throw new Error(`bolt8 guardian URL "${url}" must carry a 66-hex node id before the @, and nothing else`);
+		}
+		if (!parsed.hostname || parsed.port === '') {
+			throw new Error(`bolt8 guardian URL "${url}" needs a host and a port`);
+		}
+		if (parsed.pathname && parsed.pathname !== '/') {
+			throw new Error(`bolt8 guardian URL "${url}" must not carry a path`);
+		}
+		const canonical = `bolt8://${parsed.username.toLowerCase()}@${parsed.hostname.toLowerCase()}:${parsed.port}`;
+		return { pubkey: pubkey.toLowerCase(), url: canonical, entry: `${pubkey.toLowerCase()}@${canonical}`, bolt8: true };
 	}
-	return { pubkey: pubkey.toLowerCase(), url, entry: `${pubkey.toLowerCase()}@${url}` };
+	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+		throw new Error(`guardian URL "${url}" must use http, https or bolt8`);
+	}
+	return { pubkey: pubkey.toLowerCase(), url, entry: `${pubkey.toLowerCase()}@${url}`, bolt8: false };
 }
 
 /**
@@ -133,6 +158,7 @@ module.exports = {
 	RECOVERY_PROFILE,
 	isRecoveryMode,
 	isGuardianMode,
+	isNodeUri,
 	parseGuardianEntry,
 	validateGuardianDraft,
 	validateGuardianSet,

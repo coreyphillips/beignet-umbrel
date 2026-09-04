@@ -25,6 +25,41 @@ export function isGuardianMode(mode) {
 	return mode === 'async-remote' || mode === 'quorum';
 }
 
+/** A Lightning node URI, `<66-hex node id>@host:port`, as pasted from another wallet. */
+const NODE_URI = /^([0-9a-fA-F]{66})@(\[[0-9a-fA-F:]+\]|[^:\s@/]+):(\d{1,5})$/;
+
+/** True for a plain node URI, which resolves to a guardian entry through the daemon. */
+export function isNodeUri(text) {
+	return NODE_URI.test(String(text || '').trim());
+}
+
+/** True for a guardian entry that names a beignet node (bolt8), not an HTTP service. */
+export function isBolt8Entry(entry) {
+	return /^[0-9a-fA-F]{64}@bolt8:\/\//.test(String(entry || '').trim());
+}
+
+/**
+ * A guardian entry, read for people: where it lives and what kind it is.
+ * `<64-hex>@bolt8://<66-hex>@host:port` reads as a beignet node at host:port;
+ * an http(s) entry reads as its host.
+ */
+export function guardianEntryLabel(entry) {
+	const text = String(entry || '').trim();
+	const at = text.indexOf('@');
+	if (at < 0) return text;
+	const url = text.slice(at + 1);
+	if (isBolt8Entry(text)) {
+		const m = /^bolt8:\/\/([0-9a-fA-F]{66})@(.+)$/.exec(url);
+		return m ? `beignet node ${m[1].slice(0, 8)}… at ${m[2]}` : url;
+	}
+	try {
+		const parsed = new URL(url);
+		return `${parsed.protocol === 'https:' ? 'https ' : ''}guardian at ${parsed.host}`;
+	} catch (_) {
+		return url;
+	}
+}
+
 const SEED_ONLY_DETAIL =
 	'Only the seed is backed up. If this Umbrel is lost, importing the seed elsewhere recovers the on-chain funds; open channels are closed by their peers and the funds return on-chain over time.';
 

@@ -23,7 +23,14 @@ const {
 	sameGuardianSet,
 	recoveryEnv
 } = require('./recovery');
-const { engineVersion, recoveryAvailable, lfbwAvailable, jitQuoteAvailable, recoveryAutoApplyAvailable } = require('./engine');
+const {
+	engineVersion,
+	recoveryAvailable,
+	lfbwAvailable,
+	jitQuoteAvailable,
+	recoveryAutoApplyAvailable,
+	guardianHostingAvailable
+} = require('./engine');
 const lfbw = require('./lfbw');
 
 const HEALTH_TIMEOUT_MS = 45000;
@@ -120,6 +127,10 @@ class WalletManager {
 		// (beignet #690).
 		this.jitQuoteSupported = jitQuoteAvailable();
 		this.recoveryAutoApplySupported = recoveryAutoApplyAvailable();
+		// A wallet serving the reference guardian to other beignet nodes at its
+		// Lightning address, and a node URI resolving to a guardian entry
+		// (beignet #699), probed on the bundle like the rest.
+		this.guardianHostingSupported = guardianHostingAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 	}
@@ -472,6 +483,10 @@ class WalletManager {
 		return this.recoveryAutoApplySupported === true;
 	}
 
+	guardianHostingAvailable() {
+		return this.guardianHostingSupported === true;
+	}
+
 	recoveryAvailable() {
 		return recoveryAvailable(this.engineVersion);
 	}
@@ -529,6 +544,31 @@ class WalletManager {
 	 * frame refuses to run without its barrier, so the change would only
 	 * produce a wallet that cannot start).
 	 */
+	/**
+	 * The per-wallet "serve as guardian" flag (beignet #699): needs an engine
+	 * that hosts guardians and a Lightning listener, so it is refused on an
+	 * engine without the surface and dropped for an on-chain only wallet.
+	 */
+	_normalizeGuardianServe(value, onchainOnly) {
+		if (value === undefined || value === null) return false;
+		if (!value) return false;
+		if (!this.guardianHostingAvailable()) {
+			throw httpError(
+				400,
+				'GUARDIAN_HOSTING_UNSUPPORTED',
+				'The bundled engine cannot host a guardian yet; update the app first.'
+			);
+		}
+		if (onchainOnly) {
+			throw httpError(
+				400,
+				'GUARDIAN_SERVE_NEEDS_LIGHTNING',
+				'An on-chain only wallet runs no Lightning listener, so it cannot serve as a guardian.'
+			);
+		}
+		return true;
+	}
+
 	_normalizeRecovery(mode, existing, autoApply) {
 		const current = existing || { mode: 'off', guardians: [] };
 		const resolvedMode = mode === undefined ? current.mode || 'off' : mode;
@@ -590,6 +630,7 @@ class WalletManager {
 		onchainOnly,
 		recoveryMode,
 		recoveryAutoApply,
+		guardianServe,
 		lfbw: lfbwInput
 	} = {}) {
 		const strength = Number(wordCount) === 12 ? 128 : 256;
@@ -604,6 +645,7 @@ class WalletManager {
 			onchainOnly,
 			recoveryMode,
 			recoveryAutoApply,
+			guardianServe,
 			lfbw: lfbwInput
 		});
 	}
@@ -618,6 +660,7 @@ class WalletManager {
 		onchainOnly,
 		recoveryMode,
 		recoveryAutoApply,
+		guardianServe,
 		lfbw: lfbwInput
 	} = {}) {
 		const normalized = String(mnemonic || '')
@@ -637,6 +680,7 @@ class WalletManager {
 			onchainOnly,
 			recoveryMode,
 			recoveryAutoApply,
+			guardianServe,
 			lfbw: lfbwInput
 		});
 	}
@@ -651,6 +695,7 @@ class WalletManager {
 		onchainOnly,
 		recoveryMode,
 		recoveryAutoApply,
+		guardianServe,
 		lfbw: lfbwInput
 	}) {
 		const net = this._validateNetwork(network);
@@ -674,6 +719,9 @@ class WalletManager {
 			announce: !!announce && !onchainOnly,
 			onchainOnly: !!onchainOnly,
 			recovery,
+			// Serving the reference guardian to other beignet nodes needs the
+			// Lightning listener, which an on-chain only wallet does not run.
+			guardianServe: this._normalizeGuardianServe(guardianServe, onchainOnly),
 			lfbw: lfbwBlock,
 			// A wallet becomes a liquidity provider when a lightning-first
 			// sibling picks it as primary (setupLfbw flips this), or when the
@@ -741,6 +789,7 @@ class WalletManager {
 			onchainOnly,
 			recoveryMode,
 			recoveryAutoApply,
+			guardianServe,
 			lfbw: lfbwInput,
 			liquidityProvider,
 			jit
@@ -792,6 +841,12 @@ class WalletManager {
 		if (onchainOnly !== undefined) {
 			rec.onchainOnly = !!onchainOnly;
 			if (rec.onchainOnly) rec.announce = false;
+		}
+		if (guardianServe !== undefined) {
+			rec.guardianServe = this._normalizeGuardianServe(guardianServe, rec.onchainOnly);
+		} else if (rec.onchainOnly && rec.guardianServe) {
+			// Parking Lightning stops the listener the guardian is served on.
+			rec.guardianServe = false;
 		}
 		// Unlike announce, channel backup survives a switch to on-chain only:
 		// a parked quorum wallet still has to boot with its barrier, or it
@@ -871,6 +926,11 @@ class WalletManager {
 		// watches its channels, and a journal that promised quorum refuses to
 		// run without its barrier.
 		Object.assign(env, recoveryEnv(rec.recovery));
+		// Serve the reference guardian to other beignet nodes at this wallet's
+		// Lightning address (beignet #699). Open, no token: the pool only works
+		// if strangers can register, and BOLT 8 already encrypts the session;
+		// the engine's quotas bound what a stranger can store.
+		if (rec.guardianServe && !rec.onchainOnly) env.BEIGNET_GUARDIAN_SERVE = 'true';
 		// Operator-level engine policy (routing fees, liquidity ads, the
 		// direct-funding minimum) passes through from the manager's own env,
 		// and a wallet that provides liquidity to lightning-first wallets runs
@@ -1481,6 +1541,60 @@ class WalletManager {
 	// A direct call to a wallet daemon with its bearer token. The reverse
 	// proxy serves the browser; the manager talks to daemons itself for
 	// lightning-first setup and channelize.
+	/**
+	 * A beignet node's Lightning URI to a guardian entry (beignet #699): the
+	 * daemon of any healthy Lightning wallet opens a bolt8 session to the
+	 * node, asks its guardian for its id, and hands back the entry to pin.
+	 * Nothing is adopted here; Settings is where the operator pins it.
+	 */
+	async resolveGuardianUri(uri) {
+		if (!this.guardianHostingAvailable()) {
+			throw httpError(400, 'GUARDIAN_HOSTING_UNSUPPORTED', 'The bundled engine cannot resolve guardian nodes yet.');
+		}
+		const text = String(uri || '').trim();
+		if (!text) throw httpError(400, 'BAD_GUARDIAN_URI', 'A node URI (<node id>@host:port) is required.');
+		const via = this.registry
+			.list()
+			.find((rec) => rec.running && !rec.onchainOnly && this.runtimeState(rec.id).healthy);
+		if (!via) {
+			throw httpError(
+				503,
+				'NO_RUNNING_WALLET',
+				'Resolving a guardian node needs a running Lightning wallet on this Umbrel to ask through; start one first.'
+			);
+		}
+		try {
+			return await this._daemonCall(via, 'POST', '/recovery/resolve-guardian', { uri: text });
+		} catch (err) {
+			const code = err.code || 'DAEMON_ERROR';
+			const status = code === 'GUARDIAN_UNREACHABLE' ? 502 : code === 'INVALID_PARAMS' ? 400 : 502;
+			throw httpError(status, code, err.message);
+		}
+	}
+
+	/**
+	 * The wallets on this Umbrel that serve as guardians, with the addresses
+	 * another node reaches them at: the onion (when announcing) for anyone,
+	 * and the loopback address for sibling wallets in this same container.
+	 */
+	guardianCandidates() {
+		return this.registry
+			.list()
+			.filter((rec) => rec.guardianServe && !rec.onchainOnly && rec.nodeId)
+			.map((rec) => {
+				const onion = this.onionAddress(rec);
+				return {
+					id: rec.id,
+					name: rec.name,
+					network: rec.network,
+					nodeId: rec.nodeId,
+					running: !!rec.running && !!this.runtimeState(rec.id).healthy,
+					onionUri: onion ? `${rec.nodeId}@${onion}` : null,
+					localUri: `${rec.nodeId}@127.0.0.1:${this.listenPort(rec)}`
+				};
+			});
+	}
+
 	async _daemonCall(rec, method, apiPath, body) {
 		const token = this.token(rec.id);
 		const res = await fetch(`http://127.0.0.1:${rec.port}${apiPath}`, {
@@ -1953,6 +2067,7 @@ class WalletManager {
 				guardians: (rec.recovery && rec.recovery.guardians) || [],
 				autoApply: !!(rec.recovery && rec.recovery.autoApply)
 			},
+			guardianServe: !!rec.guardianServe && !rec.onchainOnly,
 			port: rec.port,
 			desiredRunning: !!rec.running,
 			status: rt.status,

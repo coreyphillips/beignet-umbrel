@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, autoApplyState, RESTORE_STEPS } from './recovery.js';
+import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, autoApplyState, RESTORE_STEPS, isNodeUri, isBolt8Entry, guardianEntryLabel } from './recovery.js';
 
 const node = (extra = {}) => ({
 	gate: 'confirmed',
@@ -275,4 +275,22 @@ test('the automatic checkpoint restore is narrated phase by phase in the Backup 
 	assert.equal(refused.tier, 'Checkpoint found, not applied');
 	assert.match(refused.detail, /was not applied: the capsule names guardians/);
 	assert.equal(refused.degraded, true);
+});
+
+test('a node URI is not an entry, a bolt8 entry names a beignet node, and both read for people', () => {
+	const node = '02' + 'ab'.repeat(32);
+	const key = 'cd'.repeat(32);
+	assert.equal(isNodeUri(`${node}@umbrel.local:9101`), true);
+	assert.equal(isNodeUri(`${node}@${'a'.repeat(56)}.onion:9101`), true);
+	assert.equal(isNodeUri(` ${node}@10.21.0.5:9101 `), true, 'pasted with whitespace');
+	assert.equal(isNodeUri(`${key}@https://g.example`), false, 'a guardian entry is not a node URI');
+	assert.equal(isNodeUri(`${key}@bolt8://${node}@h:1`), false);
+	assert.equal(isNodeUri(`${node}@h`), false, 'no port');
+	assert.equal(isBolt8Entry(`${key}@bolt8://${node}@h:9101`), true);
+	assert.equal(isBolt8Entry(`${key}@https://g.example`), false);
+	assert.equal(isBolt8Entry(`${node}@h:9101`), false);
+	assert.equal(guardianEntryLabel(`${key}@bolt8://${node}@friend.onion:9101`), `beignet node ${node.slice(0, 8)}… at friend.onion:9101`);
+	assert.equal(guardianEntryLabel(`${key}@https://guardian.example.net`), 'https guardian at guardian.example.net');
+	assert.equal(guardianEntryLabel(`${key}@http://127.0.0.1:8701`), 'guardian at 127.0.0.1:8701');
+	assert.equal(guardianEntryLabel('garbage'), 'garbage');
 });
