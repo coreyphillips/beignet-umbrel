@@ -11,6 +11,7 @@ import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import GuardianServeField from '../components/GuardianServeField.jsx';
+import GuardianRotateFields from '../components/GuardianRotateFields.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
 import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
 import { shortId } from '../lib/format.js';
@@ -425,6 +426,8 @@ export default function WalletPage() {
 					recoveryAvailable={!!config?.recoveryAvailable}
 					recoveryAutoApplyAvailable={!!config?.recoveryAutoApplyAvailable}
 					guardianHostingAvailable={!!config?.guardianHostingAvailable}
+					guardianRotationAvailable={!!config?.guardianRotationAvailable}
+					walletRunning={rec.status === 'running'}
 					lfbwAvailable={!!config?.lfbwAvailable}
 					settingsGuardians={config?.recoveryGuardians || []}
 					restoring={rec.status === 'restore-required' || recovery?.state === 'restoring'}
@@ -432,6 +435,10 @@ export default function WalletPage() {
 					onSaved={() => {
 						setEditing(null);
 						toast('Wallet updated', 'success');
+						refreshRec();
+						bump();
+					}}
+					onRotated={() => {
 						refreshRec();
 						bump();
 					}}
@@ -471,11 +478,14 @@ function EditWalletModal({
 	recoveryAvailable = false,
 	recoveryAutoApplyAvailable = false,
 	guardianHostingAvailable = false,
+	guardianRotationAvailable = false,
+	walletRunning = false,
 	lfbwAvailable = false,
 	settingsGuardians = [],
 	restoring = false,
 	onClose,
-	onSaved
+	onSaved,
+	onRotated
 }) {
 	const toast = useToast();
 	const [name, setName] = useState(rec.name);
@@ -665,10 +675,22 @@ function EditWalletModal({
 						<div className="info-note">
 							Changing channel backup restarts this wallet.
 							{pinnedGuardians.length === 0 && isGuardianMode(recoveryMode)
-								? ' A guardian mode registers the wallet with the guardians in Settings on its next start, and that set stays with the wallet from then on.'
+								? ' A guardian mode registers the wallet with the guardians in Settings on its next start, and that set stays with the wallet until it is rotated here.'
 								: ''}
 						</div>
 					)}
+					{guardianRotationAvailable &&
+						isGuardianMode(rec.recovery?.mode) &&
+						recoveryMode === rec.recovery?.mode &&
+						pinnedGuardians.length === 3 &&
+						!restoring && (
+							<GuardianRotateFields
+								walletId={rec.id}
+								pinned={pinnedGuardians}
+								disabled={!walletRunning}
+								onRotated={onRotated}
+							/>
+						)}
 				</>
 			)}
 			{guardianHostingAvailable && !onchainOnly && (

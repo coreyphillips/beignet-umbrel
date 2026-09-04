@@ -1351,7 +1351,8 @@ function managerRequest(path, method, body) {
 			lfbwAvailable: true,
 			jitQuoteAvailable: true,
 			recoveryAutoApplyAvailable: true,
-			guardianHostingAvailable: true
+			guardianHostingAvailable: true,
+			guardianRotationAvailable: true
 		};
 	}
 	if (path === '/recovery/resolve-guardian' && method === 'POST') {
@@ -1602,6 +1603,25 @@ function managerRequest(path, method, body) {
 		closeDemoChannel(w.id, c.channelId, false);
 		return { closed: c.channelId, lfbwOff: !!body.turnOff, record: publicRecord(w) };
 	}
+	if (sub === 'recovery/rotate' && method === 'POST') {
+		// The daemon registers with the new set under its current lease,
+		// backfills, switches, and retires the old set (beignet #701). The
+		// record follows on success; the wallet keeps running.
+		if (!isGuardianMode(w.recovery?.mode)) throw err('Wallet is not in a guardian mode', 'NOT_GUARDIAN_MODE');
+		if (w.status !== 'running') throw err('Wallet is not running', 'NOT_RUNNING');
+		const entries = Array.isArray(body?.guardians) ? body.guardians.map((g) => String(g).trim()) : [];
+		if (entries.length !== 3) throw err('Exactly three guardians are required', 'BAD_GUARDIANS');
+		const before = (w.recovery.guardians || []).map((g) => String(g).slice(0, 64)).sort().join(',');
+		const after = entries.map((g) => g.slice(0, 64)).sort().join(',');
+		if (before === after) throw err('That is the set this wallet already has', 'BAD_GUARDIANS');
+		const st = store.state[w.id];
+		if (st.recovery.rotation?.inProgress) throw err('A rotation is already running', 'ROTATION_IN_PROGRESS');
+		st.recovery.generation = String(BigInt(st.recovery.generation || '1') + 1n);
+		st.recovery.rotation = { inProgress: false, pending: false, retirePending: false, lastEvent: { type: 'rotation:retired', detail: `generation ${st.recovery.generation}` }, followed: null };
+		w.recovery = { ...w.recovery, guardians: entries };
+		emit(w.id, 'recovery:rotated', { generation: st.recovery.generation });
+		return { record: publicRecord(w), generation: st.recovery.generation, retired: 3 };
+	}
 	if (sub === 'lfbw/setup' && method === 'POST') {
 		// Like the manager: the call answers once setup has run its course.
 		if (!w.lfbw || !w.lfbw.enabled) throw err('Not a lightning-first wallet', 'NOT_LFBW');
@@ -1773,10 +1793,20 @@ function recoveryStatus(w, st) {
 	}));
 	const profile = isGuardianMode(mode) ? 'crash-v1' : null;
 	const r = st.recovery;
+	// Guardian-set rotation (beignet #701): the generation the journal is
+	// on and whether a rotation or a retirement is still owed.
+	const rotationView = isGuardianMode(mode)
+		? {
+				generation: r.generation || '1',
+				configuredSetStale: false,
+				rotation: r.rotation || { inProgress: false, pending: false, retirePending: false, lastEvent: null, followed: null }
+		  }
+		: {};
 	if (w.status === 'restore-required' || r.restore) {
 		return {
 			mode,
 			profile,
+			...rotationView,
 			guardians,
 			state: r.restore?.inProgress ? 'restoring' : 'restore-required',
 			node: null,
@@ -1812,6 +1842,7 @@ function recoveryStatus(w, st) {
 	return {
 		mode,
 		profile,
+		...rotationView,
 		guardians,
 		state: node.fenced || gate === 'fenced' ? 'fenced' : 'running',
 		node,

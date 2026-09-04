@@ -103,8 +103,8 @@ export default function RecoveryModeField({
 			)}
 			{pinned && (
 				<div className="info-note">
-					Guardians for this wallet are fixed to the set it first registered with (three
-					servers).
+					Guardians for this wallet are the set it registered with (three servers); the
+					wallet keeps them until they are rotated, one or all three, below.
 					{differs ? ' Settings now lists a different set; this wallet keeps its own.' : ''}
 					<ul className="guardian-list">
 						{pinnedGuardians.map((g) => (

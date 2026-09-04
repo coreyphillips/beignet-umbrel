@@ -113,7 +113,7 @@ test('a pinned set keeps the guardian modes usable and is shown as the wallet\'s
 	});
 	try {
 		assert.equal(r.$$('option').find((o) => o.value === 'quorum').disabled, false, 'the pinned set is a set');
-		assert.match(r.text(), /fixed to the set it first registered with/);
+		assert.match(r.text(), /the set it registered with .* until they are rotated/);
 		assert.equal(r.$$('.guardian-list li').length, 3);
 		assert.doesNotMatch(r.text(), /Settings now lists a different set/);
 	} finally {

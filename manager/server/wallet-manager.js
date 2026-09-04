@@ -22,7 +22,8 @@ const {
 	validateGuardianDraft,
 	sameGuardianSet,
 	recoveryEnv,
-	parseGuardianEntry
+	parseGuardianEntry,
+	validateGuardianSet
 } = require('./recovery');
 const {
 	engineVersion,
@@ -30,7 +31,8 @@ const {
 	lfbwAvailable,
 	jitQuoteAvailable,
 	recoveryAutoApplyAvailable,
-	guardianHostingAvailable
+	guardianHostingAvailable,
+	guardianRotationAvailable
 } = require('./engine');
 const lfbw = require('./lfbw');
 
@@ -132,6 +134,9 @@ class WalletManager {
 		// Lightning address, and a node URI resolving to a guardian entry
 		// (beignet #699), probed on the bundle like the rest.
 		this.guardianHostingSupported = guardianHostingAvailable();
+		// A wallet moving to a new guardian set with its channels running
+		// (beignet #701), probed the same way.
+		this.guardianRotationSupported = guardianRotationAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 	}
@@ -486,6 +491,10 @@ class WalletManager {
 
 	guardianHostingAvailable() {
 		return this.guardianHostingSupported === true;
+	}
+
+	guardianRotationAvailable() {
+		return this.guardianRotationSupported === true;
 	}
 
 	recoveryAvailable() {
@@ -1555,6 +1564,51 @@ class WalletManager {
 	// A direct call to a wallet daemon with its bearer token. The reverse
 	// proxy serves the browser; the manager talks to daemons itself for
 	// lightning-first setup and channelize.
+	/**
+	 * Move a wallet to a new guardian set with its channels running (beignet
+	 * #701, wire 5.9). The daemon does the work: registers with the new set
+	 * under its current lease, backfills, switches, retires the old set. On
+	 * success the record follows, so the next start names the new set; no
+	 * restart is needed now, the daemon already runs on it.
+	 */
+	async rotateGuardians(id, guardians) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		if (!this.guardianRotationAvailable()) {
+			throw httpError(400, 'GUARDIAN_ROTATION_UNSUPPORTED', 'The bundled engine cannot rotate guardian sets yet; update the app first.');
+		}
+		if (!isGuardianMode(rec.recovery && rec.recovery.mode)) {
+			throw httpError(400, 'NOT_GUARDIAN_MODE', 'Only a wallet using a guardian backup mode has a guardian set to rotate.');
+		}
+		let entries;
+		try {
+			entries = validateGuardianSet(guardians);
+		} catch (err) {
+			throw httpError(400, 'BAD_GUARDIANS', err.message);
+		}
+		if (entries.length !== GUARDIAN_SET_SIZE) {
+			throw httpError(400, 'BAD_GUARDIANS', `A guardian set is exactly ${GUARDIAN_SET_SIZE} entries; got ${entries.length}.`);
+		}
+		if (sameGuardianSet(entries, rec.recovery.guardians || [])) {
+			throw httpError(400, 'BAD_GUARDIANS', 'That is the set this wallet already uses.');
+		}
+		if (!this.runtimeState(id).proc) throw httpError(503, 'NOT_RUNNING', 'Wallet is not running');
+		let result;
+		try {
+			result = await this._daemonCall(rec, 'POST', '/recovery/rotate-guardians', { guardians: entries, confirm: true });
+		} catch (err) {
+			const code = err.code || 'DAEMON_ERROR';
+			const status = code === 'ROTATION_IN_PROGRESS' || code === 'ROTATION_UNAVAILABLE' ? 409 : code === 'INVALID_PARAMS' ? 400 : 502;
+			throw httpError(status, code, err.message);
+		}
+		// The daemon is on the new set; the record follows so the next start
+		// names it too, and the status route's configuredSetStale clears.
+		rec.recovery = { ...rec.recovery, guardians: entries };
+		this.registry.upsert(rec);
+		this._log(id, `guardian set rotated to generation ${result && result.generation}`);
+		return { record: this.publicRecord(id), generation: result && result.generation, retired: result && result.retired };
+	}
+
 	/**
 	 * A beignet node's Lightning URI to a guardian entry (beignet #699): the
 	 * daemon of any healthy Lightning wallet opens a bolt8 session to the

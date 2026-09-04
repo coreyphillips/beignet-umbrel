@@ -294,3 +294,43 @@ test('a bolt8 guardian in the settings draft needs an engine with the transport'
 	m.guardianHostingSupported = true;
 	assert.deepEqual(m.updateSettings({ recoveryGuardians: [entry] }).recoveryGuardians, [entry]);
 });
+
+test('rotating a guardian set asks the daemon and moves the record with it (beignet #701)', async () => {
+	const node = '02' + K('e');
+	const rec = { id: 'w', name: 'W', port: 3101, running: true, recovery: { mode: 'quorum', guardians: G.slice() } };
+	const m = managerWith({ records: { w: rec } });
+	m.guardianRotationSupported = true;
+	m.runtimeState = () => ({ proc: {}, healthy: true });
+	const calls = [];
+	m._daemonCall = async (r, method, path, body) => {
+		calls.push({ id: r.id, method, path, body });
+		return { generation: '2', guardians: [], retired: 1 };
+	};
+	m.publicRecord = (id) => ({ id, recovery: { guardians: m.registry.get(id).recovery.guardians } });
+	const incoming = [G[1], G[2], `${K('f')}@bolt8://${node}@friend.onion:9101`];
+	const result = await m.rotateGuardians('w', incoming);
+	assert.equal(result.generation, '2');
+	assert.equal(result.retired, 1);
+	assert.deepEqual(calls, [
+		{ id: 'w', method: 'POST', path: '/recovery/rotate-guardians', body: { guardians: incoming, confirm: true } }
+	]);
+	assert.deepEqual(m.registry.get('w').recovery.guardians, incoming, 'the record names the new set');
+
+	// Refusals: the same set, a short list, a wallet without guardians, an engine without the route.
+	await assert.rejects(() => m.rotateGuardians('w', incoming), (e) => e.code === 'BAD_GUARDIANS');
+	await assert.rejects(() => m.rotateGuardians('w', [G[0]]), (e) => e.code === 'BAD_GUARDIANS');
+	rec.recovery = { mode: 'peer-storage', guardians: [] };
+	await assert.rejects(() => m.rotateGuardians('w', G), (e) => e.code === 'NOT_GUARDIAN_MODE');
+	rec.recovery = { mode: 'quorum', guardians: incoming };
+	m.guardianRotationSupported = false;
+	await assert.rejects(() => m.rotateGuardians('w', G), (e) => e.code === 'GUARDIAN_ROTATION_UNSUPPORTED');
+	// The daemon's own refusal keeps its code and the record stays put.
+	m.guardianRotationSupported = true;
+	m._daemonCall = async () => {
+		const e = new Error('the startup gate is quarantined');
+		e.code = 'ROTATION_UNAVAILABLE';
+		throw e;
+	};
+	await assert.rejects(() => m.rotateGuardians('w', G), (e) => e.code === 'ROTATION_UNAVAILABLE' && e.statusCode === 409);
+	assert.deepEqual(m.registry.get('w').recovery.guardians, incoming);
+});

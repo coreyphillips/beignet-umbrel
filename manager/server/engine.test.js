@@ -13,7 +13,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { engineVersion, recoveryAvailable, lfbwAvailable, jitQuoteAvailable, recoveryAutoApplyAvailable,
-	guardianHostingAvailable
+	guardianHostingAvailable,
+	guardianRotationAvailable
 } = require('./engine');
 
 function fakeInstall(version) {
@@ -116,4 +117,18 @@ test('guardian hosting is probed on the OpenAPI module (beignet #699)', () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 	assert.equal(guardianHostingAvailable(undefined), false);
+});
+
+test('guardian rotation is probed on the OpenAPI module (beignet #701)', () => {
+	const { root, bin } = fakeInstall('0.12.0');
+	try {
+		const openapi = path.join(path.dirname(bin), 'openapi.js');
+		fs.writeFileSync(openapi, "paths: { '/guardian/status': {}, '/recovery/resolve-guardian': {} }");
+		assert.equal(guardianRotationAvailable(bin), false, '0.12.0 hosts guardians but cannot rotate');
+		fs.writeFileSync(openapi, "paths: { '/recovery/resolve-guardian': {}, '/recovery/rotate-guardians': {} }");
+		assert.equal(guardianRotationAvailable(bin), true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	assert.equal(guardianRotationAvailable(undefined), false);
 });
