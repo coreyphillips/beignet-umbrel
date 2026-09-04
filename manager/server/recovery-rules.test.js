@@ -283,3 +283,14 @@ test('an engine that cannot apply a checkpoint by itself refuses the answer rath
 		'a record that already carries it keeps it; only a fresh request is refused'
 	);
 });
+
+test('a bolt8 guardian in the settings draft needs an engine with the transport', () => {
+	const node = '02' + K('d');
+	const entry = `${K('a')}@bolt8://${node}@h:9735`;
+	const m = managerWith({});
+	m.guardianHostingSupported = false;
+	rejects(() => m.updateSettings({ recoveryGuardians: [entry] }), 'GUARDIAN_HOSTING_UNSUPPORTED');
+	assert.deepEqual(m.updateSettings({ recoveryGuardians: [G[0]] }).recoveryGuardians, [G[0]], 'http entries are unaffected');
+	m.guardianHostingSupported = true;
+	assert.deepEqual(m.updateSettings({ recoveryGuardians: [entry] }).recoveryGuardians, [entry]);
+});

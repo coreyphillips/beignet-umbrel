@@ -21,7 +21,8 @@ const {
 	isGuardianMode,
 	validateGuardianDraft,
 	sameGuardianSet,
-	recoveryEnv
+	recoveryEnv,
+	parseGuardianEntry
 } = require('./recovery');
 const {
 	engineVersion,
@@ -528,6 +529,19 @@ class WalletManager {
 				);
 			} catch (err) {
 				throw httpError(400, 'BAD_GUARDIANS', err.message);
+			}
+			// A bolt8 entry names a beignet node as the guardian (beignet #699);
+			// an engine without that transport would refuse to start any wallet
+			// pinned to it, so the draft is refused here instead, with the reason.
+			if (
+				!this.guardianHostingAvailable() &&
+				next.recoveryGuardians.some((entry) => parseGuardianEntry(entry).bolt8)
+			) {
+				throw httpError(
+					400,
+					'GUARDIAN_HOSTING_UNSUPPORTED',
+					'A beignet node as a guardian needs an engine that speaks the bolt8 guardian transport; update the app first.'
+				);
 			}
 		}
 		this.settings.update(next);
