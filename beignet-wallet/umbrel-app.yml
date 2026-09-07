@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.17.1"
+version: "0.18.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,17 +30,19 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A wallet that takes longer than 45 seconds to boot now finishes its
-  setup. On a busy box, a slow first boot (a large gossip load, several
-  wallets starting at once) was promoted to healthy after the startup
-  window without the setup that follows a normal start: its node id was
-  not captured and, for a lightning-first wallet or its primary, the
-  zero-conf trust and direct-funding policy its links depend on were
-  never re-applied, since the engine keeps those in memory. The setup
-  now runs once per boot however long the boot took.
+  A liquidity provider can now serve reverse swaps: a wallet pays it over
+  Lightning and it pays the same amount, minus the fee you set, to an
+  address the wallet chose, from its own on-chain balance. The node only
+  settles the Lightning payment once the wallet has claimed the coins, and
+  takes them back after the refund height if it never does. Off by
+  default: it commits the wallet's coins to a contract the payer can
+  claim, so you switch it on in the Edit dialog, under the liquidity
+  provider switch, with the fees and the caps on what is committed at once.
 
 
-  No engine change; this still bundles beignet 0.13.0.
+  Bundles beignet 0.15.0: the reverse swap provider itself, JIT hop-fee
+  mode so LND and Core Lightning wallets can take a just-in-time channel,
+  and the ownership proofs that let those wallets pay a direct funding.
 
 dependencies: []
 path: ""
