@@ -1033,6 +1033,7 @@ function lfbwDependentsOf(w) {
 		.map((o) => ({ id: o.id, name: o.name }));
 }
 const JIT_DEFAULTS = { flatFeeSat: 0, feePpm: 0, maxClientFundingSats: 1000000, maxConcurrentFundings: 3, maxTotalFundingSats: null };
+const SWAP_DEFAULTS = { enabled: false, flatFeeSat: 0, feePpm: 1000, minSat: 10000, maxSat: 1000000, maxExposureSat: 5000000, maxConcurrent: 8 };
 
 function onchainBalance(id) {
 	return store.state[id].utxos.reduce((a, u) => a + u.valueSats, 0);
@@ -1197,6 +1198,7 @@ function publicRecord(w) {
 	rec.lfbw = w.lfbw ? { ...w.lfbw, lastChannelize: w.lfbwLast || null } : null;
 	rec.liquidityProvider = !!w.liquidityProvider && !w.onchainOnly;
 	rec.jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
+	rec.swaps = { ...SWAP_DEFAULTS, ...(w.swaps || {}) };
 	rec.lfbwDependents = lfbwDependentsOf(w);
 	return rec;
 }
@@ -1514,6 +1516,18 @@ function managerRequest(path, method, body) {
 				if (w.lfbw && (!was || was.setup !== 'ready' || w.lfbw.setup !== 'ready')) runDemoLfbwSetup(w);
 			}
 			if (body.liquidityProvider !== undefined) w.liquidityProvider = !!body.liquidityProvider;
+			if (body.swaps) {
+				const swaps = { ...SWAP_DEFAULTS, ...(w.swaps || {}) };
+				if ('enabled' in body.swaps) swaps.enabled = !!body.swaps.enabled;
+				for (const k of Object.keys(SWAP_DEFAULTS)) {
+					if (k === 'enabled' || !(k in body.swaps)) continue;
+					const n = Number(body.swaps[k]);
+					if (body.swaps[k] === '' || !Number.isInteger(n) || n < 0) throw err(`${k} must be a whole number`, 'BAD_SWAPS');
+					swaps[k] = n;
+				}
+				if (swaps.minSat > swaps.maxSat) throw err('minSat must not exceed maxSat', 'BAD_SWAPS');
+				w.swaps = swaps;
+			}
 			if (body.jit) {
 				const jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
 				for (const k of Object.keys(JIT_DEFAULTS)) {

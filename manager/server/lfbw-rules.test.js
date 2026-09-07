@@ -129,6 +129,20 @@ test('dependentsOf finds the lightning-first wallets whose internal primary a wa
 	assert.deepEqual(lfbw.dependentsOf({ id: 'a' }, records), []);
 });
 
+test('normalizeSwaps fills defaults, validates whole numbers and keeps the caps consistent', () => {
+	assert.deepEqual(lfbw.normalizeSwaps(undefined), { ...lfbw.SWAP_DEFAULTS });
+	const edited = lfbw.normalizeSwaps({ enabled: true, flatFeeSat: '250', maxSat: 200000 }, { feePpm: 500 });
+	assert.equal(edited.enabled, true);
+	assert.equal(edited.flatFeeSat, 250);
+	assert.equal(edited.feePpm, 500);
+	assert.equal(edited.maxSat, 200000);
+	assert.throws(() => lfbw.normalizeSwaps({ flatFeeSat: '1.5' }), /whole number/);
+	assert.throws(() => lfbw.normalizeSwaps({ maxConcurrent: 0 }), /between/);
+	assert.throws(() => lfbw.normalizeSwaps({ minSat: 5000, maxSat: 4000 }), /minSat/);
+	assert.throws(() => lfbw.normalizeSwaps({ maxSat: 6000000 }), /maxExposureSat/);
+	assert.throws(() => lfbw.normalizeSwaps('yes'), /object/);
+});
+
 test('normalizeJit fills defaults, validates whole numbers, and lets the lifetime budget be unset', () => {
 	assert.deepEqual(lfbw.normalizeJit(undefined), { ...lfbw.JIT_DEFAULTS });
 	const edited = lfbw.normalizeJit({ flatFeeSat: '100', maxConcurrentFundings: 1, maxTotalFundingSats: '' }, { feePpm: 500 });

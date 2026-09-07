@@ -505,6 +505,7 @@ function EditWalletModal({
 	);
 	const [provider, setProvider] = useState(!!rec.liquidityProvider);
 	const [jit, setJit] = useState(() => ({ ...(rec.jit || {}) }));
+	const [swaps, setSwaps] = useState(() => ({ ...(rec.swaps || {}) }));
 	const [wallets, setWallets] = useState([]);
 	useEffect(() => {
 		if (!lfbwAvailable) return undefined;
@@ -581,6 +582,7 @@ function EditWalletModal({
 				body.lfbw = onchainOnly ? { enabled: false } : lfbwBody(lfbw);
 				body.liquidityProvider = onchainOnly ? rec.liquidityProvider : provider;
 				body.jit = jit;
+				body.swaps = swaps;
 			}
 			await manager.updateWallet(rec.id, body);
 			onSaved();
@@ -723,7 +725,15 @@ function EditWalletModal({
 						</div>
 					)}
 					{!lfbw.enabled && (
-						<ProviderFields value={provider} jit={jit} onChange={setProvider} onJit={setJit} dependents={dependents} />
+						<ProviderFields
+							value={provider}
+							jit={jit}
+							swaps={swaps}
+							onChange={setProvider}
+							onJit={setJit}
+							onSwaps={setSwaps}
+							dependents={dependents}
+						/>
 					)}
 				</>
 			)}

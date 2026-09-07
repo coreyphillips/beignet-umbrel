@@ -755,6 +755,7 @@ class WalletManager {
 			// operator turns it on to serve external wallets.
 			liquidityProvider: false,
 			jit: lfbw.normalizeJit(undefined),
+			swaps: lfbw.normalizeSwaps(undefined),
 			port,
 			running: true,
 			createdAt: nowIso()
@@ -819,7 +820,8 @@ class WalletManager {
 			guardianServe,
 			lfbw: lfbwInput,
 			liquidityProvider,
-			jit
+			jit,
+			swaps
 		} = {}
 	) {
 		const rec = this.registry.get(id);
@@ -848,6 +850,7 @@ class WalletManager {
 			this._refuseIfPrimaryInUse(rec, 'This wallet cannot stop providing liquidity');
 		}
 		const nextJit = jit !== undefined ? lfbw.normalizeJit(jit, rec.jit) : undefined;
+		const nextSwaps = swaps !== undefined ? lfbw.normalizeSwaps(swaps, rec.swaps) : undefined;
 		const nextLfbw =
 			lfbwInput !== undefined
 				? this._normalizeLfbw(lfbwInput, { network: rec.network, selfId: rec.id, existing: rec.lfbw })
@@ -883,6 +886,7 @@ class WalletManager {
 		if (rec.onchainOnly) rec.lfbw = null;
 		if (liquidityProvider !== undefined) rec.liquidityProvider = !!liquidityProvider;
 		if (nextJit !== undefined) rec.jit = nextJit;
+		if (nextSwaps !== undefined) rec.swaps = nextSwaps;
 		this.registry.upsert(rec);
 		// Restart a running daemon so it reconnects with the new Electrum config.
 		if (rt.proc) await this._restartWallet(id);
@@ -2175,6 +2179,7 @@ class WalletManager {
 			lfbw: rec.lfbw ? { ...rec.lfbw, lastChannelize: rt.lfbwLast || null } : null,
 			liquidityProvider: !!rec.liquidityProvider && !rec.onchainOnly,
 			jit: lfbw.normalizeJit(undefined, rec.jit),
+			swaps: lfbw.normalizeSwaps(undefined, rec.swaps),
 			lfbwDependents: this._dependents(rec).map((d) => ({ id: d.id, name: d.name }))
 		};
 	}

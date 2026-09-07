@@ -358,7 +358,10 @@ env:
   # (beignet #702, PR #706): what the quorum barrier has cost, measured.
   # The manager's rotate route is probed on the new route, so the Edit
   # dialog's rotation slots appear with this pin.
-  BEIGNET_VERSION: "0.13.0"
+  # 0.15.0: the reverse swap provider (beignet #737, PRs #739 and #740):
+  # BEIGNET_SWAPS and the BEIGNET_SWAP_* caps, the /swaps routes and the
+  # swap:* events the manager's provider settings drive.
+  BEIGNET_VERSION: "0.15.0"
 
 jobs:
   build:
