@@ -149,9 +149,11 @@ export default function LfbwFields({ value, onChange, candidates, editing = fals
  * fronts channel funding for lightning-first wallets, at what fee, and
  * within what caps.
  */
-export function ProviderFields({ value, jit, onChange, onJit, dependents = [] }) {
+export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwaps = () => {}, dependents = [] }) {
 	const locked = dependents.length > 0;
 	const patchJit = (key, raw) => onJit({ ...jit, [key]: raw });
+	const patchSwaps = (key, raw) => onSwaps({ ...swaps, [key]: raw });
+	const digits = (e) => e.target.value.replace(/[^0-9]/g, '');
 	return (
 		<>
 			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
@@ -203,6 +205,55 @@ export function ProviderFields({ value, jit, onChange, onJit, dependents = [] })
 							/>
 						</Field>
 					</div>
+					<div className="field-label" style={{ marginTop: 12, marginBottom: 8 }}>
+						Reverse swaps
+					</div>
+					<label className="checkbox field">
+						<input
+							type="checkbox"
+							checked={!!swaps.enabled}
+							onChange={(e) => patchSwaps('enabled', e.target.checked)}
+						/>
+						Serve Lightning to on-chain swaps from this wallet's balance
+					</label>
+					{swaps.enabled && (
+						<>
+							<div className="info-note">
+								A wallet pays this node over Lightning and this node pays the same amount, minus
+								the fee below, to an address the wallet chose, from its own on-chain balance.
+								The node only settles the Lightning payment once the wallet has claimed the
+								coins, and takes them back after the refund height if it never does. The caps
+								bound what is committed at once.
+							</div>
+							<div className="row">
+								<Field label="Flat fee (sats)">
+									<input value={swaps.flatFeeSat ?? ''} onChange={(e) => patchSwaps('flatFeeSat', digits(e))} />
+								</Field>
+								<Field label="Proportional fee (ppm)">
+									<input value={swaps.feePpm ?? ''} onChange={(e) => patchSwaps('feePpm', digits(e))} />
+								</Field>
+							</div>
+							<div className="row">
+								<Field label="Smallest swap (sats)">
+									<input value={swaps.minSat ?? ''} onChange={(e) => patchSwaps('minSat', digits(e))} />
+								</Field>
+								<Field label="Largest swap (sats)">
+									<input value={swaps.maxSat ?? ''} onChange={(e) => patchSwaps('maxSat', digits(e))} />
+								</Field>
+							</div>
+							<div className="row">
+								<Field label="Most committed at once (sats)">
+									<input
+										value={swaps.maxExposureSat ?? ''}
+										onChange={(e) => patchSwaps('maxExposureSat', digits(e))}
+									/>
+								</Field>
+								<Field label="Swaps in flight at once">
+									<input value={swaps.maxConcurrent ?? ''} onChange={(e) => patchSwaps('maxConcurrent', digits(e))} />
+								</Field>
+							</div>
+						</>
+					)}
 				</>
 			)}
 		</>

@@ -153,6 +153,31 @@ test('only a liquidity provider gets the JIT role and the relay', () => {
 	assert.equal(parkedProvider.BEIGNET_JIT_RECEIVE, undefined, 'an on-chain only wallet fronts nothing');
 });
 
+// Reverse swaps (beignet #737): off by default, and only a Lightning-running
+// liquidity provider that switched them on runs the role.
+test('only a liquidity provider that opted in serves reverse swaps', () => {
+	const m = bareManager();
+	const provider = m._daemonEnv(rec({ liquidityProvider: true }), PATHS, 's', 't');
+	assert.equal(provider.BEIGNET_SWAPS, undefined, 'off until the operator switches it on');
+	const serving = m._daemonEnv(
+		rec({ liquidityProvider: true, swaps: { enabled: true, flatFeeSat: 250, maxSat: 200000, maxExposureSat: 400000 } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(serving.BEIGNET_SWAPS, 'true');
+	assert.equal(serving.BEIGNET_SWAP_FLAT_FEE_SAT, '250');
+	assert.equal(serving.BEIGNET_SWAP_FEE_PPM, '1000');
+	assert.equal(serving.BEIGNET_SWAP_MIN_SAT, '10000');
+	assert.equal(serving.BEIGNET_SWAP_MAX_SAT, '200000');
+	assert.equal(serving.BEIGNET_SWAP_MAX_EXPOSURE_SAT, '400000');
+	assert.equal(serving.BEIGNET_SWAP_MAX_CONCURRENT, '8');
+	const notProvider = m._daemonEnv(rec({ swaps: { enabled: true } }), PATHS, 's', 't');
+	assert.equal(notProvider.BEIGNET_SWAPS, undefined, 'the role rides the liquidity provider switch');
+	const parked = m._daemonEnv(rec({ liquidityProvider: true, onchainOnly: true, swaps: { enabled: true } }), PATHS, 's', 't');
+	assert.equal(parked.BEIGNET_SWAPS, undefined, 'an on-chain only wallet has no Lightning side to swap');
+});
+
 test('operator engine policy passes through from the manager env', () => {
 	const prev = { ...process.env };
 	process.env.BEIGNET_FEE_PPM = '250';

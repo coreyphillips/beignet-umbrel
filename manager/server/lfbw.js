@@ -85,6 +85,30 @@ const JIT_BOUNDS = Object.freeze({
 	maxTotalFundingSats: [0, Number.MAX_SAFE_INTEGER]
 });
 
+// Reverse swaps (beignet #737): a wallet that serves them takes a Lightning
+// payment and pays the same amount, minus these fees, to an address the
+// payer chose, from its own on-chain balance. Off by default: it commits
+// the wallet's coins to a contract the payer can claim, so the operator
+// switches it on knowingly. The engine's own defaults for the caps.
+const SWAP_DEFAULTS = Object.freeze({
+	enabled: false,
+	flatFeeSat: 0,
+	feePpm: 1000,
+	minSat: 10000,
+	maxSat: 1000000,
+	maxExposureSat: 5000000,
+	maxConcurrent: 8
+});
+
+const SWAP_BOUNDS = Object.freeze({
+	flatFeeSat: [0, 0xffffffff],
+	feePpm: [0, 1000000],
+	minSat: [1, Number.MAX_SAFE_INTEGER],
+	maxSat: [1, Number.MAX_SAFE_INTEGER],
+	maxExposureSat: [1, Number.MAX_SAFE_INTEGER],
+	maxConcurrent: [1, 1000]
+});
+
 function httpError(status, code, message) {
 	const err = new Error(message);
 	err.status = status;
@@ -279,6 +303,56 @@ function normalizeJit(input, existing) {
 	return out;
 }
 
+/** Validated reverse swap policy, defaults filled in, or throws. */
+function normalizeSwaps(input, existing) {
+	const base = { ...SWAP_DEFAULTS, ...(existing || {}) };
+	if (input === undefined || input === null) return base;
+	if (typeof input !== 'object') throw httpError(400, 'BAD_SWAPS', 'swaps must be an object');
+	const out = { ...base };
+	if ('enabled' in input) out.enabled = !!input.enabled;
+	for (const key of Object.keys(SWAP_BOUNDS)) {
+		if (!(key in input)) continue;
+		const raw = input[key];
+		if (raw === null || raw === '' || (typeof raw !== 'number' && typeof raw !== 'string')) {
+			throw httpError(400, 'BAD_SWAPS', `${key} must be a whole number`);
+		}
+		const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
+		const [lo, hi] = SWAP_BOUNDS[key];
+		if (!Number.isInteger(n) || n < lo || n > hi) {
+			throw httpError(400, 'BAD_SWAPS', `${key} must be a whole number between ${lo} and ${hi}`);
+		}
+		out[key] = n;
+	}
+	if (out.minSat > out.maxSat) {
+		throw httpError(400, 'BAD_SWAPS', 'minSat must not exceed maxSat');
+	}
+	if (out.maxExposureSat < out.maxSat) {
+		throw httpError(400, 'BAD_SWAPS', 'maxExposureSat must be at least maxSat');
+	}
+	return out;
+}
+
+/**
+ * The env fragment for a wallet that serves reverse swaps. Only a liquidity
+ * provider that runs Lightning can: the role needs the listener and the
+ * on-chain wallet the engine funds from. Nothing for anyone else, so a
+ * wallet that does not serve swaps sees the env it always saw.
+ */
+function swapsEnv(rec) {
+	if (!rec || !rec.liquidityProvider || rec.onchainOnly) return {};
+	const swaps = normalizeSwaps(undefined, rec.swaps);
+	if (!swaps.enabled) return {};
+	return {
+		BEIGNET_SWAPS: 'true',
+		BEIGNET_SWAP_FLAT_FEE_SAT: String(swaps.flatFeeSat),
+		BEIGNET_SWAP_FEE_PPM: String(swaps.feePpm),
+		BEIGNET_SWAP_MIN_SAT: String(swaps.minSat),
+		BEIGNET_SWAP_MAX_SAT: String(swaps.maxSat),
+		BEIGNET_SWAP_MAX_EXPOSURE_SAT: String(swaps.maxExposureSat),
+		BEIGNET_SWAP_MAX_CONCURRENT: String(swaps.maxConcurrent)
+	};
+}
+
 /**
  * The env fragment for a wallet that provides liquidity to lightning-first
  * wallets: the engine's JIT LSP role with its fee and exposure caps, and
@@ -299,7 +373,7 @@ function providerEnv(rec) {
 	if (jit.maxTotalFundingSats !== null && jit.maxTotalFundingSats !== undefined) {
 		env.BEIGNET_JIT_MAX_TOTAL_FUNDING_SAT = String(jit.maxTotalFundingSats);
 	}
-	return env;
+	return Object.assign(env, swapsEnv(rec));
 }
 
 // Operator-level engine policy passed through from the manager's own env,
@@ -515,6 +589,10 @@ module.exports = {
 	CHANNELIZE_EVENTS,
 	MAX_LEASE_RATES,
 	JIT_DEFAULTS,
+	SWAP_DEFAULTS,
+	SWAP_BOUNDS,
+	normalizeSwaps,
+	swapsEnv,
 	OPERATOR_PASSTHROUGH,
 	parseNodeUri,
 	isLfbw,
