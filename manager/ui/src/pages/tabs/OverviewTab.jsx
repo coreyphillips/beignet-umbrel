@@ -16,6 +16,16 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 		10000,
 		[id, tick, provider]
 	);
+	// A provider serving swaps (beignet #737, #743) commits its own coins to
+	// contracts in one direction and pays invoices for coins locked to it in
+	// the other; what is committed right now against the caps it set is the
+	// figure its owner cannot see anywhere else (GET /swaps/status, 0.15+).
+	const swapping = provider && !!rec?.swaps?.enabled;
+	const { data: swaps } = usePoll(
+		() => (swapping ? api.get('/swaps/status').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, swapping]
+	);
 	// A wallet serving as a guardian for other beignet nodes (beignet #699):
 	// what it holds for whom, and the address to hand out.
 	const serving = !!rec?.guardianServe && !rec?.onchainOnly;
@@ -148,6 +158,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 				</Card>
 
 				{provider && <ProviderCard jit={jit} rec={rec} />}
+				{swapping && <SwapsCard swaps={swaps} rec={rec} />}
 				{serving && <GuardianCard guardian={guardian} rec={rec} info={info} />}
 				{!onchainOnly && (
 				<Card title="Liquidity">
@@ -364,6 +375,105 @@ function fmtBytes(n) {
  * the sets it holds, how much, how many sessions are up, and the address
  * another wallet pastes into its Settings to pin this node.
  */
+/**
+ * What this wallet has committed to swaps right now, per direction, against
+ * the caps the owner set. The daemon's exposure figure counts every swap it
+ * still answers for (the contract funded and not yet resolved, a payment out
+ * with the claim still owed); the state breakdown is the ledger as it stands.
+ */
+function SwapsCard({ swaps, rec }) {
+	const wantsSubmarine = !!rec?.swaps?.submarine;
+	return (
+		<Card title="Swaps" className="grid-full">
+			<div className="wallet-meta" style={{ marginBottom: 10 }}>
+				This wallet serves swaps for other wallets: Lightning to on-chain, where it funds a
+				contract from its own balance and settles the payment once the coins are claimed
+				{wantsSubmarine
+					? ', and on-chain to Lightning, where it pays an invoice for coins locked to it and claims them with the preimage'
+					: ''}
+				. The caps bound what is committed at once.
+			</div>
+			{!swaps ? (
+				<div className="wallet-meta">Reading the swap status…</div>
+			) : !swaps.enabled ? (
+				<div className="info-note">
+					The daemon is not running the swap role. It takes it on its next start (the Edit
+					dialog restarts the wallet), or the bundled engine predates the status route.
+				</div>
+			) : (
+				<>
+					<SwapDirection label="Lightning to on-chain (reverse)" status={swaps} />
+					{wantsSubmarine &&
+						(swaps.submarine?.enabled ? (
+							<SwapDirection label="On-chain to Lightning (submarine)" status={swaps.submarine} />
+						) : (
+							<div className="info-note" style={{ marginTop: 10 }}>
+								The on-chain to Lightning direction starts with the wallet's next restart, or the
+								bundled engine predates it (beignet 0.16.0).
+							</div>
+						))}
+				</>
+			)}
+		</Card>
+	);
+}
+
+// A ledger state as a phrase: CLAIM_BROADCAST reads "claim broadcast".
+const swapStateWords = (state) => String(state).toLowerCase().replace(/_/g, ' ');
+
+function SwapDirection({ label, status }) {
+	const limits = status.limits || {};
+	const fee = status.fee || {};
+	const exposedSat = Number(status.exposedSat || 0);
+	const exposedCount = Number(status.exposedCount || 0);
+	const counts = Object.entries(status.counts || {}).filter(([, n]) => n > 0);
+	const exposedRows = Number((status.counts || {}).EXPOSED || 0);
+	return (
+		<div style={{ marginTop: 10 }}>
+			<div className="field-label" style={{ marginBottom: 8 }}>
+				{label}
+			</div>
+			<div className="grid cols-4">
+				<Stat
+					label="Committed now"
+					num={exposedSat}
+					suffix=" sats"
+					sub={`${exposedCount} swap${exposedCount === 1 ? '' : 's'} in flight`}
+				/>
+				<Stat
+					label="Caps"
+					value={fmtSats(Number(limits.maxTotalExposureSat || 0))}
+					sub={`at once, ${limits.maxConcurrentSwaps ?? '-'} swap${limits.maxConcurrentSwaps === 1 ? '' : 's'} at most`}
+				/>
+				<Stat
+					label="Swap size"
+					value={`${fmtSats(Number(limits.minSwapSat || 0))} to ${fmtSats(Number(limits.maxSwapSat || 0))}`}
+					sub="sats per swap"
+				/>
+				<Stat
+					label="Fee"
+					value={`${fmtSats(Number(fee.flatFeeSat || 0))}${Number(fee.feePpm) > 0 ? ` + ${fee.feePpm} ppm` : ''}`}
+					sub="taken from each swap"
+				/>
+			</div>
+			<div className="wallet-meta" style={{ marginTop: 8 }}>
+				{counts.length === 0
+					? 'No swaps yet.'
+					: `Ledger: ${counts.map(([state, n]) => `${n} ${swapStateWords(state)}`).join(' · ')}.`}
+				{exposedRows > 0 ? (
+					<>
+						{' '}
+						<Badge tone="red">
+							{exposedRows} exposed
+						</Badge>{' '}
+						A payment went out while the contract is not claimable; check the Logs tab.
+					</>
+				) : null}
+			</div>
+		</div>
+	);
+}
+
 function GuardianCard({ guardian, rec, info }) {
 	const sets = guardian?.sets || [];
 	const namespaces = sets.reduce((n, s) => n + (s.namespaces || 0), 0);

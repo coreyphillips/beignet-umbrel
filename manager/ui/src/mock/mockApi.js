@@ -2231,6 +2231,42 @@ function walletRequest(id, path, method, body) {
 					: null
 			};
 		}
+		case '/swaps/status': {
+			// The swap role as the daemon reports it (beignet 0.15+, both
+			// directions from 0.16.0): the caps are the owner's policy, the
+			// exposure is what is committed. The demo ledger is empty.
+			const swaps = { ...SWAP_DEFAULTS, ...(w.swaps || {}) };
+			if (!w.liquidityProvider || !swaps.enabled) return { enabled: false };
+			const direction = () => ({
+				enabled: true,
+				fee: { flatFeeSat: swaps.flatFeeSat, feePpm: swaps.feePpm },
+				limits: {
+					minSwapSat: swaps.minSat,
+					maxSwapSat: swaps.maxSat,
+					maxTotalExposureSat: swaps.maxExposureSat,
+					maxConcurrentSwaps: swaps.maxConcurrent
+				},
+				counts: {},
+				exposedSat: 0,
+				exposedCount: 0
+			});
+			return {
+				...direction(),
+				timeouts: { refundDeltaBlocks: 144, fundingConfirmations: 1, resolutionConfirmations: 3 },
+				submarine: swaps.submarine
+					? {
+							...direction(),
+							timeouts: {
+								refundDeltaBlocks: 288,
+								fundingConfirmations: 1,
+								resolutionConfirmations: 3,
+								claimSafetyBlocks: swaps.claimSafetyBlocks,
+								paymentMaxFeePpm: swaps.paymentMaxFeePpm
+							}
+					  }
+					: { enabled: false }
+			};
+		}
 		case '/direct-funding/config':
 			return { ...directFundingPolicy(w) };
 		case '/direct-funding/configure': {

@@ -291,6 +291,99 @@ test('a liquidity provider gets a card with its exposure, caps and dependents', 
 	}
 });
 
+// A provider that serves swaps: what it has committed, per direction,
+// against its caps (GET /swaps/status, beignet 0.15+; both directions 0.16+).
+const SWAP_DIRECTION = {
+	enabled: true,
+	fee: { flatFeeSat: '100', feePpm: 1000 },
+	limits: { minSwapSat: '10000', maxSwapSat: '1000000', maxTotalExposureSat: '5000000', maxConcurrentSwaps: 8 },
+	counts: { CREATED: 1, FUNDED: 2, SETTLED: 14 },
+	exposedSat: '350000',
+	exposedCount: 2
+};
+
+test('a provider serving swaps gets a card with each direction it serves', async () => {
+	const api = stubApi({ channels: [ch('NORMAL')] });
+	const get = api.get;
+	api.get = async (path) => {
+		if (path === '/swaps/status') {
+			return {
+				...SWAP_DIRECTION,
+				submarine: {
+					...SWAP_DIRECTION,
+					counts: { PAYING: 1, CLAIM_CONFIRMED: 3, EXPOSED: 1 },
+					exposedSat: '120000',
+					exposedCount: 1
+				}
+			};
+		}
+		if (path === '/jit/status') return { enabled: true, lsp: null };
+		return get(path);
+	};
+	const r = await render(ToastProvider, {
+		children: createElement(OverviewTab, {
+			...props([ch('NORMAL')]),
+			api,
+			rec: { liquidityProvider: true, swaps: { enabled: true, submarine: true } }
+		})
+	});
+	try {
+		await settle(50);
+		const text = r.text();
+		assert.match(text, /Swaps/);
+		assert.match(text, /Lightning to on-chain \(reverse\)/);
+		assert.match(text, /2 swaps in flight/);
+		assert.match(text, /1 created · 2 funded · 14 settled/);
+		assert.match(text, /On-chain to Lightning \(submarine\)/);
+		assert.match(text, /1 swap in flight/);
+		assert.match(text, /1 paying · 3 claim confirmed · 1 exposed/);
+		assert.match(text, /1 exposed/);
+		assert.match(text, /check the Logs tab/);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a reverse-only provider shows one direction, and swaps off shows no card', async () => {
+	const api = stubApi({ channels: [ch('NORMAL')] });
+	const get = api.get;
+	api.get = async (path) => {
+		if (path === '/swaps/status') return { ...SWAP_DIRECTION, submarine: { enabled: false } };
+		if (path === '/jit/status') return { enabled: true, lsp: null };
+		return get(path);
+	};
+	const one = await render(ToastProvider, {
+		children: createElement(OverviewTab, {
+			...props([ch('NORMAL')]),
+			api,
+			rec: { liquidityProvider: true, swaps: { enabled: true } }
+		})
+	});
+	try {
+		await settle(50);
+		assert.match(one.text(), /Lightning to on-chain \(reverse\)/);
+		assert.doesNotMatch(one.text(), /On-chain to Lightning/);
+	} finally {
+		await one.unmount();
+	}
+	const calls = [];
+	const quiet = { ...api, get: async (path) => (calls.push(path), get(path)) };
+	const none = await render(ToastProvider, {
+		children: createElement(OverviewTab, {
+			...props([ch('NORMAL')]),
+			api: quiet,
+			rec: { liquidityProvider: true, swaps: { enabled: false } }
+		})
+	});
+	try {
+		await settle(50);
+		assert.doesNotMatch(none.text(), /Committed now.*swaps? in flight/);
+		assert.ok(!calls.includes('/swaps/status'), 'the status is not even asked for');
+	} finally {
+		await none.unmount();
+	}
+});
+
 test('a wallet that is not a provider has no such card', async () => {
 	const r = await render(ToastProvider, { children: createElement(OverviewTab, props([ch('NORMAL')])) });
 	try {
