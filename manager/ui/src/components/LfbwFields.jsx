@@ -252,6 +252,44 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 									<input value={swaps.maxConcurrent ?? ''} onChange={(e) => patchSwaps('maxConcurrent', digits(e))} />
 								</Field>
 							</div>
+							<div className="field-label" style={{ marginTop: 12, marginBottom: 8 }}>
+								Submarine swaps
+							</div>
+							<label className="checkbox field">
+								<input
+									type="checkbox"
+									checked={!!swaps.submarine}
+									onChange={(e) => patchSwaps('submarine', e.target.checked)}
+								/>
+								Also pay Lightning invoices for coins sent to this node (submarine)
+							</label>
+							{swaps.submarine && (
+								<>
+									<div className="info-note">
+										The other direction: a wallet locks coins on chain to a contract this node
+										can claim with the payment's preimage, and this node pays the wallet's
+										Lightning invoice, minus the fee above, only after those coins confirmed.
+										The invoice is paid under a deadline set back from the wallet's refund
+										height by the margin below, so the claim lands before the wallet can take
+										the coins back; the routing fee cap comes out of the swap fee. The fees,
+										sizes and caps above apply to both directions.
+									</div>
+									<div className="row">
+										<Field label="Claim margin before the refund (blocks)">
+											<input
+												value={swaps.claimSafetyBlocks ?? ''}
+												onChange={(e) => patchSwaps('claimSafetyBlocks', digits(e))}
+											/>
+										</Field>
+										<Field label="Routing fee cap (ppm of the invoice)">
+											<input
+												value={swaps.paymentMaxFeePpm ?? ''}
+												onChange={(e) => patchSwaps('paymentMaxFeePpm', digits(e))}
+											/>
+										</Field>
+									</div>
+								</>
+							)}
 						</>
 					)}
 				</>

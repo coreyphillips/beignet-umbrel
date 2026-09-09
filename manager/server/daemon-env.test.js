@@ -172,10 +172,39 @@ test('only a liquidity provider that opted in serves reverse swaps', () => {
 	assert.equal(serving.BEIGNET_SWAP_MAX_SAT, '200000');
 	assert.equal(serving.BEIGNET_SWAP_MAX_EXPOSURE_SAT, '400000');
 	assert.equal(serving.BEIGNET_SWAP_MAX_CONCURRENT, '8');
+	assert.equal(serving.BEIGNET_SWAP_SUBMARINE, undefined, 'the submarine direction is its own opt-in');
+	assert.equal(serving.BEIGNET_SWAP_CLAIM_SAFETY_BLOCKS, undefined);
+	assert.equal(serving.BEIGNET_SWAP_PAYMENT_MAX_FEE_PPM, undefined);
 	const notProvider = m._daemonEnv(rec({ swaps: { enabled: true } }), PATHS, 's', 't');
 	assert.equal(notProvider.BEIGNET_SWAPS, undefined, 'the role rides the liquidity provider switch');
 	const parked = m._daemonEnv(rec({ liquidityProvider: true, onchainOnly: true, swaps: { enabled: true } }), PATHS, 's', 't');
 	assert.equal(parked.BEIGNET_SWAPS, undefined, 'an on-chain only wallet has no Lightning side to swap');
+});
+
+// Submarine swaps (beignet #743): the second direction rides the swaps
+// switch and adds only its own two margins, so a reverse-only provider's
+// env is unchanged and a provider with swaps off serves neither.
+test('the submarine direction is served only with swaps on, with its own margins', () => {
+	const m = bareManager();
+	const both = m._daemonEnv(
+		rec({ liquidityProvider: true, swaps: { enabled: true, submarine: true, claimSafetyBlocks: 36, paymentMaxFeePpm: 2500 } }),
+		PATHS,
+		's',
+		't'
+	);
+	assert.equal(both.BEIGNET_SWAPS, 'true');
+	assert.equal(both.BEIGNET_SWAP_SUBMARINE, 'true');
+	assert.equal(both.BEIGNET_SWAP_CLAIM_SAFETY_BLOCKS, '36');
+	assert.equal(both.BEIGNET_SWAP_PAYMENT_MAX_FEE_PPM, '2500');
+	assert.equal(both.BEIGNET_SWAP_FEE_PPM, '1000', 'the shared caps apply to both directions');
+	const defaults = m._daemonEnv(rec({ liquidityProvider: true, swaps: { enabled: true, submarine: true } }), PATHS, 's', 't');
+	assert.equal(defaults.BEIGNET_SWAP_CLAIM_SAFETY_BLOCKS, '24');
+	assert.equal(defaults.BEIGNET_SWAP_PAYMENT_MAX_FEE_PPM, '5000');
+	const swapsOff = m._daemonEnv(rec({ liquidityProvider: true, swaps: { enabled: false, submarine: true } }), PATHS, 's', 't');
+	assert.equal(swapsOff.BEIGNET_SWAPS, undefined, 'submarine without swaps is nothing');
+	assert.equal(swapsOff.BEIGNET_SWAP_SUBMARINE, undefined);
+	const notProvider = m._daemonEnv(rec({ swaps: { enabled: true, submarine: true } }), PATHS, 's', 't');
+	assert.equal(notProvider.BEIGNET_SWAP_SUBMARINE, undefined, 'the role rides the liquidity provider switch');
 });
 
 test('operator engine policy passes through from the manager env', () => {

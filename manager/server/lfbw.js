@@ -97,7 +97,16 @@ const SWAP_DEFAULTS = Object.freeze({
 	minSat: 10000,
 	maxSat: 1000000,
 	maxExposureSat: 5000000,
-	maxConcurrent: 8
+	maxConcurrent: 8,
+	// The submarine direction (beignet #743, on-chain to Lightning): the node
+	// pays a wallet's invoice once the coins the wallet locked to it have
+	// confirmed, and claims them with the preimage the payment reveals. Its
+	// own margins: how many blocks before the wallet's refund opens the
+	// claim must be in by, and the routing fee the payment may spend. The
+	// fee, size and exposure caps above apply to both directions.
+	submarine: false,
+	claimSafetyBlocks: 24,
+	paymentMaxFeePpm: 5000
 });
 
 const SWAP_BOUNDS = Object.freeze({
@@ -106,7 +115,9 @@ const SWAP_BOUNDS = Object.freeze({
 	minSat: [1, Number.MAX_SAFE_INTEGER],
 	maxSat: [1, Number.MAX_SAFE_INTEGER],
 	maxExposureSat: [1, Number.MAX_SAFE_INTEGER],
-	maxConcurrent: [1, 1000]
+	maxConcurrent: [1, 1000],
+	claimSafetyBlocks: [1, 2016],
+	paymentMaxFeePpm: [0, 1000000]
 });
 
 function httpError(status, code, message) {
@@ -310,6 +321,7 @@ function normalizeSwaps(input, existing) {
 	if (typeof input !== 'object') throw httpError(400, 'BAD_SWAPS', 'swaps must be an object');
 	const out = { ...base };
 	if ('enabled' in input) out.enabled = !!input.enabled;
+	if ('submarine' in input) out.submarine = !!input.submarine;
 	for (const key of Object.keys(SWAP_BOUNDS)) {
 		if (!(key in input)) continue;
 		const raw = input[key];
@@ -333,16 +345,19 @@ function normalizeSwaps(input, existing) {
 }
 
 /**
- * The env fragment for a wallet that serves reverse swaps. Only a liquidity
+ * The env fragment for a wallet that serves swaps. Only a liquidity
  * provider that runs Lightning can: the role needs the listener and the
- * on-chain wallet the engine funds from. Nothing for anyone else, so a
- * wallet that does not serve swaps sees the env it always saw.
+ * on-chain wallet the engine funds from and claims to. Nothing for anyone
+ * else, so a wallet that does not serve swaps sees the env it always saw.
+ * The submarine direction rides the same switch (BEIGNET_SWAP_SUBMARINE
+ * means nothing to the engine without BEIGNET_SWAPS) and adds its own two
+ * margins only when it is on, so a reverse-only provider's env is unchanged.
  */
 function swapsEnv(rec) {
 	if (!rec || !rec.liquidityProvider || rec.onchainOnly) return {};
 	const swaps = normalizeSwaps(undefined, rec.swaps);
 	if (!swaps.enabled) return {};
-	return {
+	const env = {
 		BEIGNET_SWAPS: 'true',
 		BEIGNET_SWAP_FLAT_FEE_SAT: String(swaps.flatFeeSat),
 		BEIGNET_SWAP_FEE_PPM: String(swaps.feePpm),
@@ -351,6 +366,12 @@ function swapsEnv(rec) {
 		BEIGNET_SWAP_MAX_EXPOSURE_SAT: String(swaps.maxExposureSat),
 		BEIGNET_SWAP_MAX_CONCURRENT: String(swaps.maxConcurrent)
 	};
+	if (swaps.submarine) {
+		env.BEIGNET_SWAP_SUBMARINE = 'true';
+		env.BEIGNET_SWAP_CLAIM_SAFETY_BLOCKS = String(swaps.claimSafetyBlocks);
+		env.BEIGNET_SWAP_PAYMENT_MAX_FEE_PPM = String(swaps.paymentMaxFeePpm);
+	}
+	return env;
 }
 
 /**

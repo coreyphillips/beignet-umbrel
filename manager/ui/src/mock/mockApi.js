@@ -1033,7 +1033,18 @@ function lfbwDependentsOf(w) {
 		.map((o) => ({ id: o.id, name: o.name }));
 }
 const JIT_DEFAULTS = { flatFeeSat: 0, feePpm: 0, maxClientFundingSats: 1000000, maxConcurrentFundings: 3, maxTotalFundingSats: null };
-const SWAP_DEFAULTS = { enabled: false, flatFeeSat: 0, feePpm: 1000, minSat: 10000, maxSat: 1000000, maxExposureSat: 5000000, maxConcurrent: 8 };
+const SWAP_DEFAULTS = {
+	enabled: false,
+	flatFeeSat: 0,
+	feePpm: 1000,
+	minSat: 10000,
+	maxSat: 1000000,
+	maxExposureSat: 5000000,
+	maxConcurrent: 8,
+	submarine: false,
+	claimSafetyBlocks: 24,
+	paymentMaxFeePpm: 5000
+};
 
 function onchainBalance(id) {
 	return store.state[id].utxos.reduce((a, u) => a + u.valueSats, 0);
@@ -1519,13 +1530,17 @@ function managerRequest(path, method, body) {
 			if (body.swaps) {
 				const swaps = { ...SWAP_DEFAULTS, ...(w.swaps || {}) };
 				if ('enabled' in body.swaps) swaps.enabled = !!body.swaps.enabled;
+				if ('submarine' in body.swaps) swaps.submarine = !!body.swaps.submarine;
 				for (const k of Object.keys(SWAP_DEFAULTS)) {
-					if (k === 'enabled' || !(k in body.swaps)) continue;
+					if (k === 'enabled' || k === 'submarine' || !(k in body.swaps)) continue;
 					const n = Number(body.swaps[k]);
 					if (body.swaps[k] === '' || !Number.isInteger(n) || n < 0) throw err(`${k} must be a whole number`, 'BAD_SWAPS');
 					swaps[k] = n;
 				}
 				if (swaps.minSat > swaps.maxSat) throw err('minSat must not exceed maxSat', 'BAD_SWAPS');
+				if (swaps.claimSafetyBlocks < 1 || swaps.claimSafetyBlocks > 2016) {
+					throw err('claimSafetyBlocks must be a whole number between 1 and 2016', 'BAD_SWAPS');
+				}
 				w.swaps = swaps;
 			}
 			if (body.jit) {

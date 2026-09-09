@@ -1174,6 +1174,12 @@ class WalletManager {
 				if (name.startsWith('jit:') || name.startsWith('direct-funding:')) {
 					this._log(id, `${name} ${JSON.stringify(data || {})}`);
 				}
+				// A swap this provider serves (beignet #737, #743), one line per
+				// step in either direction: created, funded, paying, preimage,
+				// claim broadcast and confirmed, or failed, refunded, exposed.
+				if (name.startsWith('swap:')) {
+					this._log(id, `${name} ${JSON.stringify(data || {})}`);
+				}
 				// A deposit arriving or confirming, or the home channel becoming
 				// usable, is exactly when a lightning-first wallet has something
 				// to move. The pass itself checks every UTXO has confirmed.

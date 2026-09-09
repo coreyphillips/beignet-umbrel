@@ -141,6 +141,18 @@ test('normalizeSwaps fills defaults, validates whole numbers and keeps the caps 
 	assert.throws(() => lfbw.normalizeSwaps({ minSat: 5000, maxSat: 4000 }), /minSat/);
 	assert.throws(() => lfbw.normalizeSwaps({ maxSat: 6000000 }), /maxExposureSat/);
 	assert.throws(() => lfbw.normalizeSwaps('yes'), /object/);
+	// The submarine direction (beignet #743): off by default, a boolean of
+	// its own, with its two margins bounded like the rest.
+	assert.equal(lfbw.SWAP_DEFAULTS.submarine, false);
+	const sub = lfbw.normalizeSwaps({ submarine: 1, claimSafetyBlocks: '36', paymentMaxFeePpm: 0 }, edited);
+	assert.equal(sub.submarine, true);
+	assert.equal(sub.claimSafetyBlocks, 36);
+	assert.equal(sub.paymentMaxFeePpm, 0);
+	assert.equal(sub.enabled, true, 'the rest of the block is kept');
+	assert.equal(lfbw.normalizeSwaps({ submarine: false }, sub).submarine, false);
+	assert.throws(() => lfbw.normalizeSwaps({ claimSafetyBlocks: 0 }), /between 1 and 2016/);
+	assert.throws(() => lfbw.normalizeSwaps({ paymentMaxFeePpm: 1000001 }), /between/);
+	assert.throws(() => lfbw.normalizeSwaps({ claimSafetyBlocks: '2.5' }), /whole number/);
 });
 
 test('normalizeJit fills defaults, validates whole numbers, and lets the lifetime budget be unset', () => {
