@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.18.0"
+version: "0.19.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,19 +30,22 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A liquidity provider can now serve reverse swaps: a wallet pays it over
-  Lightning and it pays the same amount, minus the fee you set, to an
-  address the wallet chose, from its own on-chain balance. The node only
-  settles the Lightning payment once the wallet has claimed the coins, and
-  takes them back after the refund height if it never does. Off by
-  default: it commits the wallet's coins to a contract the payer can
-  claim, so you switch it on in the Edit dialog, under the liquidity
-  provider switch, with the fees and the caps on what is committed at once.
+  A liquidity provider that serves reverse swaps can now serve the other
+  direction too: a wallet locks coins on chain to a contract this node can
+  claim, the node pays the wallet's Lightning invoice, minus the fee you
+  set, only after those coins confirmed, and claims them with the preimage
+  the payment reveals. The payment is made under a deadline set back from
+  the wallet's refund height by a claim margin you set, so the claim lands
+  before the wallet can take the coins back. Off by default: a second
+  checkbox under Reverse swaps in the Edit dialog, with the claim margin
+  and the routing fee cap; the fees, sizes and exposure caps are shared
+  with the reverse direction. Every swap step now shows in the Logs tab.
 
 
-  Bundles beignet 0.15.0: the reverse swap provider itself, JIT hop-fee
-  mode so LND and Core Lightning wallets can take a just-in-time channel,
-  and the ownership proofs that let those wallets pay a direct funding.
+  Bundles beignet 0.17.0: the submarine swap provider itself, a cltvLimit
+  on the pay routes that bounds a payment's total CLTV expiry, and a fix
+  that keeps a zero-conf splice's broadcast obligation until the chain has
+  the transaction.
 
 dependencies: []
 path: ""
