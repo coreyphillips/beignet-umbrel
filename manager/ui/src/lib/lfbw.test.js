@@ -71,6 +71,25 @@ test('lfbwStatus tells spendable, receivable and the three kinds of arriving sat
 	assert.match(s.notes[3], /5,000 sats rejoin/);
 });
 
+test('a stranger\'s funding and a splice conflict or revert are narrated (beignet #760)', () => {
+	const base = {
+		balance: { onchain: 0, lightning: 200_000, total: 200_000, splicingSats: 50_000 },
+		channels: [home()],
+		utxos: [],
+		peers: [{ pubkey: PK, state: 'connected' }]
+	};
+	const unpaired = lfbwStatus({ ...base, rec: rec({ unpairedFunding: { at: 1 } }) });
+	assert.match(unpaired.notes.join(' '), /A payer's transaction is growing your channel; it locks once the chain has confirmed it \(three blocks by default\)/);
+	const paired = lfbwStatus({ ...base, rec: rec() });
+	assert.doesNotMatch(paired.notes.join(' '), /payer's transaction/);
+	const conflicted = lfbwStatus({ ...base, rec: rec({ lastSplice: { state: 'conflicted', spliceTxid: 'a', conflictTxid: 'b', at: Date.now() } }) });
+	assert.match(conflicted.notes.join(' '), /spent the coin behind their funding elsewhere before it confirmed. Your channel is being restored/);
+	const reverted = lfbwStatus({ ...base, rec: rec({ lastSplice: { state: 'reverted', spliceTxid: 'a', conflictTxid: 'b', at: Date.now() } }) });
+	assert.match(reverted.notes.join(' '), /was restored to its previous funding/);
+	const old = lfbwStatus({ ...base, rec: rec({ lastSplice: { state: 'reverted', spliceTxid: 'a', conflictTxid: 'b', at: Date.now() - 2 * 60 * 60 * 1000 } }) });
+	assert.doesNotMatch(old.notes.join(' '), /restored/);
+});
+
 test('a deposit under the floor is said to be waiting, and nothing is said before setup is ready', () => {
 	const below = lfbwStatus({
 		rec: rec(),

@@ -219,13 +219,19 @@ test('the direct-funding policy names the primary as liquidity peer and relay, s
 		lspPort: 9101,
 		targetInboundSat: 0,
 		trusted: true,
-		allowSplice: true
+		allowSplice: true,
+		allowUnpairedSplice: true
 	});
 	const external = lfbw.directFundingConfig({ mode: 'external', trusted: false }, primary);
 	assert.equal(external.targetInboundSat, lfbw.DEFAULT_INBOUND_SATS);
 	assert.equal(external.trusted, false);
 	assert.equal(
 		'allowSplice' in lfbw.directFundingConfig({ mode: 'internal', trusted: true }, primary, { allowSpliceSupported: false }),
+		false,
+		'an engine without the field is not sent it'
+	);
+	assert.equal(
+		'allowUnpairedSplice' in lfbw.directFundingConfig({ mode: 'internal', trusted: true }, primary, { allowSpliceSupported: false }),
 		false,
 		'not sent to an engine that lacks the field'
 	);

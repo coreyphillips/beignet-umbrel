@@ -366,7 +366,10 @@ env:
   # GET /swaps/status reporting both directions, the submarine swap:* events.
   # 0.17.0: cltvLimit on the pay routes (#751) and the zero-conf splice
   # rebroadcast obligation (#756).
-  BEIGNET_VERSION: "0.17.0"
+  # 0.18.0: a stranger's direct funding splices the home channel and locks
+  # at depth (beignet #760): allowUnpairedSplice on /direct-funding/configure,
+  # the splice:* events relayed, splice:conflicted / splice:reverted.
+  BEIGNET_VERSION: "0.18.0"
 
 jobs:
   build:

@@ -112,7 +112,8 @@ test('an internal, trusted setup pairs both ways, arms direct funding on the pri
 		lspPort: 3901 + 6000,
 		targetInboundSat: 0,
 		trusted: true,
-		allowSplice: true
+		allowSplice: true,
+		allowUnpairedSplice: true
 	});
 	assert.deepEqual(byPath('/peer/connect'), { pubkey: PK_P, host: '127.0.0.1', port: 3901 + 6000 });
 	assert.ok(out.lfbw.setupAt);
@@ -189,7 +190,8 @@ test('an external primary is trusted by the wallet alone, gets no return trust, 
 		lspPort: 9735,
 		targetInboundSat: 100000,
 		trusted: true,
-		allowSplice: true
+		allowSplice: true,
+		allowUnpairedSplice: true
 	});
 	// Declined: no trust call at all, and no zero-conf on direct funding.
 	const declined = harness({ wallet: walletRec({ mode: 'external', primaryWalletId: null, primaryUri: `${PK_X}@lsp.example:9735`, primaryPubkey: PK_X, trusted: false }), running: ['w1'] });

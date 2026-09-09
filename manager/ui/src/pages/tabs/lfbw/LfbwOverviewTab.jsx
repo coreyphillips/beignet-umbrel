@@ -393,7 +393,11 @@ function DirectFundingPolicy({ api, tick }) {
 		<Card title="Direct funding policy">
 			<div className="wallet-meta" style={{ marginBottom: 8 }}>
 				A beignet wallet paying your request funds your channel directly, in one transaction.
-				{config.allowSplice ? ' Paired senders grow your existing channel; others open a new one that confirms first.' : ''}
+				{config.allowUnpairedSplice
+					? ' Any beignet sender grows your existing channel: your primary splices at once, anyone else after their coin has confirmed a few more times. A second sender while one is confirming is paid as an ordinary transaction that moves in by itself.'
+					: config.allowSplice
+					? ' Paired senders grow your existing channel; others open a new one that confirms first.'
+					: ''}
 			</div>
 			{!editing ? (
 				<div className="wallet-meta">

@@ -16,6 +16,8 @@ export const CHANNELIZE_FLOOR_SATS = 25000;
 // Headroom asked of a JIT provisioning so the channel is not exhausted by
 // the very payment that created it.
 export const INBOUND_HEADROOM_SATS = 10000;
+/** How long a splice revert stays on the Overview after it happened. */
+export const REVERT_NOTE_MS = 60 * 60 * 1000;
 
 const CLOSED = new Set(['CLOSED', 'FORCE_CLOSED']);
 const usable = (c) => (c.htlcUsable != null ? !!c.htlcUsable : c.state === 'NORMAL');
@@ -166,7 +168,24 @@ export function lfbwStatus({ rec, info, balance, liquidity, channels, utxos, pee
 			notes.push(`${fmt(openingSats)} sats are in a channel that is still confirming.`);
 		}
 		if (splicingSats > 0) {
-			notes.push(`${fmt(splicingSats)} sats rejoin your balance when the current splice locks.`);
+			notes.push(
+				lf.unpairedFunding
+					? `${fmt(splicingSats)} sats rejoin your balance when the current splice locks. A payer's transaction is growing your channel; it locks once the chain has confirmed it (three blocks by default), and the sats it brings show up then.`
+					: `${fmt(splicingSats)} sats rejoin your balance when the current splice locks.`
+			);
+		}
+		// A stranger's coin spent elsewhere before its splice confirmed
+		// (beignet #760): the engine and the primary put the channel back on
+		// its previous funding. Nothing of the wallet's is lost either way.
+		const splice = lf.lastSplice || null;
+		if (splice && splice.state === 'conflicted') {
+			notes.push(
+				'A payer spent the coin behind their funding elsewhere before it confirmed. Your channel is being restored to its previous state with your primary; nothing of yours is lost, and that payment will not arrive.'
+			);
+		} else if (splice && splice.state === 'reverted' && Date.now() - (splice.at || 0) < REVERT_NOTE_MS) {
+			notes.push(
+				'Your channel was restored to its previous funding after a payer spent the coin behind their funding elsewhere. Nothing of yours was lost; that payment did not arrive.'
+			);
 		}
 	}
 
