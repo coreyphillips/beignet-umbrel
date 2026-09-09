@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.19.1"
+version: "0.20.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,14 +30,19 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  The Overview tab of a wallet that serves swaps now has a Swaps card: for
-  each direction it serves, what is committed right now against the caps
-  you set, the swap size range and fee, and the ledger's state counts, with
-  an exposed swap called out for a look at the Logs tab. Until now that
-  only showed in the logs.
+  A lightning-first wallet that already has a home channel now takes an
+  on-chain payment from any beignet wallet as a splice of that channel,
+  instead of a second channel. Your primary's payments grow it at once; a
+  payment from anyone else grows it after their coin has confirmed a few
+  more times, so a coin that gets spent elsewhere first can never become
+  your channel's funding: the channel is put back the way it was, with your
+  primary, and the Overview says so. Nothing of yours is at risk either
+  way. While one such payment is confirming, a second sender is paid as an
+  ordinary transaction that moves into your balance on its own.
 
 
-  No engine change; this still bundles beignet 0.17.0.
+  Bundles beignet 0.18.0: the confirm-first splice itself and the
+  conflicted-splice revert that protects it.
 
 dependencies: []
 path: ""
