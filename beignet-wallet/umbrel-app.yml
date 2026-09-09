@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.19.0"
+version: "0.19.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,22 +30,14 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A liquidity provider that serves reverse swaps can now serve the other
-  direction too: a wallet locks coins on chain to a contract this node can
-  claim, the node pays the wallet's Lightning invoice, minus the fee you
-  set, only after those coins confirmed, and claims them with the preimage
-  the payment reveals. The payment is made under a deadline set back from
-  the wallet's refund height by a claim margin you set, so the claim lands
-  before the wallet can take the coins back. Off by default: a second
-  checkbox under Reverse swaps in the Edit dialog, with the claim margin
-  and the routing fee cap; the fees, sizes and exposure caps are shared
-  with the reverse direction. Every swap step now shows in the Logs tab.
+  The Overview tab of a wallet that serves swaps now has a Swaps card: for
+  each direction it serves, what is committed right now against the caps
+  you set, the swap size range and fee, and the ledger's state counts, with
+  an exposed swap called out for a look at the Logs tab. Until now that
+  only showed in the logs.
 
 
-  Bundles beignet 0.17.0: the submarine swap provider itself, a cltvLimit
-  on the pay routes that bounds a payment's total CLTV expiry, and a fix
-  that keeps a zero-conf splice's broadcast obligation until the chain has
-  the transaction.
+  No engine change; this still bundles beignet 0.17.0.
 
 dependencies: []
 path: ""
