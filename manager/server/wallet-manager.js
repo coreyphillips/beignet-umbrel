@@ -312,7 +312,12 @@ class WalletManager {
 				lfbwBusy: false,
 				lfbwRetryAt: 0,
 				// What the last channelize pass decided (why a deposit waits).
-				lfbwLast: null
+				lfbwLast: null,
+				// The home channel's last splice conflict or revert (beignet
+				// #760), and whether an unpaired payer's funding is in flight;
+				// both narrate the Overview and die with the process.
+				lfbwSplice: null,
+				lfbwUnpaired: null
 			});
 		}
 		return this.runtime.get(id);
@@ -1179,6 +1184,32 @@ class WalletManager {
 				// claim broadcast and confirmed, or failed, refunded, exposed.
 				if (name.startsWith('swap:')) {
 					this._log(id, `${name} ${JSON.stringify(data || {})}`);
+				}
+				// The home channel's splice lifecycle (beignet #760): a stranger's
+				// direct funding now splices the channel and locks at depth, and
+				// a double spent coin is reverted with the primary. One line each,
+				// and the conflict or revert is kept for the Overview.
+				if (name.startsWith('splice:')) {
+					this._log(id, `${name} ${JSON.stringify(data || {})}`);
+					const rt = this.runtimeState(id);
+					if (name === 'splice:conflicted' || name === 'splice:reverted') {
+						rt.lfbwSplice = {
+							state: name === 'splice:conflicted' ? 'conflicted' : 'reverted',
+							spliceTxid: (data && data.spliceTxid) || null,
+							conflictTxid: (data && data.conflictTxid) || null,
+							at: Date.now()
+						};
+					}
+					if (name === 'splice:complete' || name === 'splice:aborted' || name === 'splice:reverted') {
+						rt.lfbwUnpaired = null;
+					}
+					if (name === 'splice:complete') rt.lfbwSplice = null;
+				}
+				// A direct funding from a payer this wallet has not paired with
+				// arrives as a splice that waits for confirmations; the Overview
+				// says so while it does.
+				if (name === 'direct-funding:offer:accepted' && data && data.paired === false) {
+					this.runtimeState(id).lfbwUnpaired = { at: Date.now() };
 				}
 				// A deposit arriving or confirming, or the home channel becoming
 				// usable, is exactly when a lightning-first wallet has something
@@ -2182,7 +2213,14 @@ class WalletManager {
 			nodeId: rec.nodeId || null,
 			listenPort: rec.onchainOnly ? null : this.listenPort(rec),
 			reach: rec.onchainOnly ? null : this._reach(rec),
-			lfbw: rec.lfbw ? { ...rec.lfbw, lastChannelize: rt.lfbwLast || null } : null,
+			lfbw: rec.lfbw
+				? {
+						...rec.lfbw,
+						lastChannelize: rt.lfbwLast || null,
+						lastSplice: rt.lfbwSplice || null,
+						unpairedFunding: rt.lfbwUnpaired || null
+				  }
+				: null,
 			liquidityProvider: !!rec.liquidityProvider && !rec.onchainOnly,
 			jit: lfbw.normalizeJit(undefined, rec.jit),
 			swaps: lfbw.normalizeSwaps(undefined, rec.swaps),

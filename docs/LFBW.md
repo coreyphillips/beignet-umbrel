@@ -82,9 +82,14 @@ coreyphillips/beignet#532.
   as it stands. The dashboard falls back to a plain send only on a rejection
   or a `CREATED`/`OFFERED` status, and shows `SIGNED_PENDING`, `ABORTED` and
   `FAILED` as what they are.
-- **Anonymous senders get a confirmed channel; paired senders splice.** A
-  payer outside the receiver's trusted set always opens a new channel that
-  confirms first. The primary (paired) grows the home channel.
+- **Every beignet sender splices the home channel; strangers wait for depth.**
+  The primary (paired) grows the home channel at once. A payer outside the
+  trusted set grows it too (beignet #760, `allowUnpairedSplice`), but the
+  splice locks only after the engine's depth (three confirmations by
+  default), so the coin is never the live funding before the chain has it;
+  a coin spent elsewhere first is reverted with the primary and the wallet
+  says so on its Overview. While one such funding is confirming, a second
+  sender is paid as an ordinary transaction that channelizes on its own.
 - **A primary in use cannot be deleted, parked, or stop providing liquidity**
   (409 `PRIMARY_IN_USE` naming its dependents). Orphaning a lightning-first
   wallet would cost it inbound, direct funding and its channelize path at

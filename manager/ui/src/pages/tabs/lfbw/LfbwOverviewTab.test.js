@@ -115,9 +115,29 @@ test('ready: the figures, the primary named from the wallet list, the home chann
 		assert.match(text, /12,000 sats are waiting: amounts under 25,000 sats/);
 		assert.match(text, /Smallest direct funding accepted: 5,000 sats/);
 		assert.match(text, /Paired senders grow your existing channel/);
-		assert.equal(api.calls.some(([m, p]) => m === 'GET' && p.startsWith('/graph/node')), false, 'an internal primary is not looked up in the graph');
 	} finally {
 		await view.unmount();
+	}
+	// With the engine's unpaired splice on (beignet #760) the card says every
+	// beignet sender grows the channel, and what a second one gets meanwhile.
+	const unpairedApi = stubApi({
+		dfConfig: { lspPubkey: PK, lspHost: '127.0.0.1', lspPort: 9101, targetInboundSat: 0, trusted: true, allowSplice: true, allowUnpairedSplice: true, unpairedSpliceDepth: 3, minAmountSat: 5000 }
+	});
+	const unpairedView = await mount(unpairedApi, rec());
+	try {
+		const text = unpairedView.text();
+		assert.match(text, /Any beignet sender grows your existing channel/);
+		assert.match(text, /paid as an ordinary transaction that moves in by itself/);
+		assert.doesNotMatch(text, /others open a new one that confirms first/);
+	} finally {
+		await unpairedView.unmount();
+	}
+	const view2 = await mount(api, rec());
+	try {
+		const text = view2.text();
+		assert.equal(api.calls.some(([m, p]) => m === 'GET' && p.startsWith('/graph/node')), false, 'an internal primary is not looked up in the graph');
+	} finally {
+		await view2.unmount();
 	}
 });
 

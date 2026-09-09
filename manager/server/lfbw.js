@@ -433,9 +433,14 @@ function providerRoleChanged(spawnedEnv, rec) {
  * negotiated with, and its reachable address is signed into every request
  * as the relay descriptor for payers who cannot reach the wallet directly.
  * `allowSplice` is what keeps ONE home channel: a paired payer's payment
- * grows it rather than opening a second. Sent only when the engine has the
- * field, because an engine that lacks it refuses unknown keys nowhere but
- * would also do nothing with it.
+ * grows it rather than opening a second. `allowUnpairedSplice` extends that
+ * to every beignet payer (beignet #760): a stranger's confirmed coin splices
+ * the home channel too, locking only after the engine's depth (three
+ * confirmations by default) so the coin is never the live funding before
+ * the chain has it, and a double spent coin is reverted with the primary.
+ * Both are sent only when the engine has the fields, because an engine
+ * that lacks them refuses unknown keys nowhere but would also do nothing
+ * with them.
  */
 function directFundingConfig(lf, primary, { allowSpliceSupported = true } = {}) {
 	const cfg = {
@@ -447,7 +452,10 @@ function directFundingConfig(lf, primary, { allowSpliceSupported = true } = {}) 
 		targetInboundSat: lf.mode === 'external' ? DEFAULT_INBOUND_SATS : 0,
 		trusted: lf.trusted === true
 	};
-	if (allowSpliceSupported) cfg.allowSplice = true;
+	if (allowSpliceSupported) {
+		cfg.allowSplice = true;
+		cfg.allowUnpairedSplice = true;
+	}
 	return cfg;
 }
 
