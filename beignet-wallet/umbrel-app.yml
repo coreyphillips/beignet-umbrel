@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.20.0"
+version: "0.20.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,19 +30,18 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A lightning-first wallet that already has a home channel now takes an
-  on-chain payment from any beignet wallet as a splice of that channel,
-  instead of a second channel. Your primary's payments grow it at once; a
-  payment from anyone else grows it after their coin has confirmed a few
-  more times, so a coin that gets spent elsewhere first can never become
-  your channel's funding: the channel is put back the way it was, with your
-  primary, and the Overview says so. Nothing of yours is at risk either
-  way. While one such payment is confirming, a second sender is paid as an
-  ordinary transaction that moves into your balance on its own.
+  A maintenance release for the lightning-first wallet's home channel. The
+  few blocks between a stranger's payment reaching the chain and the channel
+  accepting it are now covered end to end: the wallet can close the channel
+  by itself during that window if it ever has to, it keeps collecting the
+  payments it is owed while the channel is being enlarged, it notices a
+  closing transaction from the other side as soon as it is mined rather than
+  a few blocks later, and a payment whose coin was spent elsewhere is still
+  put right after a reorg. Nothing changes in how the app looks or is set up.
 
 
-  Bundles beignet 0.18.0: the confirm-first splice itself and the
-  conflicted-splice revert that protects it.
+  Bundles beignet 0.19.0: those four engine fixes, with no change to the
+  daemon the manager drives.
 
 dependencies: []
 path: ""
