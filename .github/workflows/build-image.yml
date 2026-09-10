@@ -369,7 +369,13 @@ env:
   # 0.18.0: a stranger's direct funding splices the home channel and locks
   # at depth (beignet #760): allowUnpairedSplice on /direct-funding/configure,
   # the splice:* events relayed, splice:conflicted / splice:reverted.
-  BEIGNET_VERSION: "0.18.0"
+  # 0.19.0: engine fixes around that lock window, no daemon surface change:
+  # a force close can spend a splice the chain has but that is below its
+  # lock depth (#764), the HTLC backstops run while a channel is splicing
+  # (#774), a spend of the funding output is seen from its first
+  # confirmation (#775), and a conflict verdict refused under a sighting a
+  # reorg took back is emitted again (#776).
+  BEIGNET_VERSION: "0.19.0"
 
 jobs:
   build:
