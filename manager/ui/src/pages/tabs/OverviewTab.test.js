@@ -339,6 +339,15 @@ test('a provider serving swaps gets a card with each direction it serves', async
 		assert.match(text, /1 paying · 3 claim confirmed · 1 exposed/);
 		assert.match(text, /1 exposed/);
 		assert.match(text, /check the Logs tab/);
+		// One budget serves both directions, so the caps are printed once,
+		// over the sum of the two committed figures, and not under either.
+		assert.match(text, /Both directions together/);
+		assert.match(text, /470,000sats3 swaps in flight, both directions/);
+		assert.match(text, /Caps5,000,000 satsat once, 8 swaps at most/);
+		assert.match(text, /Room left4,530,000sats5 more swaps, either direction/);
+		assert.match(text, /One budget covers both directions, not one each/);
+		assert.match(text, /2 swaps in flight, of the shared budget/);
+		assert.match(text, /1 swap in flight, of the shared budget/);
 	} finally {
 		await r.unmount();
 	}
@@ -363,6 +372,9 @@ test('a reverse-only provider shows one direction, and swaps off shows no card',
 		await settle(50);
 		assert.match(one.text(), /Lightning to on-chain \(reverse\)/);
 		assert.doesNotMatch(one.text(), /On-chain to Lightning/);
+		// Nothing to share with, so the one direction carries the caps itself.
+		assert.doesNotMatch(one.text(), /Both directions together/);
+		assert.match(one.text(), /Caps5,000,000 satsat once, 8 swaps at most/);
 	} finally {
 		await one.unmount();
 	}
