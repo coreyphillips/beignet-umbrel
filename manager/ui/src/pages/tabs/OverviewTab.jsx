@@ -397,8 +397,10 @@ function SwapsCard({ swaps, rec }) {
 				<div className="wallet-meta">Reading the swap status…</div>
 			) : !swaps.enabled ? (
 				<div className="info-note">
-					The daemon is not running the swap role. It takes it on its next start (the Edit
-					dialog restarts the wallet), or the bundled engine predates the status route.
+					The daemon is not running the swap role, so nothing is being served yet. Either it
+					has not restarted since you turned swaps on (the Edit dialog restarts it), or the
+					bundled engine drops this policy on the way to the node, which no restart fixes and
+					an app update does.
 				</div>
 			) : (
 				<>
@@ -491,8 +493,9 @@ function GuardianCard({ guardian, rec, info }) {
 				<div className="wallet-meta">Reading the guardian status…</div>
 			) : guardian.serving === false ? (
 				<div className="info-note">
-					The daemon is not serving yet. It takes the role on its next start (the Edit dialog
-					restarts the wallet), or the bundled engine predates the guardian surface.
+					The daemon is not serving yet. Either it has not restarted since you turned this on
+					(the Edit dialog restarts it), or the bundled engine drops the setting on the way to
+					the node, which no restart fixes and an app update does.
 				</div>
 			) : (
 				<>
