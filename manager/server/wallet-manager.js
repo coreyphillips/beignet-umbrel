@@ -52,7 +52,12 @@ const MAX_LOG_LINES = 300;
 // failed, which the daemon reports only as a transient `node:error` event, so
 // they are retained here for the dashboard to read back.
 const MAX_NODE_ERRORS = 100;
-const KILL_GRACE_MS = 10000;
+// How long a daemon gets to shut down on SIGTERM before it is SIGKILLed. The
+// engine drains HTLCs for up to 10s and force-exits itself at 15s, so a
+// shorter grace than that kills a daemon that was about to exit cleanly on
+// its own. KILL_REAP_MS is the extra wait for the exit event AFTER a SIGKILL.
+const KILL_GRACE_MS = 18000;
+const KILL_REAP_MS = 2000;
 // The beignet daemon only subscribes to block headers on a successful
 // boot-time Electrum connection. If it boots while the server is down it
 // reconnects later but stays blind to new blocks, so channel funding
@@ -1093,19 +1098,7 @@ class WalletManager {
 		proc.stderr.on('data', emit);
 
 		proc.on('error', (err) => this._log(id, `spawn error: ${err.message}`));
-		proc.on('exit', (code, signal) => {
-			rt.proc = null;
-			rt.healthy = false;
-			rt.status = 'stopped';
-			if (rt.chainWatch) {
-				clearInterval(rt.chainWatch);
-				rt.chainWatch = null;
-			}
-			this._stopLfbwWatch(rt);
-			this._stopEvents(rt);
-			this._log(id, `exited code=${code} signal=${signal}`);
-			this._maybeRestart(id, rt);
-		});
+		proc.on('exit', (code, signal) => this._onChildExit(id, rt, proc, code, signal));
 
 		this._startEvents(id, rec, rt);
 
@@ -1115,6 +1108,13 @@ class WalletManager {
 		}
 
 		rt.chainStallPolls = 0;
+		// The watch handles live on rt, so overwriting them strands the old
+		// intervals for the life of the manager. Stop them before spawning
+		// the replacements: any path that reached here without the previous
+		// child's exit handler running (a superseded child, above) still has
+		// its watches ticking.
+		if (rt.chainWatch) clearInterval(rt.chainWatch);
+		this._stopLfbwWatch(rt);
 		rt.chainWatch = setInterval(() => {
 			this._checkChainStall(id).catch(() => {});
 		}, CHAIN_WATCH_POLL_MS);
@@ -1343,6 +1343,43 @@ class WalletManager {
 		}
 	}
 
+	/**
+	 * A child daemon exited. Extracted so a test can hold the one rule that
+	 * keeps a restart from orphaning a working node: only the CURRENT child's
+	 * exit may touch runtime state.
+	 *
+	 * A child killed during a restart can exit AFTER its replacement is
+	 * already up (the kill settles, the replacement spawns, the old exit
+	 * event lands a tick later). Clearing rt.proc then orphans a live daemon:
+	 * it keeps the wallet's instance lock and it still answers /health on the
+	 * wallet's port, so every later attempt logs healthy and then dies with
+	 * START_FAILED ("Another beignet instance ... is already using this
+	 * wallet"), and the manager restarts forever against a wallet that is
+	 * already running. Only a container restart clears that by hand, because
+	 * the lock names a live holder on this host and _clearStaleInstanceLock
+	 * rightly refuses it. _pollHealth makes the same ownership check.
+	 */
+	_onChildExit(id, rt, proc, code, signal) {
+		if (rt.proc !== proc) {
+			this._log(
+				id,
+				`a superseded daemon exited code=${code} signal=${signal}; the running daemon is untouched`
+			);
+			return;
+		}
+		rt.proc = null;
+		rt.healthy = false;
+		rt.status = 'stopped';
+		if (rt.chainWatch) {
+			clearInterval(rt.chainWatch);
+			rt.chainWatch = null;
+		}
+		this._stopLfbwWatch(rt);
+		this._stopEvents(rt);
+		this._log(id, `exited code=${code} signal=${signal}`);
+		this._maybeRestart(id, rt);
+	}
+
 	_maybeRestart(id, rt) {
 		const rec = this.registry.get(id);
 		if (rt.stopping || !rec || !rec.running) return;
@@ -1554,11 +1591,14 @@ class WalletManager {
 	_killProc(proc) {
 		return new Promise((resolve) => {
 			let done = false;
+			let hardKill = null;
+			let reap = null;
 			const finish = () => {
-				if (!done) {
-					done = true;
-					resolve();
-				}
+				if (done) return;
+				done = true;
+				if (hardKill) clearTimeout(hardKill);
+				if (reap) clearTimeout(reap);
+				resolve();
 			};
 			proc.once('exit', finish);
 			try {
@@ -1567,14 +1607,19 @@ class WalletManager {
 				finish();
 				return;
 			}
-			setTimeout(() => {
+			hardKill = setTimeout(() => {
 				try {
 					proc.kill('SIGKILL');
 				} catch (_) {
 					/* already gone */
 				}
-				finish();
-			}, KILL_GRACE_MS);
+				// Settle on the exit event the SIGKILL produces, not on the
+				// timer that sent it: callers restart the wallet the moment
+				// this resolves, and a replacement spawned while the old
+				// daemon is still alive loses to its instance lock. The reap
+				// timer is the backstop for a process wedged in the kernel.
+				reap = setTimeout(finish, this.killReapMs || KILL_REAP_MS);
+			}, this.killGraceMs || KILL_GRACE_MS);
 		});
 	}
 
