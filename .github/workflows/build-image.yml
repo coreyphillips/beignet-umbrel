@@ -375,7 +375,13 @@ env:
   # (#774), a spend of the funding output is seen from its first
   # confirmation (#775), and a conflict verdict refused under a sighting a
   # reorg took back is emitted again (#776).
-  BEIGNET_VERSION: "0.19.0"
+  # 0.19.1: `beignet start` hands the swap and guardian config to the node
+  # (#781). It had parsed BEIGNET_SWAPS and its caps, BEIGNET_GUARDIAN_SERVE
+  # and the guardian quotas, bounds-checked them and then dropped them, so
+  # both roles were off however a wallet was configured: the swap provider
+  # since 0.15.0 and guardian hosting since it shipped. No manager change
+  # is needed, the env has always been right; the daemon now acts on it.
+  BEIGNET_VERSION: "0.19.1"
 
 jobs:
   build:
