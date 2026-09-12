@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.20.3"
+version: "0.20.4"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,17 +30,17 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Two roles a wallet could be set to serve were never actually being served.
-  If you turned on swaps, or set a wallet to hold channel backups for other
-  nodes as a guardian, the wallet stored your settings and showed them back
-  to you, but the node was started without them and did neither. Restarting
-  could not help, which is unfortunately what the app told you to try. Both
-  roles now start with the wallet, and those two panels explain themselves
-  honestly when a role really is off. Nothing else changes, and nothing was
-  ever at risk: a role that is off simply serves nobody.
+  A wallet serving swaps in both directions now shows one combined budget,
+  because that is how the limits actually work: the amount committed at once
+  and the number of swaps in flight are shared between the two directions
+  rather than allowed for each. Each direction still shows what it has
+  committed, so you can see which one is using the room.
 
 
-  Bundles beignet 0.19.1, which is where the fix lives.
+  Bundles beignet 0.19.3, a set of engine fixes: a wallet no longer offers or
+  spends a coin it has already spent elsewhere, an invoice being held can no
+  longer report itself both settled and cancelled, and a wallet shutting down
+  no longer waits without limit on a slow Electrum server.
 
 dependencies: []
 path: ""
