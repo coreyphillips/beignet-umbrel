@@ -157,9 +157,6 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 					</table>
 				</Card>
 
-				{provider && <ProviderCard jit={jit} rec={rec} />}
-				{swapping && <SwapsCard swaps={swaps} rec={rec} />}
-				{serving && <GuardianCard guardian={guardian} rec={rec} info={info} />}
 				{!onchainOnly && (
 				<Card title="Liquidity">
 					{liq && (openCount ?? liq.channelCount) > 0 ? (
@@ -212,6 +209,10 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 					)}
 				</Card>
 				)}
+
+				{provider && <ProviderCard jit={jit} rec={rec} />}
+				{swapping && <SwapsCard swaps={swaps} rec={rec} />}
+				{serving && <GuardianCard guardian={guardian} rec={rec} info={info} />}
 
 				<Card title="Fees">
 					{feeEst ? (
