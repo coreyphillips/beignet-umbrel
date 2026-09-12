@@ -1057,7 +1057,7 @@ function lfbwDependentsOf(w) {
 const JIT_DEFAULTS = { flatFeeSat: 0, feePpm: 0, maxClientFundingSats: 1000000, maxConcurrentFundings: 3, maxTotalFundingSats: null };
 const SWAP_DEFAULTS = {
 	enabled: false,
-	flatFeeSat: 0,
+	flatFeeSat: 500,
 	feePpm: 1000,
 	minSat: 10000,
 	maxSat: 1000000,

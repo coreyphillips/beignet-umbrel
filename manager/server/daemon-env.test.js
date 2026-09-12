@@ -173,6 +173,11 @@ test('only a liquidity provider that opted in serves reverse swaps', () => {
 	assert.equal(serving.BEIGNET_SWAP_MAX_EXPOSURE_SAT, '400000');
 	assert.equal(serving.BEIGNET_SWAP_MAX_CONCURRENT, '8');
 	assert.equal(serving.BEIGNET_SWAP_SUBMARINE, undefined, 'the submarine direction is its own opt-in');
+	// Umbrel #117: a provider that left the fee alone still charges for its
+	// own refund transaction, which the engine's quote never prices.
+	const untouched = m._daemonEnv(rec({ liquidityProvider: true, swaps: { enabled: true } }), PATHS, 's', 't');
+	assert.ok(Number(untouched.BEIGNET_SWAP_FLAT_FEE_SAT) > 0, 'the default flat fee is not zero');
+	assert.equal(untouched.BEIGNET_SWAP_FLAT_FEE_SAT, '500');
 	assert.equal(serving.BEIGNET_SWAP_CLAIM_SAFETY_BLOCKS, undefined);
 	assert.equal(serving.BEIGNET_SWAP_PAYMENT_MAX_FEE_PPM, undefined);
 	const notProvider = m._daemonEnv(rec({ swaps: { enabled: true } }), PATHS, 's', 't');

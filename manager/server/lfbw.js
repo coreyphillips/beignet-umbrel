@@ -89,10 +89,15 @@ const JIT_BOUNDS = Object.freeze({
 // payment and pays the same amount, minus these fees, to an address the
 // payer chose, from its own on-chain balance. Off by default: it commits
 // the wallet's coins to a contract the payer can claim, so the operator
-// switches it on knowingly. The engine's own defaults for the caps.
+// switches it on knowingly. The engine's own defaults for the caps, except
+// the flat fee: the engine's quote prices only the funding transaction
+// (its miner fee rides the quote), never the provider's own refund
+// transaction, which the provider pays when a swap is never claimed. A
+// 160 vbyte refund at roughly 3 sat/vb is about 480 sats, so 500 sats
+// covers it with a small margin; at 0 every small swap is subsidised.
 const SWAP_DEFAULTS = Object.freeze({
 	enabled: false,
-	flatFeeSat: 0,
+	flatFeeSat: 500,
 	feePpm: 1000,
 	minSat: 10000,
 	maxSat: 1000000,
