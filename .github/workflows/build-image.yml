@@ -381,7 +381,21 @@ env:
   # both roles were off however a wallet was configured: the swap provider
   # since 0.15.0 and guardian hosting since it shipped. No manager change
   # is needed, the env has always been right; the daemon now acts on it.
-  BEIGNET_VERSION: "0.19.1"
+  # 0.19.2: field fixes, no daemon surface change. A direct-funding payer asks
+  # the chain before offering a coin its own wallet view still lists, and says
+  # which candidates were spent when it refuses (#782/#785). Hold settle and
+  # cancel can no longer both report success on one invoice (#771/#788). A
+  # restore stops arming hold-invoice parking for an invoice whose incoming
+  # payment already completed (#786). A coin this wallet has spent can no
+  # longer be selected out of listUtxos (#784/#789).
+  # 0.19.3: wallet shutdown is bounded (#783/#787). stop() waits at most 30s
+  # for an in-flight refresh and always runs teardown, an abandoned refresh or
+  # an interrupted request batch cannot reconnect behind it, and a refresh
+  # after stop is refused. The CLI still force-exits at 15s, under the
+  # manager's 18s SIGTERM grace (KILL_GRACE_MS), so nothing here changes what
+  # the manager waits for. dist/cli is byte-identical to 0.19.1 apart from the
+  # direct-funding wallet adapter: no routes, no env, no openapi change.
+  BEIGNET_VERSION: "0.19.3"
 
 jobs:
   build:
