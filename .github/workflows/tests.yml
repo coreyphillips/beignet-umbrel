@@ -1,0 +1,47 @@
+name: tests
+
+# The manager's server tests and the dashboard's tests and build, on every
+# pull request and on every push to main. Nothing else in this repo runs
+# them: build-image.yml only builds, and docker/Dockerfile never tests.
+#
+# Node 22: the manager's test script passes a glob to `node --test`, which
+# the test runner only accepts from Node 21 on.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  manager:
+    name: manager server tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: manager
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: manager/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  ui:
+    name: dashboard tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: manager/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: manager/ui/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
