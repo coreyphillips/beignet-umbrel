@@ -58,6 +58,7 @@ coreyphillips/beignet#532.
 | Dashboard reduction | `manager/ui/src/lib/lfbw.js` | One derivation of spendable, receivable and the arriving sats; which invoice to mint. |
 | Envelope reader | `manager/ui/src/lib/funding-envelope.js` | Reads the frozen head of a v3 request (node id, expiry, amount, chain) to show the payer who is asking. Fails closed. |
 | Fallback rule | `manager/ui/src/lib/direct-funding.js` | A plain send may follow a direct funding only on a rejection or a status from before the witness left the device. |
+| Fallback record | `manager/server/direct-funding-fallbacks.js` | Every fallback, per wallet, with the daemon's reason, the request being paid and the transaction that went instead (`GET`/`POST /api/wallets/:id/direct-funding/fallbacks`). Reported by the payer's card, because the daemon answers the one call that asked and the ordinary payment that follows is not connected to it anywhere else. The Activity tab reads it back onto the payment's row (umbrel #121). |
 
 ## Trust and safety
 

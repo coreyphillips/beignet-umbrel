@@ -6,7 +6,13 @@ import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
 import { formatInvoiceWarning } from '../../lib/hints.js';
 import { parsePayment } from '../../lib/payment-uri.js';
-import { describeFunding, fundingOutcome } from '../../lib/direct-funding.js';
+import {
+	describeFallback,
+	describeFunding,
+	fallbackRecord,
+	fundingOutcome,
+	persistFallback
+} from '../../lib/direct-funding.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import AddressSend from './lfbw/AddressSend.jsx';
 import { arrivingFundsNote, lfbwStatus } from '../../lib/lfbw.js';
@@ -235,6 +241,11 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	// funding. On by default when present; the payer can decline it.
 	const [directFunding, setDirectFunding] = useState(true);
 	const [fundingResult, setFundingResult] = useState(null);
+	// A direct funding that degraded into this payment. Kept on screen rather
+	// than said once in a toast, and recorded against the transaction it became:
+	// the reason lives in the daemon's answer to this call and nowhere else, and
+	// what goes out instead is an ordinary send (umbrel #121).
+	const [fellBack, setFellBack] = useState(null);
 	// The line the hand-off left, and the field the caret is owed.
 	const [arrived, setArrived] = useState(arrival?.note ?? null);
 	const inputRef = useRef(null);
@@ -591,10 +602,19 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	const funding = request?.funding || null;
 	const payDirect = !!funding && directFunding && !maxMode;
 
+	// Written once the payment it became is known, because the transaction id is
+	// what ties the reason to a row in Activity. A manager that will not take it
+	// changes nothing about the payment: the note stays on screen, which is
+	// where the answer used to end anyway.
+	const noteFallback = (record) =>
+		persistFallback(record, (entry) => manager.recordDirectFundingFallback(id, entry));
+
 	const send = async () => {
 		setBusy(true);
 		setTxid('');
 		setFundingResult(null);
+		setFellBack(null);
+		let fallback = null;
 		try {
 			if (payDirect) {
 				// The daemon rejects only before our witness leaves the device. A
@@ -623,6 +643,12 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					bump();
 					return;
 				}
+				fallback = fallbackRecord(outcome.reason, {
+					funding,
+					address: parsed.address,
+					amountSats: parseInt(amount, 10)
+				});
+				setFellBack({ ...fallback, pending: true });
 				toast(`Direct funding not taken (${outcome.reason}); paying the address instead.`, 'info');
 			}
 			// What was read, not what was typed. The box is kept canonical above, so
@@ -636,6 +662,7 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 				? await api.post('/send-max', base)
 				: await api.post('/send', { ...base, amountSats: parseInt(amount, 10) });
 			setTxid(r.txid);
+			if (fallback) setFellBack(await noteFallback({ ...fallback, txid: r.txid || null }));
 			setMaxMode(false);
 			setAmount('');
 			setRequest(null);
@@ -644,6 +671,10 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 			toast('Sent', 'success');
 			bump();
 		} catch (e) {
+			// No payment to attach it to, so nothing in Activity will ever show
+			// this one. It is still the answer to why the direct funding did not
+			// happen, and the log keeps it.
+			if (fallback) setFellBack(await noteFallback({ ...fallback, error: e.message }));
 			toast(e.message, 'error');
 		} finally {
 			setBusy(false);
@@ -888,6 +919,16 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 			>
 				{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
 			</Button>
+			{fellBack && (
+				<div className="info-note" style={{ marginTop: 12 }} role="status">
+					{describeFallback(fellBack)}
+					{fellBack.persisted === false && (
+						<div role="alert">
+							The fallback reason could not be saved to Activity. Keep this note for your records.
+						</div>
+					)}
+				</div>
+			)}
 			{txid && (
 				<div className="info-note" style={{ marginTop: 12 }}>
 					Broadcast: <span className="mono">{txid}</span>

@@ -6,7 +6,13 @@ import { fmtSats } from '../../../lib/format.js';
 import { FEE_CAP_MULTIPLE, perkwFromSatVb } from '../../../lib/fees.js';
 import { parsePayment } from '../../../lib/payment-uri.js';
 import { useSettledRefusal } from '../../../hooks/useSettledRefusal.js';
-import { describeFunding, fundingOutcome } from '../../../lib/direct-funding.js';
+import {
+	describeFallback,
+	describeFunding,
+	fallbackRecord,
+	fundingOutcome,
+	persistFallback
+} from '../../../lib/direct-funding.js';
 import { homeChannel } from '../../../lib/lfbw.js';
 import { manager, walletApi } from '../../../api.js';
 
@@ -165,9 +171,17 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 		}
 	};
 
+	// A direct funding that degraded into an ordinary payment, recorded against
+	// the transaction it became: the reason lives in the daemon's answer to this
+	// call and nowhere else, and what goes out instead is a splice-out like any
+	// other (umbrel #121). Never allowed to disturb the payment itself.
+	const noteFallback = (record) =>
+		persistFallback(record, (entry) => manager.recordDirectFundingFallback(id, entry));
+
 	const send = async () => {
 		setBusy(true);
 		setResult(null);
+		let fallback = null;
 		try {
 			if (payDirect) {
 				// The daemon rejects only before our witness leaves the device.
@@ -191,6 +205,11 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 					finish();
 					return;
 				}
+				fallback = fallbackRecord(outcome.reason, {
+					funding,
+					address: parsed.address,
+					amountSats: amountNum
+				});
 				toast(`Direct funding not taken (${outcome.reason}); paying the address instead.`, 'info');
 			}
 			if (!home) throw new Error('No channel to send from yet.');
@@ -201,10 +220,19 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 				address: parsed.address
 			});
 			if (r && r.ok === false) throw new Error(r.error || r.message || 'The splice was refused');
-			setResult({ kind: 'splice', txid: r?.txid || r?.spliceTxid || null });
+			const txid = r?.txid || r?.spliceTxid || null;
+			const recorded = fallback ? await noteFallback({ ...fallback, txid }) : null;
+			setResult({ kind: 'splice', txid, fallback: recorded });
 			toast('Sent', 'success');
 			finish();
 		} catch (e) {
+			// No payment to attach it to, so nothing in Activity will ever show
+			// this one. It is still the answer to why the direct funding did not
+			// happen, and the log keeps it.
+			if (fallback) {
+				const recorded = await noteFallback({ ...fallback, error: e.message });
+				setResult({ kind: 'failed', fallback: recorded });
+			}
 			toast(e.message, 'error');
 		} finally {
 			setBusy(false);
@@ -353,6 +381,16 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 			>
 				{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
 			</Button>
+			{result?.fallback && (
+				<div className="info-note" style={{ marginTop: 12 }} role="status">
+					{describeFallback(result.fallback)}
+					{result.fallback.persisted === false && (
+						<div role="alert">
+							The fallback reason could not be saved to Activity. Keep this note for your records.
+						</div>
+					)}
+				</div>
+			)}
 			{result?.kind === 'splice' && (
 				<div className="info-note" style={{ marginTop: 12 }}>
 					Sent from your channel.{result.txid ? ' Transaction: ' : ''}

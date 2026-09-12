@@ -29,6 +29,7 @@ function managerWith(records) {
 	};
 	m.runtime = new Map();
 	m.channelLogs = new Map();
+	m.fallbackLogs = new Map();
 	m.logs = [];
 	m._log = (_id, line) => m.logs.push(line);
 	m.lfbwSupported = true;

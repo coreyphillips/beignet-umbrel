@@ -927,6 +927,28 @@ function recordChannelEvent(walletId, entry) {
 	];
 }
 
+// Direct fundings that degraded into an ordinary payment, mirroring the
+// manager's own durable log: the payer's card records one when the daemon
+// refuses the funding, and the Activity tab reads it back onto the payment it
+// became. Seeded on Main so the annotated row is there to be found, which is
+// the whole complaint behind it (umbrel #121): on the row alone, a degraded
+// direct funding and an ordinary send are the same transaction.
+const fundingFallbacks = {};
+{
+	const paid = store.state['demo-main'].txs.find((t) => t.type === 'sent');
+	fundingFallbacks['demo-main'] = [
+		{
+			timestamp: paid.timestamp + 1000,
+			reason: 'The recipient did not take the direct funding.',
+			address: paid.address,
+			amountSats: Math.abs(paid.valueSats),
+			nodeId: pubkey(),
+			requestId: hex(32),
+			txid: paid.txid
+		}
+	];
+}
+
 // The daemon lists a channel's peer in /peers while the connection is up; the
 // channels table uses that to badge channels whose peer has dropped. Link each
 // wallet's channel peers into its peers list so demo channels read as healthy,
@@ -1684,6 +1706,19 @@ function managerRequest(path, method, body) {
 		const channelId = new URLSearchParams(subQuery || '').get('channelId');
 		const all = channelEvents[w.id] || [];
 		return channelId ? all.filter((e) => e.channelId === channelId) : all.slice();
+	}
+	if (sub === 'direct-funding/fallbacks') {
+		// Direct fundings that degraded into an ordinary payment, recorded by the
+		// send card and read back onto the payment's activity row.
+		if (method === 'POST') {
+			if (!body || !String(body.reason || '').trim()) throw err('reason is required', 'INVALID_PARAMS');
+			// The timestamp is the manager's, never the browser's, exactly as the
+			// real route does it.
+			const entry = { ...body, reason: String(body.reason).trim(), timestamp: Date.now() };
+			(fundingFallbacks[w.id] = fundingFallbacks[w.id] || []).push(entry);
+			return { ...entry, persisted: true };
+		}
+		return (fundingFallbacks[w.id] || []).slice();
 	}
 	throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
 }

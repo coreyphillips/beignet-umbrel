@@ -81,7 +81,13 @@ export const manager = {
 	channelEvents: (id, channelId) =>
 		request(
 			`/api/wallets/${id}/channel-events${channelId ? `?channelId=${channelId}` : ''}`
-		)
+		),
+	// Direct fundings that degraded into an ordinary payment (umbrel #121).
+	// Only the payer's browser sees both halves, so it is the one that reports
+	// them; the Activity tab reads them back onto the payment they became.
+	directFundingFallbacks: (id) => request(`/api/wallets/${id}/direct-funding/fallbacks`),
+	recordDirectFundingFallback: (id, body) =>
+		request(`/api/wallets/${id}/direct-funding/fallbacks`, { method: 'POST', body, timeoutMs: 5000 })
 };
 
 // Per-wallet beignet daemon API (proxied; bearer token injected server-side).

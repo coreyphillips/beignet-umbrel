@@ -21,15 +21,29 @@ const NODE = '02' + 'ab'.repeat(32);
 const HOME = { channelId: 'c'.repeat(64), peerPubkey: PK, state: 'NORMAL', htlcUsable: true, localBalanceSats: 400_000, remoteBalanceSats: 100_000 };
 const REQUEST = encodeFundingEnvelope({ nodeId: NODE, expiresAt: Date.now() + 3_600_000, amountSats: 50_000 });
 
+// The manager, which the card reaches through the module rather than a prop:
+// the sibling wallet list, and the record a direct-funding fallback leaves.
 const realFetch = globalThis.fetch;
+let managerCalls = [];
 test.beforeEach(() => {
-	globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, result: [] }) });
+	managerCalls = [];
+	globalThis.fetch = async (url, init = {}) => {
+		managerCalls.push({
+			url: String(url),
+			method: init.method || 'GET',
+			body: init.body ? JSON.parse(init.body) : null
+		});
+		return { ok: true, status: 200, json: async () => ({ ok: true, result: init.method === 'POST' ? { persisted: true } : [] }) };
+	};
 });
 test.afterEach(() => {
 	globalThis.fetch = realFetch;
 });
 
-function stubApi({ utxos = [], sendAnswer } = {}) {
+const recorded = () =>
+	managerCalls.find((c) => c.method === 'POST' && c.url.endsWith('/direct-funding/fallbacks'));
+
+function stubApi({ utxos = [], sendAnswer, spliceError } = {}) {
 	const calls = [];
 	return {
 		calls,
@@ -42,7 +56,10 @@ function stubApi({ utxos = [], sendAnswer } = {}) {
 		post: async (path, body) => {
 			calls.push(['POST', path, body]);
 			if (path === '/channel/splice-quote') return { feeSats: 1200, maxAmountSats: 380_000, spendableSats: 395_000, reserveSats: 5000 };
-			if (path === '/channel/splice-out') return { ok: true, txid: 'd'.repeat(64) };
+			if (path === '/channel/splice-out') {
+				if (spliceError) throw new Error(spliceError);
+				return { ok: true, txid: 'd'.repeat(64) };
+			}
 			if (path === '/direct-funding/send') {
 				if (sendAnswer instanceof Error) throw sendAnswer;
 				return sendAnswer;
@@ -172,9 +189,20 @@ test('a rejected direct funding falls back to the splice-out; a signed one never
 		await settle(50);
 		assert.ok(rejected.calls.some(([m, p]) => m === 'POST' && p === '/channel/splice-out'), 'the plain payment followed');
 		assert.match(view.text(), /Direct funding not taken \(receiver declined the offer\)/);
+		// The toast said it once. The reason is also recorded against the
+		// transaction it became, and stays on the card (umbrel #121).
+		const note = recorded();
+		assert.ok(note, 'the reason went somewhere durable');
+		assert.equal(note.url, '/api/wallets/w1/direct-funding/fallbacks');
+		assert.equal(note.body.reason, 'receiver declined the offer');
+		assert.equal(note.body.txid, 'd'.repeat(64), 'the splice that went instead');
+		assert.equal(note.body.amountSats, 50_000);
+		assert.equal(note.body.nodeId, NODE);
+		assert.match(view.text(), /That did not happen \(receiver declined the offer\)/);
 	} finally {
 		await view.unmount();
 	}
+	managerCalls = []; // the rejection above left one; this half must record none
 	const signed = stubApi({ utxos: coin, sendAnswer: { status: 'SIGNED_PENDING', spentTxid: 'a'.repeat(64), caveat: 'the funding has not reached the mempool yet' } });
 	view = await mount(signed);
 	try {
@@ -184,6 +212,44 @@ test('a rejected direct funding falls back to the splice-out; a signed one never
 		await settle(50);
 		assert.equal(signed.calls.some(([m, p]) => m === 'POST' && p === '/channel/splice-out'), false, 'the witness is out: paying again would pay twice');
 		assert.match(view.text(), /signed and on its way \(signed pending\)\. the funding has not reached the mempool yet/);
+		assert.equal(recorded(), undefined, 'nothing fell back, so there is nothing to explain');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a failed splice-out retains the direct-funding refusal without claiming payment success', async () => {
+	const api = stubApi({ utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }], sendAnswer: new Error('request expired'), spliceError: 'Insufficient funds' });
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+		await settle(400);
+		await click(sendButton(view));
+		await settle(50);
+		assert.equal(recorded().body.error, 'Insufficient funds');
+		assert.match(view.text(), /ordinary payment also failed \(insufficient funds\)/);
+		assert.doesNotMatch(view.text(), /went out as an ordinary payment|Sent from your channel/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a failed fallback record keeps the splice transaction visible', async () => {
+	const fetch = globalThis.fetch;
+	globalThis.fetch = async (url, init = {}) => {
+		if (init.method === 'POST') throw new Error('offline');
+		return fetch(url, init);
+	};
+	const api = stubApi({ utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }], sendAnswer: new Error('request expired') });
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+		await settle(400);
+		await click(sendButton(view));
+		await settle(50);
+		assert.match(view.text(), /Sent from your channel/);
+		assert.match(view.text(), /fallback reason could not be saved/);
+		assert.equal(api.calls.filter(([m, p]) => m === 'POST' && p === '/channel/splice-out').length, 1);
 	} finally {
 		await view.unmount();
 	}

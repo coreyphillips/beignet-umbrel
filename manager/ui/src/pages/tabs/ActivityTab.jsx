@@ -14,6 +14,8 @@ import {
 } from '../../components/ui.jsx';
 import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { addressUrl, txUrl } from '../../lib/explorer.js';
+import { describeFallback } from '../../lib/direct-funding.js';
+import { manager } from '../../api.js';
 
 const STATUS_TONE = { COMPLETED: 'green', PENDING: 'yellow', FAILED: 'red' };
 
@@ -37,16 +39,25 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 
 	const { data } = usePoll(
 		async () => {
-			const [txs, payments, utxos] = await Promise.all([
+			const [txs, payments, utxos, fallbacks] = await Promise.all([
 				api.get('/transactions').catch(() => []),
 				api.get('/payments').catch(() => []),
-				api.get('/utxos').catch(() => [])
+				api.get('/utxos').catch(() => []),
+				// Payments that were meant to be direct fundings and are not. The
+				// daemon has no idea: it was asked for an ordinary send and made
+				// one. The manager holds the pair (umbrel #121).
+				manager.directFundingFallbacks(id).catch(() => [])
 			]);
-			return { txs, payments, utxos };
+			return { txs, payments, utxos, fallbacks };
 		},
 		8000,
 		[id, tick]
 	);
+	// txid -> the fallback recorded against it, newest wins. One transaction is
+	// one payment, so a second entry for a txid is a re-record rather than a
+	// second story.
+	const fellBack = {};
+	for (const f of data?.fallbacks || []) if (f.txid) fellBack[f.txid] = f;
 	const { data: boostable } = usePoll(
 		() => api.get('/transactions/boostable').catch(() => null),
 		8000,
@@ -104,6 +115,12 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 										>
 											<td>
 												<Badge tone={t.type === 'received' ? 'green' : 'blue'}>{t.type}</Badge>
+												{/* Otherwise this row is an ordinary send in every
+												    respect, which is exactly what made a degraded
+												    direct funding impossible to find afterwards. */}
+												{fellBack[t.txid] && (
+													<Badge tone="yellow">direct funding not taken</Badge>
+												)}
 											</td>
 											<td>{fmtSats(Math.abs(t.valueSats))}</td>
 											<td>{t.feeSats != null ? fmtSats(t.feeSats) : '-'}</td>
@@ -233,6 +250,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 					detail={detail}
 					network={network}
 					tipHeight={tipHeight}
+					fallback={detail.kind === 'tx' ? fellBack[detail.item.txid] || null : null}
 					onClose={() => setDetail(null)}
 				/>
 			)}
@@ -253,7 +271,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 	);
 }
 
-function DetailModal({ detail, network, tipHeight, onClose }) {
+function DetailModal({ detail, network, tipHeight, fallback, onClose }) {
 	const { kind, item } = detail;
 	const title =
 		kind === 'tx' ? 'Transaction' : kind === 'payment' ? 'Lightning payment' : 'Coin';
@@ -261,18 +279,34 @@ function DetailModal({ detail, network, tipHeight, onClose }) {
 		// The modal already carries a Close in its header; a second one at the foot
 		// is just a second thing to read.
 		<Modal title={title} onClose={onClose} wide>
-			{kind === 'tx' && <TxDetail tx={item} network={network} tipHeight={tipHeight} />}
+			{kind === 'tx' && (
+				<TxDetail tx={item} network={network} tipHeight={tipHeight} fallback={fallback} />
+			)}
 			{kind === 'payment' && <PaymentDetail payment={item} />}
 			{kind === 'utxo' && <UtxoDetail utxo={item} network={network} />}
 		</Modal>
 	);
 }
 
-function TxDetail({ tx, network, tipHeight }) {
+function TxDetail({ tx, network, tipHeight, fallback }) {
 	const confs = confirmations(tx, tipHeight);
 	const url = txUrl(network, tx.txid);
 	return (
 		<div className="detail">
+			{/* The one thing about this transaction that nothing else can say: it
+			    was sent as a direct funding, the recipient's side did not take it,
+			    and the payer's daemon gave a reason that used to outlive nothing.
+			    Said first, because it is why the operator opened the row. */}
+			{fallback && (
+				<div className="info-note" style={{ marginBottom: 12 }}>
+					{describeFallback(fallback)}
+					<div className="wallet-meta" style={{ marginTop: 4 }}>
+						Recorded {fmtDate(fallback.timestamp)}
+						{fallback.nodeId ? ` · recipient node ${shortId(fallback.nodeId)}` : ''}
+						{fallback.requestId ? ` · request ${shortId(fallback.requestId)}` : ''}
+					</div>
+				</div>
+			)}
 			<DetailRow label="Type">
 				<Badge tone={tx.type === 'received' ? 'green' : 'blue'}>{tx.type}</Badge>
 			</DetailRow>
