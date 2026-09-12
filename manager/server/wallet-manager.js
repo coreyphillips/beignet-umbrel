@@ -1042,7 +1042,15 @@ class WalletManager {
 			rt.electrumWait = null;
 		}
 
-		if (!(await this._probeElectrum(rec.electrum))) {
+		const reachable = await this._probeElectrum(rec.electrum);
+		// A stop that arrived while the probe was out wins: stopWallet found
+		// no child to kill and wrote running=false, so spawning now would
+		// leave a daemon up that the record and the dashboard say is stopped.
+		if (rt.stopping) {
+			this._log(id, 'start cancelled: stop requested');
+			return;
+		}
+		if (!reachable) {
 			rt.status = 'waiting-electrum';
 			rt.healthy = false;
 			this._log(
