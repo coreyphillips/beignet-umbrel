@@ -210,6 +210,10 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 					address: parsed.address,
 					amountSats: amountNum
 				});
+				// On screen before the splice-out, which negotiates with the peer
+				// and can outlast the toast by a long way. Until it returns there
+				// is no transaction to record the reason against.
+				setResult({ kind: 'pending', fallback: { ...fallback, pending: true } });
 				toast(`Direct funding not taken (${outcome.reason}); paying the address instead.`, 'info');
 			}
 			if (!home) throw new Error('No channel to send from yet.');

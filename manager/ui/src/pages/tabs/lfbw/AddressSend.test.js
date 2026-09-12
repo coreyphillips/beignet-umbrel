@@ -234,6 +234,42 @@ test('a failed splice-out retains the direct-funding refusal without claiming pa
 	}
 });
 
+test('a splice-out still in flight keeps the refusal on the card, not only in the toast', async () => {
+	let release;
+	const held = new Promise((r) => {
+		release = r;
+	});
+	const base = stubApi({
+		utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }],
+		sendAnswer: new Error('receiver declined the offer')
+	});
+	const api = {
+		...base,
+		post: async (path, body) => {
+			if (path === '/channel/splice-out') await held;
+			return base.post(path, body);
+		}
+	};
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+		await settle(400);
+		await click(sendButton(view));
+		await settle(50);
+		// The splice negotiates with the peer and can take far longer than the
+		// 3.6s a toast lasts, and there is no transaction to record against yet.
+		assert.match(view.text(), /That did not happen \(receiver declined the offer\)/);
+		assert.match(view.text(), /ordinary payment is being attempted/);
+		release();
+		await settle(50);
+		assert.match(view.text(), /went out as an ordinary payment/);
+		assert.equal(recorded().body.txid, 'd'.repeat(64));
+	} finally {
+		release();
+		await view.unmount();
+	}
+});
+
 test('a failed fallback record keeps the splice transaction visible', async () => {
 	const fetch = globalThis.fetch;
 	globalThis.fetch = async (url, init = {}) => {

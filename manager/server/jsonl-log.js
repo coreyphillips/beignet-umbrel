@@ -20,6 +20,9 @@ class JsonlLog {
 		this.warn = warn || (() => {});
 		this.entries = null; // loaded lazily, so a stopped wallet is still readable
 		this.broken = false;
+		// A file whose last line has no newline: appending straight onto it would
+		// join two records into one unparseable line, losing both.
+		this.unterminated = false;
 	}
 
 	_load() {
@@ -36,6 +39,7 @@ class JsonlLog {
 			);
 			return;
 		}
+		this.unterminated = raw.length > 0 && !raw.endsWith('\n');
 		for (const line of raw.split('\n')) {
 			if (!line.trim()) continue;
 			try {
@@ -68,10 +72,17 @@ class JsonlLog {
 					fs.writeFileSync(tmp, this.entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
 					fs.renameSync(tmp, this.file);
 				} else {
-					fs.appendFileSync(this.file, JSON.stringify(entry) + '\n');
+					fs.appendFileSync(
+						this.file,
+						(this.unterminated ? '\n' : '') + JSON.stringify(entry) + '\n'
+					);
 				}
+				this.unterminated = false;
 				persisted = true;
 			} catch (err) {
+				// A write that threw may have left part of a line on disk, so the
+				// next one starts on a line of its own.
+				this.unterminated = true;
 				this.warn(`${this.label} write failed (${err.message}); entry kept in memory only`);
 			}
 		}

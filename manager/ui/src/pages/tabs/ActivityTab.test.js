@@ -77,11 +77,11 @@ const api = {
 	post: async () => ({})
 };
 
-async function mount() {
+async function mount(walletApi = api) {
 	const view = await render(ToastProvider, {
 		children: createElement(ActivityTab, {
 			id: 'w1',
-			api,
+			api: walletApi,
 			info: { blockHeight: 908_214 },
 			rec: { network: 'mainnet' },
 			tick: 0,
@@ -113,6 +113,44 @@ test('opening it gives the reason, and which request was being paid', async () =
 		assert.match(text, /That did not happen \(receiver declined the offer\)/);
 		assert.match(text, /recipient node 02cdcd…cdcdcd/);
 		assert.match(text, /request dddddd…dddddd/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('bumping the fee by RBF carries the reason to the replacement', async () => {
+	const REPLACEMENT = 'e'.repeat(64);
+	const posted = [];
+	const listing = globalThis.fetch;
+	globalThis.fetch = async (url, init = {}) => {
+		if (init.method !== 'POST') return listing(url, init);
+		posted.push({ url: String(url), body: JSON.parse(init.body) });
+		return { ok: true, status: 200, json: async () => ({ ok: true, result: { persisted: true } }) };
+	};
+	const boostApi = {
+		get: async (path) => {
+			if (path === '/transactions') return TXS;
+			if (path === '/transactions/boostable') return { rbf: [{ txid: FELL_BACK }], cpfp: [] };
+			return [];
+		},
+		post: async (path) =>
+			path === '/tx/boost'
+				? { txid: REPLACEMENT, boostType: 'rbf', feeSats: 900, originalTxid: FELL_BACK }
+				: {}
+	};
+	const view = await mount(boostApi);
+	try {
+		await click(view.$$('tbody tr')[0].querySelector('button'));
+		await settle(20);
+		await click(view.$$('button').filter((b) => b.textContent.trim() === 'Bump fee').pop());
+		await settle(20);
+		// RBF replaces the transaction the reason was recorded against, and the
+		// row it would be shown on goes with it.
+		const note = posted.find((p) => p.url.endsWith('/direct-funding/fallbacks'));
+		assert.ok(note, 'the reason followed the replacement');
+		assert.equal(note.body.txid, REPLACEMENT);
+		assert.equal(note.body.reason, FALLBACK.reason);
+		assert.equal(note.body.nodeId, NODE);
 	} finally {
 		await view.unmount();
 	}

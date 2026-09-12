@@ -94,6 +94,19 @@ test('history survives a new instance, i.e. a manager restart', (t) => {
 	assert.equal(reloaded[0].txid, TXID);
 });
 
+test('a file whose last line was left unterminated does not swallow the next entry', (t) => {
+	const dir = tmpdir(t);
+	const file = path.join(dir, 'direct-funding-fallbacks.jsonl');
+	fs.writeFileSync(file, JSON.stringify({ timestamp: 1, reason: 'receiver declined the offer' }));
+	const { persisted } = new DirectFundingFallbackLog(dir).record({ reason: 'request expired' });
+	assert.equal(persisted, true);
+	assert.deepEqual(
+		new DirectFundingFallbackLog(dir).list().map((e) => e.reason),
+		['receiver declined the offer', 'request expired'],
+		'both survive: appending onto the tail would have joined them into one unparseable line'
+	);
+});
+
 test('keeps exactly the newest MAX_FALLBACKS entries, oldest first', (t) => {
 	const dir = tmpdir(t);
 	const log = new DirectFundingFallbackLog(dir);

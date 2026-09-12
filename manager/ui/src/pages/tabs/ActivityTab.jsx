@@ -14,7 +14,7 @@ import {
 } from '../../components/ui.jsx';
 import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { addressUrl, txUrl } from '../../lib/explorer.js';
-import { describeFallback } from '../../lib/direct-funding.js';
+import { describeFallback, persistFallback } from '../../lib/direct-funding.js';
 import { manager } from '../../api.js';
 
 const STATUS_TONE = { COMPLETED: 'green', PENDING: 'yellow', FAILED: 'red' };
@@ -260,6 +260,16 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 					api={api}
 					tx={bumping.tx}
 					method={bumping.method}
+					// An RBF bump replaces the transaction id the fallback was
+					// recorded against, so without moving it to the replacement the
+					// reason leaves this list with the transaction it named.
+					onReplaced={(txid) => {
+						const f = fellBack[bumping.tx.txid];
+						if (!f || !txid || txid === bumping.tx.txid) return null;
+						return persistFallback({ ...f, txid }, (entry) =>
+							manager.recordDirectFundingFallback(id, entry)
+						);
+					}}
 					onClose={() => setBumping(null)}
 					onDone={() => {
 						setBumping(null);
@@ -436,7 +446,7 @@ function UtxoDetail({ utxo: u, network }) {
 	);
 }
 
-function BumpFeeModal({ api, tx, method, onClose, onDone }) {
+function BumpFeeModal({ api, tx, method, onReplaced, onClose, onDone }) {
 	const toast = useToast();
 	const [feeRate, setFeeRate] = useState('');
 	const [busy, setBusy] = useState(false);
@@ -449,6 +459,7 @@ function BumpFeeModal({ api, tx, method, onClose, onDone }) {
 			const rate = parseInt(feeRate, 10);
 			if (rate > 0) body.satsPerVbyte = rate;
 			const r = await api.post('/tx/boost', body);
+			await onReplaced?.(r.txid);
 			toast(
 				`Fee bumped via ${r.boostType === 'cpfp' ? 'CPFP' : 'RBF'} · new fee ${fmtSats(r.feeSats)}`,
 				'success'
