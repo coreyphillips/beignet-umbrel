@@ -395,7 +395,19 @@ env:
   # manager's 18s SIGTERM grace (KILL_GRACE_MS), so nothing here changes what
   # the manager waits for. dist/cli is byte-identical to 0.19.1 apart from the
   # direct-funding wallet adapter: no routes, no env, no openapi change.
-  BEIGNET_VERSION: "0.19.3"
+  # 0.19.5: the direct-funding payer no longer counts a locally refused
+  # onion send as delivered (#790/#791). The node's onion send hook used to
+  # swallow a sendToPeer throw (a peer no longer ready, an outbound gate), so
+  # the onion lane counted a frame that never left, the registry never fell
+  # through to the blind relay, and the payer sat out the offer timeout
+  # blaming the receiver; the failure now says which lane refused and why.
+  # A publish correction rides along: the npm 0.19.3 and 0.19.4 tarballs were
+  # cut from a stale local dist, so 0.19.3 never actually carried the bounded
+  # wallet shutdown (#787) the note above describes and 0.19.4 carried
+  # nothing new; 0.19.5 builds on publish (prepublishOnly) and is the first
+  # npm release with both. dist/cli is byte-identical to 0.19.3: no routes,
+  # no env, no openapi change.
+  BEIGNET_VERSION: "0.19.5"
 
 jobs:
   build:
