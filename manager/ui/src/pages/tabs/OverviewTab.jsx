@@ -370,6 +370,13 @@ function fmtBytes(n) {
 	return `${v} B`;
 }
 
+// The daemon reports the caps per direction, but enforces one budget across
+// both, so the card prints them once. Should some engine ever let the two
+// differ, there is no single budget to print and each direction keeps its own.
+const oneBudget = (a = {}, b = {}) =>
+	String(a.maxTotalExposureSat ?? '') === String(b.maxTotalExposureSat ?? '') &&
+	String(a.maxConcurrentSwaps ?? '') === String(b.maxConcurrentSwaps ?? '');
+
 /**
  * The guardian this wallet serves to other beignet nodes (beignet #699):
  * the sets it holds, how much, how many sessions are up, and the address
@@ -383,6 +390,11 @@ function fmtBytes(n) {
  */
 function SwapsCard({ swaps, rec }) {
 	const wantsSubmarine = !!rec?.swaps?.submarine;
+	const sharing = !!(
+		swaps?.enabled &&
+		swaps.submarine?.enabled &&
+		oneBudget(swaps.limits, swaps.submarine.limits)
+	);
 	return (
 		<Card title="Swaps" className="grid-full">
 			<div className="wallet-meta" style={{ marginBottom: 10 }}>
@@ -391,7 +403,8 @@ function SwapsCard({ swaps, rec }) {
 				{wantsSubmarine
 					? ', and on-chain to Lightning, where it pays an invoice for coins locked to it and claims them with the preimage'
 					: ''}
-				. The caps bound what is committed at once.
+				. The caps bound what is committed at once
+				{sharing ? ', across both directions together' : ''}.
 			</div>
 			{!swaps ? (
 				<div className="wallet-meta">Reading the swap status…</div>
@@ -404,10 +417,15 @@ function SwapsCard({ swaps, rec }) {
 				</div>
 			) : (
 				<>
-					<SwapDirection label="Lightning to on-chain (reverse)" status={swaps} />
+					{sharing && <SwapBudget reverse={swaps} submarine={swaps.submarine} />}
+					<SwapDirection label="Lightning to on-chain (reverse)" status={swaps} sharing={sharing} />
 					{wantsSubmarine &&
 						(swaps.submarine?.enabled ? (
-							<SwapDirection label="On-chain to Lightning (submarine)" status={swaps.submarine} />
+							<SwapDirection
+								label="On-chain to Lightning (submarine)"
+								status={swaps.submarine}
+								sharing={sharing}
+							/>
 						) : (
 							<div className="info-note" style={{ marginTop: 10 }}>
 								The on-chain to Lightning direction starts with the wallet's next restart, or the
@@ -423,7 +441,81 @@ function SwapsCard({ swaps, rec }) {
 // A ledger state as a phrase: CLAIM_BROADCAST reads "claim broadcast".
 const swapStateWords = (state) => String(state).toLowerCase().replace(/_/g, ' ');
 
-function SwapDirection({ label, status }) {
+// The states a swap ends in. The concurrency limit counts every row that is
+// not one of these, while the reported exposure counts only the rows whose
+// principal is at risk, so the slots have to be counted from the ledger
+// breakdown. A state this app has not heard of counts as live: overstating
+// the room left is the worse way to be wrong.
+const terminalSwapStates = new Set([
+	'SETTLED',
+	'REFUNDED',
+	'CANCELLED',
+	'FAILED',
+	'CLAIM_CONFIRMED',
+	'PAYMENT_FAILED'
+]);
+
+const liveSwaps = (status) =>
+	Object.entries(status.counts || {}).reduce(
+		(n, [state, c]) => (terminalSwapStates.has(state) ? n : n + Number(c || 0)),
+		0
+	);
+
+/**
+ * The one budget both directions draw on. The daemon admits a swap against the
+ * whole ledger with no direction filter, so the exposure ceiling and the
+ * concurrency limit are shared: what reverse holds is not there for submarine.
+ * Only the reporting is per direction, and the two row sets partition the
+ * ledger, so the sum of the two is the whole of it.
+ */
+function SwapBudget({ reverse, submarine }) {
+	const limits = reverse.limits || {};
+	const exposedSat = Number(reverse.exposedSat || 0) + Number(submarine.exposedSat || 0);
+	const exposedCount = Number(reverse.exposedCount || 0) + Number(submarine.exposedCount || 0);
+	const maxSat = Number(limits.maxTotalExposureSat || 0);
+	const maxCount = Number(limits.maxConcurrentSwaps);
+	// Every exposed row is a live one, so the ledger breakdown can only be an
+	// undercount if it is missing.
+	const liveCount = Math.max(liveSwaps(reverse) + liveSwaps(submarine), exposedCount);
+	const slotsLeft = Number.isFinite(maxCount) ? Math.max(0, maxCount - liveCount) : null;
+	return (
+		<div style={{ marginTop: 10 }}>
+			<div className="field-label" style={{ marginBottom: 8 }}>
+				Both directions together
+			</div>
+			<div className="grid cols-3">
+				<Stat
+					label="Committed now"
+					num={exposedSat}
+					suffix=" sats"
+					sub={`over ${exposedCount} swap${exposedCount === 1 ? '' : 's'}, both directions`}
+				/>
+				<Stat
+					label="Caps"
+					value={fmtSats(maxSat)}
+					sub={`at once, ${limits.maxConcurrentSwaps ?? '-'} swap${maxCount === 1 ? '' : 's'} at most`}
+				/>
+				<Stat
+					label="Room left"
+					num={Math.max(0, maxSat - exposedSat)}
+					suffix=" sats"
+					sub={
+						slotsLeft === null
+							? 'for either direction'
+							: `${slotsLeft} more swap${slotsLeft === 1 ? '' : 's'} of the ${maxCount}, either direction`
+					}
+				/>
+			</div>
+			<div className="wallet-meta" style={{ marginTop: 8 }}>
+				One budget covers both directions, not one each. What a reverse swap holds is not there
+				for a submarine one, and the limit on swaps in flight is the total. Each direction below
+				reports its own share of this.
+			</div>
+		</div>
+	);
+}
+
+function SwapDirection({ label, status, sharing }) {
 	const limits = status.limits || {};
 	const fee = status.fee || {};
 	const exposedSat = Number(status.exposedSat || 0);
@@ -435,18 +527,20 @@ function SwapDirection({ label, status }) {
 			<div className="field-label" style={{ marginBottom: 8 }}>
 				{label}
 			</div>
-			<div className="grid cols-4">
+			<div className={`grid cols-${sharing ? 3 : 4}`}>
 				<Stat
 					label="Committed now"
 					num={exposedSat}
 					suffix=" sats"
-					sub={`${exposedCount} swap${exposedCount === 1 ? '' : 's'} in flight`}
+					sub={`${exposedCount} swap${exposedCount === 1 ? '' : 's'} in flight${sharing ? ', of the shared budget' : ''}`}
 				/>
-				<Stat
-					label="Caps"
-					value={fmtSats(Number(limits.maxTotalExposureSat || 0))}
-					sub={`at once, ${limits.maxConcurrentSwaps ?? '-'} swap${limits.maxConcurrentSwaps === 1 ? '' : 's'} at most`}
-				/>
+				{!sharing && (
+					<Stat
+						label="Caps"
+						value={fmtSats(Number(limits.maxTotalExposureSat || 0))}
+						sub={`at once, ${limits.maxConcurrentSwaps ?? '-'} swap${limits.maxConcurrentSwaps === 1 ? '' : 's'} at most`}
+					/>
+				)}
 				<Stat
 					label="Swap size"
 					value={`${fmtSats(Number(limits.minSwapSat || 0))} to ${fmtSats(Number(limits.maxSwapSat || 0))}`}
