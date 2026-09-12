@@ -178,6 +178,36 @@ test('an external primary is asked to sell inbound first, then opened to plainly
 	assert.match(m.logs.find((l) => /inbound purchase failed/.test(l)), /sells no liquidity/);
 });
 
+test('a dual-funded open that succeeds is a decision of its own, and "move now" reports it', async () => {
+	const PK_X = '02' + '33'.repeat(32);
+	const { m } = harness({
+		lf: { mode: 'external', primaryWalletId: null, primaryUri: `${PK_X}@lsp.example:9735`, primaryPubkey: PK_X, trusted: false },
+		answers: {
+			'w1 GET /balance': { onchain: 200000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [],
+			'w1 GET /fees/estimates': { normal: 7 },
+			'w1 POST /tx/quote': { maxSendSats: 200000 },
+			'w1 POST /channel/open-v2': { channelId: 'c2' }
+		}
+	});
+	const rt = m.runtimeState('w1');
+	rt.lfbwLast = { at: 1, action: 'wait', reason: 'fee-too-high', feeSats: 4000 };
+	const outcome = await m._lfbwChannelize('w1');
+	const v2 = m.calls.find((c) => c.path === '/channel/open-v2');
+	assert.ok(v2, 'the purchase was placed');
+	assert.equal(m.calls.some((c) => c.path === '/channel/connect-and-open'), false, 'no plain open after a success');
+	assert.equal(outcome.action, 'open-v2');
+	assert.equal(outcome.amountSats, v2.body.amountSats);
+	assert.equal(outcome.requestedSats, v2.body.requestFunds.requestedSats);
+	assert.equal(rt.lfbwLast.action, 'open-v2', 'the stale fee wait is replaced by the open');
+	// "Move now anyway" is the owner's path to a forced open: it reports
+	// the open, never a 503 for a wallet that answered.
+	const now = await m.channelizeNow('w1');
+	assert.equal(now.action, 'open-v2');
+	assert.equal(m.calls.filter((c) => c.path === '/channel/open-v2').length, 2);
+});
+
 test('channelize is woken by a deposit arriving, one confirming, and the home channel becoming usable', () => {
 	const { CHANNELIZE_EVENTS } = require('./lfbw');
 	// transaction:received as well: the engine relays confirmed only on a

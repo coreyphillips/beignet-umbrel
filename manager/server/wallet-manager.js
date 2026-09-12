@@ -2118,7 +2118,11 @@ class WalletManager {
 				);
 				try {
 					await this._daemonCall(rec, 'POST', '/channel/open-v2', order.body);
-					return;
+					return decided({
+						action: 'open-v2',
+						amountSats: order.body.amountSats,
+						requestedSats: order.body.requestFunds.requestedSats
+					});
 				} catch (err) {
 					this._log(id, `lightning-first: inbound purchase failed (${err.message}); opening without it`);
 					order = order.fallback;
