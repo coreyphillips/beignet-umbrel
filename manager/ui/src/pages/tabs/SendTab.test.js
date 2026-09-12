@@ -34,8 +34,31 @@ const OPEN_CHANNEL = {
 	localBalanceSats: 500_000
 };
 
+// The manager, which the card reaches through the module rather than a prop:
+// the wallet list it offers as destinations, and the record a direct-funding
+// fallback leaves behind.
+const realFetch = globalThis.fetch;
+let managerCalls = [];
+test.beforeEach(() => {
+	managerCalls = [];
+	globalThis.fetch = async (url, init = {}) => {
+		managerCalls.push({
+			url: String(url),
+			method: init.method || 'GET',
+			body: init.body ? JSON.parse(init.body) : null
+		});
+		return { ok: true, status: 200, json: async () => ({ ok: true, result: init.method === 'POST' ? { persisted: true } : [] }) };
+	};
+});
+test.afterEach(() => {
+	globalThis.fetch = realFetch;
+});
+
+const recorded = () =>
+	managerCalls.find((c) => c.method === 'POST' && c.url.endsWith('/direct-funding/fallbacks'));
+
 /** A daemon that records what it was asked, and answers plausibly. */
-function stubApi({ channels = [], decodedOffer, offerDecodeError } = {}) {
+function stubApi({ channels = [], decodedOffer, offerDecodeError, sendError } = {}) {
 	const calls = [];
 	return {
 		calls,
@@ -48,6 +71,7 @@ function stubApi({ channels = [], decodedOffer, offerDecodeError } = {}) {
 		},
 		post: async (path, body) => {
 			calls.push(['POST', path, body]);
+			if (path === '/send' && sendError) throw new Error(sendError);
 			if (path === '/tx/quote') {
 				// Priced from what was asked: the fee follows the rate, and a max
 				// quote answers with what a sweep at that rate would send.
@@ -350,8 +374,8 @@ import { encodeFundingEnvelope } from '../../lib/funding-envelope.js';
 const REQUEST = encodeFundingEnvelope({ nodeId: '02' + 'ab'.repeat(32), expiresAt: Date.now() + 3_600_000, amountSats: 25_000 });
 
 /** The plain stub plus the direct-funding route, answering as told. */
-function stubFundingApi(sendAnswer) {
-	const api = stubApi();
+function stubFundingApi(sendAnswer, { sendError } = {}) {
+	const api = stubApi({ sendError });
 	const post = api.post;
 	api.post = async (path, body) => {
 		if (path === '/direct-funding/send') {
@@ -419,6 +443,46 @@ test('a rejected direct funding falls back to the plain send; a signed one never
 	await settle(50);
 	assert.equal(signed.calls.some(([m, p]) => m === 'POST' && p === '/send'), false, 'the witness is out: a plain send would pay twice');
 	assert.match(view.text(), /signed and on its way/);
+	await view.unmount();
+});
+
+test('a fallback is recorded against the payment it became, and outlives the toast', async () => {
+	const api = stubFundingApi(new Error('request expired'));
+	const view = await mountSend(api);
+	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+	await settle(400);
+	await click(sendButton(view));
+	await settle(50);
+
+	const note = recorded();
+	assert.ok(note, 'the reason went somewhere durable');
+	assert.equal(note.url, '/api/wallets/w1/direct-funding/fallbacks');
+	assert.equal(note.body.reason, 'request expired');
+	// The join to the row an operator goes back to. Without it this is an
+	// ordinary send in every respect, which is the whole complaint.
+	assert.equal(note.body.txid, 'a'.repeat(64));
+	assert.equal(note.body.address, ADDR);
+	assert.equal(note.body.amountSats, 25_000);
+	assert.equal(note.body.nodeId, '02' + 'ab'.repeat(32));
+	assert.match(note.body.requestId, /^[0-9a-f]{32}$/);
+	assert.match(view.text(), /That did not happen \(request expired\)/, 'and it is still on the card');
+	await view.unmount();
+});
+
+test('the reason is kept even when the plain payment fails too, with no transaction to attach it to', async () => {
+	const api = stubFundingApi(new Error('request expired'), { sendError: 'Insufficient funds' });
+	const view = await mountSend(api);
+	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+	await settle(400);
+	await click(sendButton(view));
+	await settle(50);
+
+	const note = recorded();
+	assert.equal(note.body.reason, 'request expired');
+	assert.equal(note.body.txid, null);
+	assert.equal(note.body.error, 'Insufficient funds');
+	assert.match(view.text(), /ordinary payment also failed \(insufficient funds\)/);
+	assert.doesNotMatch(view.text(), /went out as an ordinary payment/);
 	await view.unmount();
 });
 
@@ -538,3 +602,30 @@ test('a lightning-first wallet pays an invoice within Can send without a note', 
 		await view.unmount();
 	}
 });
+
+for (const failure of ['offline', 'memory-only']) {
+	test(`an unsuccessful ${failure} fallback record does not hide or repeat a successful payment`, async () => {
+		const fetch = globalThis.fetch;
+		globalThis.fetch = async (url, init = {}) => {
+			if (init.method === 'POST' && String(url).endsWith('/direct-funding/fallbacks')) {
+				if (failure === 'offline') throw new Error('offline');
+				return { ok: true, status: 200, json: async () => ({ ok: true, result: { persisted: false } }) };
+			}
+			return fetch(url, init);
+		};
+		const api = stubFundingApi(new Error('request expired'));
+		const view = await mountSend(api);
+		try {
+			await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+			await settle(400);
+			await click(sendButton(view));
+			await settle(50);
+			assert.match(view.text(), /Broadcast:/);
+			assert.match(view.text(), /fallback reason could not be saved/);
+			assert.match(view.text(), /request expired/);
+			assert.equal(api.calls.filter(([m, p]) => m === 'POST' && p === '/send').length, 1);
+		} finally {
+			await view.unmount();
+		}
+	});
+}

@@ -15,6 +15,7 @@ const { TorControl, pickLocalIp } = require('./tor-control');
 const { probeSocksConnect } = require('./socks-probe');
 const { subscribeToEvents } = require('./node-events');
 const { ChannelEventLog } = require('./channel-events');
+const { DirectFundingFallbackLog } = require('./direct-funding-fallbacks');
 const {
 	GUARDIAN_SET_SIZE,
 	isRecoveryMode,
@@ -118,6 +119,9 @@ class WalletManager {
 		// separately from runtime state so it is readable while a wallet is
 		// stopped and survives runtime resets.
 		this.channelLogs = new Map();
+		// Direct fundings that degraded into an ordinary payment, kept the same
+		// way and for the same reason (see direct-funding-fallbacks.js).
+		this.fallbackLogs = new Map();
 		this.onion = null;
 		this.torControl = null;
 		// null = unknown/not applicable, true/false = last probe result.
@@ -1635,6 +1639,7 @@ class WalletManager {
 		this.registry.remove(id);
 		this.runtime.delete(id);
 		this.channelLogs.delete(id);
+		this.fallbackLogs.delete(id);
 		if (purge) {
 			fs.rmSync(p.base, { recursive: true, force: true });
 		}
@@ -2305,7 +2310,7 @@ class WalletManager {
 					// Persistence problems land in the wallet's log ring, so a
 					// history that silently stopped being durable is visible in the
 					// dashboard's Logs tab rather than nowhere.
-					warn: (m) => this._log(id, `channel history: ${m}`)
+					warn: (m) => this._log(id, m)
 				})
 			);
 		}
@@ -2316,6 +2321,53 @@ class WalletManager {
 	channelEvents(id, { channelId } = {}) {
 		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		return this.channelLog(id).list({ channelId });
+	}
+
+	fallbackLog(id) {
+		if (!this.fallbackLogs.has(id)) {
+			this.fallbackLogs.set(
+				id,
+				new DirectFundingFallbackLog(this.paths(id).base, {
+					warn: (m) => this._log(id, m)
+				})
+			);
+		}
+		return this.fallbackLogs.get(id);
+	}
+
+	/**
+	 * A direct funding the payer could not make, recorded against the ordinary
+	 * payment that went instead.
+	 *
+	 * Reported by the dashboard rather than observed here: the daemon answers
+	 * the payer that made the call and nobody else, and the plain payment that
+	 * follows is an ordinary send the daemon has no reason to connect to it.
+	 * The browser that saw both is the only witness to the pair.
+	 */
+	recordDirectFundingFallback(id, input) {
+		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		const recorded = this.fallbackLog(id).record(input);
+		if (!recorded) {
+			throw httpError(
+				400,
+				'INVALID_PARAMS',
+				'reason is required: it is the whole of what this records'
+			);
+		}
+		const { entry, persisted } = recorded;
+		const became = entry.txid
+			? `paid as an ordinary transaction ${entry.txid}`
+			: entry.error
+			? `and the ordinary payment failed too (${entry.error})`
+			: 'paid as an ordinary transaction';
+		this._log(id, `direct funding not taken (${entry.reason}); ${became}`);
+		return { ...entry, persisted };
+	}
+
+	// Durable direct-funding fallbacks, oldest first.
+	directFundingFallbacks(id) {
+		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		return this.fallbackLog(id).list();
 	}
 
 	// Recent node-level errors, newest last. `since` filters by timestamp so a

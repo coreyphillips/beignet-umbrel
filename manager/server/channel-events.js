@@ -1,7 +1,7 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
+const { JsonlLog } = require('./jsonl-log');
 
 // Durable per-wallet channel history. The daemon reports a channel's life
 // (opening, ready, closing, and the reason an automatic force-close fired)
@@ -26,39 +26,11 @@ const LIFECYCLE_EVENTS = new Set([
 
 class ChannelEventLog {
 	constructor(dir, { warn } = {}) {
-		this.file = path.join(dir, 'channel-events.jsonl');
-		this.entries = null; // loaded lazily so a stopped wallet is still readable
-		this.warn = warn || (() => {});
-		// Set when the file exists but cannot be read. Writing through that would
-		// compact over history we could not see, destroying it; a broken log
-		// records in memory only, and says so.
-		this.broken = false;
-	}
-
-	_load() {
-		if (this.entries) return;
-		this.entries = [];
-		let raw;
-		try {
-			raw = fs.readFileSync(this.file, 'utf8');
-		} catch (err) {
-			if (err && err.code === 'ENOENT') return; // genuinely no history yet
-			this.broken = true;
-			this.warn(
-				`channel history unreadable (${err.message}); recording in memory only for this session`
-			);
-			return;
-		}
-		for (const line of raw.split('\n')) {
-			if (!line.trim()) continue;
-			try {
-				this.entries.push(JSON.parse(line));
-			} catch (err) {
-				// A torn write loses one line, not the log; but say so rather than
-				// silently presenting a shortened history as complete.
-				this.warn(`ignoring malformed channel-event entry: ${err.message}`);
-			}
-		}
+		this.log = new JsonlLog(path.join(dir, 'channel-events.jsonl'), {
+			max: MAX_EVENTS,
+			label: 'channel history',
+			warn
+		});
 	}
 
 	/**
@@ -87,41 +59,13 @@ class ChannelEventLog {
 			entry.code = data.code || 'ERROR';
 			entry.message = data.message || 'Unknown error';
 		}
-		this._load();
-		this.entries.push(entry);
-		let persisted = false;
-		if (!this.broken) {
-			try {
-				if (this.entries.length > MAX_EVENTS) {
-					// Compact: keep the newest MAX_EVENTS and rewrite atomically, so a
-					// crash mid-write leaves the old file rather than half a file.
-					this.entries = this.entries.slice(-MAX_EVENTS);
-					const tmp = `${this.file}.tmp`;
-					fs.writeFileSync(
-						tmp,
-						this.entries.map((e) => JSON.stringify(e)).join('\n') + '\n'
-					);
-					fs.renameSync(tmp, this.file);
-				} else {
-					fs.appendFileSync(this.file, JSON.stringify(entry) + '\n');
-				}
-				persisted = true;
-			} catch (err) {
-				this.warn(
-					`channel history write failed (${err.message}); entry kept in memory only`
-				);
-			}
-		}
-		return { entry, persisted };
+		return this.log.append(entry);
 	}
 
 	/** Entries oldest first, optionally for one channel. */
 	list({ channelId } = {}) {
-		this._load();
-		const all = channelId
-			? this.entries.filter((e) => e.channelId === channelId)
-			: this.entries;
-		return all.slice();
+		const all = this.log.all();
+		return channelId ? all.filter((e) => e.channelId === channelId) : all;
 	}
 }
 

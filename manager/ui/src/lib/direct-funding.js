@@ -41,6 +41,58 @@ export function fundingOutcome(answer) {
 	};
 }
 
+/**
+ * What a fallback leaves behind for the manager's durable record.
+ *
+ * The reason is the whole point of it: it exists in the daemon's answer to the
+ * payer and nowhere else, and the ordinary payment that follows looks like any
+ * other send. The rest names the request that was being paid, so a transaction
+ * gone back to weeks later can be told apart from one that was never meant to
+ * be a direct funding at all (umbrel #121).
+ */
+export function fallbackRecord(reason, { funding, address, amountSats, txid = null, error = null } = {}) {
+	return {
+		reason,
+		address: address || null,
+		amountSats: Number.isFinite(amountSats) ? amountSats : null,
+		nodeId: (funding && funding.nodeId) || null,
+		requestId: (funding && funding.requestId) || null,
+		txid,
+		error
+	};
+}
+
+/** Save the diagnostic without turning a logging failure into a payment failure. */
+export async function persistFallback(record, save) {
+	try {
+		const saved = await save(record);
+		return { ...record, persisted: saved?.persisted === true };
+	} catch (_) {
+		return { ...record, persisted: false };
+	}
+}
+
+/**
+ * A reason is said in the middle of our own sentence, and arrives as anything
+ * from a bare clause to a full sentence with a full stop. An ALL_CAPS code or
+ * an identifier is left as it came: lowercasing one makes it a different
+ * string.
+ */
+function inline(reason) {
+	const said = String(reason || '').trim().replace(/\.$/, '');
+	return /^[A-Z][a-z]/.test(said) ? said[0].toLowerCase() + said.slice(1) : said;
+}
+
+/** The line a fallback gets wherever it is shown, on the card or a month later. */
+export function describeFallback(entry) {
+	const reason = `This was meant to be a direct funding: paid that way, the transaction would have become the recipient's channel funding. That did not happen (${inline(
+		entry.reason
+	)})`;
+	if (entry.error) return `${reason}. The ordinary payment also failed (${inline(entry.error)}).`;
+	if (entry.pending) return `${reason}. An ordinary payment is being attempted.`;
+	return `${reason}, so it went out as an ordinary payment.`;
+}
+
 /** One sentence for a sent outcome, said the way the daemon's status means it. */
 export function describeFunding(outcome) {
 	if (outcome.kind !== 'sent') return outcome.reason;

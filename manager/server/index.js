@@ -319,6 +319,23 @@ async function main() {
 		});
 	});
 
+	// Direct fundings that degraded into an ordinary payment, and the reason.
+	// The payer's daemon says why in the answer to the one call that asked, and
+	// the transaction that goes out instead is an ordinary send: nothing on
+	// either end of the payment can say afterwards that it was meant to be a
+	// direct funding. The dashboard reports the pair here and reads it back
+	// onto the payment's activity row (umbrel #121).
+	api.get('/wallets/:id/direct-funding/fallbacks', (req, res) =>
+		res.json({ ok: true, result: manager.directFundingFallbacks(req.params.id) })
+	);
+
+	api.post('/wallets/:id/direct-funding/fallbacks', (req, res) =>
+		res.json({
+			ok: true,
+			result: manager.recordDirectFundingFallback(req.params.id, req.body || {})
+		})
+	);
+
 	// Fetch the wallet daemon's OpenAPI spec and rewrite its server URL so the
 	// Swagger UI "Try it out" calls route back through this manager (with auth).
 	api.get(

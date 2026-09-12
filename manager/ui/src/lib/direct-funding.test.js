@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeFunding, fundingOutcome } from './direct-funding.js';
+import { describeFallback, describeFunding, fallbackRecord, fundingOutcome, persistFallback } from './direct-funding.js';
 
 test('a rejection permits the fallback, with the daemon\'s reason', () => {
 	const out = fundingOutcome(new Error('request expired'));
@@ -48,4 +48,54 @@ test('every status after the witness left is a payment out of our hands, never a
 	assert.match(describeFunding(failed), /did not complete \(failed\)\. funding never reached the mempool/);
 	assert.match(describeFunding(failed), /before paying again/);
 	assert.match(describeFunding(fundingOutcome({ status: 'SIGNED_PENDING' })), /signed pending/);
+});
+
+test('a fallback carries the reason and the request it was paying, for the record', () => {
+	const funding = { nodeId: '02' + 'ab'.repeat(32), requestId: 'c'.repeat(32), envelope: 'ignored' };
+	const record = fallbackRecord('receiver declined the offer', {
+		funding,
+		address: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
+		amountSats: 50_000,
+		txid: 'a'.repeat(64)
+	});
+	assert.deepEqual(record, {
+		reason: 'receiver declined the offer',
+		address: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
+		amountSats: 50_000,
+		nodeId: funding.nodeId,
+		requestId: funding.requestId,
+		txid: 'a'.repeat(64),
+		error: null
+	});
+	// A typed amount that never became a number must not be recorded as one.
+	assert.equal(fallbackRecord('x', { amountSats: NaN }).amountSats, null);
+	assert.equal(fallbackRecord('x').requestId, null);
+	assert.match(describeFallback(record), /That did not happen \(receiver declined the offer\)/);
+});
+
+test('a reason is said inside our own sentence, however it was written', () => {
+	// The daemon's own default is a full sentence, and reads as a quotation
+	// dropped mid-line unless it is let into the one around it.
+	const said = describeFallback(fundingOutcome({ status: 'OFFERED' }));
+	assert.match(said, /That did not happen \(the recipient did not take the direct funding\), so/);
+	// A code is not prose and is left exactly as it came.
+	assert.match(describeFallback({ reason: 'DF_REQUEST_EXPIRED' }), /\(DF_REQUEST_EXPIRED\)/);
+});
+
+test('fallback text distinguishes an attempted or failed ordinary payment from a sent one', () => {
+	const record = fallbackRecord('request expired');
+	assert.match(describeFallback({ ...record, pending: true }), /ordinary payment is being attempted/);
+	const failed = describeFallback({ ...record, error: 'Insufficient funds' });
+	assert.match(failed, /ordinary payment also failed \(insufficient funds\)/);
+	assert.doesNotMatch(failed, /went out as an ordinary payment/);
+});
+
+test('saving a fallback retains the payment details even when persistence fails', async () => {
+	const record = fallbackRecord('request expired', { txid: 'a'.repeat(64) });
+	const saved = await persistFallback(record, async () => ({ persisted: true }));
+	assert.equal(saved.persisted, true);
+	for (const save of [async () => ({ persisted: false }), async () => { throw new Error('offline'); }]) {
+		const result = await persistFallback(record, save);
+		assert.deepEqual(result, { ...record, persisted: false });
+	}
 });

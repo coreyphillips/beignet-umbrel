@@ -716,6 +716,9 @@ function parseBip21(text, warnings, opts) {
 		else {
 			funding = {
 				envelope: fundingValue,
+				// The receiver's own id for this request, which is what names it
+				// in the record a fallback leaves behind (umbrel #121).
+				requestId: env.requestId,
 				nodeId: env.nodeId,
 				network: env.network,
 				expiresAt: env.expiresAt,
