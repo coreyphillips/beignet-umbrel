@@ -2063,9 +2063,11 @@ class WalletManager {
 			}
 			const [utxos, channels] = await Promise.all([
 				this._daemonCall(rec, 'GET', '/utxos').catch(() => null),
-				this._daemonCall(rec, 'GET', '/channels').catch(() => [])
+				this._daemonCall(rec, 'GET', '/channels').catch(() => null)
 			]);
-			this._forgetPreviousPrimary(rec, channels);
+			// An unanswered channel list says nothing about the previous
+			// primary: only a list that was read can show its channel gone.
+			if (Array.isArray(channels)) this._forgetPreviousPrimary(rec, channels);
 			const target = lfbw.channelizeTarget({ onchainSats, utxos, channels, primaryPubkey: lf.primaryPubkey });
 			if (target.action === 'wait') return decided(target);
 			const fees = await this._daemonCall(rec, 'GET', '/fees/estimates').catch(() => null);

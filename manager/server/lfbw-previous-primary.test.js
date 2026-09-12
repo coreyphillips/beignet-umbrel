@@ -176,6 +176,22 @@ test('the channelize pass forgets the previous primary once its channel is gone,
 	assert.ok(m.logs.some((l) => /previous primary is gone/.test(l)));
 });
 
+test('the channelize pass keeps the previous primary when the channel list cannot be read', async () => {
+	// A transient daemon error is not an empty channel list: forgetting the
+	// previous primary on it would persist the loss for good.
+	const { m, rec } = harness({
+		answers: {
+			'GET /balance': { onchain: 50000 },
+			'GET /utxos': [{ height: 90 }],
+			'GET /channels': new Error('socket hang up')
+		}
+	});
+	await m._lfbwChannelize('w1');
+	assert.deepEqual(rec.lfbw.previousPrimary, { pubkey: PK_OLD, walletId: 'p1', at: 1 });
+	assert.equal(m.upserts.some((u) => u.lfbw && u.lfbw.previousPrimary === null), false, 'nothing persisted it as gone');
+	assert.equal(m.logs.some((l) => /previous primary is gone/.test(l)), false);
+});
+
 test('closeHome with turnOff drops lightning-first, restarts the daemon, then closes on the restarted one', async () => {
 	const { m, rec } = harness();
 	const order = [];
