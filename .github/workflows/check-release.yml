@@ -29,6 +29,7 @@ on:
     paths:
       - 'beignet-wallet/docker-compose.yml'
       - 'beignet-wallet/umbrel-app.yml'
+      - '.github/workflows/build-image.yml'
   push:
     branches: [main]
 
@@ -89,3 +90,39 @@ jobs:
           fi
 
           echo "ok: the image exists, and it is what the manifest says it is."
+
+      # The release notes are the one place a user learns which engine the
+      # app bundles, and they are written by hand while the version the
+      # image actually bundles lives in build-image.yml. The two drifted for
+      # 0.20.4, whose notes described an engine release the image never
+      # carried. The notes must name the bundled version.
+      - name: The release notes must name the beignet version the image bundles
+        run: |
+          set -euo pipefail
+
+          BUILD=.github/workflows/build-image.yml
+          MANIFEST=beignet-wallet/umbrel-app.yml
+
+          BEIGNET=$(grep -oE '^ *BEIGNET_VERSION: *"[^"]+"' "$BUILD" | sed 's/.*"\(.*\)"/\1/')
+          if [ -z "$BEIGNET" ]; then
+            echo "::error::$BUILD names no BEIGNET_VERSION."
+            exit 1
+          fi
+          echo "bundled beignet: $BEIGNET"
+
+          # The releaseNotes block, folded onto one line so a version that
+          # wrapped onto the next line still reads as "beignet X.Y.Z".
+          NOTES=$(awk '/^releaseNotes:/{on=1; next} on && /^[^[:space:]]/{exit} on{print}' "$MANIFEST" | tr '\n' ' ' | tr -s ' ')
+          if [ -z "$NOTES" ]; then
+            echo "::error::$MANIFEST has no releaseNotes."
+            exit 1
+          fi
+
+          ESCAPED=$(printf '%s' "$BEIGNET" | sed 's/\./\\./g')
+          if ! printf '%s\n' "$NOTES" | grep -qE "beignet ${ESCAPED}([^0-9]|$)"; then
+            echo "::error::The release notes in $MANIFEST do not mention \"beignet $BEIGNET\", the version $BUILD bundles."
+            echo "::error::Either the notes describe a different engine release or the bundled version was bumped without them."
+            exit 1
+          fi
+
+          echo "ok: the release notes name beignet $BEIGNET."
