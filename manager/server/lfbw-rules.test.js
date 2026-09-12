@@ -131,6 +131,11 @@ test('dependentsOf finds the lightning-first wallets whose internal primary a wa
 
 test('normalizeSwaps fills defaults, validates whole numbers and keeps the caps consistent', () => {
 	assert.deepEqual(lfbw.normalizeSwaps(undefined), { ...lfbw.SWAP_DEFAULTS });
+	// Umbrel #117: the engine's quote never prices the provider's refund
+	// transaction, so a zero flat fee subsidises every small swap.
+	assert.ok(lfbw.SWAP_DEFAULTS.flatFeeSat > 0, 'the default flat fee covers the refund transaction');
+	assert.equal(lfbw.SWAP_DEFAULTS.flatFeeSat, 500);
+	assert.equal(lfbw.normalizeSwaps({ enabled: true }).flatFeeSat, 500);
 	const edited = lfbw.normalizeSwaps({ enabled: true, flatFeeSat: '250', maxSat: 200000 }, { feePpm: 500 });
 	assert.equal(edited.enabled, true);
 	assert.equal(edited.flatFeeSat, 250);

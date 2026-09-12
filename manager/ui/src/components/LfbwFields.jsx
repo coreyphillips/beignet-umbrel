@@ -226,7 +226,10 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 								bound what is committed at once.
 							</div>
 							<div className="row">
-								<Field label="Flat fee (sats)">
+								<Field
+									label="Flat fee (sats)"
+									hint="Covers this node's own funding and refund transactions; left at 0, every small swap is subsidised."
+								>
 									<input value={swaps.flatFeeSat ?? ''} onChange={(e) => patchSwaps('flatFeeSat', digits(e))} />
 								</Field>
 								<Field label="Proportional fee (ppm)">
