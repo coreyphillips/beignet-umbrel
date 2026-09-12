@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.20.4"
+version: "0.20.5"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,17 +30,20 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A wallet serving swaps in both directions now shows one combined budget,
-  because that is how the limits actually work: the amount committed at once
-  and the number of swaps in flight are shared between the two directions
-  rather than allowed for each. Each direction still shows what it has
-  committed, so you can see which one is using the room.
+  When a payment to another Beignet wallet could have funded its channel
+  directly but fell back to an ordinary Bitcoin payment, Activity now keeps
+  the reason instead of showing it once in a passing message. The fallback
+  is its own row, its details say why it happened and where the money went,
+  and the reason survives a restart.
 
 
-  Bundles beignet 0.19.3, a set of engine fixes: a wallet no longer offers or
-  spends a coin it has already spent elsewhere, an invoice being held can no
-  longer report itself both settled and cancelled, and a wallet shutting down
-  no longer waits without limit on a slow Electrum server.
+  Bundles beignet 0.19.5. A wallet paying another Beignet wallet through a
+  private path no longer treats a message its own connection refused as sent:
+  it now tries the relay route instead of waiting two minutes and blaming the
+  other side, and a failure says which route refused and why. This is also
+  the first engine release whose published package matches its source, so
+  the bounded shutdown on a slow Electrum server described for 0.20.4 is
+  actually included now.
 
 dependencies: []
 path: ""
