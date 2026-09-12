@@ -441,6 +441,26 @@ function SwapsCard({ swaps, rec }) {
 // A ledger state as a phrase: CLAIM_BROADCAST reads "claim broadcast".
 const swapStateWords = (state) => String(state).toLowerCase().replace(/_/g, ' ');
 
+// The states a swap ends in. The concurrency limit counts every row that is
+// not one of these, while the reported exposure counts only the rows whose
+// principal is at risk, so the slots have to be counted from the ledger
+// breakdown. A state this app has not heard of counts as live: overstating
+// the room left is the worse way to be wrong.
+const terminalSwapStates = new Set([
+	'SETTLED',
+	'REFUNDED',
+	'CANCELLED',
+	'FAILED',
+	'CLAIM_CONFIRMED',
+	'PAYMENT_FAILED'
+]);
+
+const liveSwaps = (status) =>
+	Object.entries(status.counts || {}).reduce(
+		(n, [state, c]) => (terminalSwapStates.has(state) ? n : n + Number(c || 0)),
+		0
+	);
+
 /**
  * The one budget both directions draw on. The daemon admits a swap against the
  * whole ledger with no direction filter, so the exposure ceiling and the
@@ -454,7 +474,10 @@ function SwapBudget({ reverse, submarine }) {
 	const exposedCount = Number(reverse.exposedCount || 0) + Number(submarine.exposedCount || 0);
 	const maxSat = Number(limits.maxTotalExposureSat || 0);
 	const maxCount = Number(limits.maxConcurrentSwaps);
-	const slotsLeft = Number.isFinite(maxCount) ? Math.max(0, maxCount - exposedCount) : null;
+	// Every exposed row is a live one, so the ledger breakdown can only be an
+	// undercount if it is missing.
+	const liveCount = Math.max(liveSwaps(reverse) + liveSwaps(submarine), exposedCount);
+	const slotsLeft = Number.isFinite(maxCount) ? Math.max(0, maxCount - liveCount) : null;
 	return (
 		<div style={{ marginTop: 10 }}>
 			<div className="field-label" style={{ marginBottom: 8 }}>
@@ -465,7 +488,7 @@ function SwapBudget({ reverse, submarine }) {
 					label="Committed now"
 					num={exposedSat}
 					suffix=" sats"
-					sub={`${exposedCount} swap${exposedCount === 1 ? '' : 's'} in flight, both directions`}
+					sub={`over ${exposedCount} swap${exposedCount === 1 ? '' : 's'}, both directions`}
 				/>
 				<Stat
 					label="Caps"
@@ -479,7 +502,7 @@ function SwapBudget({ reverse, submarine }) {
 					sub={
 						slotsLeft === null
 							? 'for either direction'
-							: `${slotsLeft} more swap${slotsLeft === 1 ? '' : 's'}, either direction`
+							: `${slotsLeft} more swap${slotsLeft === 1 ? '' : 's'} of the ${maxCount}, either direction`
 					}
 				/>
 			</div>

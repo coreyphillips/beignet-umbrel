@@ -342,9 +342,11 @@ test('a provider serving swaps gets a card with each direction it serves', async
 		// One budget serves both directions, so the caps are printed once,
 		// over the sum of the two committed figures, and not under either.
 		assert.match(text, /Both directions together/);
-		assert.match(text, /470,000sats3 swaps in flight, both directions/);
+		assert.match(text, /470,000satsover 3 swaps, both directions/);
 		assert.match(text, /Caps5,000,000 satsat once, 8 swaps at most/);
-		assert.match(text, /Room left4,530,000sats5 more swaps, either direction/);
+		// The slots go by the unresolved rows the daemon counts (3 reverse, 2
+		// submarine), not by the 3 that have principal at risk.
+		assert.match(text, /Room left4,530,000sats3 more swaps of the 8, either direction/);
 		assert.match(text, /One budget covers both directions, not one each/);
 		assert.match(text, /2 swaps in flight, of the shared budget/);
 		assert.match(text, /1 swap in flight, of the shared budget/);
