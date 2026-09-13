@@ -407,7 +407,21 @@ env:
   # nothing new; 0.19.5 builds on publish (prepublishOnly) and is the first
   # npm release with both. dist/cli is byte-identical to 0.19.3: no routes,
   # no env, no openapi change.
-  BEIGNET_VERSION: "0.19.5"
+  # 0.20.0: the 2026-09-12 review batch. The final hop now enforces the
+  # min_final_cltv_expiry an invoice advertised in its c tag instead of the
+  # 40-block default, and GET /invoices/held rows and the hold:* events carry
+  # the realised earliestExpiry and cancelHeight (#770): the swap provider
+  # role this app serves can no longer be paid with an HTLC that expires
+  # before its on-chain refund. A second splice-in while a splice is running
+  # is refused up front as SPLICE_BUSY (503, retryable) instead of a 200
+  # followed by an asynchronous failure with wallet inputs pledged for
+  # nothing (#766), which is what the channelize pass posts. Overlapping
+  # keyed sends can no longer both broadcast (#768), CORS preflights allow
+  # X-Idempotency-Key (#769), and a direct-funding payer can ask the receiver
+  # to replay a lost receipt with the opt-in recoverReceipt (#767). The
+  # manager reads none of the new fields, so no manager or UI change rides
+  # along: the option and the fields are additive to routes it already calls.
+  BEIGNET_VERSION: "0.20.0"
 
 jobs:
   build:
