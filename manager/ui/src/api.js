@@ -8,13 +8,13 @@ if (new URLSearchParams(window.location.search).has('demo')) {
 export const DEMO =
 	import.meta.env.VITE_DEMO === '1' || sessionStorage.getItem('beignet-demo') === '1';
 
-async function request(path, { method = 'GET', body, timeoutMs } = {}) {
+async function request(path, { method = 'GET', body, timeoutMs, headers } = {}) {
 	if (DEMO) return (await import('./mock/mockApi.js')).mockRequest(path, { method, body });
 	let res;
 	try {
 		res = await fetch(path, {
 			method,
-			headers: body ? { 'Content-Type': 'application/json' } : undefined,
+			headers: body || headers ? { ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers } : undefined,
 			body: body ? JSON.stringify(body) : undefined,
 			signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
 		});
@@ -101,7 +101,9 @@ export function walletApi(id) {
 	const base = `/wallets/${id}/api`;
 	return {
 		get: (path) => request(base + path, { timeoutMs: DAEMON_READ_TIMEOUT_MS }),
-		post: (path, body) => request(base + path, { method: 'POST', body }),
+		// `headers` carries an X-Idempotency-Key for a write that may be asked
+		// again after its answer was lost.
+		post: (path, body, { headers } = {}) => request(base + path, { method: 'POST', body, headers }),
 		// The daemon's removal routes take their target in the query string and
 		// carry no body, so this takes a path already carrying it.
 		del: (path) => request(base + path, { method: 'DELETE' }),

@@ -8,17 +8,40 @@
  * the only answers that permit the plain send are a rejection and a status
  * from before the witness went out (CREATED, OFFERED); everything else is a
  * payment that is out of our hands, to be shown as it stands.
+ *
+ * A rejection means the daemon's own answer, though. A request the browser
+ * lost (a backgrounded mobile tab, a dropped connection) is no answer at all:
+ * the daemon keeps offering after the page stops listening, so a plain send
+ * then races a funding the recipient can still accept (umbrel #140).
  */
 
 const PRE_WITNESS = new Set(['CREATED', 'OFFERED']);
 const SETTLED = new Set(['MEMPOOL_SEEN', 'CONFIRMED']);
 
+// Codes that do not come from the daemon's answer to this call: the manager
+// standing in for a daemon it could not reach or that is not running, the
+// client giving up on the wait, and a key clash that says nothing about the
+// funding. A thrown error with no code at all (a fetch that lost its
+// connection, a body that was not the daemon's JSON) is not an answer either.
+const NOT_AN_ANSWER = new Set(['PROXY_ERROR', 'NOT_RUNNING', 'WALLET_UNRESPONSIVE', 'IDEMPOTENCY_CONFLICT']);
+
+/** Whether an error is the daemon refusing the funding, rather than no answer. */
+export function isRefusal(error) {
+	const code = error && error.code;
+	return typeof code === 'string' && code !== '' && !NOT_AN_ANSWER.has(code);
+}
+
 /**
- * Returns { kind: 'fallback', reason } when a plain send is safe, or
- * { kind: 'sent', ... } describing the funding as the daemon reported it.
+ * Returns { kind: 'fallback', reason } when a plain send is safe,
+ * { kind: 'unknown', reason } when no answer arrived and nothing may follow
+ * yet, or { kind: 'sent', ... } describing the funding as the daemon reported
+ * it.
  */
 export function fundingOutcome(answer) {
 	if (answer instanceof Error) {
+		if (!isRefusal(answer)) {
+			return { kind: 'unknown', reason: answer.message || 'no answer from the wallet' };
+		}
 		return { kind: 'fallback', reason: answer.message || 'The direct funding was refused.' };
 	}
 	const status = answer && answer.status;
@@ -39,6 +62,74 @@ export function fundingOutcome(answer) {
 		settled: SETTLED.has(status),
 		failed: status === 'FAILED' || status === 'ABORTED'
 	};
+}
+
+// Asking again is safe because the daemon is idempotent on the request id: a
+// second POST joins the exchange in flight or replays what it recorded, and
+// never spends a second coin.
+const UNKNOWN_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
+// The daemon's exchange runs for a 120 s offer window and then a 45 s receipt
+// window. Past that, asking has had every chance to come back with a real
+// answer, so a page still in view stops and says the outcome is unknown.
+export const UNKNOWN_RETRY_BUDGET_MS = 180_000;
+
+/** An X-Idempotency-Key for one send, kept across its retries. */
+export function idempotencyKey() {
+	const bytes = new Uint8Array(16);
+	globalThis.crypto.getRandomValues(bytes);
+	return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function untilVisible(doc) {
+	return new Promise((resolve) => {
+		const onChange = () => {
+			if (doc.hidden) return;
+			doc.removeEventListener('visibilitychange', onChange);
+			resolve();
+		};
+		doc.addEventListener('visibilitychange', onChange);
+	});
+}
+
+/**
+ * POST /direct-funding/send until the daemon answers, and return the outcome.
+ *
+ * `post` makes the call, the same body and key every time. Without an answer
+ * it asks again with backoff while the page is in view; a hidden page waits
+ * until it is shown again (a mobile browser would only drop the request once
+ * more) and always asks at least once on return, however long it was away.
+ * `onUnknown` hears each missing answer, so the card can say it is waiting.
+ * An outcome still unknown when the budget runs out comes back as such: it
+ * never turns into a fallback.
+ */
+export async function sendDirectFunding(
+	post,
+	{
+		onUnknown = () => {},
+		budgetMs = UNKNOWN_RETRY_BUDGET_MS,
+		delaysMs = UNKNOWN_RETRY_DELAYS_MS,
+		doc = globalThis.document,
+		now = Date.now
+	} = {}
+) {
+	const started = now();
+	for (let attempt = 0; ; attempt++) {
+		let answer;
+		try {
+			answer = await post();
+		} catch (e) {
+			answer = e instanceof Error ? e : new Error(String(e));
+		}
+		const outcome = fundingOutcome(answer);
+		if (outcome.kind !== 'unknown') return outcome;
+		onUnknown(outcome);
+		if (doc && doc.hidden) {
+			await untilVisible(doc);
+			continue;
+		}
+		if (now() - started >= budgetMs) return outcome;
+		await new Promise((r) => setTimeout(r, delaysMs[Math.min(attempt, delaysMs.length - 1)]));
+	}
 }
 
 /**
@@ -91,6 +182,17 @@ export function describeFallback(entry) {
 	if (entry.error) return `${reason}. The ordinary payment also failed (${inline(entry.error)}).`;
 	if (entry.pending) return `${reason}. An ordinary payment is being attempted.`;
 	return `${reason}, so it went out as an ordinary payment.`;
+}
+
+/** The note for a direct funding whose answer never arrived. */
+export function describeUnknown({ reason, waiting }) {
+	const said = `The wallet's answer to the direct funding did not arrive (${inline(
+		reason
+	)}), so whether the recipient took it is not known yet.`;
+	if (waiting) {
+		return `${said} Nothing will be paid to the address unless the wallet answers that it was refused. Asking again.`;
+	}
+	return `${said} Nothing was paid to the address. Check Activity before paying again: paying this same request again picks up the first attempt if the wallet has one, and never spends a second coin.`;
 }
 
 /** One sentence for a sent outcome, said the way the daemon's status means it. */

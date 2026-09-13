@@ -3,14 +3,32 @@
  *
  * The one rule that keeps a payer from paying twice: a plain on-chain send
  * may follow a direct funding only when the daemon rejected it or reported a
- * status from before the witness left the device.
+ * status from before the witness left the device. A request whose answer
+ * never arrived is not a rejection (umbrel #140).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeFallback, describeFunding, fallbackRecord, fundingOutcome, persistFallback } from './direct-funding.js';
+import {
+	describeFallback,
+	describeFunding,
+	describeUnknown,
+	fallbackRecord,
+	fundingOutcome,
+	idempotencyKey,
+	isRefusal,
+	persistFallback,
+	sendDirectFunding
+} from './direct-funding.js';
+
+/** A daemon refusal, as api.js throws it: the daemon's message and code. */
+function refused(message, code) {
+	const e = new Error(message);
+	e.code = code;
+	return e;
+}
 
 test('a rejection permits the fallback, with the daemon\'s reason', () => {
-	const out = fundingOutcome(new Error('request expired'));
+	const out = fundingOutcome(refused('request expired', 'EXPIRED'));
 	assert.equal(out.kind, 'fallback');
 	assert.equal(out.reason, 'request expired');
 });
@@ -98,4 +116,128 @@ test('saving a fallback retains the payment details even when persistence fails'
 		const result = await persistFallback(record, save);
 		assert.deepEqual(result, { ...record, persisted: false });
 	}
+});
+
+test('a request whose answer never arrived is unknown, never a fallback (umbrel #140)', () => {
+	const proxy = refused('connect ECONNREFUSED 127.0.0.1:4101', 'PROXY_ERROR');
+	proxy.status = 502;
+	const notJson = new Error('Request failed (504)');
+	notJson.status = 504;
+	const lost = [
+		new TypeError('Failed to fetch'), // Chromium
+		new TypeError('Load failed'), // WebKit
+		new TypeError('NetworkError when attempting to fetch resource.'), // Firefox
+		new DOMException('The operation was aborted.', 'AbortError'),
+		refused('Wallet is not responding', 'WALLET_UNRESPONSIVE'),
+		proxy,
+		refused('Wallet is not running', 'NOT_RUNNING'),
+		notJson
+	];
+	for (const error of lost) {
+		const out = fundingOutcome(error);
+		assert.equal(out.kind, 'unknown', error.message);
+		assert.equal(isRefusal(error), false, error.message);
+	}
+	assert.equal(fundingOutcome(new TypeError('Failed to fetch')).reason, 'Failed to fetch');
+});
+
+test('a daemon refusal code still permits the fallback', () => {
+	for (const code of ['OFFER_DECLINED', 'NO_SUITABLE_UTXO', 'UNREACHABLE', 'EXCHANGE_TIMEOUT', 'EXPIRED']) {
+		const out = fundingOutcome(refused(`refused: ${code}`, code));
+		assert.equal(out.kind, 'fallback', code);
+		assert.equal(out.reason, `refused: ${code}`);
+	}
+});
+
+/** A page whose visibility a test flips. */
+function fakeDocument(hidden = false) {
+	const listeners = new Set();
+	const doc = {
+		hidden,
+		addEventListener: (_, fn) => listeners.add(fn),
+		removeEventListener: (_, fn) => listeners.delete(fn),
+		show: () => {
+			doc.hidden = false;
+			for (const fn of [...listeners]) fn();
+		},
+		listeners
+	};
+	return doc;
+}
+
+test('a lost answer is asked for again with the same call, and the answer that comes back is used', async () => {
+	const answers = [new TypeError('Failed to fetch'), refused('Wallet is not running', 'NOT_RUNNING'), { status: 'SIGNED_PENDING', spentTxid: 'a'.repeat(64) }];
+	let calls = 0;
+	const heard = [];
+	const out = await sendDirectFunding(
+		async () => {
+			const answer = answers[calls++];
+			if (answer instanceof Error) throw answer;
+			return answer;
+		},
+		{ onUnknown: (o) => heard.push(o.reason), delaysMs: [0], doc: fakeDocument() }
+	);
+	assert.equal(calls, 3);
+	assert.deepEqual(heard, ['Failed to fetch', 'Wallet is not running']);
+	assert.equal(out.kind, 'sent');
+	assert.equal(out.txid, 'a'.repeat(64));
+});
+
+test('a refusal on a retry is the answer: it falls back, and asking stops', async () => {
+	let calls = 0;
+	const out = await sendDirectFunding(
+		async () => {
+			calls++;
+			throw calls === 1 ? new TypeError('Failed to fetch') : refused('the receiver declined the offer', 'OFFER_DECLINED');
+		},
+		{ delaysMs: [0], doc: fakeDocument() }
+	);
+	assert.equal(calls, 2);
+	assert.equal(out.kind, 'fallback');
+});
+
+test('an answer still missing when the budget runs out stays unknown', async () => {
+	let clock = 0;
+	let calls = 0;
+	const out = await sendDirectFunding(
+		async () => {
+			calls++;
+			clock += 60_000;
+			throw new TypeError('Failed to fetch');
+		},
+		{ delaysMs: [0], doc: fakeDocument(), now: () => clock, budgetMs: 180_000 }
+	);
+	assert.equal(out.kind, 'unknown');
+	assert.equal(calls, 3);
+	assert.match(describeUnknown({ reason: out.reason, waiting: false }), /Nothing was paid to the address/);
+	assert.match(describeUnknown({ reason: out.reason, waiting: true }), /\(failed to fetch\).*Asking again/);
+});
+
+test('a hidden page waits to be shown, then asks at least once more however long it was away', async () => {
+	let clock = 0;
+	let calls = 0;
+	const doc = fakeDocument(true);
+	const pending = sendDirectFunding(
+		async () => {
+			calls++;
+			if (calls === 1) throw new TypeError('Load failed');
+			return { status: 'MEMPOOL_SEEN', fundingTxid: 'f'.repeat(64) };
+		},
+		{ delaysMs: [0], doc, now: () => clock, budgetMs: 1000 }
+	);
+	await new Promise((r) => setTimeout(r, 20));
+	assert.equal(calls, 1, 'nothing is asked while the page is hidden');
+	clock = 10 * 60_000; // away far longer than the budget
+	doc.show();
+	const out = await pending;
+	assert.equal(calls, 2);
+	assert.equal(out.kind, 'sent');
+	assert.equal(out.settled, true);
+	assert.equal(doc.listeners.size, 0, 'the visibility listener is removed once shown');
+});
+
+test('each send gets its own idempotency key', () => {
+	const a = idempotencyKey();
+	assert.match(a, /^[0-9a-f]{32}$/);
+	assert.notEqual(a, idempotencyKey());
 });
