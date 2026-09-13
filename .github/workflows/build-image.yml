@@ -421,7 +421,16 @@ env:
   # to replay a lost receipt with the opt-in recoverReceipt (#767). The
   # manager reads none of the new fields, so no manager or UI change rides
   # along: the option and the fields are additive to routes it already calls.
-  BEIGNET_VERSION: "0.20.0"
+  # 0.20.1: a second outbound dial to a peer at the same address joins the
+  # dial already in flight instead of opening a second socket (#805). Two
+  # overlapping dials used to leave each side holding a socket the other had
+  # dropped, found out only when the first ping failed thirty seconds later.
+  # A wallet's start-up reconnect and a connect right behind it met this
+  # every time, which is the shape of the lightning-first setup pass here
+  # (POST /peer/connect to the primary just after start). The only change in
+  # the tarball is dist/lightning/transport/peer-manager.js: dist/cli is
+  # byte-identical to 0.20.0, so no routes, no env, no openapi change.
+  BEIGNET_VERSION: "0.20.1"
 
 jobs:
   build:
