@@ -430,7 +430,18 @@ env:
   # (POST /peer/connect to the primary just after start). The only change in
   # the tarball is dist/lightning/transport/peer-manager.js: dist/cli is
   # byte-identical to 0.20.0, so no routes, no env, no openapi change.
-  BEIGNET_VERSION: "0.20.1"
+  # 0.20.2: a wallet paying a direct-funding request from a lightning-first
+  # wallet it is the primary of no longer dials itself when that wallet is
+  # offline as the send starts (#806, #807). It holds the first offer until
+  # the receiver connects, re-sends an unanswered offer on every reconnect,
+  # and re-sends on a schedule that now runs to 90 s of the 120 s window. A
+  # receiver that never connects is refused before any witness leaves
+  # (UNREACHABLE), so the dashboard's fallback stays correct. This is the
+  # phone that was in the background while its owner paid it from a browser
+  # on the same phone. Only dist/lightning/direct-funding and the node's
+  # direct-funding adapter changed: dist/cli is byte-identical to 0.20.1, so
+  # no routes, no env, no openapi change.
+  BEIGNET_VERSION: "0.20.2"
 
 jobs:
   build:
