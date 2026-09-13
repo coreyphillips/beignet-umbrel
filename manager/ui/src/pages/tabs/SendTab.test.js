@@ -21,6 +21,13 @@ import { ToastProvider } from '../../components/Toast.jsx';
 import SendTab from './SendTab.jsx';
 
 const ADDR = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+
+/** A daemon refusal, as api.js throws it: the daemon's message and code. */
+function refused(message, code) {
+	const e = new Error(message);
+	e.code = code;
+	return e;
+}
 const BALANCE = 4_000_000;
 // Shape only: the card's parser checks that an offer looks like one, and the
 // daemon is what actually reads it. An offer carries no checksum to satisfy.
@@ -425,7 +432,7 @@ test('declining direct funding pays the address plainly, and Max turns it off', 
 });
 
 test('a rejected direct funding falls back to the plain send; a signed one never does', async () => {
-	const rejected = stubFundingApi(new Error('request expired'));
+	const rejected = stubFundingApi(refused('request expired', 'EXPIRED'));
 	let view = await mountSend(rejected);
 	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
 	await settle(400);
@@ -446,8 +453,47 @@ test('a rejected direct funding falls back to the plain send; a signed one never
 	await view.unmount();
 });
 
+test('a lost answer is asked for again, never paid to the address while unknown (umbrel #140)', async () => {
+	const api = stubApi();
+	const post = api.post;
+	const keys = [];
+	let asked = 0;
+	api.post = async (path, body, opts) => {
+		if (path === '/direct-funding/send') {
+			api.calls.push(['POST', path, body]);
+			keys.push(opts?.headers?.['X-Idempotency-Key']);
+			// The mobile browser dropped the first request while the daemon kept
+			// offering; asking again joins that exchange and gets its answer.
+			if (++asked === 1) throw new TypeError('Failed to fetch');
+			return { status: 'SIGNED_PENDING', spentTxid: 'a'.repeat(64) };
+		}
+		return post(path, body);
+	};
+	const view = await mountSend(api);
+	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+	await settle(400);
+	await click(sendButton(view));
+	await settle(50);
+	assert.equal(asked, 1);
+	assert.match(view.text(), /did not arrive \(failed to fetch\).*Asking again/);
+	assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/send'), false, 'a lost answer is not a refusal');
+	assert.equal(recorded(), undefined, 'nothing is recorded as a fallback while the outcome is unknown');
+
+	await settle(1100);
+	assert.equal(asked, 2, 'the same funding was asked for again');
+	const sends = api.calls.filter(([m, p]) => m === 'POST' && p === '/direct-funding/send');
+	assert.deepEqual(sends[1][2], sends[0][2], 'with the same body');
+	assert.match(keys[0], /^[0-9a-f]{32}$/);
+	assert.equal(keys[1], keys[0], 'and the same idempotency key');
+	assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/send'), false);
+	assert.match(view.text(), /signed and on its way/);
+	assert.doesNotMatch(view.text(), /did not arrive/);
+	assert.equal(recorded(), undefined);
+	await view.unmount();
+});
+
 test('a fallback is recorded against the payment it became, and outlives the toast', async () => {
-	const api = stubFundingApi(new Error('request expired'));
+	const api = stubFundingApi(refused('request expired', 'EXPIRED'));
 	const view = await mountSend(api);
 	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
 	await settle(400);
@@ -470,7 +516,7 @@ test('a fallback is recorded against the payment it became, and outlives the toa
 });
 
 test('the reason is kept even when the plain payment fails too, with no transaction to attach it to', async () => {
-	const api = stubFundingApi(new Error('request expired'), { sendError: 'Insufficient funds' });
+	const api = stubFundingApi(refused('request expired', 'EXPIRED'), { sendError: 'Insufficient funds' });
 	const view = await mountSend(api);
 	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
 	await settle(400);
@@ -613,7 +659,7 @@ for (const failure of ['offline', 'memory-only']) {
 			}
 			return fetch(url, init);
 		};
-		const api = stubFundingApi(new Error('request expired'));
+		const api = stubFundingApi(refused('request expired', 'EXPIRED'));
 		const view = await mountSend(api);
 		try {
 			await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));

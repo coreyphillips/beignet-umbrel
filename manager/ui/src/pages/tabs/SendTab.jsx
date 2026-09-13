@@ -9,9 +9,11 @@ import { parsePayment } from '../../lib/payment-uri.js';
 import {
 	describeFallback,
 	describeFunding,
+	describeUnknown,
 	fallbackRecord,
-	fundingOutcome,
-	persistFallback
+	idempotencyKey,
+	persistFallback,
+	sendDirectFunding
 } from '../../lib/direct-funding.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import AddressSend from './lfbw/AddressSend.jsx';
@@ -246,6 +248,9 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	// the reason lives in the daemon's answer to this call and nowhere else, and
 	// what goes out instead is an ordinary send (umbrel #121).
 	const [fellBack, setFellBack] = useState(null);
+	// A direct funding whose answer never reached this page: still being asked
+	// for ({ reason, waiting: true }), or given up on without paying anything.
+	const [fundingUnknown, setFundingUnknown] = useState(null);
 	// The line the hand-off left, and the field the caret is owed.
 	const [arrived, setArrived] = useState(arrival?.note ?? null);
 	const inputRef = useRef(null);
@@ -614,6 +619,7 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 		setTxid('');
 		setFundingResult(null);
 		setFellBack(null);
+		setFundingUnknown(null);
 		let fallback = null;
 		try {
 			if (payDirect) {
@@ -621,18 +627,19 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 				// rejection, or a status from before that point, is the one place a
 				// plain send may follow; anything later is a payment out of our
 				// hands, shown as it stands, because a plain send after it would
-				// pay the recipient twice.
-				let answer;
-				try {
-					answer = await api.post('/direct-funding/send', {
-						request: funding.envelope,
-						amountSats: parseInt(amount, 10),
-						feeHeadroomSats: 1000
-					});
-				} catch (e) {
-					answer = e instanceof Error ? e : new Error(String(e));
+				// pay the recipient twice. A lost answer is neither, so it is asked
+				// for again, and nothing is paid while it is unknown.
+				const body = { request: funding.envelope, amountSats: parseInt(amount, 10), feeHeadroomSats: 1000 };
+				const headers = { 'X-Idempotency-Key': idempotencyKey() };
+				const outcome = await sendDirectFunding(() => api.post('/direct-funding/send', body, { headers }), {
+					onUnknown: ({ reason }) => setFundingUnknown({ reason, waiting: true })
+				});
+				setFundingUnknown(null);
+				if (outcome.kind === 'unknown') {
+					setFundingUnknown({ reason: outcome.reason, waiting: false });
+					toast('No answer from the wallet about the direct funding; nothing was paid to the address.', 'error');
+					return;
 				}
-				const outcome = fundingOutcome(answer);
 				if (outcome.kind === 'sent') {
 					setFundingResult(outcome);
 					toast(outcome.failed ? describeFunding(outcome) : 'Sent as direct funding', outcome.failed ? 'error' : 'success');
@@ -919,6 +926,11 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 			>
 				{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
 			</Button>
+			{fundingUnknown && (
+				<div className={fundingUnknown.waiting ? 'info-note' : 'error-note'} style={{ marginTop: 12 }} role="status">
+					{describeUnknown(fundingUnknown)}
+				</div>
+			)}
 			{fellBack && (
 				<div className="info-note" style={{ marginTop: 12 }} role="status">
 					{describeFallback(fellBack)}

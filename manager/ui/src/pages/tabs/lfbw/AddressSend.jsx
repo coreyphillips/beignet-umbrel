@@ -9,9 +9,11 @@ import { useSettledRefusal } from '../../../hooks/useSettledRefusal.js';
 import {
 	describeFallback,
 	describeFunding,
+	describeUnknown,
 	fallbackRecord,
-	fundingOutcome,
-	persistFallback
+	idempotencyKey,
+	persistFallback,
+	sendDirectFunding
 } from '../../../lib/direct-funding.js';
 import { homeChannel } from '../../../lib/lfbw.js';
 import { manager, walletApi } from '../../../api.js';
@@ -187,18 +189,22 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 				// The daemon rejects only before our witness leaves the device.
 				// A rejection, or a status from before that point, is the one
 				// place a plain send may follow; anything later is a payment
-				// out of our hands, shown as it stands.
-				let answer;
-				try {
-					answer = await api.post('/direct-funding/send', {
-						request: funding.envelope,
-						amountSats: amountNum,
-						feeHeadroomSats: 1000
-					});
-				} catch (e) {
-					answer = e instanceof Error ? e : new Error(String(e));
+				// out of our hands, shown as it stands. A lost answer is
+				// neither: it is asked for again, and nothing is paid while it
+				// is unknown, because the splice-out here never touches the
+				// coin the funding pinned and a late acceptance would always
+				// be a second payment.
+				const body = { request: funding.envelope, amountSats: amountNum, feeHeadroomSats: 1000 };
+				const headers = { 'X-Idempotency-Key': idempotencyKey() };
+				const outcome = await sendDirectFunding(() => api.post('/direct-funding/send', body, { headers }), {
+					onUnknown: ({ reason }) => setResult({ kind: 'unknown', reason, waiting: true })
+				});
+				if (outcome.kind === 'unknown') {
+					setResult({ kind: 'unknown', reason: outcome.reason, waiting: false });
+					toast('No answer from the wallet about the direct funding; nothing was paid to the address.', 'error');
+					return;
 				}
-				const outcome = fundingOutcome(answer);
+				setResult(null);
 				if (outcome.kind === 'sent') {
 					setResult({ kind: 'funding', outcome });
 					toast(outcome.failed ? describeFunding(outcome) : 'Sent as direct funding', outcome.failed ? 'error' : 'success');
@@ -385,6 +391,11 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 			>
 				{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
 			</Button>
+			{result?.kind === 'unknown' && (
+				<div className={result.waiting ? 'info-note' : 'error-note'} style={{ marginTop: 12 }} role="status">
+					{describeUnknown(result)}
+				</div>
+			)}
 			{result?.fallback && (
 				<div className="info-note" style={{ marginTop: 12 }} role="status">
 					{describeFallback(result.fallback)}

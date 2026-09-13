@@ -16,6 +16,13 @@ import { encodeFundingEnvelope } from '../../../lib/funding-envelope.js';
 import AddressSend from './AddressSend.jsx';
 
 const ADDR = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+
+/** A daemon refusal, as api.js throws it: the daemon's message and code. */
+function refused(message, code) {
+	const e = new Error(message);
+	e.code = code;
+	return e;
+}
 const PK = '03' + '22'.repeat(32);
 const NODE = '02' + 'ab'.repeat(32);
 const HOME = { channelId: 'c'.repeat(64), peerPubkey: PK, state: 'NORMAL', htlcUsable: true, localBalanceSats: 400_000, remoteBalanceSats: 100_000 };
@@ -180,7 +187,7 @@ test('a beignet request is paid as direct funding only when a confirmed coin cov
 test('a rejected direct funding falls back to the splice-out; a signed one never does', async () => {
 	const uri = buildBip21({ address: ADDR, funding: REQUEST });
 	const coin = [{ txid: 'a'.repeat(64), vout: 0, valueSats: 80_000, height: 100 }];
-	const rejected = stubApi({ utxos: coin, sendAnswer: new Error('receiver declined the offer') });
+	const rejected = stubApi({ utxos: coin, sendAnswer: refused('receiver declined the offer', 'OFFER_DECLINED') });
 	let view = await mount(rejected);
 	try {
 		await type(view.$('input[placeholder^="bc1"]'), uri);
@@ -218,8 +225,46 @@ test('a rejected direct funding falls back to the splice-out; a signed one never
 	}
 });
 
+test('a lost answer is asked for again, never spliced out while unknown (umbrel #140)', async () => {
+	const base = stubApi({ utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }] });
+	const keys = [];
+	let asked = 0;
+	const api = {
+		...base,
+		post: async (path, body, opts) => {
+			if (path === '/direct-funding/send') {
+				base.calls.push(['POST', path, body]);
+				keys.push(opts?.headers?.['X-Idempotency-Key']);
+				// Here the fallback is a splice-out, which never touches the coin
+				// the funding pinned: a late acceptance would always pay twice.
+				if (++asked === 1) throw new TypeError('Load failed');
+				return { status: 'MEMPOOL_SEEN', fundingTxid: 'f'.repeat(64), amountSat: 50_000 };
+			}
+			return base.post(path, body);
+		}
+	};
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+		await settle(400);
+		await click(sendButton(view));
+		await settle(50);
+		assert.equal(asked, 1);
+		assert.match(view.text(), /did not arrive \(load failed\).*Asking again/);
+		assert.equal(base.calls.some(([m, p]) => m === 'POST' && p === '/channel/splice-out'), false);
+		await settle(1100);
+		assert.equal(asked, 2);
+		assert.equal(keys[1], keys[0]);
+		assert.equal(base.calls.some(([m, p]) => m === 'POST' && p === '/channel/splice-out'), false, 'a lost answer is not a refusal');
+		assert.equal(recorded(), undefined);
+		assert.match(view.text(), /Paid as direct funding/);
+	} finally {
+		await view.unmount();
+	}
+});
+
 test('a failed splice-out retains the direct-funding refusal without claiming payment success', async () => {
-	const api = stubApi({ utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }], sendAnswer: new Error('request expired'), spliceError: 'Insufficient funds' });
+	const api = stubApi({ utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }], sendAnswer: refused('request expired', 'EXPIRED'), spliceError: 'Insufficient funds' });
 	const view = await mount(api);
 	try {
 		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
@@ -241,7 +286,7 @@ test('a splice-out still in flight keeps the refusal on the card, not only in th
 	});
 	const base = stubApi({
 		utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }],
-		sendAnswer: new Error('receiver declined the offer')
+		sendAnswer: refused('receiver declined the offer', 'OFFER_DECLINED')
 	});
 	const api = {
 		...base,
@@ -276,7 +321,7 @@ test('a failed fallback record keeps the splice transaction visible', async () =
 		if (init.method === 'POST') throw new Error('offline');
 		return fetch(url, init);
 	};
-	const api = stubApi({ utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }], sendAnswer: new Error('request expired') });
+	const api = stubApi({ utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 200_000, height: 100 }], sendAnswer: refused('request expired', 'EXPIRED') });
 	const view = await mount(api);
 	try {
 		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
