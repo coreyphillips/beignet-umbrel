@@ -29,7 +29,6 @@ on:
     paths:
       - 'beignet-wallet/docker-compose.yml'
       - 'beignet-wallet/umbrel-app.yml'
-      - '.github/workflows/build-image.yml'
   push:
     branches: [main]
 
@@ -96,7 +95,12 @@ jobs:
       # image actually bundles lives in build-image.yml. The two drifted for
       # 0.20.4, whose notes described an engine release the image never
       # carried. The notes must name the bundled version.
+      # Only on the release PR (step 3): a bundle commit (step 1) legitimately
+      # names an engine the notes do not describe yet, and so does main between
+      # the two, so the check would be red exactly when the process is right.
+      # The release PR is the one commit that must line the two up.
       - name: The release notes must name the beignet version the image bundles
+        if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
 
