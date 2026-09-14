@@ -36,6 +36,7 @@ const {
 	guardianRotationAvailable
 } = require('./engine');
 const lfbw = require('./lfbw');
+const siblingPeers = require('./sibling-peers');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -326,7 +327,12 @@ class WalletManager {
 				// #760), and whether an unpaired payer's funding is in flight;
 				// both narrate the Overview and die with the process.
 				lfbwSplice: null,
-				lfbwUnpaired: null
+				lfbwUnpaired: null,
+				// Sibling channel peers kept on loopback: a pending redial per
+				// sibling node id, and whether the last dial to each sibling
+				// worked, so a refused one is logged once rather than per retry.
+				siblingRedials: new Map(),
+				siblingLinks: new Map()
 			});
 		}
 		return this.runtime.get(id);
@@ -1229,6 +1235,9 @@ class WalletManager {
 				if (lfbw.isLfbw(rec) && lfbw.CHANNELIZE_EVENTS.includes(name)) {
 					this._scheduleChannelize(id);
 				}
+				if (name === 'peer:disconnect' && data && data.pubkey) {
+					this._scheduleSiblingRedial(id, data.pubkey);
+				}
 				if (recorded && name !== 'node:error') {
 					this._log(
 						id,
@@ -1388,6 +1397,7 @@ class WalletManager {
 		}
 		this._stopLfbwWatch(rt);
 		this._stopEvents(rt);
+		this._resetSiblingLinks(rt);
 		this._log(id, `exited code=${code} signal=${signal}`);
 		this._maybeRestart(id, rt);
 	}
@@ -1592,6 +1602,7 @@ class WalletManager {
 		this.registry.upsert(rec);
 		this._stopEvents(rt);
 		this._stopLfbwWatch(rt);
+		this._resetSiblingLinks(rt);
 		if (rt.proc) {
 			await this._killProc(rt.proc);
 			rt.proc = null;
@@ -1664,6 +1675,108 @@ class WalletManager {
 	async _onHealthy(id) {
 		await this._captureNodeId(id);
 		await this._restoreLfbwLinks(id);
+		// After the lightning-first links, whose setup dials the same pair
+		// from the dependent's side; by now that dial has settled. That dial
+		// can relabel a Tor socket as loopback, so the link is redialed even
+		// when both ends list 127.0.0.1.
+		await this._linkSiblings(id, { redial: true });
+	}
+
+	/**
+	 * Connect this wallet over loopback to every running sibling it shares a
+	 * channel with. Both ends run this when they come up, so whichever is
+	 * healthy second makes the connection. A redial names one sibling. A
+	 * failed link is tried again after the redial backoff for as long as both
+	 * stay up.
+	 */
+	async _linkSiblings(id, { pubkey = null, redial = false } = {}) {
+		const rec = this.registry.get(id);
+		const rt = this.runtimeState(id);
+		if (!rec || rec.onchainOnly || !rec.nodeId || !rt.proc || !rt.healthy || rt.stopping) return;
+		const targets = siblingPeers.siblingsOf(rec, this.registry.list()).filter((s) => {
+			if (pubkey && s.nodeId !== pubkey) return false;
+			const srt = this.runtimeState(s.id);
+			return !!srt.proc && srt.healthy && !srt.stopping;
+		});
+		if (targets.length === 0) return;
+		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+		if (!Array.isArray(channels)) {
+			for (const sibling of targets) this._scheduleSiblingRedial(id, sibling.nodeId, redial);
+			return;
+		}
+		for (const sibling of siblingPeers.channelSiblings(targets, channels)) {
+			const before = rt.siblingLinks.get(sibling.nodeId);
+			try {
+				await this._linkSibling(rec, sibling, redial);
+				rt.siblingLinks.set(sibling.nodeId, 'ok');
+				if (before !== 'ok') this._log(id, `connected to sibling "${sibling.name}" over loopback`);
+			} catch (err) {
+				rt.siblingLinks.set(sibling.nodeId, 'failed');
+				if (before !== 'failed') {
+					this._log(id, `could not connect to sibling "${sibling.name}" over loopback: ${err.message}`);
+				}
+				// The engine falls back to its previous address after a failed
+				// dial and may reconnect there without a disconnect event.
+				this._scheduleSiblingRedial(id, sibling.nodeId, redial);
+			}
+		}
+	}
+
+	/**
+	 * /peers lists the address each end has stored for the other, not the
+	 * socket's route, and a dial to a peer already connected only replaces
+	 * that address. A socket registers under the address its dialer stored,
+	 * so a link counts as loopback when both ends list 127.0.0.1, unless a
+	 * dial may have relabeled it since it opened (redial). Otherwise this
+	 * end drops the peer and dials loopback. The drop also
+	 * aborts a reconnect this end has in flight, which could land on Tor just
+	 * before the dial and turn it into a relabel. The sibling can still have
+	 * dialed Tor meanwhile, so the link counts only once the sibling lists
+	 * loopback too. Its address is rewritten only while it is connected, when
+	 * the rewrite opens no second socket, and the drop and dial then repeat.
+	 */
+	async _linkSibling(rec, sibling, redial = false) {
+		// 'ready' is a finished handshake; the engine's PeerInfo type says
+		// 'connected', but the route reports the transport's own state.
+		const readyPeer = async (from, pubkey) =>
+			((await this._daemonCall(from, 'GET', '/peers')) || []).find((p) => p.pubkey === pubkey && p.state === 'ready');
+		const onLoopback = (peer) => !!peer && peer.host === '127.0.0.1';
+		const dialLoopback = (from, to) =>
+			this._daemonCall(from, 'POST', '/peer/connect', { pubkey: to.nodeId, host: '127.0.0.1', port: this.listenPort(to) });
+		let theirs = await readyPeer(sibling, rec.nodeId);
+		if (!redial && onLoopback(theirs) && onLoopback(await readyPeer(rec, sibling.nodeId))) return;
+		for (let pass = 0; pass < 2; pass++) {
+			if (theirs && !onLoopback(theirs)) await dialLoopback(sibling, rec);
+			await this._daemonCall(rec, 'POST', '/peer/disconnect', { pubkey: sibling.nodeId });
+			await dialLoopback(rec, sibling);
+			theirs = await readyPeer(sibling, rec.nodeId);
+			if (onLoopback(theirs)) return;
+			if (!theirs) break;
+		}
+		throw new Error(`"${sibling.name}" does not list the link on 127.0.0.1`);
+	}
+
+	// One redial per dropped sibling, however many disconnects land before it.
+	// A retry keeps the redial flag of the attempt it retries.
+	_scheduleSiblingRedial(id, pubkey, redial = false) {
+		const rec = this.registry.get(id);
+		const rt = this.runtimeState(id);
+		if (rt.siblingRedials.has(pubkey)) return;
+		if (!siblingPeers.siblingsOf(rec, this.registry.list()).some((s) => s.nodeId === pubkey)) return;
+		const delay = siblingPeers.redialDelay(rec.nodeId, pubkey, this.siblingRedialMs);
+		const timer = setTimeout(() => {
+			rt.siblingRedials.delete(pubkey);
+			this._linkSiblings(id, { pubkey, redial }).catch(() => {});
+		}, delay);
+		rt.siblingRedials.set(pubkey, timer);
+	}
+
+	_resetSiblingLinks(rt) {
+		if (rt.siblingRedials) {
+			for (const timer of rt.siblingRedials.values()) clearTimeout(timer);
+			rt.siblingRedials.clear();
+		}
+		if (rt.siblingLinks) rt.siblingLinks.clear();
 	}
 
 	/**
@@ -2410,6 +2523,7 @@ class WalletManager {
 				rt.chainWatch = null;
 			}
 			this._stopEvents(rt);
+			this._resetSiblingLinks(rt);
 			if (rt.proc) {
 				rt.stopping = true;
 				pending.push(this._killProc(rt.proc));
