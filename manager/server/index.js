@@ -348,6 +348,17 @@ async function main() {
 		})
 	);
 
+	// The steps of the latest attempt to pay a direct-funding request from
+	// this wallet: the routes tried and skipped, the offer, the receipt. The
+	// daemon logs most of them where only GET /logs can read them (umbrel #147).
+	api.get(
+		'/wallets/:id/direct-funding/steps',
+		asyncHandler(async (req, res) => {
+			const requestId = typeof req.query.requestId === 'string' ? req.query.requestId : undefined;
+			res.json({ ok: true, result: await manager.directFundingSteps(req.params.id, { requestId }) });
+		})
+	);
+
 	// Fetch the wallet daemon's OpenAPI spec and rewrite its server URL so the
 	// Swagger UI "Try it out" calls route back through this manager (with auth).
 	api.get(

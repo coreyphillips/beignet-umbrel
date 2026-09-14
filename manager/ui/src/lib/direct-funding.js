@@ -212,3 +212,98 @@ export function describeFunding(outcome) {
 		outcome.caveat ? ` ${outcome.caveat}` : ''
 	}`;
 }
+
+// The routes a direct-funding request can name, by the engine's transport type.
+const ROUTES = {
+	1: 'direct connection',
+	2: 'onion message',
+	3: 'relay through the recipient\'s node',
+	4: 'rendezvous'
+};
+
+// Why the engine passed a route over (DfLaneSkipReason).
+const SKIPPED = {
+	unknown_transport_type: 'this wallet does not know the route',
+	lane_disabled: 'turned off on this wallet',
+	lane_module_unavailable: 'not available on this wallet',
+	lane_not_established: 'could not connect',
+	no_frame_exchanged: 'connected, but nothing came back',
+	relay_is_self: 'the relay is this wallet',
+	introduction_node_is_self: 'the route starts at this wallet'
+};
+
+const said = (text) => String(text).replace(/_/g, ' ');
+const because = (...parts) => {
+	const known = parts.filter((p) => p !== undefined && p !== null && p !== '');
+	return known.length ? ` (${known.join(': ')})` : '';
+};
+
+/**
+ * One direct-funding step, as the daemon logged it ({ timestamp, action, data }),
+ * in a line an operator can read. An action this does not know is shown by its
+ * name, because a step nobody has described yet is still a step.
+ */
+export function describeStep({ action, data = {} }) {
+	switch (action) {
+		case 'df_send_prepared':
+			return 'Request read, connecting to the recipient';
+		case 'df_send_started':
+			return data.resumed ? 'Offer resumed' : 'Offer sent';
+		case 'df_send_replayed':
+			return `Asked again${because(data.reason)}`;
+		case 'df_lane_skipped':
+			return `Route skipped: ${ROUTES[data.transportType] || 'unknown route'}${because(
+				SKIPPED[data.reason] || (data.reason && said(data.reason)),
+				data.error
+			)}`;
+		case 'df_frame_dropped':
+			return `Message dropped on the ${said(data.transport || 'route')}${because(data.reason && said(data.reason), data.error)}`;
+		case 'df_blinded_path_failed':
+			return `Could not build the onion route${because(data.error)}`;
+		case 'df_send_coin_spent':
+			return 'The coin to offer was already spent';
+		case 'df_send_refused':
+			return `Refused${because(data.reason)}`;
+		case 'df_send_committed':
+			return 'Recipient accepted, funding signed';
+		case 'df_send_caveat':
+			return data.caveat ? `Note: ${data.caveat}` : 'Note from the wallet';
+		case 'df_send_completed':
+			return 'Receipt received';
+		case 'df_forged_receipt':
+			return `Receipt did not match the request${because(data.reason)}`;
+		case 'df_payment_reconciled':
+			return `Payment reconciled${because(data.status && data.status.toLowerCase().replace('_', ' '), data.reason)}`;
+		case 'df_offer_dropped':
+			return `Offer dropped${because(data.reason && said(data.reason), data.error)}`;
+		case 'df_offer_declined':
+			return `Offer declined${because(data.reason)}`;
+		case 'df_offer_accepted':
+			return data.resumed ? 'Offer accepted again' : 'Offer accepted';
+		case 'df_offer_failed':
+			return `Offer failed${because(data.error || data.reason)}`;
+		case 'df_offer_completed':
+			return 'Receipt sent';
+		default:
+			return said(String(action || '').replace(/^df_/, ''));
+	}
+}
+
+// Steps after which nothing more happens to the attempt.
+const FINAL_STEPS = new Set(['df_send_completed', 'df_send_refused']);
+
+/** Whether an attempt's steps have reached their end, so nobody needs to ask again. */
+export function stepsFinished(steps) {
+	return Array.isArray(steps) && steps.some((s) => FINAL_STEPS.has(s.action));
+}
+
+/**
+ * Seconds from the offer to each step, the number a slow payment is judged
+ * by. Counted from the first offer sent, or from the first step when there is
+ * none; a step from before that (the request being read) has no offset.
+ */
+export function stepOffset(step, steps) {
+	const base = (steps.find((s) => s.action === 'df_send_started') || steps[0])?.timestamp;
+	if (!Number.isFinite(base) || step.timestamp < base) return null;
+	return `+${((step.timestamp - base) / 1000).toFixed(1)} s`;
+}

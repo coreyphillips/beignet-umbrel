@@ -23,6 +23,27 @@ function text(value) {
 	return trimmed ? trimmed.slice(0, MAX_TEXT) : null;
 }
 
+// A fallback's steps (umbrel #147): enough for a slow exchange that dialed
+// every route twice, and short enough that the file stays a list of reasons.
+const MAX_STEPS = 40;
+
+// Only scalars are kept, each capped like the reason: a step's data is a
+// caption for its action, and the engine's own record is the full account.
+function steps(value) {
+	if (!Array.isArray(value)) return null;
+	const kept = [];
+	for (const step of value.slice(-MAX_STEPS)) {
+		if (!step || !/^df_[a-z_]+$/.test(step.action) || !Number.isFinite(step.timestamp)) continue;
+		const data = {};
+		for (const [key, v] of Object.entries(step.data && typeof step.data === 'object' ? step.data : {})) {
+			if (typeof v === 'string') data[key] = v.slice(0, MAX_TEXT);
+			else if (typeof v === 'number' || typeof v === 'boolean') data[key] = v;
+		}
+		kept.push({ timestamp: step.timestamp, action: step.action, data });
+	}
+	return kept.length ? kept : null;
+}
+
 // Identifiers are recorded only when they are the right shape, because a
 // malformed one joins nothing and reads as though it might.
 function hex(value, length) {
@@ -71,6 +92,10 @@ class DirectFundingFallbackLog {
 		if (requestId) entry.requestId = requestId;
 		const error = text(input.error);
 		if (error) entry.error = error;
+		// What the daemon did before it gave up: the routes it tried and why
+		// each went nowhere, stamped by the daemon.
+		const tried = steps(input.steps);
+		if (tried) entry.steps = tried;
 		return this.log.append(entry);
 	}
 
@@ -80,4 +105,4 @@ class DirectFundingFallbackLog {
 	}
 }
 
-module.exports = { DirectFundingFallbackLog, MAX_FALLBACKS };
+module.exports = { DirectFundingFallbackLog, MAX_FALLBACKS, MAX_STEPS };

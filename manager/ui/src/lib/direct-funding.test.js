@@ -11,13 +11,16 @@ import assert from 'node:assert/strict';
 import {
 	describeFallback,
 	describeFunding,
+	describeStep,
 	describeUnknown,
 	fallbackRecord,
 	fundingOutcome,
 	idempotencyKey,
 	isRefusal,
 	persistFallback,
-	sendDirectFunding
+	sendDirectFunding,
+	stepOffset,
+	stepsFinished
 } from './direct-funding.js';
 
 /** A daemon refusal, as api.js throws it: the daemon's message and code. */
@@ -240,4 +243,34 @@ test('each send gets its own idempotency key', () => {
 	const a = idempotencyKey();
 	assert.match(a, /^[0-9a-f]{32}$/);
 	assert.notEqual(a, idempotencyKey());
+});
+
+test('a skipped route says which route and why, in words (umbrel #147)', () => {
+	assert.equal(
+		describeStep({ action: 'df_lane_skipped', data: { transportType: 2, reason: 'lane_not_established', error: 'connection timed out' } }),
+		'Route skipped: onion message (could not connect: connection timed out)'
+	);
+	assert.equal(
+		describeStep({ action: 'df_lane_skipped', data: { transportType: 3, reason: 'introduction_node_is_self' } }),
+		"Route skipped: relay through the recipient's node (the route starts at this wallet)"
+	);
+	assert.equal(
+		describeStep({ action: 'df_frame_dropped', data: { transport: 'direct_peer', reason: 'no_listener' } }),
+		'Message dropped on the direct peer (no listener)'
+	);
+	assert.equal(describeStep({ action: 'df_offer_declined', data: { reason: 'no liquidity peer' } }), 'Offer declined (no liquidity peer)');
+	assert.equal(describeStep({ action: 'df_send_refused', data: {} }), 'Refused');
+	assert.equal(describeStep({ action: 'df_something_new', data: {} }), 'something new', 'a step nobody described is still shown');
+});
+
+test('offsets count from the offer, and a step before it has none', () => {
+	const steps = [
+		{ timestamp: 1000, action: 'df_send_prepared', data: {} },
+		{ timestamp: 5000, action: 'df_send_started', data: {} },
+		{ timestamp: 76_500, action: 'df_send_committed', data: {} }
+	];
+	assert.deepEqual(steps.map((s) => stepOffset(s, steps)), [null, '+0.0 s', '+71.5 s']);
+	assert.equal(stepsFinished(steps), false);
+	assert.equal(stepsFinished([...steps, { timestamp: 78_000, action: 'df_send_completed', data: {} }]), true);
+	assert.equal(stepsFinished(null), false);
 });

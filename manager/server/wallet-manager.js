@@ -16,6 +16,7 @@ const { probeSocksConnect } = require('./socks-probe');
 const { subscribeToEvents } = require('./node-events');
 const { ChannelEventLog } = require('./channel-events');
 const { DirectFundingFallbackLog } = require('./direct-funding-fallbacks');
+const { ActionLogCursor, PrintedStepReader, DirectFundingSteps, formatStep } = require('./df-steps');
 const {
 	GUARDIAN_SET_SIZE,
 	isRecoveryMode,
@@ -75,6 +76,14 @@ const CHAIN_STALL_RESTART_COOLDOWN_MS = 5 * 60 * 1000;
 const TOR_CIRCUIT_CHECK_MS = 5 * 60 * 1000;
 const TOR_CIRCUIT_FIRST_CHECK_MS = 90 * 1000;
 const TOR_PROBE_TIMEOUT_MS = 30000;
+// Direct-funding steps (umbrel #147) live in the daemon's action log, which it
+// never prints. The log is read every DF_PULL_SLOW_MS as a backstop, and on
+// every tick for DF_PULL_FAST_WINDOW_MS after anything says an exchange is
+// under way: long enough for a 120 s offer window and the 45 s receipt window
+// after it, which is where a slow payment spends its time.
+const DF_PULL_TICK_MS = 3000;
+const DF_PULL_SLOW_MS = 60000;
+const DF_PULL_FAST_WINDOW_MS = 200000;
 // Lightning listen port = HTTP daemon port + this offset.
 const LISTEN_PORT_OFFSET = 6000;
 // Onion virtual ports mapped for inbound (covers the first N wallets).
@@ -326,7 +335,17 @@ class WalletManager {
 				// #760), and whether an unpaired payer's funding is in flight;
 				// both narrate the Overview and die with the process.
 				lfbwSplice: null,
-				lfbwUnpaired: null
+				lfbwUnpaired: null,
+				// Direct-funding steps from both of their sources, kept for the
+				// payment they belong to; where the action log read has got to,
+				// its timer and fast window, and the read in flight.
+				dfSteps: new DirectFundingSteps(),
+				dfPrinted: new PrintedStepReader(),
+				dfCursor: null,
+				dfWatch: null,
+				dfFastUntil: 0,
+				dfLastPull: 0,
+				dfPull: null
 			});
 		}
 		return this.runtime.get(id);
@@ -404,9 +423,15 @@ class WalletManager {
 		});
 	}
 
-	_log(id, line) {
+	// `at` stamps a line with when it happened rather than when it was heard,
+	// and files it in order: a step read back from the action log arrives
+	// after lines printed later than it.
+	_log(id, line, at) {
 		const rt = this.runtimeState(id);
-		rt.logs.push(`[${nowIso()}] ${line}`);
+		const stamped = `[${at === undefined ? nowIso() : new Date(at).toISOString()}] ${line}`;
+		let i = rt.logs.length;
+		if (at !== undefined) while (i > 0 && rt.logs[i - 1].slice(0, 26) > stamped.slice(0, 26)) i--;
+		rt.logs.splice(i, 0, stamped);
 		if (rt.logs.length > MAX_LOG_LINES) rt.logs.shift();
 		process.stdout.write(`wallet ${String(id).slice(0, 8)}: ${line}\n`);
 	}
@@ -1105,6 +1130,7 @@ class WalletManager {
 					if (!line.trim()) return;
 					this._log(id, line.trim());
 					this._noteStartFailure(rt, line.trim());
+					this._notePrintedStep(id, rt, line.trim());
 				});
 		proc.stdout.on('data', emit);
 		proc.stderr.on('data', emit);
@@ -1127,9 +1153,11 @@ class WalletManager {
 		// its watches ticking.
 		if (rt.chainWatch) clearInterval(rt.chainWatch);
 		this._stopLfbwWatch(rt);
+		this._stopDfWatch(rt);
 		rt.chainWatch = setInterval(() => {
 			this._checkChainStall(id).catch(() => {});
 		}, CHAIN_WATCH_POLL_MS);
+		if (!rec.onchainOnly) this._startDfWatch(id, rt);
 		// Lightning-first: on-chain arrivals move into the home channel. The
 		// event stream drives it (transaction:confirmed); this is the backstop
 		// for an event missed while the stream reconnects.
@@ -1151,6 +1179,82 @@ class WalletManager {
 			clearTimeout(rt.lfbwTimer);
 			rt.lfbwTimer = null;
 		}
+	}
+
+	_startDfWatch(id, rt) {
+		// Kept across restarts: steps the old daemon wrote after the last read
+		// are still in its action log for the new one to serve.
+		if (!rt.dfCursor) rt.dfCursor = new ActionLogCursor(rt.startedAt || Date.now());
+		rt.dfWatch = setInterval(() => {
+			const now = Date.now();
+			if (now < rt.dfFastUntil || now - rt.dfLastPull >= DF_PULL_SLOW_MS) {
+				this._pullDfSteps(id).catch(() => {});
+			}
+		}, DF_PULL_TICK_MS);
+	}
+
+	_stopDfWatch(rt) {
+		if (rt.dfWatch) {
+			clearInterval(rt.dfWatch);
+			rt.dfWatch = null;
+		}
+	}
+
+	// Something says a direct funding is moving. Read the action log now, and
+	// keep reading it on every tick while the exchange can still be live;
+	// a step that ends one only needs the one read that catches up.
+	_nudgeDfPull(id, rt, live) {
+		rt.dfFastUntil = live ? Date.now() + DF_PULL_FAST_WINDOW_MS : 0;
+		this._pullDfSteps(id).catch(() => {});
+	}
+
+	_notePrintedStep(id, rt, line) {
+		for (const step of rt.dfPrinted.read(line)) {
+			rt.dfSteps.add(step);
+			if (step.action.startsWith('df_send_')) {
+				this._nudgeDfPull(id, rt, !/^df_send_(completed|refused)$/.test(step.action));
+			}
+		}
+	}
+
+	/**
+	 * Copy the direct-funding entries the daemon logged since the last read
+	 * into the wallet's log ring and step buffer. One read at a time: a nudge
+	 * that lands while one is out joins it.
+	 */
+	_pullDfSteps(id) {
+		const rt = this.runtimeState(id);
+		if (rt.dfPull) return rt.dfPull;
+		const rec = this.registry.get(id);
+		if (!rec || !rt.proc || !rt.healthy || !rt.dfCursor) return Promise.resolve();
+		rt.dfLastPull = Date.now();
+		rt.dfPull = this._daemonCall(rec, 'GET', rt.dfCursor.path())
+			.then((entries) => {
+				for (const step of rt.dfCursor.take(entries)) {
+					if (rt.dfSteps.add(step)) this._log(id, formatStep(step), step.timestamp);
+				}
+			})
+			.catch(() => {
+				/* the next tick asks again from the same place */
+			})
+			.finally(() => {
+				rt.dfPull = null;
+			});
+		return rt.dfPull;
+	}
+
+	/**
+	 * The steps of the latest attempt to pay a direct-funding request from this
+	 * wallet, oldest first, read fresh from the daemon first so a card asking
+	 * mid-exchange sees the route that is being tried now.
+	 */
+	async directFundingSteps(id, { requestId } = {}) {
+		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		if (!/^[0-9a-fA-F]{32}$/.test(String(requestId || ''))) {
+			throw httpError(400, 'INVALID_PARAMS', 'requestId must be 32 hex characters');
+		}
+		await this._pullDfSteps(id);
+		return this.runtimeState(id).dfSteps.forRequest(requestId);
 	}
 
 	// Subscribe to the daemon's event stream. The reason a channel open failed
@@ -1190,6 +1294,11 @@ class WalletManager {
 				// story of a just-in-time channel or a direct funding.
 				if (name.startsWith('jit:') || name.startsWith('direct-funding:')) {
 					this._log(id, `${name} ${JSON.stringify(data || {})}`);
+				}
+				// The receiver's side of an offer: the reasons behind it are in
+				// the action log, so read it while the offer is live.
+				if (name.startsWith('direct-funding:')) {
+					this._nudgeDfPull(id, rt, !/:(completed|declined|failed)$/.test(name));
 				}
 				// A swap this provider serves (beignet #737, #743), one line per
 				// step in either direction: created, funded, paying, preimage,
@@ -1387,6 +1496,7 @@ class WalletManager {
 			rt.chainWatch = null;
 		}
 		this._stopLfbwWatch(rt);
+		this._stopDfWatch(rt);
 		this._stopEvents(rt);
 		this._log(id, `exited code=${code} signal=${signal}`);
 		this._maybeRestart(id, rt);
@@ -2360,7 +2470,15 @@ class WalletManager {
 	 */
 	recordDirectFundingFallback(id, input) {
 		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
-		const recorded = this.fallbackLog(id).record(input);
+		// The steps are attached here, from what the manager saw, rather than
+		// taken from the browser: they are the evidence of why it fell back.
+		// A re-record (an RBF bump moving the entry to its new txid) comes
+		// after the buffer may have lost them, so its own copy stands then.
+		const steps =
+			input && typeof input.requestId === 'string'
+				? this.runtimeState(id).dfSteps.forRequest(input.requestId)
+				: [];
+		const recorded = this.fallbackLog(id).record(steps.length ? { ...input, steps } : input);
 		if (!recorded) {
 			throw httpError(
 				400,
@@ -2409,6 +2527,7 @@ class WalletManager {
 				clearInterval(rt.chainWatch);
 				rt.chainWatch = null;
 			}
+			this._stopDfWatch(rt);
 			this._stopEvents(rt);
 			if (rt.proc) {
 				rt.stopping = true;

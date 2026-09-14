@@ -49,7 +49,12 @@ const FALLBACK = {
 	amountSats: 50_000,
 	nodeId: NODE,
 	requestId: 'd'.repeat(32),
-	txid: FELL_BACK
+	txid: FELL_BACK,
+	steps: [
+		{ timestamp: Date.now() - 180_000, action: 'df_send_started', data: { requestId: 'd'.repeat(32) } },
+		{ timestamp: Date.now() - 150_000, action: 'df_lane_skipped', data: { transportType: 2, reason: 'lane_not_established' } },
+		{ timestamp: Date.now() - 60_000, action: 'df_send_refused', data: { reason: 'receiver declined the offer' } }
+	]
 };
 
 const realFetch = globalThis.fetch;
@@ -113,6 +118,11 @@ test('opening it gives the reason, and which request was being paid', async () =
 		assert.match(text, /That did not happen \(receiver declined the offer\)/);
 		assert.match(text, /recipient node 02cdcd…cdcdcd/);
 		assert.match(text, /request dddddd…dddddd/);
+		// Where the time went before it fell back (umbrel #147).
+		assert.deepEqual(
+			view.$$('ol[aria-label="Direct funding steps"] li').map((li) => li.textContent.replace(/^.*? s /, '')),
+			['Offer sent', 'Route skipped: onion message (could not connect)', 'Refused (receiver declined the offer)']
+		);
 	} finally {
 		await view.unmount();
 	}
