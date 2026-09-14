@@ -934,8 +934,22 @@ function recordChannelEvent(walletId, entry) {
 // the whole complaint behind it (umbrel #121): on the row alone, a degraded
 // direct funding and an ordinary send are the same transaction.
 const fundingFallbacks = {};
+// The steps of each direct funding a demo wallet paid, keyed wallet:request, as
+// the manager serves them from the daemon's logs (umbrel #147).
+const fundingSteps = {};
 {
 	const paid = store.state['demo-main'].txs.find((t) => t.type === 'sent');
+	const requestId = hex(32);
+	const began = paid.timestamp - 125_000;
+	// The slow refusal the steps exist to explain: the onion route's dial timed
+	// out, the relay took the offer and never answered, and the window closed.
+	const steps = [
+		{ timestamp: began, action: 'df_send_started', data: { requestId, amountSat: String(Math.abs(paid.valueSats)), resumed: false } },
+		{ timestamp: began + 30_100, action: 'df_lane_skipped', data: { transportType: 2, reason: 'lane_not_established', error: 'connection timed out after 30000ms' } },
+		{ timestamp: began + 120_400, action: 'df_lane_skipped', data: { transportType: 3, reason: 'no_frame_exchanged', error: 'offer timed out' } },
+		{ timestamp: began + 120_450, action: 'df_send_refused', data: { requestId, reason: 'The recipient did not take the direct funding.' } }
+	];
+	fundingSteps[`demo-main:${requestId}`] = steps;
 	fundingFallbacks['demo-main'] = [
 		{
 			timestamp: paid.timestamp + 1000,
@@ -943,8 +957,9 @@ const fundingFallbacks = {};
 			address: paid.address,
 			amountSats: Math.abs(paid.valueSats),
 			nodeId: pubkey(),
-			requestId: hex(32),
-			txid: paid.txid
+			requestId,
+			txid: paid.txid,
+			steps
 		}
 	];
 }
@@ -1720,6 +1735,10 @@ function managerRequest(path, method, body) {
 		}
 		return (fundingFallbacks[w.id] || []).slice();
 	}
+	if (sub === 'direct-funding/steps') {
+		const requestId = new URLSearchParams(subQuery || '').get('requestId') || '';
+		return (fundingSteps[`${w.id}:${requestId.toLowerCase()}`] || []).slice();
+	}
 	throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
 }
 
@@ -2384,6 +2403,12 @@ function walletRequest(id, path, method, body) {
 					}, 9000);
 				}
 			}
+			const sentAt = Date.now();
+			fundingSteps[`${id}:${env.requestId}`] = [
+				{ timestamp: sentAt - 1800, action: 'df_send_started', data: { requestId: env.requestId, amountSat: String(amount), resumed: false } },
+				{ timestamp: sentAt, action: 'df_send_committed', data: { requestId: env.requestId, fundingTxid } },
+				{ timestamp: sentAt + 400, action: 'df_send_completed', data: { requestId: env.requestId } }
+			];
 			return {
 				offerId: hex(64),
 				spentTxid: coin.txid,

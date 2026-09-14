@@ -15,6 +15,7 @@ import {
 	persistFallback,
 	sendDirectFunding
 } from '../../lib/direct-funding.js';
+import { LiveFundingSteps } from '../../components/FundingSteps.jsx';
 import { useQuote } from '../../hooks/useQuote.js';
 import AddressSend from './lfbw/AddressSend.jsx';
 import { arrivingFundsNote, lfbwStatus } from '../../lib/lfbw.js';
@@ -251,6 +252,9 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	// A direct funding whose answer never reached this page: still being asked
 	// for ({ reason, waiting: true }), or given up on without paying anything.
 	const [fundingUnknown, setFundingUnknown] = useState(null);
+	// The request the latest direct funding paid, and which press of the button
+	// that was, so its steps are shown with it and a second press asks afresh.
+	const [stepsFor, setStepsFor] = useState(null);
 	// The line the hand-off left, and the field the caret is owed.
 	const [arrived, setArrived] = useState(arrival?.note ?? null);
 	const inputRef = useRef(null);
@@ -620,6 +624,7 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 		setFundingResult(null);
 		setFellBack(null);
 		setFundingUnknown(null);
+		setStepsFor(payDirect && funding.requestId ? { requestId: funding.requestId, attempt: Date.now() } : null);
 		let fallback = null;
 		try {
 			if (payDirect) {
@@ -961,6 +966,7 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					)}
 				</div>
 			)}
+			{stepsFor && <LiveFundingSteps key={stepsFor.attempt} walletId={id} requestId={stepsFor.requestId} />}
 		</Card>
 	);
 }

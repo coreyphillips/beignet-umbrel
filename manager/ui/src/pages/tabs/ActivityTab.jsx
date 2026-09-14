@@ -16,6 +16,7 @@ import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { addressUrl, txUrl } from '../../lib/explorer.js';
 import { describeFallback, persistFallback } from '../../lib/direct-funding.js';
 import { manager } from '../../api.js';
+import { FundingSteps } from '../../components/FundingSteps.jsx';
 
 const STATUS_TONE = { COMPLETED: 'green', PENDING: 'yellow', FAILED: 'red' };
 
@@ -315,6 +316,7 @@ function TxDetail({ tx, network, tipHeight, fallback }) {
 						{fallback.nodeId ? ` · recipient node ${shortId(fallback.nodeId)}` : ''}
 						{fallback.requestId ? ` · request ${shortId(fallback.requestId)}` : ''}
 					</div>
+					<FundingSteps steps={fallback.steps} />
 				</div>
 			)}
 			<DetailRow label="Type">

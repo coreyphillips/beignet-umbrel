@@ -417,6 +417,39 @@ test('a request carrying a direct-funding request offers to pay it that way, and
 	await view.unmount();
 });
 
+test('a direct funding shows its steps on the card, for the request it paid (umbrel #147)', async () => {
+	const T0 = Date.now() - 80_000;
+	const listing = globalThis.fetch;
+	globalThis.fetch = async (url, init = {}) => {
+		if (!String(url).includes('/direct-funding/steps')) return listing(url, init);
+		managerCalls.push({ url: String(url), method: 'GET', body: null });
+		const steps = [
+			{ timestamp: T0, action: 'df_send_started', data: {} },
+			{ timestamp: T0 + 30_000, action: 'df_lane_skipped', data: { transportType: 2, reason: 'lane_not_established' } },
+			{ timestamp: T0 + 71_500, action: 'df_send_committed', data: {} },
+			{ timestamp: T0 + 73_800, action: 'df_send_completed', data: {} }
+		];
+		return { ok: true, status: 200, json: async () => ({ ok: true, result: steps }) };
+	};
+	const api = stubFundingApi({ status: 'MEMPOOL_SEEN', fundingTxid: 'f'.repeat(64), attested: true });
+	const view = await mountSend(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+		await settle(400);
+		await click(sendButton(view));
+		await settle(50);
+		const asked = managerCalls.find((c) => c.url.includes('/direct-funding/steps'));
+		assert.match(asked.url, /^\/api\/wallets\/w1\/direct-funding\/steps\?requestId=[0-9a-f]{32}$/);
+		assert.deepEqual(
+			view.$$('ol[aria-label="Direct funding steps"] li').map((li) => li.textContent.replace(/^.*? s /, '')),
+			['Offer sent', 'Route skipped: onion message (could not connect)', 'Recipient accepted, funding signed', 'Receipt received']
+		);
+		assert.match(view.text(), /\+71\.5 s Recipient accepted/);
+	} finally {
+		await view.unmount();
+	}
+});
+
 test('declining direct funding pays the address plainly, and Max turns it off', async () => {
 	const api = stubFundingApi({ status: 'MEMPOOL_SEEN' });
 	const view = await mountSend(api);

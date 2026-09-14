@@ -341,10 +341,25 @@ async function main() {
 		res.json({ ok: true, result: manager.directFundingFallbacks(req.params.id) })
 	);
 
-	api.post('/wallets/:id/direct-funding/fallbacks', (req, res) =>
-		res.json({
-			ok: true,
-			result: manager.recordDirectFundingFallback(req.params.id, req.body || {})
+	api.post(
+		'/wallets/:id/direct-funding/fallbacks',
+		asyncHandler(async (req, res) => {
+			await manager.catchUpDirectFundingSteps(req.params.id);
+			res.json({
+				ok: true,
+				result: manager.recordDirectFundingFallback(req.params.id, req.body || {})
+			});
+		})
+	);
+
+	// The steps of the latest attempt to pay a direct-funding request from
+	// this wallet: the routes tried and skipped, the offer, the receipt. The
+	// daemon logs most of them where only GET /logs can read them (umbrel #147).
+	api.get(
+		'/wallets/:id/direct-funding/steps',
+		asyncHandler(async (req, res) => {
+			const requestId = typeof req.query.requestId === 'string' ? req.query.requestId : undefined;
+			res.json({ ok: true, result: await manager.directFundingSteps(req.params.id, { requestId }) });
 		})
 	);
 

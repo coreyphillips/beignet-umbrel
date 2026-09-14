@@ -87,7 +87,10 @@ export const manager = {
 	// them; the Activity tab reads them back onto the payment they became.
 	directFundingFallbacks: (id) => request(`/api/wallets/${id}/direct-funding/fallbacks`),
 	recordDirectFundingFallback: (id, body) =>
-		request(`/api/wallets/${id}/direct-funding/fallbacks`, { method: 'POST', body, timeoutMs: 5000 })
+		request(`/api/wallets/${id}/direct-funding/fallbacks`, { method: 'POST', body, timeoutMs: 5000 }),
+	// The latest attempt to pay a direct-funding request, step by step (umbrel #147).
+	directFundingSteps: (id, requestId) =>
+		request(`/api/wallets/${id}/direct-funding/steps?requestId=${encodeURIComponent(requestId)}`, { timeoutMs: 10000 })
 };
 
 // Per-wallet beignet daemon API (proxied; bearer token injected server-side).
