@@ -441,7 +441,23 @@ env:
   # on the same phone. Only dist/lightning/direct-funding and the node's
   # direct-funding adapter changed: dist/cli is byte-identical to 0.20.1, so
   # no routes, no env, no openapi change.
-  BEIGNET_VERSION: "0.20.2"
+  # 0.21.0: a wallet no longer needs a manual refresh to see a deposit (#808,
+  # fixed by #809 and hardened by #816, #817, #825, #834, #835, #844, #845). A
+  # script hash or header notification that lands during a refresh now earns
+  # a scan of its own instead of that refresh's result, and a reconnect
+  # rescans any address whose status changed while the socket was down. The
+  # rest is payment replay and hold hardening: settled invoices, pruned
+  # payments and issued invoice hashes refuse a replayed preimage or keysend
+  # (#811, #824, #836, #843, #846, #849), redispatch after a receiver restart
+  # fulfils only the HTLCs that settled the payment (#828), owed held-forward
+  # fails on closed or errored channels are dropped (#833, #842), a refused
+  # late hold fail is retried (#826), and a late failure no longer removes a
+  # successful retry's record (#848). The one surface change: hold settle and
+  # cancel answer HOLD_RESOLUTION_PENDING (503, retryable) instead of
+  # NOT_FOUND while HTLCs are still parked (#827). The manager and dashboard
+  # call neither route. dist/cli otherwise has no route, env or openapi
+  # change; config.js, openapi.js and cli.js are byte-identical to 0.20.2.
+  BEIGNET_VERSION: "0.21.0"
 
 jobs:
   build:
