@@ -1676,8 +1676,10 @@ class WalletManager {
 		await this._captureNodeId(id);
 		await this._restoreLfbwLinks(id);
 		// After the lightning-first links, whose setup dials the same pair
-		// from the dependent's side; by now that dial has settled.
-		await this._linkSiblings(id);
+		// from the dependent's side; by now that dial has settled. That dial
+		// can relabel a Tor socket as loopback, so the link is redialed even
+		// when both ends list 127.0.0.1.
+		await this._linkSiblings(id, { redial: true });
 	}
 
 	/**
@@ -1687,7 +1689,7 @@ class WalletManager {
 	 * failed link is tried again after the redial backoff for as long as both
 	 * stay up.
 	 */
-	async _linkSiblings(id, { pubkey = null } = {}) {
+	async _linkSiblings(id, { pubkey = null, redial = false } = {}) {
 		const rec = this.registry.get(id);
 		const rt = this.runtimeState(id);
 		if (!rec || rec.onchainOnly || !rec.nodeId || !rt.proc || !rt.healthy || rt.stopping) return;
@@ -1705,7 +1707,7 @@ class WalletManager {
 		for (const sibling of siblingPeers.channelSiblings(targets, channels)) {
 			const before = rt.siblingLinks.get(sibling.nodeId);
 			try {
-				await this._linkSibling(rec, sibling);
+				await this._linkSibling(rec, sibling, redial);
 				rt.siblingLinks.set(sibling.nodeId, 'ok');
 				if (before !== 'ok') this._log(id, `connected to sibling "${sibling.name}" over loopback`);
 			} catch (err) {
@@ -1724,15 +1726,16 @@ class WalletManager {
 	 * /peers lists the address each end has stored for the other, not the
 	 * socket's route, and a dial to a peer already connected only replaces
 	 * that address. A socket registers under the address its dialer stored,
-	 * so a link is known to be loopback only when both ends list 127.0.0.1.
-	 * Otherwise this end drops the peer and dials loopback. The drop also
+	 * so a link counts as loopback when both ends list 127.0.0.1, unless a
+	 * dial may have relabeled it since it opened (redial). Otherwise this
+	 * end drops the peer and dials loopback. The drop also
 	 * aborts a reconnect this end has in flight, which could land on Tor just
 	 * before the dial and turn it into a relabel. The sibling can still have
 	 * dialed Tor meanwhile, so the link counts only once the sibling lists
 	 * loopback too. Its address is rewritten only while it is connected, when
 	 * the rewrite opens no second socket, and the drop and dial then repeat.
 	 */
-	async _linkSibling(rec, sibling) {
+	async _linkSibling(rec, sibling, redial = false) {
 		// 'ready' is a finished handshake; the engine's PeerInfo type says
 		// 'connected', but the route reports the transport's own state.
 		const readyPeer = async (from, pubkey) =>
@@ -1741,7 +1744,7 @@ class WalletManager {
 		const dialLoopback = (from, to) =>
 			this._daemonCall(from, 'POST', '/peer/connect', { pubkey: to.nodeId, host: '127.0.0.1', port: this.listenPort(to) });
 		let theirs = await readyPeer(sibling, rec.nodeId);
-		if (onLoopback(theirs) && onLoopback(await readyPeer(rec, sibling.nodeId))) return;
+		if (!redial && onLoopback(theirs) && onLoopback(await readyPeer(rec, sibling.nodeId))) return;
 		for (let pass = 0; pass < 2; pass++) {
 			if (theirs && !onLoopback(theirs)) await dialLoopback(sibling, rec);
 			await this._daemonCall(rec, 'POST', '/peer/disconnect', { pubkey: sibling.nodeId });

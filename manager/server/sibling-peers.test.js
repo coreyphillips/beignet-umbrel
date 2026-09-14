@@ -224,6 +224,13 @@ test('the lower node id redials first, and a later redial leaves a sibling linke
 	assert.deepEqual(m.calls, [], 'A already dialed B back');
 	await m._linkSiblings('b');
 	assert.deepEqual(m.calls, []);
+
+	// On a start the lightning-first setup may just have relabeled a Tor socket.
+	await m._onHealthy('b');
+	assert.deepEqual(m.calls, [
+		{ from: 'b', disconnect: PK_A },
+		{ from: 'b', pubkey: PK_A, host: '127.0.0.1', port: 3901 + 6000 }
+	]);
 });
 
 test('a sibling that may be connected through Tor is moved to loopback, whichever end lists the onion', async () => {
