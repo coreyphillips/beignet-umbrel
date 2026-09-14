@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.20.8"
+version: "0.20.9"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,21 +30,17 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Direct funding: if the dashboard loses its connection while a payment is
-  being offered as direct funding, for example because a phone browser went
-  to the background, it now asks the wallet again for the outcome instead of
-  paying the address as an ordinary transaction. Before, the recipient could
-  take the direct funding after the ordinary payment had already gone out.
-  While the answer is unknown the card says it is waiting, and nothing is paid
-  to the address.
+  Bundles beignet 0.21.0. Wallets now keep their balance and Activity up to
+  date on their own: a deposit or confirmation that arrives while the wallet
+  is already checking for changes, or while its connection to the Electrum
+  server is down, now shows up right away instead of waiting for the next
+  block. Lightning-first wallets move a new deposit into their channel on the
+  first pass instead of waiting for a later check.
 
 
-  Bundles beignet 0.20.2. A wallet paying a lightning-first wallet it is the
-  primary of no longer gives up when that wallet is offline as the payment
-  starts, such as a phone wallet in the background while you pay it from a
-  browser on the same phone. It now waits for the wallet to come back within
-  the two minute offer window and offers again each time it reconnects,
-  instead of spending those two minutes trying to connect to itself.
+  A settled invoice or keysend no longer accepts a second payment on the same
+  payment hash, including after the payment has been cleared from memory or
+  the wallet has restarted.
 
 dependencies: []
 path: ""
