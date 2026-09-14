@@ -1701,7 +1701,7 @@ class WalletManager {
 		if (targets.length === 0) return;
 		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
 		if (!Array.isArray(channels)) {
-			for (const sibling of targets) this._scheduleSiblingRedial(id, sibling.nodeId);
+			for (const sibling of targets) this._scheduleSiblingRedial(id, sibling.nodeId, redial);
 			return;
 		}
 		for (const sibling of siblingPeers.channelSiblings(targets, channels)) {
@@ -1717,7 +1717,7 @@ class WalletManager {
 				}
 				// The engine falls back to its previous address after a failed
 				// dial and may reconnect there without a disconnect event.
-				this._scheduleSiblingRedial(id, sibling.nodeId);
+				this._scheduleSiblingRedial(id, sibling.nodeId, redial);
 			}
 		}
 	}
@@ -1757,7 +1757,8 @@ class WalletManager {
 	}
 
 	// One redial per dropped sibling, however many disconnects land before it.
-	_scheduleSiblingRedial(id, pubkey) {
+	// A retry keeps the redial flag of the attempt it retries.
+	_scheduleSiblingRedial(id, pubkey, redial = false) {
 		const rec = this.registry.get(id);
 		const rt = this.runtimeState(id);
 		if (rt.siblingRedials.has(pubkey)) return;
@@ -1765,7 +1766,7 @@ class WalletManager {
 		const delay = siblingPeers.redialDelay(rec.nodeId, pubkey, this.siblingRedialMs);
 		const timer = setTimeout(() => {
 			rt.siblingRedials.delete(pubkey);
-			this._linkSiblings(id, { pubkey }).catch(() => {});
+			this._linkSiblings(id, { pubkey, redial }).catch(() => {});
 		}, delay);
 		rt.siblingRedials.set(pubkey, timer);
 	}

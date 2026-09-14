@@ -300,6 +300,17 @@ test('a failed channel read is tried again after the backoff', async () => {
 	assert.deepEqual(m.calls, []);
 	await sleep(60);
 	assert.ok(m.links.has('a|b'));
+
+	// On a start the retry still redials a link both ends list as loopback.
+	m.calls = [];
+	failures = 1;
+	await m._onHealthy('a');
+	assert.deepEqual(m.calls, []);
+	await sleep(60);
+	assert.deepEqual(m.calls, [
+		{ from: 'a', disconnect: PK_B },
+		{ from: 'a', pubkey: PK_B, host: '127.0.0.1', port: 3902 + 6000 }
+	]);
 });
 
 test('a redial pending when the wallet stops is dropped, even if it is back up before the backoff', async () => {
