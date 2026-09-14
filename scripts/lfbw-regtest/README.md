@@ -37,7 +37,15 @@ node 04-direct-funding.mjs '<json from 01>'
 node 03-jit.mjs '<json from 01>'        # -> adds "L2"
 node 05-paired-and-outgrow.mjs '<json with L2>'
 node 06-external-primary.mjs '<json from 01>'
+node 07-sibling-loopback.mjs '<json from 01>'  # manager with PUBLIC_HOST=10.255.255.1
 ```
+
+`07` needs the manager restarted with `PUBLIC_HOST=10.255.255.1`, an address
+nothing answers, so L1's requests name the primary somewhere only a payer
+without a live connection would dial (the stand-in for its onion). It
+restarts P, then stops W for 70 s so P's own reconnect backs off, and pays
+L1 from W as soon as each is back. Against a manager without the sibling
+links the second send took 84 s to commit; with them, under a second.
 
 `02` reads the on-chain balance right after a splice; the figure lags until
 the electrum server sees the splice transaction, so its two balance checks

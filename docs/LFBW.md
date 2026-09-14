@@ -108,6 +108,14 @@ payer reaches the wallet through the primary's relay or the onion-message
 lane, and a payer that already holds a connection to the wallet (the primary
 paying its own dependent) uses it directly.
 
+A request names the primary by its onion, so a sibling payer that is not
+connected to the primary would dial out through Tor and back into the same
+machine (umbrel #146). The manager keeps every pair of sibling wallets that
+share a channel connected on `127.0.0.1` instead: each wallet dials its
+running channel siblings when it comes up (`WalletManager._linkSiblings`),
+and a sibling that drops is redialed after a short backoff, the lower node id
+first (`manager/server/sibling-peers.js`).
+
 ## Engine requirements
 
 The routes and policy this needs (`POST /jit/invoice`, the four
