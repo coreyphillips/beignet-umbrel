@@ -1123,17 +1123,25 @@ class WalletManager {
 		rt.spawnedEnv = env;
 		rt.startedAt = Date.now();
 
-		const emit = (buf) =>
-			String(buf)
-				.split('\n')
-				.forEach((line) => {
-					if (!line.trim()) return;
-					this._log(id, line.trim());
-					this._noteStartFailure(rt, line.trim());
-					this._notePrintedStep(id, rt, line.trim());
-				});
-		proc.stdout.on('data', emit);
-		proc.stderr.on('data', emit);
+		const emit = (line) => {
+			if (!line.trim()) return;
+			this._log(id, line.trim());
+			this._noteStartFailure(rt, line.trim());
+			this._notePrintedStep(id, rt, line.trim());
+		};
+		// A chunk can end mid-line, and a printed step cut there loses its
+		// fields, so the unfinished tail waits for the rest of its line.
+		const readLines = (stream) => {
+			let rest = '';
+			stream.on('data', (buf) => {
+				const lines = (rest + String(buf)).split('\n');
+				rest = lines.pop();
+				lines.forEach(emit);
+			});
+			stream.on('end', () => emit(rest));
+		};
+		readLines(proc.stdout);
+		readLines(proc.stderr);
 
 		proc.on('error', (err) => this._log(id, `spawn error: ${err.message}`));
 		proc.on('exit', (code, signal) => this._onChildExit(id, rt, proc, code, signal));
@@ -1157,7 +1165,7 @@ class WalletManager {
 		rt.chainWatch = setInterval(() => {
 			this._checkChainStall(id).catch(() => {});
 		}, CHAIN_WATCH_POLL_MS);
-		if (!rec.onchainOnly) this._startDfWatch(id, rt);
+		this._startDfWatch(id, rt);
 		// Lightning-first: on-chain arrivals move into the home channel. The
 		// event stream drives it (transaction:confirmed); this is the backstop
 		// for an event missed while the stream reconnects.
@@ -1205,7 +1213,9 @@ class WalletManager {
 	// a step that ends one only needs the one read that catches up.
 	_nudgeDfPull(id, rt, live) {
 		rt.dfFastUntil = live ? Date.now() + DF_PULL_FAST_WINDOW_MS : 0;
-		this._pullDfSteps(id).catch(() => {});
+		// A read already out may have left before the step that nudged this.
+		const pull = rt.dfPull ? rt.dfPull.then(() => this._pullDfSteps(id)) : this._pullDfSteps(id);
+		pull.catch(() => {});
 	}
 
 	_notePrintedStep(id, rt, line) {

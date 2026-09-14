@@ -16,6 +16,7 @@ import {
 	sendDirectFunding
 } from '../../../lib/direct-funding.js';
 import { homeChannel } from '../../../lib/lfbw.js';
+import { LiveFundingSteps } from '../../../components/FundingSteps.jsx';
 import { manager, walletApi } from '../../../api.js';
 
 // Typing an amount or dragging a slider re-prices on every keystroke and
@@ -51,6 +52,8 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	const [quoteError, setQuoteError] = useState(null);
 	const [result, setResult] = useState(null);
 	const [directFunding, setDirectFunding] = useState(true);
+	// The request the latest direct funding paid, and which press that was.
+	const [stepsFor, setStepsFor] = useState(null);
 	const inputRef = useRef(null);
 	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
 	const { data: wallets } = usePoll(() => manager.listWallets().catch(() => []), 15000, []);
@@ -183,6 +186,7 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	const send = async () => {
 		setBusy(true);
 		setResult(null);
+		setStepsFor(payDirect && funding.requestId ? { requestId: funding.requestId, attempt: Date.now() } : null);
 		let fallback = null;
 		try {
 			if (payDirect) {
@@ -422,6 +426,7 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 					)}
 				</div>
 			)}
+			{stepsFor && <LiveFundingSteps key={stepsFor.attempt} walletId={id} requestId={stepsFor.requestId} />}
 		</Card>
 	);
 }
