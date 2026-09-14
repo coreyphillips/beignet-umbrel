@@ -252,7 +252,7 @@ test('a skipped route says which route and why, in words (umbrel #147)', () => {
 	);
 	assert.equal(
 		describeStep({ action: 'df_lane_skipped', data: { transportType: 3, reason: 'introduction_node_is_self' } }),
-		"Route skipped: relay through the recipient's node (the route starts at this wallet)"
+		"Route skipped: relay through the recipient's liquidity peer (the route starts at this wallet)"
 	);
 	assert.equal(
 		describeStep({ action: 'df_frame_dropped', data: { transport: 'direct_peer', reason: 'no_listener' } }),

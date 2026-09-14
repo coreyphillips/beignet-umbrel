@@ -341,10 +341,14 @@ async function main() {
 		res.json({ ok: true, result: manager.directFundingFallbacks(req.params.id) })
 	);
 
-	api.post('/wallets/:id/direct-funding/fallbacks', (req, res) =>
-		res.json({
-			ok: true,
-			result: manager.recordDirectFundingFallback(req.params.id, req.body || {})
+	api.post(
+		'/wallets/:id/direct-funding/fallbacks',
+		asyncHandler(async (req, res) => {
+			await manager.catchUpDirectFundingSteps(req.params.id);
+			res.json({
+				ok: true,
+				result: manager.recordDirectFundingFallback(req.params.id, req.body || {})
+			});
 		})
 	);
 

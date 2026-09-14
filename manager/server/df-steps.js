@@ -205,20 +205,24 @@ class DirectFundingSteps {
 		}
 		if (start === -1) return [];
 		// A df_send_prepared ahead of the start belongs to the same attempt,
-		// unless an earlier attempt ended in between.
+		// unless an earlier attempt ended in between or is too old to be this one.
+		const latest = steps[start].timestamp;
 		while (start > 0) {
 			let j = start - 1;
 			while (j >= 0 && !named(steps[j])) j--;
 			if (j < 0 || ENDS.has(steps[j].action) || !STARTS.has(steps[j].action)) break;
+			if (latest - steps[j].timestamp > ATTEMPT_MAX_MS) break;
 			start = j;
 		}
-		const deadline = steps[start].timestamp + ATTEMPT_MAX_MS;
+		const deadline = latest + ATTEMPT_MAX_MS;
 		const out = [];
 		for (let i = start; i < steps.length; i++) {
 			const s = steps[i];
 			if (s.timestamp > deadline) break;
 			if (i > start && STARTS.has(s.action) && typeof s.data.requestId === 'string' && !named(s)) break;
 			if (typeof s.data.requestId === 'string' && !named(s)) continue;
+			// An offer this wallet received, never a step of its own send.
+			if (s.action.startsWith('df_offer_')) continue;
 			out.push(s);
 			if (i > start && ENDS.has(s.action) && named(s)) break;
 		}

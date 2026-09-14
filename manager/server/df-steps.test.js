@@ -203,6 +203,43 @@ test('a printed df_send_* line starts reading the action log, and an ending one 
 	);
 });
 
+test('a step that lands while a read is out is caught up by one more read, which anyone waiting also waits on', async (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dfsteps-'));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const daemon = fakeDaemon();
+	const { m, rt } = managerWith(daemon, { dir });
+	let release;
+	const held = new Promise((resolve) => (release = resolve));
+	const call = daemon.call;
+	m._daemonCall = async (...args) => {
+		const answer = await call(...args);
+		if (daemon.calls.length === 1) await held;
+		return answer;
+	};
+	// The printed refusal is stamped when it is read, so the rest sit just before now.
+	const now = Date.now();
+	rt.dfSteps.add({ timestamp: now - 120_000, action: 'df_send_started', data: { requestId: REQUEST } });
+	m._pullDfSteps('w1');
+
+	daemon.log.push(entry(now - 90_000, 'df_lane_skipped', { transportType: 2, reason: 'lane_not_established' }));
+	for (const line of printed('df_send_refused', { requestId: REQUEST, reason: 'offer timed out' })) {
+		m._notePrintedStep('w1', rt, line);
+	}
+	const steps = m.directFundingSteps('w1', { requestId: REQUEST });
+	const caughtUp = m.catchUpDirectFundingSteps('w1');
+	release();
+	assert.deepEqual(
+		(await steps).map((s) => s.action),
+		['df_send_started', 'df_lane_skipped', 'df_send_refused']
+	);
+	await caughtUp;
+	assert.equal(daemon.calls.length, 2);
+	assert.deepEqual(
+		m.recordDirectFundingFallback('w1', { reason: 'offer timed out', requestId: REQUEST }).steps.map((s) => s.action),
+		['df_send_started', 'df_lane_skipped', 'df_send_refused']
+	);
+});
+
 test('a payment\'s steps run from its start to its end, with the lanes\' unnamed steps between', () => {
 	const steps = new DirectFundingSteps();
 	const add = (timestamp, action, data = {}) => steps.add({ timestamp, action, data });
@@ -212,6 +249,7 @@ test('a payment\'s steps run from its start to its end, with the lanes\' unnamed
 	add(T0 + 1100, 'df_send_started', { requestId: REQUEST });
 	add(T0 + 31_100, 'df_lane_skipped', { transportType: 2, reason: 'lane_not_established' });
 	add(T0 + 31_200, 'df_frame_dropped', { reason: 'request_id_mismatch', requestId: OTHER });
+	add(T0 + 40_000, 'df_offer_accepted', { offerId: 'ab'.repeat(16) });
 	add(T0 + 71_600, 'df_send_committed', { requestId: REQUEST });
 	add(T0 + 73_900, 'df_send_completed', { requestId: REQUEST });
 	add(T0 + 90_000, 'df_lane_skipped', { transportType: 3, reason: 'lane_disabled' });
@@ -225,7 +263,7 @@ test('a payment\'s steps run from its start to its end, with the lanes\' unnamed
 			[71_600, 'df_send_committed'],
 			[73_900, 'df_send_completed']
 		],
-		'from the prepare to the receipt; a step naming another request, and one after the end, are not this payment\'s'
+		'from the prepare to the receipt; a step naming another request, an offer received, and one after the end, are not this payment\'s'
 	);
 	assert.deepEqual(
 		steps.forRequest(OTHER).map((s) => s.action),
@@ -249,6 +287,15 @@ test('an attempt that never logged its end stops at the next payment, or after A
 	lone.add({ timestamp: T0, action: 'df_send_started', data: { requestId: REQUEST } });
 	lone.add({ timestamp: T0 + ATTEMPT_MAX_MS + 1, action: 'df_lane_skipped', data: {} });
 	assert.equal(lone.forRequest(REQUEST).length, 1);
+
+	// Resumed after the daemon came back: the old start is not this attempt's.
+	lone.add({ timestamp: T0 + 2 * ATTEMPT_MAX_MS, action: 'df_send_started', data: { requestId: REQUEST, resumed: true } });
+	lone.add({ timestamp: T0 + 2 * ATTEMPT_MAX_MS + 5000, action: 'df_send_completed', data: { requestId: REQUEST } });
+	assert.deepEqual(
+		lone.forRequest(REQUEST).map((s) => s.action),
+		['df_send_started', 'df_send_completed']
+	);
+	assert.equal(lone.forRequest(REQUEST)[0].data.resumed, true);
 });
 
 test('the steps buffer drops its oldest past its cap, and a step heard twice is held once', () => {

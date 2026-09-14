@@ -345,7 +345,8 @@ class WalletManager {
 				dfWatch: null,
 				dfFastUntil: 0,
 				dfLastPull: 0,
-				dfPull: null
+				dfPull: null,
+				dfPullAgain: false
 			});
 		}
 		return this.runtime.get(id);
@@ -1214,8 +1215,8 @@ class WalletManager {
 	_nudgeDfPull(id, rt, live) {
 		rt.dfFastUntil = live ? Date.now() + DF_PULL_FAST_WINDOW_MS : 0;
 		// A read already out may have left before the step that nudged this.
-		const pull = rt.dfPull ? rt.dfPull.then(() => this._pullDfSteps(id)) : this._pullDfSteps(id);
-		pull.catch(() => {});
+		if (rt.dfPull) rt.dfPullAgain = true;
+		this._pullDfSteps(id).catch(() => {});
 	}
 
 	_notePrintedStep(id, rt, line) {
@@ -1230,7 +1231,8 @@ class WalletManager {
 	/**
 	 * Copy the direct-funding entries the daemon logged since the last read
 	 * into the wallet's log ring and step buffer. One read at a time: a nudge
-	 * that lands while one is out joins it.
+	 * that lands while one is out queues one more, and the promise waiting on
+	 * the first also waits on that one.
 	 */
 	_pullDfSteps(id) {
 		const rt = this.runtimeState(id);
@@ -1247,8 +1249,11 @@ class WalletManager {
 			.catch(() => {
 				/* the next tick asks again from the same place */
 			})
-			.finally(() => {
+			.then(() => {
 				rt.dfPull = null;
+				if (!rt.dfPullAgain) return undefined;
+				rt.dfPullAgain = false;
+				return this._pullDfSteps(id);
 			});
 		return rt.dfPull;
 	}
@@ -1265,6 +1270,12 @@ class WalletManager {
 		}
 		await this._pullDfSteps(id);
 		return this.runtimeState(id).dfSteps.forRequest(requestId);
+	}
+
+	// Resolves once the daemon's action log has been read up to now, so a
+	// fallback recorded next saves the steps that explain it.
+	catchUpDirectFundingSteps(id) {
+		return this.registry.get(id) ? this._pullDfSteps(id) : Promise.resolve();
 	}
 
 	// Subscribe to the daemon's event stream. The reason a channel open failed

@@ -217,7 +217,7 @@ export function describeFunding(outcome) {
 const ROUTES = {
 	1: 'direct connection',
 	2: 'onion message',
-	3: 'relay through the recipient\'s node',
+	3: 'relay through the recipient\'s liquidity peer',
 	4: 'rendezvous'
 };
 
@@ -227,7 +227,7 @@ const SKIPPED = {
 	lane_disabled: 'turned off on this wallet',
 	lane_module_unavailable: 'not available on this wallet',
 	lane_not_established: 'could not connect',
-	no_frame_exchanged: 'connected, but nothing came back',
+	no_frame_exchanged: 'connected, but failed before any message went out',
 	relay_is_self: 'the relay is this wallet',
 	introduction_node_is_self: 'the route starts at this wallet'
 };
