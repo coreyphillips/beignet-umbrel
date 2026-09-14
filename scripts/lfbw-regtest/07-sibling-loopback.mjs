@@ -19,6 +19,8 @@ const loopback = async (a, aNode, b, bNode) => {
 	return ab?.state === 'ready' && ba?.state === 'ready' && [ab.host, ba.host].includes('127.0.0.1') ? { ab, ba } : null;
 };
 
+await healthy(P);
+await healthy(L1);
 const df = await w(L1, '/direct-funding/config');
 if (df.lspHost !== DEAD_HOST) {
 	check(`L1 requests name P at ${DEAD_HOST} (restart the manager with PUBLIC_HOST=${DEAD_HOST})`, false, `lspHost ${df.lspHost}`);
@@ -45,12 +47,11 @@ const Wrec = await api(`/wallets/${W}`);
 const Wnode = Wrec.nodeId;
 await waitFor('W connected to P over loopback', () => loopback(W, Wnode, P, Pnode), { timeoutMs: 30000 });
 
-// W holds only the dead address for P from here on, as a payer that last
-// reached P through its onion would. A dial to a connected peer just records
-// the address (one that joins W's own reconnect to the dead address times out
-// with it, having recorded it all the same), and the next connection P makes
-// to W persists it. P keeps a working address for W, so P redials W by itself
-// after P restarts; only a restart of W needs the manager.
+// W holds only the dead address for P, as a payer that last reached P through
+// its onion would. A dial to a connected peer just records the address (one
+// that joins W's own reconnect to the dead address times out with it, having
+// recorded it all the same). The manager points it back at loopback the next
+// time it links the pair.
 await w(W, '/peer/connect', { method: 'POST', body: { pubkey: Pnode, host: DEAD_HOST, port: Prec.listenPort } }).catch(() => null);
 
 // Pay an L1 request from W at once, and read W's lane log for the send.
@@ -92,8 +93,7 @@ check('P restart: W is back on P over 127.0.0.1 within 20 s', !!linked, linked ?
 await payFromW('P restart');
 
 // 2. Stop W long enough for P's own reconnect backoff to pass a minute, then
-// pay as soon as W is healthy. P dialed W back in step 1, so the address W
-// holds for P is still the dead one: only P, or the manager, can link them.
+// pay as soon as W is healthy.
 await api(`/wallets/${W}/stop`, { method: 'POST' });
 log('  W stopped; waiting 70 s for P to back off');
 await new Promise((r) => setTimeout(r, 70000));

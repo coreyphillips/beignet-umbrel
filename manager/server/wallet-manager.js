@@ -1698,7 +1698,10 @@ class WalletManager {
 		});
 		if (targets.length === 0) return;
 		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
-		if (!Array.isArray(channels)) return;
+		if (!Array.isArray(channels)) {
+			for (const sibling of targets) this._scheduleSiblingRedial(id, sibling.nodeId);
+			return;
+		}
 		for (const sibling of siblingPeers.channelSiblings(targets, channels)) {
 			const before = rt.siblingLinks.get(sibling.nodeId);
 			try {
@@ -1720,33 +1723,34 @@ class WalletManager {
 	/**
 	 * /peers lists the address each end has stored for the other, not the
 	 * socket's route, and a dial to a peer already connected only replaces
-	 * that address. The end that dialed stored what it dialed, so a link is
-	 * known to be loopback only when both ends list 127.0.0.1. Anything else
-	 * may be a live Tor socket: both stored addresses are pointed at loopback,
-	 * so the end that sees the drop reconnects there too, and the link is
-	 * dropped and dialed again.
+	 * that address. A socket registers under the address its dialer stored,
+	 * so a link is known to be loopback only when both ends list 127.0.0.1.
+	 * Otherwise this end drops the peer and dials loopback. The drop also
+	 * aborts a reconnect this end has in flight, which could land on Tor just
+	 * before the dial and turn it into a relabel. The sibling can still have
+	 * dialed Tor meanwhile, so the link counts only once the sibling lists
+	 * loopback too. Its address is rewritten only while it is connected, when
+	 * the rewrite opens no second socket, and the drop and dial then repeat.
 	 */
 	async _linkSibling(rec, sibling) {
 		// 'ready' is a finished handshake; the engine's PeerInfo type says
 		// 'connected', but the route reports the transport's own state.
 		const readyPeer = async (from, pubkey) =>
 			((await this._daemonCall(from, 'GET', '/peers')) || []).find((p) => p.pubkey === pubkey && p.state === 'ready');
-		const mine = await readyPeer(rec, sibling.nodeId);
-		if (mine) {
-			const theirs = await readyPeer(sibling, rec.nodeId);
-			if (mine.host === '127.0.0.1' && theirs && theirs.host === '127.0.0.1') return;
-			await this._daemonCall(sibling, 'POST', '/peer/connect', {
-				pubkey: rec.nodeId,
-				host: '127.0.0.1',
-				port: this.listenPort(rec)
-			});
+		const onLoopback = (peer) => !!peer && peer.host === '127.0.0.1';
+		const dialLoopback = (from, to) =>
+			this._daemonCall(from, 'POST', '/peer/connect', { pubkey: to.nodeId, host: '127.0.0.1', port: this.listenPort(to) });
+		let theirs = await readyPeer(sibling, rec.nodeId);
+		if (onLoopback(theirs) && onLoopback(await readyPeer(rec, sibling.nodeId))) return;
+		for (let pass = 0; pass < 2; pass++) {
+			if (theirs && !onLoopback(theirs)) await dialLoopback(sibling, rec);
 			await this._daemonCall(rec, 'POST', '/peer/disconnect', { pubkey: sibling.nodeId });
+			await dialLoopback(rec, sibling);
+			theirs = await readyPeer(sibling, rec.nodeId);
+			if (onLoopback(theirs)) return;
+			if (!theirs) break;
 		}
-		await this._daemonCall(rec, 'POST', '/peer/connect', {
-			pubkey: sibling.nodeId,
-			host: '127.0.0.1',
-			port: this.listenPort(sibling)
-		});
+		throw new Error(`"${sibling.name}" does not list the link on 127.0.0.1`);
 	}
 
 	// One redial per dropped sibling, however many disconnects land before it.

@@ -49,20 +49,33 @@ function managerWith(records, channels) {
 	m.siblingRedialMs = 20;
 	m.calls = [];
 	m.refuse = new Set();
-	// Wallet id to { pubkey: stored host } for each peer its daemon has ready.
-	m.connected = {};
+	// Wallet id to { pubkey: host } for the address each daemon has stored,
+	// and the wallet pairs with a ready connection. An inbound peer with no
+	// stored address lists its socket's source, 127.0.0.1.
+	m.stored = {};
+	m.links = new Set();
+	m.link = (x, y) => m.links.add(pair(x, y));
+	m.beforeConnect = null;
+	const pair = (x, y) => [x, y].sort().join('|');
+	const walletOf = (pubkey) => Object.values(store).find((r) => r.nodeId === pubkey);
 	m._daemonCall = async (rec, method, apiPath, body) => {
 		if (apiPath === '/channels') return channels[rec.id] || [];
 		if (apiPath === '/peers') {
-			return Object.entries(m.connected[rec.id] || {}).map(([pubkey, host]) => ({ pubkey, host, state: 'ready' }));
+			return Object.values(store)
+				.filter((r) => r.id !== rec.id && m.links.has(pair(rec.id, r.id)))
+				.map((r) => ({ pubkey: r.nodeId, host: (m.stored[rec.id] || {})[r.nodeId] || '127.0.0.1', state: 'ready' }));
 		}
 		if (apiPath === '/peer/disconnect') {
 			m.calls.push({ from: rec.id, disconnect: body.pubkey });
+			m.links.delete(pair(rec.id, walletOf(body.pubkey).id));
 			return { disconnected: true };
 		}
 		if (apiPath === '/peer/connect') {
 			m.calls.push({ from: rec.id, ...body });
+			if (m.beforeConnect) m.beforeConnect(rec, body);
 			if (m.refuse.has(body.port)) throw new Error(`connect ECONNREFUSED 127.0.0.1:${body.port}`);
+			m.stored[rec.id] = { ...m.stored[rec.id], [body.pubkey]: body.host };
+			m.link(rec.id, walletOf(body.pubkey).id);
 			return { pubkey: body.pubkey, host: body.host, port: body.port, state: 'connected' };
 		}
 		throw new Error(`unexpected ${method} ${apiPath}`);
@@ -124,16 +137,23 @@ test('two running siblings with a channel get a loopback connect once both are h
 	// B comes up second and makes the connection, to A's listen port.
 	up(m, 'b');
 	await m._onHealthy('b');
-	assert.deepEqual(m.calls, [{ from: 'b', pubkey: PK_A, host: '127.0.0.1', port: 3901 + 6000 }]);
+	assert.deepEqual(m.calls, [
+		{ from: 'b', disconnect: PK_A },
+		{ from: 'b', pubkey: PK_A, host: '127.0.0.1', port: 3901 + 6000 }
+	]);
 	assert.ok(m.logs.includes('b: connected to sibling "A" over loopback'));
 
 	// A restarts: its own pass dials B again.
 	m.calls = [];
 	m._maybeRestart = () => {};
 	m._onChildExit('a', m.runtimeState('a'), m.runtimeState('a').proc, 0, null);
+	m.links.clear();
 	up(m, 'a');
 	await m._onHealthy('a');
-	assert.deepEqual(m.calls, [{ from: 'a', pubkey: PK_B, host: '127.0.0.1', port: 3902 + 6000 }]);
+	assert.deepEqual(m.calls, [
+		{ from: 'a', disconnect: PK_B },
+		{ from: 'a', pubkey: PK_B, host: '127.0.0.1', port: 3902 + 6000 }
+	]);
 });
 
 test('a stopped, parked, foreign-network or channel-less sibling gets no connect', async () => {
@@ -185,7 +205,10 @@ test('a sibling dropping triggers one reconnect after the backoff; other peers d
 	assert.deepEqual(m.calls, [], 'nothing before the backoff');
 	assert.equal(rt.siblingRedials.size, 1, 'both drops of B share one redial');
 	await sleep(200);
-	assert.deepEqual(m.calls, [{ from: 'a', pubkey: PK_B, host: '127.0.0.1', port: 3902 + 6000 }]);
+	assert.deepEqual(m.calls, [
+		{ from: 'a', disconnect: PK_B },
+		{ from: 'a', pubkey: PK_B, host: '127.0.0.1', port: 3902 + 6000 }
+	]);
 });
 
 test('the lower node id redials first, and a later redial leaves a sibling linked over loopback alone', async () => {
@@ -195,8 +218,8 @@ test('the lower node id redials first, and a later redial leaves a sibling linke
 		a: [channel(PK_B)],
 		b: [channel(PK_A)]
 	});
-	m.connected.a = { [PK_B]: '127.0.0.1' };
-	m.connected.b = { [PK_A]: '127.0.0.1' };
+	m.stored = { a: { [PK_B]: '127.0.0.1' }, b: { [PK_A]: '127.0.0.1' } };
+	m.link('a', 'b');
 	await m._linkSiblings('b', { pubkey: PK_A });
 	assert.deepEqual(m.calls, [], 'A already dialed B back');
 	await m._linkSiblings('b');
@@ -209,23 +232,67 @@ test('a sibling that may be connected through Tor is moved to loopback, whicheve
 		a: [channel(PK_B)],
 		b: [channel(PK_A)]
 	});
-	const moved = [
-		{ from: 'b', pubkey: PK_A, host: '127.0.0.1', port: 3901 + 6000 },
+	const rewriteB = { from: 'b', pubkey: PK_A, host: '127.0.0.1', port: 3901 + 6000 };
+	const redialA = [
 		{ from: 'a', disconnect: PK_B },
 		{ from: 'a', pubkey: PK_B, host: '127.0.0.1', port: 3902 + 6000 }
 	];
+	const linkedOnLoopback = () => {
+		assert.ok(m.links.has('a|b'));
+		assert.deepEqual(m.stored, { a: { [PK_B]: '127.0.0.1' }, b: { [PK_A]: '127.0.0.1' } });
+		assert.equal(m.runtimeState('a').siblingLinks.get(PK_B), 'ok');
+		assert.equal(m.runtimeState('a').siblingRedials.size, 0);
+	};
 	// A dialed B's onion: A lists it.
-	m.connected.a = { [PK_B]: ONION };
-	m.connected.b = { [PK_A]: '127.0.0.1' };
+	m.stored = { a: { [PK_B]: ONION }, b: { [PK_A]: '127.0.0.1' } };
+	m.link('a', 'b');
 	await m._linkSiblings('a');
-	assert.deepEqual(m.calls, moved);
+	assert.deepEqual(m.calls, redialA);
+	linkedOnLoopback();
 
 	// B dialed A's onion: A lists loopback for an inbound socket, B lists the onion.
 	m.calls = [];
-	m.connected.a = { [PK_B]: '127.0.0.1' };
-	m.connected.b = { [PK_A]: ONION };
+	m.stored = { b: { [PK_A]: ONION } };
 	await m._linkSiblings('a');
-	assert.deepEqual(m.calls, moved);
+	assert.deepEqual(m.calls, [rewriteB, ...redialA]);
+	linkedOnLoopback();
+
+	// Not connected, and B still holds the onion: A's dial alone would leave B
+	// to reconnect through Tor after the next drop.
+	m.calls = [];
+	m.links.clear();
+	m.stored = { b: { [PK_A]: ONION } };
+	await m._linkSiblings('a');
+	assert.deepEqual(m.calls, [...redialA, rewriteB, ...redialA]);
+	linkedOnLoopback();
+
+	// B's reconnect through Tor lands just before A's dial, which then only
+	// relabels the Tor socket on A's end.
+	m.calls = [];
+	m.links.clear();
+	m.beforeConnect = (rec) => {
+		if (rec.id !== 'a') return;
+		m.beforeConnect = null;
+		m.stored.b = { [PK_A]: ONION };
+		m.link('a', 'b');
+	};
+	await m._linkSiblings('a');
+	assert.deepEqual(m.calls, [...redialA, rewriteB, ...redialA]);
+	linkedOnLoopback();
+});
+
+test('a failed channel read is tried again after the backoff', async () => {
+	const { m } = managerWith([wallet('a', 3901, PK_A), wallet('b', 3902, PK_B)], { a: [channel(PK_B)] });
+	const daemonCall = m._daemonCall;
+	let failures = 1;
+	m._daemonCall = async (rec, method, apiPath, body) => {
+		if (apiPath === '/channels' && failures-- > 0) throw new Error('timeout');
+		return daemonCall(rec, method, apiPath, body);
+	};
+	await m._linkSiblings('a');
+	assert.deepEqual(m.calls, []);
+	await sleep(60);
+	assert.ok(m.links.has('a|b'));
 });
 
 test('a redial pending when the wallet stops is dropped, even if it is back up before the backoff', async () => {
@@ -243,10 +310,10 @@ test('a refused connect is retried after the backoff and logged once, and the re
 	const rt = m.runtimeState('a');
 	m.refuse.add(3902 + 6000);
 	await m._linkSiblings('a');
-	assert.equal(m.calls.length, 1);
+	assert.equal(m.calls.length, 2);
 	assert.equal(rt.siblingRedials.size, 1, 'a retry is pending');
 	await sleep(70);
-	assert.ok(m.calls.length >= 3, `retried, ${m.calls.length} dials`);
+	assert.ok(m.calls.length >= 4, `retried, ${m.calls.length} calls`);
 	const refusals = m.logs.filter((l) => l.includes('could not connect to sibling "B"'));
 	assert.equal(refusals.length, 1);
 	assert.match(refusals[0], /ECONNREFUSED 127\.0\.0\.1:9902/);
