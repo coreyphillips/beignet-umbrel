@@ -1683,37 +1683,26 @@ class WalletManager {
 	/**
 	 * Connect this wallet over loopback to every running sibling it shares a
 	 * channel with. Both ends run this when they come up, so whichever is
-	 * healthy second makes the connection. A dial to a peer already connected
-	 * succeeds without a new socket and makes loopback the address the engine
-	 * reconnects to. A redial names one sibling and leaves it alone if the
-	 * other end got there first.
+	 * healthy second makes the connection. A redial names one sibling. A
+	 * failed link is tried again after the redial backoff for as long as both
+	 * stay up.
 	 */
 	async _linkSiblings(id, { pubkey = null } = {}) {
 		const rec = this.registry.get(id);
 		const rt = this.runtimeState(id);
-		if (!rec || rec.onchainOnly || !rt.proc || !rt.healthy || rt.stopping) return;
+		if (!rec || rec.onchainOnly || !rec.nodeId || !rt.proc || !rt.healthy || rt.stopping) return;
 		const targets = siblingPeers.siblingsOf(rec, this.registry.list()).filter((s) => {
 			if (pubkey && s.nodeId !== pubkey) return false;
 			const srt = this.runtimeState(s.id);
 			return !!srt.proc && srt.healthy && !srt.stopping;
 		});
 		if (targets.length === 0) return;
-		if (pubkey) {
-			// 'ready' is a finished handshake; the engine's PeerInfo type says
-			// 'connected', but the route reports the transport's own state.
-			const peers = await this._daemonCall(rec, 'GET', '/peers').catch(() => null);
-			if ((peers || []).some((p) => p.pubkey === pubkey && p.state === 'ready')) return;
-		}
 		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
 		if (!Array.isArray(channels)) return;
 		for (const sibling of siblingPeers.channelSiblings(targets, channels)) {
 			const before = rt.siblingLinks.get(sibling.nodeId);
 			try {
-				await this._daemonCall(rec, 'POST', '/peer/connect', {
-					pubkey: sibling.nodeId,
-					host: '127.0.0.1',
-					port: this.listenPort(sibling)
-				});
+				await this._linkSibling(rec, sibling);
 				rt.siblingLinks.set(sibling.nodeId, 'ok');
 				if (before !== 'ok') this._log(id, `connected to sibling "${sibling.name}" over loopback`);
 			} catch (err) {
@@ -1721,8 +1710,43 @@ class WalletManager {
 				if (before !== 'failed') {
 					this._log(id, `could not connect to sibling "${sibling.name}" over loopback: ${err.message}`);
 				}
+				// The engine falls back to its previous address after a failed
+				// dial and may reconnect there without a disconnect event.
+				this._scheduleSiblingRedial(id, sibling.nodeId);
 			}
 		}
+	}
+
+	/**
+	 * /peers lists the address each end has stored for the other, not the
+	 * socket's route, and a dial to a peer already connected only replaces
+	 * that address. The end that dialed stored what it dialed, so a link is
+	 * known to be loopback only when both ends list 127.0.0.1. Anything else
+	 * may be a live Tor socket: both stored addresses are pointed at loopback,
+	 * so the end that sees the drop reconnects there too, and the link is
+	 * dropped and dialed again.
+	 */
+	async _linkSibling(rec, sibling) {
+		// 'ready' is a finished handshake; the engine's PeerInfo type says
+		// 'connected', but the route reports the transport's own state.
+		const readyPeer = async (from, pubkey) =>
+			((await this._daemonCall(from, 'GET', '/peers')) || []).find((p) => p.pubkey === pubkey && p.state === 'ready');
+		const mine = await readyPeer(rec, sibling.nodeId);
+		if (mine) {
+			const theirs = await readyPeer(sibling, rec.nodeId);
+			if (mine.host === '127.0.0.1' && theirs && theirs.host === '127.0.0.1') return;
+			await this._daemonCall(sibling, 'POST', '/peer/connect', {
+				pubkey: rec.nodeId,
+				host: '127.0.0.1',
+				port: this.listenPort(rec)
+			});
+			await this._daemonCall(rec, 'POST', '/peer/disconnect', { pubkey: sibling.nodeId });
+		}
+		await this._daemonCall(rec, 'POST', '/peer/connect', {
+			pubkey: sibling.nodeId,
+			host: '127.0.0.1',
+			port: this.listenPort(sibling)
+		});
 	}
 
 	// One redial per dropped sibling, however many disconnects land before it.
