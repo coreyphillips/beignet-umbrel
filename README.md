@@ -71,21 +71,35 @@ Run the manager against a local beignet daemon and a regtest Electrum server.
 
 ```sh
 # 1. Build beignet locally
-cd ../beignet/beignet && yarn install && yarn build
+cd /path/to/beignet && yarn install && yarn build
 
-# 2. Start the regtest stack (bitcoind + electrs on :60001)
-docker compose -f docker/docker-compose.yml up -d bitcoind electrs
+# 2. Start a regtest chain. This repo ships no stack of its own; use
+#    bitcoin-regtest-dashboard, which bundles bitcoind and an electrs on
+#    :60401 and adds an HTTP API for mining, funding and reorgs.
+#    https://github.com/coreyphillips/bitcoin-regtest-dashboard
+cd /path/to/bitcoin-regtest-dashboard && docker compose up -d
+curl -s http://localhost:3000/api/health
 
-# 3. Run the manager
-cd ../../beignet-umbrel/manager && npm install
+# 3. Run the manager. BEIGNET_TRUST_ALL is needed outside Umbrel: without
+#    app_proxy in front, the manager's API is otherwise restricted to it
+#    and to loopback.
+cd /path/to/beignet-umbrel/manager && npm install
 DATA_DIR=/tmp/beignet-mgr \
 DEFAULT_ELECTRUM_HOST=127.0.0.1 \
-DEFAULT_ELECTRUM_PORT=60001 \
+DEFAULT_ELECTRUM_PORT=60401 \
 DEFAULT_NETWORK=regtest \
-BEIGNET_BIN="$(cd ../../beignet/beignet && pwd)/dist/cli/cli.js" \
+BEIGNET_TRUST_ALL=1 \
+BEIGNET_BIN=/path/to/beignet/dist/cli/cli.js \
 npm start
 # open http://localhost:3000
 ```
+
+The manager serves the dashboard build in `manager/public`, so run
+`cd manager/ui && npm run build` first if the UI source changed, or
+`npm run dev` there for a Vite server on :5199 that proxies to the manager.
+
+For the lightning-first scenarios against real daemons, see
+[scripts/lfbw-regtest/README.md](scripts/lfbw-regtest/README.md).
 
 ## Build the image
 

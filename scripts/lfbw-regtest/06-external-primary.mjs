@@ -1,16 +1,32 @@
-import { api, w, cln, mine, waitFor, check, log, fund, healthy, sleep } from './lib.mjs';
+import { api, w, cln, mine, waitFor, check, log, fund, healthy, sleep, listenPortOf, PRIMARY_LOCAL_HOST } from './lib.mjs';
 const { P, Pnode } = JSON.parse(process.argv[2]);
-// L3 names P as an EXTERNAL node by URI: no return trust, no starting channel, no env change on P.
+// L3 names P as an EXTERNAL node by URI: no starting channel and no env
+// change on P. The wallet still trusts its chosen primary, in both modes:
+// without that the primary cannot provision inbound just in time, because
+// its zero-conf open is refused as untrusted (lfbw.js normalizeLfbw). The
+// external node's trust toward us is its own business, which is what the
+// dependent check below is about.
 const pEnvBefore = (await api(`/wallets/${P}`)).liquidityProvider;
-const L3 = (await api('/wallets', { method: 'POST', body: { name: 'External phone', network: 'regtest', lfbw: { enabled: true, primaryUri: `${Pnode}@127.0.0.1:9901` } } })).record;
+const L3 = (await api('/wallets', { method: 'POST', body: { name: 'External phone', network: 'regtest', lfbw: { enabled: true, primaryUri: `${Pnode}@${PRIMARY_LOCAL_HOST}:${await listenPortOf(P)}` } } })).record;
 const rec = await waitFor('L3 setup ready', async () => { const r = await api(`/wallets/${L3.id}`); if (r.lfbw.setup === 'failed') throw new Error(r.lfbw.setupError); return r.lfbw.setup === 'ready' ? r : null; }, { timeoutMs: 120000 });
-check('external mode recorded', rec.lfbw.mode === 'external' && rec.lfbw.primaryPubkey === Pnode && rec.lfbw.trusted === false);
+check('external mode recorded', rec.lfbw.mode === 'external' && rec.lfbw.primaryPubkey === Pnode && rec.lfbw.trusted === true, `mode ${rec.lfbw.mode} trusted ${rec.lfbw.trusted}`);
 const trust = await w(L3.id, '/trusted-peers');
-check('no trust toward an external primary unless asked', trust.length === 0, JSON.stringify(trust));
+check('the wallet trusts its chosen primary in external mode too', trust.some((t) => t.pubkey === Pnode && t.trusted), JSON.stringify(trust));
 const df = await w(L3.id, '/direct-funding/config');
-check('direct-funding policy names the external node, buys inbound alongside', df.lspPubkey === Pnode && df.targetInboundSat === 100000 && df.trusted === false, JSON.stringify(df));
+check('direct-funding policy names the external node, buys inbound alongside', df.lspPubkey === Pnode && df.targetInboundSat === 100000 && df.trusted === true, JSON.stringify(df));
 check('P not listed as dependent of an external pairing', !(await api(`/wallets/${P}`)).lfbwDependents.some((d) => d.id === L3.id));
 // JIT through the external node: an empty wallet's invoice, paid by CLN.
+// 03 spends CLN's outbound toward P, and this script always runs after it,
+// so top CLN up first or the pay fails for want of liquidity rather than
+// for anything this script is testing.
+const NEED_MSAT = 60_000_000;
+const outboundToP = () => (JSON.parse(cln('listpeerchannels')).channels.find((c) => c.peer_id === Pnode && c.state === 'CHANNELD_NORMAL')?.spendable_msat ?? 0);
+if (outboundToP() < NEED_MSAT) {
+	const topup = JSON.parse(cln(`invoice ${NEED_MSAT * 2} topup-${Date.now()} "cln outbound for the external jit"`));
+	const paid = await w(P, '/invoice/pay-safe', { method: 'POST', body: { bolt11: topup.bolt11 } });
+	log('topped CLN up', paid.status, `spendable now ${outboundToP()} msat`);
+}
+check('CLN has outbound to pay through P', outboundToP() >= NEED_MSAT, `${outboundToP()} msat`);
 const inv = await w(L3.id, '/jit/invoice', { method: 'POST', body: { lspPubkey: Pnode, amountSats: 40000, description: 'external jit', targetRemainingInboundSat: 10000 } });
 let out = '';
 try { out = cln(`pay ${inv.bolt11}`); } catch (e) { out = String(e.stdout || e.message); }
@@ -18,7 +34,7 @@ log('cln pay:', out.replace(/\s+/g, ' ').replace(/^#[^{]*/, '').slice(0, 120));
 const chan = await waitFor('L3 got a channel from the external node with the payment', async () => { const c = await w(L3.id, '/channels'); const h = c.find((x) => x.peerPubkey === Pnode); return h && h.localBalanceSats >= 39000 ? h : null; }, { timeoutMs: 90000 }).catch(() => null);
 check('JIT through an external primary', !!chan, chan ? JSON.stringify({ state: chan.state, usable: chan.htlcUsable, cap: chan.capacitySats, local: chan.localBalanceSats }) : JSON.stringify(await w(L3.id, '/channels')));
 if (chan && !(chan.htlcUsable ?? chan.state === 'NORMAL')) {
-	mine(3);
+	await mine(3);
 	const usable = await waitFor('channel usable after confirmations (untrusted external)', async () => { const c = await w(L3.id, '/channels'); const h = c.find((x) => x.peerPubkey === Pnode); return h && (h.htlcUsable ?? h.state === 'NORMAL') ? h : null; }, { timeoutMs: 120000 }).catch(() => null);
 	check('untrusted external channel confirms before use', !!usable);
 }

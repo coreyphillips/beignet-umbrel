@@ -23,5 +23,5 @@ check('L1 direct-funding policy names P with allowSplice', df.lspPubkey === Prec
 const chans = await waitFor('starting channel usable without mining', async () => { const c = await w(L1.id, '/channels'); const home = c.find((x) => x.peerPubkey === Prec.nodeId && (x.htlcUsable ?? x.state === 'NORMAL')); return home ? c : null; }, { timeoutMs: 60000 });
 const home = chans.find((x) => x.peerPubkey === Prec.nodeId);
 check('home channel 200k from P, zero-conf', home.capacitySats === 200000 && home.remoteBalanceSats >= 190000, JSON.stringify({ state: home.state, cap: home.capacitySats, local: home.localBalanceSats, remote: home.remoteBalanceSats }));
-log('blockcount', btc('getblockcount'));
+log('blockcount', await btc('getblockcount'));
 console.log(JSON.stringify({ P: P.id, L1: L1.id, Pnode: Prec.nodeId, L1node: ready.nodeId }));

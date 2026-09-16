@@ -15,7 +15,7 @@ try { res = await w(P, '/direct-funding/send', { method: 'POST', body: { request
 if (res) {
 	const grown = await waitFor('home channel grows over the existing connection', async () => { const h = (await chansOf(L1)).find((x) => x.channelId === homeL1.channelId); return h && h.capacitySats > homeL1.capacitySats ? h : null; }, { timeoutMs: 60000 }).catch(() => null);
 	check('primary paid its dependent with no address in the request (existing connection, splice)', !!grown, grown ? `cap ${homeL1.capacitySats} -> ${grown.capacitySats}` : JSON.stringify((await chansOf(L1)).map((c) => [c.state, c.capacitySats])));
-	mine(1);
+	await mine(1);
 }
 // B. A JIT receive that outgrows L2's existing channels: a splice, not a third channel.
 const before = await chansOf(L2);
