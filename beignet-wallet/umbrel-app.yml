@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.20.9"
+version: "0.20.10"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,17 +30,25 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.21.0. Wallets now keep their balance and Activity up to
-  date on their own: a deposit or confirmation that arrives while the wallet
-  is already checking for changes, or while its connection to the Electrum
-  server is down, now shows up right away instead of waiting for the next
-  block. Lightning-first wallets move a new deposit into their channel on the
-  first pass instead of waiting for a later check.
+  Bundles beignet 0.21.3. Paying a beignet wallet's request as direct funding
+  now starts connecting to the recipient the moment the request is pasted, so
+  a slow connection over Tor is under way before you press Send, and the two
+  minute offer window no longer starts until the offer does. A wallet
+  receiving direct funding no longer opens a channel on a coin it could not
+  check with its Electrum server, and no longer opens a second channel when
+  that check fails.
 
 
-  A settled invoice or keysend no longer accepts a second payment on the same
-  payment hash, including after the payment has been cleared from memory or
-  the wallet has restarted.
+  The wallet log and the payment card now show each step of a direct
+  funding with times: the routes tried and why one was skipped, the offer,
+  the recipient's answer and the receipt. A payment that fell back to an
+  ordinary transaction keeps its steps in Activity.
+
+
+  Disconnecting a peer and connecting it again right away now makes a fresh
+  connection instead of waiting on the cancelled one, and a hold invoice
+  settled or cancelled for only some parts of a multi-part payment keeps the
+  remaining parts parked and retries them.
 
 dependencies: []
 path: ""
