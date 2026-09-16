@@ -78,6 +78,24 @@ node 05-paired-and-outgrow.mjs '<json with L2>'
 node 06-external-primary.mjs '<json from 01>'
 ```
 
+`07-recovery.mjs` is separate and takes no argument. Run it against its own
+manager, on its own `DATA_DIR` and port window, because the guardian set is
+app-wide settings and quorum mode is sticky per wallet: pinning a set inside
+the run above would change what every later wallet there is created with.
+
+```sh
+PORT=3910 DATA_DIR=/tmp/lfbw-recovery CHILD_PORT_BASE=3921 CHILD_PORT_MAX=3935 \
+  ... node server/index.js
+MANAGER_URL=http://127.0.0.1:3910 node 07-recovery.mjs
+```
+
+It covers guardian hosting over bolt8, resolving a guardian by URI, pinning
+and validating a set, quorum status, rotation with the wallet running and
+the outgoing set retiring, the SCB round trip, and the peer-storage capsule
+surface. Two things are reported rather than asserted: whether a storage
+peer has returned a capsule is the peer's behaviour, not the wallet's, and
+rotation on an empty journal is skipped with a pointer to beignet #862.
+
 `03` opens the CLN channel from the primary's side and pays CLN over it
 first, because CLN needs outbound toward the primary to pay its dependents;
 a CLN-initiated open trips coreyphillips/beignet#670. `06` tops CLN up again
