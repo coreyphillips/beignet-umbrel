@@ -1969,6 +1969,33 @@ class WalletManager {
 			rec.nodeId = info.nodeId;
 			this.registry.upsert(rec);
 		}
+		if (info) this._noteListener(id, info);
+	}
+
+	/**
+	 * A Lightning wallet whose listen port did not bind still reports ready,
+	 * and a guardian on it still reports serving, because the engine treats
+	 * a failed bind as non-fatal and says nothing (beignet #861). The only
+	 * surface that knows is GET /info.listening. Without this, the symptom
+	 * is that nobody can reach the wallet: a guardian pinned by its URI
+	 * answers GUARDIAN_UNREACHABLE, a lightning-first primary cannot be
+	 * dialled by its dependents, and every explanation points at the other
+	 * end. Ports in this range belong to whatever else is on the box, so a
+	 * collision is ordinary rather than exotic.
+	 */
+	_noteListener(id, info) {
+		const rt = this.runtimeState(id);
+		const listening = info.listening !== false;
+		if (rt.listening === listening) return;
+		rt.listening = listening;
+		if (!listening) {
+			const rec = this.registry.get(id);
+			this._log(
+				id,
+				`no Lightning listener: port ${this.listenPort(rec)} did not bind, so nothing can connect to this wallet. ` +
+					'Another process on this machine is probably using it.'
+			);
+		}
 	}
 
 	/**
@@ -2407,6 +2434,9 @@ class WalletManager {
 			// say what this wallet fronts for lightning-first wallets.
 			nodeId: rec.nodeId || null,
 			listenPort: rec.onchainOnly ? null : this.listenPort(rec),
+			// null until the daemon has been asked; false means the port did
+			// not bind and no peer can reach this wallet (beignet #861).
+			listening: rec.onchainOnly ? null : rt.listening ?? null,
 			reach: rec.onchainOnly ? null : this._reach(rec),
 			lfbw: rec.lfbw
 				? {
