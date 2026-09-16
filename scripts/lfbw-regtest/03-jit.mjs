@@ -1,16 +1,17 @@
-import { api, w, btc, mine, cln, waitFor, check, log, fund, healthy, sleep } from './lib.mjs';
+import { api, w, btc, mine, cln, waitFor, check, log, fund, healthy, sleep, listenPortOf, PRIMARY_DIAL_HOST, CLN_P2P_HOST, CLN_P2P_PORT } from './lib.mjs';
 const ids = JSON.parse(process.argv[2]);
 const { P, Pnode } = ids;
 // CLN opens a channel to P so it can pay P's dependents.
 const clnId = JSON.parse(cln('getinfo')).id;
-try { log(cln(`connect ${Pnode}@host.docker.internal:9901`).slice(0, 120)); } catch (e) { log('connect', e.message.slice(0, 200)); }
+const pPort = await listenPortOf(P);
+try { log(cln(`connect ${Pnode}@${PRIMARY_DIAL_HOST}:${pPort}`).slice(0, 120)); } catch (e) { log('connect', e.message.slice(0, 200)); }
 const existing = JSON.parse(cln('listpeerchannels')).channels.filter((c) => c.peer_id === Pnode && c.state === 'CHANNELD_NORMAL');
 if (existing.length === 0) {
 	// P opens to CLN (a CLN-initiated v2 open trips a one-sat fee rounding refusal in the engine, filed separately).
-	const open = await w(P, '/channel/connect-and-open', { method: 'POST', body: { pubkey: clnId, host: '127.0.0.1', port: 19846, amountSats: 1000000 } });
+	const open = await w(P, '/channel/connect-and-open', { method: 'POST', body: { pubkey: clnId, host: CLN_P2P_HOST, port: CLN_P2P_PORT, amountSats: 1000000 } });
 	log('P open to CLN', open.state || JSON.stringify(open).slice(0, 80));
 	await new Promise((r) => setTimeout(r, 6000));
-	mine(6);
+	await mine(6);
 	await waitFor('cln channel with P normal', () => JSON.parse(cln('listpeerchannels')).channels.some((c) => c.peer_id === Pnode && c.state === 'CHANNELD_NORMAL'), { timeoutMs: 180000, everyMs: 3000 });
 	// Give CLN outbound toward P: P pays a CLN invoice over the new channel.
 	await waitFor('P sees the CLN channel usable', async () => (await w(P, '/channels')).some((c) => c.peerPubkey === clnId && (c.htlcUsable ?? c.state === 'NORMAL')), { timeoutMs: 120000 });
