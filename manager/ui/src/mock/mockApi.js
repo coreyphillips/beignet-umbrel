@@ -2348,6 +2348,21 @@ function walletRequest(id, path, method, body) {
 				})
 			};
 		}
+		case '/direct-funding/prepare': {
+			// Reads the request and starts the dial a send would make. Spends
+			// and records nothing; refuses what send would refuse.
+			const env = decodeFundingEnvelope(String(body.request || ''));
+			if (!env) throw err('request is not a direct-funding envelope', 'INVALID_PARAMS');
+			if (env.expiresAt <= Date.now()) throw err('The payment request has expired', 'DF_REQUEST_EXPIRED');
+			return {
+				requestId: env.requestId,
+				receiverNodeId: env.nodeId,
+				amountSat: env.amountSats ?? null,
+				expiresAt: env.expiresAt,
+				connection: 'connecting',
+				peerNodeId: env.nodeId
+			};
+		}
 		case '/direct-funding/send': {
 			// Rejects only before our witness leaves the device; after that it
 			// resolves with the status as it stands. The demo spends a confirmed

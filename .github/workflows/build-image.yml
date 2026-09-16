@@ -457,7 +457,25 @@ env:
   # NOT_FOUND while HTLCs are still parked (#827). The manager and dashboard
   # call neither route. dist/cli otherwise has no route, env or openapi
   # change; config.js, openapi.js and cli.js are byte-identical to 0.20.2.
-  BEIGNET_VERSION: "0.21.0"
+  # 0.21.3: direct funding over a slow dial. A payer now starts connecting to
+  # the node a send talks to first (the receiver, or its introduction node or
+  # relay) the moment it reads the request, and the offer window starts at
+  # send start rather than at the dial (#854), so a Tor dial no longer eats
+  # the window; a failed intro address is dialed twice at 30 s each, outside
+  # the window (#853). The receiver treats a failed or unavailable Electrum
+  # lookup as no answer rather than as a clean coin, so it neither opens a
+  # channel on a coin it could not check nor opens a second one (#855, #860).
+  # A hold settle or cancel that the channel accepts for only some MPP parts
+  # keeps the refused parts parked and retries them, and reports the terminal
+  # state only once every part is resolved (#810). A connectPeer right after a
+  # disconnectPeer opens its own dial instead of joining the cancelled one
+  # (#852, the "cancelled while establishing" redial). The one surface
+  # change: POST /direct-funding/prepare (admin scope) reads a request and
+  # starts the dial without spending or recording anything, and logs
+  # df_send_prepared, which the wallet log already knows how to read (#147).
+  # The dashboard calls it as soon as a beignet request is pasted. No env or
+  # config change; config.js is byte-identical to 0.21.0.
+  BEIGNET_VERSION: "0.21.3"
 
 jobs:
   build:
