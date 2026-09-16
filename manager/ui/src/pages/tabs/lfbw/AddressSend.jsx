@@ -158,6 +158,17 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	}, [funding, utxos, amountNum]);
 	const payDirect = !!funding && !!coveringCoin && directFunding;
 
+	// The daemon can start connecting to the recipient's node the moment the
+	// request is read, so a slow dial (Tor) is not waiting in front of the
+	// exchange once Send is pressed. It spends and records nothing, and a send
+	// joins the dial in progress. Nothing here depends on the answer: an engine
+	// without the route, or a request it refuses, is left for the send to say.
+	useEffect(() => {
+		if (!funding || !directFunding) return;
+		api.post('/direct-funding/prepare', { request: funding.envelope }).catch(() => {});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [funding?.envelope, directFunding]);
+
 	const onDest = async (val) => {
 		setDest(val);
 		if (val === 'custom') {

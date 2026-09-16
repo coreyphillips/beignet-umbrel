@@ -390,10 +390,16 @@ function stubFundingApi(sendAnswer, { sendError } = {}) {
 			if (sendAnswer instanceof Error) throw sendAnswer;
 			return sendAnswer;
 		}
+		if (path === '/direct-funding/prepare') {
+			api.calls.push(['POST', path, body]);
+			return { requestId: 'r'.repeat(32), connection: 'connecting' };
+		}
 		return post(path, body);
 	};
 	return api;
 }
+
+const prepared = (api) => api.calls.filter(([m, p]) => m === 'POST' && p === '/direct-funding/prepare');
 
 const sendButton = (view) => view.$$('button').find((b) => /^(Send|Send max|Pay as direct funding)$/.test(b.textContent.trim()));
 
@@ -414,6 +420,23 @@ test('a request carrying a direct-funding request offers to pay it that way, and
 	assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/send'), false);
 	assert.match(view.text(), /signed a receipt/);
 	assert.match(view.text(), /Receipt: b{64}/);
+	await view.unmount();
+});
+
+test('a pasted request has the daemon start dialing the recipient before Send, once, and not when direct funding is declined', async () => {
+	const api = stubFundingApi({ status: 'MEMPOOL_SEEN', fundingTxid: 'f'.repeat(64) });
+	const view = await mountSend(api);
+	await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding: REQUEST }));
+	await settle(400);
+	assert.deepEqual(prepared(api).map(([, , body]) => body), [{ request: REQUEST }], 'the dial starts on paste');
+	assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/direct-funding/send'), false, 'nothing is sent');
+	// Declining direct funding asks for nothing more; taking it back asks again.
+	await click(view.$('input[type="checkbox"]'));
+	await settle(50);
+	assert.equal(prepared(api).length, 1);
+	await click(view.$('input[type="checkbox"]'));
+	await settle(50);
+	assert.equal(prepared(api).length, 2);
 	await view.unmount();
 });
 

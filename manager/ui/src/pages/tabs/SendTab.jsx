@@ -611,6 +611,17 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	const funding = request?.funding || null;
 	const payDirect = !!funding && directFunding && !maxMode;
 
+	// The daemon can start connecting to the recipient's node the moment the
+	// request is read, so a slow dial (Tor) is not waiting in front of the
+	// exchange once Send is pressed. It spends and records nothing, and a send
+	// joins the dial in progress. Nothing here depends on the answer: an engine
+	// without the route, or a request it refuses, is left for the send to say.
+	useEffect(() => {
+		if (!funding || !directFunding) return;
+		api.post('/direct-funding/prepare', { request: funding.envelope }).catch(() => {});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [funding?.envelope, directFunding]);
+
 	// Written once the payment it became is known, because the transaction id is
 	// what ties the reason to a row in Activity. A manager that will not take it
 	// changes nothing about the payment: the note stays on screen, which is

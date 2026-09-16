@@ -71,6 +71,7 @@ function stubApi({ utxos = [], sendAnswer, spliceError } = {}) {
 				if (sendAnswer instanceof Error) throw sendAnswer;
 				return sendAnswer;
 			}
+			if (path === '/direct-funding/prepare') return { requestId: 'r'.repeat(32), connection: 'connecting' };
 			throw new Error(`unexpected POST ${path}`);
 		}
 	};
@@ -179,6 +180,21 @@ test('a beignet request is paid as direct funding only when a confirmed coin cov
 		assert.deepEqual(sent[2], { request: REQUEST, amountSats: 50_000, feeHeadroomSats: 1000 });
 		assert.equal(direct.calls.some(([m, p]) => m === 'POST' && p === '/channel/splice-out'), false);
 		assert.match(view.text(), /signed a receipt/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a pasted request has the daemon start dialing the recipient before Send, coin or no coin', async () => {
+	const uri = buildBip21({ address: ADDR, funding: REQUEST });
+	const api = stubApi();
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), uri);
+		await settle(300);
+		const prepared = api.calls.filter(([m, p]) => m === 'POST' && p === '/direct-funding/prepare');
+		assert.deepEqual(prepared.map(([, , body]) => body), [{ request: REQUEST }]);
+		assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/direct-funding/send'), false);
 	} finally {
 		await view.unmount();
 	}
