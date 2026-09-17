@@ -127,18 +127,11 @@ async function main() {
 	// --- Management API ---
 	const api = express.Router();
 
-	// A registry file that could not be read is the one manager-level fault
-	// worth reporting here: the wallets it lists are invisible until it is
-	// repaired, and every save is refused so it is not overwritten.
+	// The manager-level faults worth reporting here are its two files on the
+	// data volume: a registry or a settings file that could not be read. See
+	// WalletManager#health for what each one costs.
 	api.get('/health', (req, res) => {
-		const failed = manager.registry.loadError;
-		res.json({
-			ok: true,
-			result: {
-				status: failed ? 'degraded' : 'ok',
-				registry: failed ? { error: failed.message, backup: failed.backup, at: failed.at } : null
-			}
-		});
+		res.json({ ok: true, result: manager.health() });
 	});
 
 	api.get('/config', (req, res) => {

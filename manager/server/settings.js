@@ -12,9 +12,11 @@ const path = require('path');
 class Settings {
 	constructor(file, seed) {
 		this.file = file;
-		// A file that exists but could not be read: { message }. Settings are
-		// only ever written whole, so while it is set the file on disk holds
-		// something these defaults would replace.
+		// A file that exists but could not be read: { message, backup, at }.
+		// Settings are only ever written whole, so while it is set the file on
+		// disk holds something these defaults would replace; load() copies it
+		// aside first, because the guardian set in it is entered by hand and
+		// kept nowhere else.
 		this.loadError = null;
 		this.data = {
 			defaultNetwork: seed.defaultNetwork,
@@ -37,10 +39,27 @@ class Settings {
 				this.data = { ...this.data, ...parsed };
 			}
 		} catch (err) {
-			if (err.code !== 'ENOENT') {
-				this.loadError = { message: err.message };
-				console.error(`settings: failed to read ${this.file}: ${err.message}`);
-			}
+			if (err.code === 'ENOENT') return;
+			if (this.loadError) return;
+			const backup = this._keepUnreadable();
+			this.loadError = { message: err.message, backup, at: Date.now() };
+			console.error(`settings: failed to read ${this.file}: ${err.message}`);
+			console.error(
+				'settings: defaults are in use and the next save writes them over it' +
+					(backup ? `; a copy was kept at ${backup}` : '')
+			);
+		}
+	}
+
+	/** Copy the unreadable file aside so the next save does not take it with it. */
+	_keepUnreadable() {
+		const backup = `${this.file}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+		try {
+			fs.copyFileSync(this.file, backup);
+			return backup;
+		} catch (err) {
+			console.error(`settings: could not copy ${this.file} to ${backup}: ${err.message}`);
+			return null;
 		}
 	}
 
@@ -49,8 +68,8 @@ class Settings {
 		const tmp = `${this.file}.tmp`;
 		fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2));
 		fs.renameSync(tmp, this.file);
-		// What could not be read has now been replaced deliberately, so there
-		// is nothing left on disk to preserve.
+		// What could not be read has now been replaced; the copy load() kept
+		// aside is what is left of it.
 		this.loadError = null;
 	}
 
