@@ -167,7 +167,10 @@ async function main() {
 				guardianHostingAvailable: manager.guardianHostingAvailable(),
 				// A wallet moving to a new guardian set with its channels running
 				// (beignet #701).
-				guardianRotationAvailable: manager.guardianRotationAvailable()
+				guardianRotationAvailable: manager.guardianRotationAvailable(),
+				// FFOR offline receive (beignet #729, #865): a wallet paid while
+				// it is offline through a settlement peer, probed on the bundle.
+				fforAvailable: manager.fforAvailable()
 			}
 		});
 	});
@@ -266,6 +269,23 @@ async function main() {
 		'/wallets/:id',
 		asyncHandler(async (req, res) => {
 			res.json({ ok: true, result: await manager.updateWallet(req.params.id, req.body || {}) });
+		})
+	);
+
+	// FFOR offline receive: the siblings a wallet can pick as its settlement
+	// peer, and a manual re-run of the return the manager performs on start.
+	api.get(
+		'/wallets/:id/ffor/candidates',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: manager.fforCandidates(req.params.id) });
+		})
+	);
+
+	api.post(
+		'/wallets/:id/ffor/return',
+		asyncHandler(async (req, res) => {
+			const { channelId } = req.body || {};
+			res.json({ ok: true, result: await manager.fforReturn(req.params.id, { channelId }) });
 		})
 	);
 

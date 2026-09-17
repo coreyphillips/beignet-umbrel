@@ -5,8 +5,9 @@ import { Badge, Button, Card, CopyText, Stat, staggerContainer, staggerItem } fr
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
+import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
 
-export default function OverviewTab({ id, api, info, health, recovery, rec, tick }) {
+export default function OverviewTab({ id, api, info, health, recovery, rec, tick, config }) {
 	// A liquidity provider fronts its own coins for lightning-first wallets;
 	// what it is willing to front and what it has committed is the one figure
 	// its owner cannot see anywhere else (GET /jit/status, beignet 0.10+).
@@ -33,6 +34,21 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 		() => (serving ? api.get('/guardian/status').catch(() => null) : Promise.resolve(null)),
 		10000,
 		[id, tick, serving]
+	);
+	// FFOR offline receive (beignet #729): the voucher book this wallet is
+	// being paid against while away, and, on a wallet that settles for its
+	// siblings, the books it holds for them. Only on an engine with the routes.
+	const fforOn = !!config?.fforAvailable && !rec?.onchainOnly;
+	const { data: epochs } = usePoll(
+		() => (fforOn ? api.get('/ffor/epochs').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, fforOn]
+	);
+	const settling = fforOn && !!rec?.ffor?.settle?.enabled;
+	const { data: settlements } = usePoll(
+		() => (settling ? api.get('/ffor/settlements').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, settling]
 	);
 	const { data } = usePoll(
 		async () => {
@@ -153,6 +169,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 							{!onchainOnly && <Row k="Pending close" v={fmtSats(info?.pendingCloseBalanceSats)} />}
 						{splicing > 0 && <Row k="Splicing" v={fmtSats(splicing)} />}
 							{!onchainOnly && <BackupRow recovery={recovery} rec={rec} />}
+							{fforOn && <EpochRow epochs={epochs} tip={info?.blockHeight} />}
 						</tbody>
 					</table>
 				</Card>
@@ -213,6 +230,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 				{provider && <ProviderCard jit={jit} rec={rec} />}
 				{swapping && <SwapsCard swaps={swaps} rec={rec} />}
 				{serving && <GuardianCard guardian={guardian} rec={rec} info={info} />}
+				{settling && <SettlementCard settlements={settlements} />}
 
 				<Card title="Fees">
 					{feeEst ? (
@@ -641,6 +659,83 @@ function BackupRow({ recovery, rec }) {
 				</>
 			}
 		/>
+	);
+}
+
+// The voucher book this wallet is being paid against while away (FFOR): its
+// state, how many vouchers were paid, and the height to be back by.
+function EpochRow({ epochs, tip }) {
+	const epoch = Array.isArray(epochs) ? currentEpoch(epochs) : null;
+	if (!epoch) return null;
+	const d = describeEpoch(epoch, tip || 0);
+	return (
+		<Row
+			k="Offline receive"
+			v={
+				<>
+					<Badge tone={d.tone}>{d.label}</Badge>
+					<div className="wallet-meta" style={{ marginTop: 4 }} data-testid="ffor-row">
+						{d.detail}
+					</div>
+				</>
+			}
+		/>
+	);
+}
+
+/**
+ * The voucher books this wallet settles for its siblings (FFOR, beignet
+ * #729): one row per epoch, with what it has settled so far. The whole
+ * budget of each book is locked on this wallet's side of the channel until
+ * the sibling returns and closes it.
+ */
+function SettlementCard({ settlements }) {
+	return (
+		<Card title="Offline receives settled for siblings" className="grid-full">
+			<div className="wallet-meta" style={{ marginBottom: 10 }}>
+				Sibling wallets pre-sign voucher books on their channels with this one and go offline; this
+				wallet settles payments to those vouchers at once from its side of the channel, and each book
+				locks its amount here until the sibling is back and closes it.
+			</div>
+			{!settlements ? (
+				<div className="wallet-meta">Reading the settlement status…</div>
+			) : settlements.length === 0 ? (
+				<div className="empty">No voucher book is open with this wallet right now.</div>
+			) : (
+				<div className="table-wrap">
+					<table>
+						<thead>
+							<tr>
+								<th>Channel</th>
+								<th>State</th>
+								<th>Paid</th>
+								<th>Locked</th>
+								<th>Return by</th>
+							</tr>
+						</thead>
+						<tbody>
+							{settlements.map((e) => {
+								const counts = slotCounts(e);
+								const d = describeEpoch({ ...e, role: 'R' }, 0);
+								return (
+									<tr key={e.channelId}>
+										<td className="mono">{String(e.channelId).slice(0, 12)}…</td>
+										<td>
+											<Badge tone={d.tone}>{e.state.toLowerCase()}</Badge>
+										</td>
+										<td>
+											{counts.settled} of {counts.total}
+										</td>
+										<td>{fmtSats(Math.floor(Number(e.budgetMsat || 0) / 1000))}</td>
+										<td>block {e.settlementDeadline}</td>
+									</tr>
+								);
+							})}
+						</tbody>
+					</table>
+				</div>
+			)}
+		</Card>
 	);
 }
 

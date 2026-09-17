@@ -80,6 +80,13 @@ const GUARDIAN_HOSTING_MARKERS = ["'/guardian/status'", "'/recovery/resolve-guar
 // Guardian-set rotation (beignet #701): a wallet moves to a new set with
 // the channels running. The route is a literal in the OpenAPI module.
 const GUARDIAN_ROTATION_MARKERS = ["'/recovery/rotate-guardians'"];
+// FFOR offline receive (beignet #729, #865). The routes are literals in the
+// OpenAPI module from 0.15.0 on, but the role switches (BEIGNET_FFOR_SETTLE
+// and its siblings) were parsed and dropped until 0.21.4, so a settlement
+// peer on 0.15.0 to 0.21.3 would come up with the role silently off. The
+// daemon-options module is where 0.21.4 forwards them, so it is probed too.
+const FFOR_ROUTE_MARKERS = ["'/ffor/epoch/start'", "'/ffor/recover'"];
+const FFOR_ROLE_MARKERS = ['fforSettle'];
 
 /** The text of a module beside the daemon binary, or null when absent. */
 function siblingModule(bin, file) {
@@ -123,8 +130,14 @@ function guardianRotationAvailable(bin = process.env.BEIGNET_BIN) {
 	return probe(bin, 'openapi.js', GUARDIAN_ROTATION_MARKERS);
 }
 
+/** True when the engine behind `bin` serves FFOR offline receive and honours its role switches. */
+function fforAvailable(bin = process.env.BEIGNET_BIN) {
+	return probe(bin, 'openapi.js', FFOR_ROUTE_MARKERS) && probe(bin, 'daemon-options.js', FFOR_ROLE_MARKERS);
+}
+
 module.exports = {
 	engineVersion,
+	fforAvailable,
 	recoveryAvailable,
 	lfbwAvailable,
 	jitQuoteAvailable,
@@ -136,5 +149,7 @@ module.exports = {
 	JIT_QUOTE_MARKERS,
 	RECOVERY_AUTO_APPLY_MARKERS,
 	GUARDIAN_HOSTING_MARKERS,
-	GUARDIAN_ROTATION_MARKERS
+	GUARDIAN_ROTATION_MARKERS,
+	FFOR_ROUTE_MARKERS,
+	FFOR_ROLE_MARKERS
 };

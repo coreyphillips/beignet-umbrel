@@ -490,8 +490,10 @@ env:
   # for good (#872). The FFOR roles (fforSettle, fforWitness, fforIssuer)
   # now reach the node instead of being parsed and dropped, and the two
   # FFOR events with several arguments are read as the one object the node
-  # emits, which had thrown on every epoch state change (#729); this app
-  # sets no FFOR role, so none of that is reachable here yet. In dist/cli
+  # emits, which had thrown on every epoch state change (#729). 0.21.4 is
+  # the FFOR minimum for this app: from 0.15.0 the routes exist but the
+  # role switch is dropped, so the manager probes daemon-options.js for
+  # fforSettle as well as openapi.js for the routes. In dist/cli
   # only beignet-node.js and daemon-options.js changed: cli.js, config.js,
   # daemon.js and openapi.js are byte-identical to 0.21.3, so no routes,
   # no env, no openapi change.

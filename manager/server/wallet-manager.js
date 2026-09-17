@@ -51,9 +51,11 @@ const {
 	jitQuoteAvailable,
 	recoveryAutoApplyAvailable,
 	guardianHostingAvailable,
-	guardianRotationAvailable
+	guardianRotationAvailable,
+	fforAvailable
 } = require('./engine');
 const lfbw = require('./lfbw');
+const ffor = require('./ffor');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -172,6 +174,9 @@ class WalletManager {
 		// A wallet moving to a new guardian set with its channels running
 		// (beignet #701), probed the same way.
 		this.guardianRotationSupported = guardianRotationAvailable();
+		// FFOR offline receive (beignet #729, #865): the routes and, from
+		// 0.21.4, the role switches the daemon honours; probed on the bundle.
+		this.fforSupported = fforAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 	}
@@ -363,7 +368,14 @@ class WalletManager {
 				dfFastUntil: 0,
 				dfLastPull: 0,
 				dfPull: null,
-				dfPullAgain: false
+				dfPullAgain: false,
+				// FFOR offline receive: what the last return (the reconcile
+				// with the settlement peer after a start) produced, whether a
+				// peer contradicted an ACTIVE epoch at reconnect (enforce
+				// on-chain), and the guard against two returns at once.
+				fforReturn: null,
+				fforEnforce: null,
+				fforReturning: false
 			});
 		}
 		return this.runtime.get(id);
@@ -558,6 +570,10 @@ class WalletManager {
 		return this.guardianRotationSupported === true;
 	}
 
+	fforAvailable() {
+		return this.fforSupported === true;
+	}
+
 	recoveryAvailable() {
 		return recoveryAvailable(this.engineVersion);
 	}
@@ -669,6 +685,32 @@ class WalletManager {
 		return true;
 	}
 
+	/**
+	 * The per-wallet FFOR block (beignet #729): settling offline receives
+	 * for siblings needs an engine whose daemon honours the switch and a
+	 * Lightning listener, so it is refused on an engine without the surface
+	 * and dropped for an on-chain only wallet. Receiving needs no role.
+	 */
+	_normalizeFfor(input, existing, onchainOnly) {
+		const next = ffor.normalizeFfor(input, existing);
+		if (!next.settle.enabled) return next;
+		if (!this.fforAvailable()) {
+			throw httpError(
+				400,
+				'FFOR_UNSUPPORTED',
+				'The bundled engine cannot settle offline receives yet; update the app first.'
+			);
+		}
+		if (onchainOnly) {
+			throw httpError(
+				400,
+				'FFOR_NEEDS_LIGHTNING',
+				'An on-chain only wallet runs no Lightning listener, so it cannot settle offline receives.'
+			);
+		}
+		return next;
+	}
+
 	_normalizeRecovery(mode, existing, autoApply) {
 		const current = existing || { mode: 'off', guardians: [] };
 		const resolvedMode = mode === undefined ? current.mode || 'off' : mode;
@@ -731,7 +773,8 @@ class WalletManager {
 		recoveryMode,
 		recoveryAutoApply,
 		guardianServe,
-		lfbw: lfbwInput
+		lfbw: lfbwInput,
+		ffor: fforInput
 	} = {}) {
 		const strength = Number(wordCount) === 12 ? 128 : 256;
 		const mnemonic = bip39.generateMnemonic(strength);
@@ -746,7 +789,8 @@ class WalletManager {
 			recoveryMode,
 			recoveryAutoApply,
 			guardianServe,
-			lfbw: lfbwInput
+			lfbw: lfbwInput,
+			ffor: fforInput
 		});
 	}
 
@@ -761,7 +805,8 @@ class WalletManager {
 		recoveryMode,
 		recoveryAutoApply,
 		guardianServe,
-		lfbw: lfbwInput
+		lfbw: lfbwInput,
+		ffor: fforInput
 	} = {}) {
 		const normalized = String(mnemonic || '')
 			.trim()
@@ -781,7 +826,8 @@ class WalletManager {
 			recoveryMode,
 			recoveryAutoApply,
 			guardianServe,
-			lfbw: lfbwInput
+			lfbw: lfbwInput,
+			ffor: fforInput
 		});
 	}
 
@@ -796,7 +842,8 @@ class WalletManager {
 		recoveryMode,
 		recoveryAutoApply,
 		guardianServe,
-		lfbw: lfbwInput
+		lfbw: lfbwInput,
+		ffor: fforInput
 	}) {
 		const net = this._validateNetwork(network);
 		const resolvedElectrum = this._resolveElectrum(electrum);
@@ -822,6 +869,9 @@ class WalletManager {
 			// Serving the reference guardian to other beignet nodes needs the
 			// Lightning listener, which an on-chain only wallet does not run.
 			guardianServe: this._normalizeGuardianServe(guardianServe, onchainOnly),
+			// Settling offline receives for siblings (FFOR) is opt-in per
+			// wallet: an epoch locks the whole budget of its liquidity.
+			ffor: this._normalizeFfor(fforInput, null, onchainOnly),
 			lfbw: lfbwBlock,
 			// A wallet becomes a liquidity provider when a lightning-first
 			// sibling picks it as primary (setupLfbw flips this), or when the
@@ -894,7 +944,8 @@ class WalletManager {
 			lfbw: lfbwInput,
 			liquidityProvider,
 			jit,
-			swaps
+			swaps,
+			ffor: fforInput
 		} = {}
 	) {
 		const rec = this.registry.get(id);
@@ -931,6 +982,8 @@ class WalletManager {
 		if (nextLfbw && (onchainOnly === true || (onchainOnly === undefined && rec.onchainOnly))) {
 			throw httpError(400, 'BAD_LFBW_PEER', 'An on-chain only wallet cannot be lightning-first');
 		}
+		const nextOnchainOnly = onchainOnly === undefined ? !!rec.onchainOnly : !!onchainOnly;
+		const nextFfor = fforInput !== undefined ? this._normalizeFfor(fforInput, rec.ffor, nextOnchainOnly) : undefined;
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
 		if (tor !== undefined) rec.tor = !!tor;
@@ -960,6 +1013,11 @@ class WalletManager {
 		if (liquidityProvider !== undefined) rec.liquidityProvider = !!liquidityProvider;
 		if (nextJit !== undefined) rec.jit = nextJit;
 		if (nextSwaps !== undefined) rec.swaps = nextSwaps;
+		if (nextFfor !== undefined) rec.ffor = nextFfor;
+		if (rec.onchainOnly && rec.ffor && rec.ffor.settle && rec.ffor.settle.enabled) {
+			// Parking Lightning stops the listener the settlement runs on.
+			rec.ffor = ffor.normalizeFfor({ settle: { enabled: false } }, rec.ffor);
+		}
 		// An edit is what makes a backup stale, so it is stamped here and not
 		// in upsert: the record is also saved on every start, stop and node-id
 		// capture, none of which change anything an archive holds.
@@ -1045,6 +1103,9 @@ class WalletManager {
 		// the engine's JIT role with its fee and exposure caps, plus the blind
 		// relay for direct-funding frames. Everyone else sees nothing new.
 		Object.assign(env, lfbw.operatorEnv(), lfbw.providerEnv(rec));
+		// Settling offline receives for siblings (FFOR, beignet #729): an
+		// exact 'true' plus the terms floor and caps. Off contributes nothing.
+		Object.assign(env, ffor.fforEnv(rec));
 		return env;
 	}
 
@@ -1363,6 +1424,29 @@ class WalletManager {
 				// claim broadcast and confirmed, or failed, refunded, exposed.
 				if (name.startsWith('swap:')) {
 					this._log(id, `${name} ${JSON.stringify(data || {})}`);
+				}
+				// FFOR offline receive (beignet #729): an epoch's committed
+				// state changes, a settlement this wallet made for a sibling,
+				// and a peer contradicting an ACTIVE epoch at reconnect, which
+				// is the one case the wallet must enforce on-chain; kept on the
+				// runtime so the dashboard can say so until the epoch ends.
+				if (name.startsWith('ffor:')) {
+					const summary = name === 'ffor:state' || name === 'ffor:enforce'
+						? { channelId: data && data.channelId, state: data && data.state }
+						: data || {};
+					this._log(id, `${name} ${JSON.stringify(summary)}`);
+					if (name === 'ffor:enforce' && data && data.channelId) {
+						rt.fforEnforce = { at: Date.now(), channelId: String(data.channelId) };
+					}
+					if (
+						name === 'ffor:state' &&
+						data &&
+						(data.state === 'CLOSED' || data.state === 'ABORTED') &&
+						rt.fforEnforce &&
+						rt.fforEnforce.channelId === String(data.channelId)
+					) {
+						rt.fforEnforce = null;
+					}
 				}
 				// The home channel's splice lifecycle (beignet #760): a stranger's
 				// direct funding now splices the channel and locks at depth, and
@@ -2033,6 +2117,7 @@ class WalletManager {
 	async _onHealthy(id) {
 		await this._captureNodeId(id);
 		await this._restoreLfbwLinks(id);
+		await this._fforReturn(id);
 	}
 
 	/**
@@ -2424,6 +2509,117 @@ class WalletManager {
 		}
 	}
 
+	/**
+	 * The return half of an offline receive (FFOR, beignet #729). While the
+	 * wallet was away its settlement peer settled payers' HTLCs against the
+	 * pre-signed voucher book and sent the wallet nothing; the engine does
+	 * not reconcile on reestablish by itself, so every start asks the daemon
+	 * to: fetch any witnesses, then close the epoch cooperatively, which is
+	 * when the settled bitmap and the preimages arrive and the credit lands
+	 * on the channel. Never force-closes on its own; that stays a user
+	 * action (Enforce) the dashboard offers when the peer is gone.
+	 */
+	async _fforReturn(id) {
+		const rec = this.registry.get(id);
+		if (!rec || rec.onchainOnly || !this.fforAvailable()) return;
+		const epochs = await this._daemonCall(rec, 'GET', '/ffor/epochs').catch(() => null);
+		for (const channelId of ffor.returnJobs(epochs)) {
+			await this.fforReturn(id, { channelId, waitForPeer: true }).catch(() => {});
+		}
+	}
+
+	/**
+	 * Reconcile one epoch with its settlement peer: wait for the channel to
+	 * reestablish (a sibling on loopback is back in seconds), then ask the
+	 * daemon to recover. An unreachable peer answers 'nothing' and the record
+	 * says so, which is what the dashboard's return panel reads.
+	 */
+	async fforReturn(id, { channelId, waitForPeer = false } = {}) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		const rt = this.runtimeState(id);
+		if (!rt.proc) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
+		if (!channelId || typeof channelId !== 'string') {
+			throw httpError(400, 'INVALID_PARAMS', 'channelId is required');
+		}
+		if (rt.fforReturning) throw httpError(409, 'FFOR_RETURN_IN_PROGRESS', 'A return is already running');
+		rt.fforReturning = true;
+		try {
+			if (waitForPeer) await this._waitChannelNormal(rec, channelId);
+			let result;
+			try {
+				result = await this._daemonCall(rec, 'POST', '/ffor/recover', {
+					channelId,
+					forceCloseIfUnreachable: false
+				});
+			} catch (err) {
+				rt.fforReturn = { at: Date.now(), channelId, action: null, error: err.message, code: err.code || null };
+				this._log(id, ffor.returnLogLine(channelId, null, err));
+				throw httpError(502, err.code || 'FFOR_RETURN_FAILED', err.message);
+			}
+			// The recover answer carries the epoch as it stood when the close
+			// was sent; the settled bitmap and the preimages arrive with the
+			// peer's close_ack and the drain a moment later. Wait for the
+			// epoch to settle so the record says what was actually credited.
+			let epoch = result && result.epoch ? result.epoch : null;
+			if (result && result.action !== 'nothing') {
+				epoch = (await this._waitEpochSettled(rec, channelId)) || epoch;
+			}
+			if (epoch && result) result = { ...result, epoch };
+			rt.fforReturn = {
+				at: Date.now(),
+				channelId,
+				action: (result && result.action) || 'nothing',
+				preimagesKnown: (result && result.preimagesKnown) || [],
+				witnesses: (result && result.witnesses) || [],
+				epoch: epoch
+					? { state: epoch.state, epochId: epoch.epochId, slots: epoch.slots, activationMismatch: !!epoch.activationMismatch }
+					: null,
+				error: null
+			};
+			this._log(id, ffor.returnLogLine(channelId, result));
+			return rt.fforReturn;
+		} finally {
+			rt.fforReturning = false;
+		}
+	}
+
+	// Poll the epoch until the close has drained (CLOSED or ABORTED), or the
+	// wait runs out; the latest view is returned either way.
+	async _waitEpochSettled(rec, channelId, timeoutMs = ffor.RETURN_DRAIN_TIMEOUT_MS) {
+		const deadline = Date.now() + timeoutMs;
+		let last = null;
+		while (Date.now() < deadline) {
+			const view = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
+			if (view) last = view;
+			if (view && (view.state === 'CLOSED' || view.state === 'ABORTED')) return view;
+			await sleep(ffor.RETURN_POLL_MS);
+		}
+		return last;
+	}
+
+	// Poll the daemon's channel list until the channel reads NORMAL or the
+	// wait runs out; the caller reconciles either way, so an unreachable
+	// peer is reported rather than retried forever.
+	async _waitChannelNormal(rec, channelId, timeoutMs = ffor.RETURN_REESTABLISH_TIMEOUT_MS) {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			if (!this.runtimeState(rec.id).proc) return false;
+			const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+			const ch = Array.isArray(channels) ? channels.find((c) => c.channelId === channelId) : null;
+			if (ch && ch.state === 'NORMAL') return true;
+			await sleep(ffor.RETURN_POLL_MS);
+		}
+		return false;
+	}
+
+	/** The siblings this wallet can pick as its settlement peer. */
+	fforCandidates(id) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		return ffor.settlementCandidates(this.registry.list(), rec, (r) => !!this.runtimeState(r.id).healthy);
+	}
+
 	// Coalesce a burst of triggers (a confirmation, then channel:ready a
 	// moment later) into one channelize pass.
 	_scheduleChannelize(id) {
@@ -2700,7 +2896,13 @@ class WalletManager {
 			liquidityProvider: !!rec.liquidityProvider && !rec.onchainOnly,
 			jit: lfbw.normalizeJit(undefined, rec.jit),
 			swaps: lfbw.normalizeSwaps(undefined, rec.swaps),
-			lfbwDependents: this._dependents(rec).map((d) => ({ id: d.id, name: d.name }))
+			lfbwDependents: this._dependents(rec).map((d) => ({ id: d.id, name: d.name })),
+			// FFOR offline receive: the settlement role this wallet offers its
+			// siblings, what the last return produced, and whether a peer
+			// contradicted an ACTIVE epoch (enforce on-chain).
+			ffor: ffor.normalizeFfor(undefined, rec.ffor),
+			fforReturn: rt.fforReturn || null,
+			fforEnforce: rt.fforEnforce || null
 		};
 	}
 

@@ -112,6 +112,11 @@ export const manager = {
 	// Move a wallet to a new guardian set with its channels running (beignet #701).
 	rotateGuardians: (id, guardians) =>
 		request(`/api/wallets/${id}/recovery/rotate`, { method: 'POST', body: { guardians } }),
+	// FFOR offline receive (beignet #729): the siblings a wallet can pick as
+	// its settlement peer, and a manual re-run of the reconcile the manager
+	// performs with that peer after every start.
+	fforCandidates: (id) => request(`/api/wallets/${id}/ffor/candidates`),
+	fforReturn: (id, body) => request(`/api/wallets/${id}/ffor/return`, { method: 'POST', body }),
 	errors: (id, since) =>
 		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
 	channelEvents: (id, channelId) =>

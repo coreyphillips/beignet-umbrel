@@ -69,7 +69,21 @@ export function useSSE(url, onEvent) {
 			'direct-funding:offer:accepted',
 			'direct-funding:offer:declined',
 			'direct-funding:offer:failed',
-			'direct-funding:offer:completed'
+			'direct-funding:offer:completed',
+			// FFOR offline receive (beignet #729): the epoch's committed state
+			// changes, a settlement this wallet made for a sibling or its
+			// refusal, a peer contradicting an ACTIVE epoch at reconnect, and
+			// the witness and issuer roles' events. Older daemons never send
+			// them.
+			'ffor:state',
+			'ffor:settled',
+			'ffor:delegated-failed',
+			'ffor:enforce',
+			'ffor:witness-provisioned',
+			'ffor:witness-recorded',
+			'ffor:witness-released',
+			'ffor:issuer-provisioned',
+			'ffor:issuer-issued'
 		];
 		let es;
 		try {

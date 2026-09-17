@@ -369,6 +369,8 @@ const store = {
 			// fronts their inbound capacity (JIT receive) and relays their
 			// payment requests.
 			liquidityProvider: true,
+			// Settles offline receives for its lightning-first wallets (FFOR).
+			ffor: { settle: { enabled: true, maxBudgetMsat: null, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 0 } },
 			createdAt: now - 90 * DAY
 		},
 		{
@@ -894,6 +896,10 @@ function runDemoRestore(w, st) {
 // one tells the reestablish-watchdog incident (beignet #212) that motivated
 // the feature.
 const channelEvents = {};
+// FFOR offline receive: the settlement role's defaults and, per wallet, the
+// epoch views in both roles, exactly the daemon's shape (seeded below).
+const FFOR_SETTLE_DEFAULTS = { enabled: false, maxBudgetMsat: null, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 0 };
+const fforEpochs = {};
 
 function recordChannelEvent(walletId, entry) {
 	if (!channelEvents[walletId]) channelEvents[walletId] = [];
@@ -1038,6 +1044,38 @@ store.state['demo-lfbw'] = walletState({
 	offers: [],
 	peers: [{ pubkey: nodeId('demo-main'), host: '127.0.0.1', port: 9101, state: 'connected' }]
 });
+// Spending is receiving offline right now (FFOR): a book of three 50,000 sat
+// vouchers on its home channel with Main, one paid while it was away, one
+// shared, one still to hand out; and the book before it, closed on the last
+// start with two of two paid, which the return panel reports.
+seedFforEpoch({
+	receiverId: 'demo-lfbw',
+	settlerId: 'demo-main',
+	channelId: store.state['demo-lfbw'].channels[0].channelId,
+	state: 'ACTIVE',
+	amountsSats: [50000, 50000, 50000],
+	slotStates: ['settled', 'exposed', 'unissued'],
+	settlementDeadline: 908214 + 900,
+	voucherExpiry: 908214 + 900 + 1152,
+	startedAt: 908214 - 120
+});
+store.wallets.find((w) => w.id === 'demo-lfbw').fforReturn = {
+	at: now - 2 * 60 * 1000,
+	channelId: store.state['demo-lfbw'].channels[0].channelId,
+	action: 'closed',
+	preimagesKnown: [1, 2],
+	witnesses: [],
+	epoch: {
+		state: 'CLOSED',
+		epochId: hex(64),
+		slots: [
+			{ k: 1, amountMsat: '25000000', paymentHash: hex(64), state: 'settled' },
+			{ k: 2, amountMsat: '25000000', paymentHash: hex(64), state: 'settled' }
+		],
+		activationMismatch: false
+	},
+	error: null
+};
 store.state['demo-lfbw-setup'] = walletState({
 	blockHeight: 908214,
 	channels: [],
@@ -1258,6 +1296,11 @@ function publicRecord(w) {
 	rec.jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
 	rec.swaps = { ...SWAP_DEFAULTS, ...(w.swaps || {}) };
 	rec.lfbwDependents = lfbwDependentsOf(w);
+	// FFOR offline receive: the settlement role, the last return, and whether
+	// a peer contradicted an ACTIVE epoch (enforce on-chain).
+	rec.ffor = { settle: { ...FFOR_SETTLE_DEFAULTS, ...((w.ffor && w.ffor.settle) || {}) } };
+	rec.fforReturn = w.fforReturn || null;
+	rec.fforEnforce = w.fforEnforce || null;
 	return rec;
 }
 
@@ -1413,7 +1456,8 @@ function managerRequest(path, method, body) {
 			jitQuoteAvailable: true,
 			recoveryAutoApplyAvailable: true,
 			guardianHostingAvailable: true,
-			guardianRotationAvailable: true
+			guardianRotationAvailable: true,
+			fforAvailable: true
 		};
 	}
 	if ((path === '/backup/inspect' || path === '/backup/restore') && method === 'POST') {
@@ -1593,6 +1637,25 @@ function managerRequest(path, method, body) {
 				if (w.lfbw && (!was || was.setup !== 'ready' || w.lfbw.setup !== 'ready')) runDemoLfbwSetup(w);
 			}
 			if (body.liquidityProvider !== undefined) w.liquidityProvider = !!body.liquidityProvider;
+			if (body.ffor && body.ffor.settle) {
+				const settle = { ...FFOR_SETTLE_DEFAULTS, ...((w.ffor && w.ffor.settle) || {}) };
+				const s = body.ffor.settle;
+				if ('enabled' in s) settle.enabled = !!s.enabled;
+				for (const k of ['maxBudgetMsat', 'maxEpochBlocks', 'feeBaseMsat', 'feePpm']) {
+					if (!(k in s)) continue;
+					if (s[k] === null || s[k] === '') {
+						if (k === 'maxBudgetMsat' || k === 'maxEpochBlocks') settle[k] = null;
+						else throw err(`${k} must be a whole number`, 'BAD_FFOR');
+						continue;
+					}
+					const n = Number(s[k]);
+					if (!Number.isInteger(n) || n < 0) throw err(`${k} must be a whole number`, 'BAD_FFOR');
+					settle[k] = n;
+				}
+				if (settle.enabled && w.onchainOnly) throw err('An on-chain only wallet runs no Lightning listener, so it cannot settle offline receives.', 'FFOR_NEEDS_LIGHTNING');
+				w.ffor = { settle };
+			}
+			if (w.onchainOnly && w.ffor && w.ffor.settle) w.ffor.settle.enabled = false;
 			if (body.swaps) {
 				const swaps = { ...SWAP_DEFAULTS, ...(w.swaps || {}) };
 				if ('enabled' in body.swaps) swaps.enabled = !!body.swaps.enabled;
@@ -1727,6 +1790,19 @@ function managerRequest(path, method, body) {
 		setTimeout(() => {
 			w.status = 'running';
 			emit(w.id, 'node:ready', {});
+			// The manager reconciles every open voucher book with its
+			// settlement peer once the daemon is healthy (FFOR).
+			for (const e of fforEpochsOf(w.id)) {
+				if (e.role === 'R' && (e.state === 'ACTIVE' || e.state === 'DRAINING')) {
+					setTimeout(() => {
+						try {
+							fforReturn(w, e.channelId);
+						} catch (_) {
+							/* the demo peer is gone */
+						}
+					}, 1500);
+				}
+			}
 		}, 1500);
 		return publicRecord(w);
 	}
@@ -1768,7 +1844,228 @@ function managerRequest(path, method, body) {
 		const requestId = new URLSearchParams(subQuery || '').get('requestId') || '';
 		return (fundingSteps[`${w.id}:${requestId.toLowerCase()}`] || []).slice();
 	}
+	// FFOR offline receive: the siblings that settle, and the manager's
+	// reconcile with the settlement peer, run on demand.
+	if (sub === 'ffor/candidates') return fforCandidatesOf(w);
+	if (sub === 'ffor/return' && method === 'POST') {
+		if (w.status !== 'running') throw err('The wallet is not running', 'NOT_RUNNING');
+		return fforReturn(w, body && body.channelId);
+	}
 	throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
+}
+
+// ---------- FFOR offline receive (beignet #729) ----------
+
+
+function fforCandidatesOf(self) {
+	return store.wallets
+		.filter((x) => x.id !== self.id && x.network === self.network && !x.onchainOnly && x.ffor && x.ffor.settle && x.ffor.settle.enabled)
+		.map((x) => ({ id: x.id, name: x.name, nodeId: nodeId(x.id), running: x.status === 'running' }));
+}
+
+function fforEpochsOf(id) {
+	return (fforEpochs[id] = fforEpochs[id] || []);
+}
+
+function fforSlotView(s) {
+	return { k: s.k, amountMsat: s.amountMsat, paymentHash: s.paymentHash, state: s.state };
+}
+
+function fforView(e) {
+	return { ...e, slots: e.slots.map(fforSlotView) };
+}
+
+function fforEmitState(walletId, e) {
+	emit(walletId, 'ffor:state', { channelId: e.channelId, state: e.state, epoch: fforView(e) });
+	recordChannelEvent(walletId, { timestamp: Date.now(), event: 'ffor:state', channelId: e.channelId, state: e.state });
+}
+
+/** Seed an epoch on a channel between two demo wallets: R's view and S's mirror. */
+function seedFforEpoch({ receiverId, settlerId, channelId, state, amountsSats, slotStates, settlementDeadline, voucherExpiry, startedAt }) {
+	const epochId = hex(64);
+	const slots = amountsSats.map((sats, i) => ({
+		k: i + 1,
+		amountMsat: String(sats * 1000),
+		paymentHash: hex(64),
+		state: slotStates[i] || 'unissued'
+	}));
+	const base = {
+		channelId,
+		epochId,
+		peerNodeId: null,
+		variant: 'D',
+		budgetMsat: String(amountsSats.reduce((a, b) => a + b, 0) * 1000),
+		numSlots: slots.length,
+		hashChain: false,
+		witnessPeers: [],
+		settlementDeadline,
+		voucherExpiry,
+		feeBaseMsat: 1000,
+		feeProportionalMillionths: 100,
+		epochStartHeight: startedAt,
+		activationHash: hex(64),
+		witnesses: [],
+		settledBitmap: null,
+		abortReason: null,
+		activationMismatch: false,
+		closeSent: false
+	};
+	const r = { ...base, role: 'R', state, peerNodeId: nodeId(settlerId), slots };
+	const sTable = { unissued: 'unused', exposed: 'unused', settled: 'settled', unsettled: 'unused' };
+	const s = { ...base, role: 'S', state, peerNodeId: nodeId(receiverId), slots: slots.map((x) => ({ ...x, state: sTable[x.state] || 'unused' })) };
+	fforEpochsOf(receiverId).push(r);
+	fforEpochsOf(settlerId).push(s);
+	return { r, s };
+}
+
+function fforMirror(walletId, e) {
+	const peer = store.wallets.find((x) => nodeId(x.id) === e.peerNodeId);
+	return peer ? fforEpochsOf(peer.id).find((x) => x.epochId === e.epochId) || null : null;
+}
+
+/** The manager's return: close cooperatively when the peer runs, credit what was paid. */
+function fforReturn(w, channelId) {
+	const e = fforEpochsOf(w.id).find((x) => x.role === 'R' && x.channelId === channelId);
+	if (!e) throw err('no FFOR epoch on this channel', 'NOT_FOUND');
+	const peer = store.wallets.find((x) => nodeId(x.id) === e.peerNodeId);
+	const reachable = !!peer && peer.status === 'running';
+	let action = 'nothing';
+	if (reachable && (e.state === 'ACTIVE' || e.state === 'DRAINING')) {
+		// The demo: every shared invoice was paid while away.
+		for (const s of e.slots) if (s.state === 'exposed') s.state = 'settled';
+		for (const s of e.slots) if (s.state === 'unissued') s.state = 'unsettled';
+		e.state = 'CLOSED';
+		e.closeSent = true;
+		const m = fforMirror(w.id, e);
+		if (m) {
+			m.state = 'CLOSED';
+			m.slots.forEach((s, i) => (s.state = e.slots[i].state === 'settled' ? 'settled' : 'unused'));
+			fforEmitState(peer.id, m);
+		}
+		const credited = e.slots.filter((s) => s.state === 'settled').reduce((a, s) => a + Number(s.amountMsat) / 1000, 0);
+		const ch = store.state[w.id].channels.find((c) => c.channelId === channelId);
+		if (ch && credited > 0) {
+			ch.localBalanceSats += credited;
+			ch.remoteBalanceSats = Math.max(0, ch.remoteBalanceSats - credited);
+		}
+		fforEmitState(w.id, e);
+		action = 'closed';
+	}
+	w.fforReturn = {
+		at: Date.now(),
+		channelId,
+		action,
+		preimagesKnown: e.slots.filter((s) => s.state === 'settled').map((s) => s.k),
+		witnesses: [],
+		epoch: { state: e.state, epochId: e.epochId, slots: e.slots.map(fforSlotView), activationMismatch: false },
+		error: null
+	};
+	return w.fforReturn;
+}
+
+/** The daemon's /ffor/* surface for one wallet. */
+function fforRequest(w, st, route, query, method, body) {
+	const mine = fforEpochsOf(w.id);
+	const byChannel = (cid, role) => mine.find((x) => x.channelId === cid && (!role || x.role === role));
+	switch (route) {
+		case '/ffor/epochs':
+			return mine.map(fforView);
+		case '/ffor/settlements':
+			return mine.filter((x) => x.role === 'S').map(fforView);
+		case '/ffor/epoch': {
+			const cid = new URLSearchParams(query || '').get('channelId') || (body && body.channelId);
+			const e = byChannel(cid);
+			if (!e) throw err('no FFOR epoch on this channel', 'NOT_FOUND');
+			return fforView(e);
+		}
+		case '/ffor/epoch/start': {
+			const ch = st.channels.find((c) => c.channelId === body.channelId);
+			if (!ch) throw err('Channel not found', 'CHANNEL_NOT_FOUND');
+			if (mine.some((x) => x.channelId === ch.channelId && !['CLOSED', 'ABORTED'].includes(x.state))) {
+				throw err('a live epoch already exists on this channel', 'FFOR_REFUSED');
+			}
+			const peer = store.wallets.find((x) => nodeId(x.id) === ch.peerPubkey);
+			if (!peer || !peer.ffor || !peer.ffor.settle || !peer.ffor.settle.enabled) {
+				throw err('settlement service not offered by this peer', 'FFOR_REFUSED');
+			}
+			const amounts = (body.voucherAmountsMsat || []).map((m) => Math.floor(Number(m) / 1000));
+			if (amounts.length === 0 || amounts.length > 483) throw err('voucherAmountsMsat must hold 1 to 483 entries', 'INVALID_PARAMS');
+			const budget = amounts.reduce((a, b) => a + b, 0);
+			if (budget > ch.remoteBalanceSats) throw err('S cannot cover budget_msat plus its channel reserve', 'FFOR_REFUSED');
+			if (Number(body.voucherExpiry) < Number(body.settlementDeadline) + 1008) {
+				throw err('voucher_expiry must sit at least 1008 blocks past settlement_deadline', 'FFOR_REFUSED');
+			}
+			const { r, s } = seedFforEpoch({
+				receiverId: w.id,
+				settlerId: peer.id,
+				channelId: ch.channelId,
+				state: 'NEGOTIATING',
+				amountsSats: amounts,
+				slotStates: [],
+				settlementDeadline: Number(body.settlementDeadline),
+				voucherExpiry: Number(body.voucherExpiry),
+				startedAt: st.blockHeight
+			});
+			// Setup runs to ACTIVE on its own: the two sides sign the book.
+			setTimeout(() => {
+				if (r.state !== 'NEGOTIATING') return;
+				r.state = s.state = 'VOUCHERS_COMMITTED';
+				fforEmitState(w.id, r);
+				setTimeout(() => {
+					if (r.state !== 'VOUCHERS_COMMITTED') return;
+					r.state = s.state = 'ACTIVE';
+					fforEmitState(w.id, r);
+					fforEmitState(peer.id, s);
+				}, 2500);
+			}, 2000);
+			return fforView(r);
+		}
+		case '/ffor/epoch/abort': {
+			const e = byChannel(body.channelId, 'R');
+			if (!e) throw err('no FFOR epoch on this channel', 'NOT_FOUND');
+			if (e.state === 'ACTIVE') throw err('an ACTIVE epoch cannot be aborted; close or recover it', 'FFOR_REFUSED');
+			e.state = 'ABORTED';
+			e.abortReason = Number(body.reason) || 0;
+			const m = fforMirror(w.id, e);
+			if (m) m.state = 'ABORTED';
+			fforEmitState(w.id, e);
+			return fforView(e);
+		}
+		case '/ffor/invoice': {
+			const e = byChannel(body.channelId, 'R');
+			if (!e) throw err('no FFOR epoch on this channel', 'NOT_FOUND');
+			if (e.state !== 'ACTIVE') throw err(`the epoch is ${e.state}, not ACTIVE`, 'FFOR_REFUSED');
+			const slot = e.slots.find((s) => s.k === Number(body.k));
+			if (!slot) throw err('k is outside the book', 'INVALID_PARAMS');
+			if (slot.state !== 'unissued') throw err(`slot ${slot.k} already has an invoice`, 'FFOR_REFUSED');
+			slot.state = 'exposed';
+			const sats = Math.floor(Number(slot.amountMsat) / 1000);
+			return { bolt11: demoInvoice(w.network, sats), paymentHash: slot.paymentHash, k: slot.k, amountMsat: slot.amountMsat };
+		}
+		case '/ffor/recover': {
+			const e = byChannel(body.channelId, 'R');
+			if (!e) throw err('no FFOR epoch on this channel', 'NOT_FOUND');
+			const ret = fforReturn(w, body.channelId);
+			return { action: ret.action, preimagesKnown: ret.preimagesKnown, witnesses: [], epoch: fforView(e) };
+		}
+		case '/ffor/enforce': {
+			const e = byChannel(body.channelId, 'R');
+			if (!e) throw err('no FFOR epoch on this channel', 'NOT_FOUND');
+			for (const s of e.slots) if (s.state === 'exposed') s.state = 'settled';
+			e.state = 'CLOSED';
+			const ch = st.channels.find((c) => c.channelId === body.channelId);
+			if (ch) ch.state = 'FORCE_CLOSED';
+			w.fforEnforce = null;
+			fforEmitState(w.id, e);
+			return { ok: true, commitmentTxid: hex(64), preimagesKnown: e.slots.filter((s) => s.state === 'settled').map((s) => s.k) };
+		}
+		case '/ffor/witness/status':
+			return { enabled: false, mailboxes: [] };
+		case '/ffor/issuer/status':
+			return { enabled: false, manifests: [] };
+		default:
+			return undefined;
+	}
 }
 
 // Peers commonly refuse channels below a minimum. Demo opens under this are
@@ -2024,6 +2321,11 @@ function walletRequest(id, path, method, body) {
 		);
 	}
 	if (w.status !== 'running') throw err('Wallet is not running', 'NOT_RUNNING');
+
+	if (route.startsWith('/ffor/')) {
+		const answer = fforRequest(w, st, route, query, method, body);
+		if (answer !== undefined) return answer;
+	}
 
 	switch (route) {
 		case '/recovery/status':

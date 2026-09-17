@@ -38,7 +38,15 @@ Use Playwright (chromium) headless. Install into the scratchpad, not the repo.
   `demo-restore` (holding for a guardian restore; its Restore channels button
   runs a scripted restore that lands three channels over about 15s, one of
   them closing safely), `demo-capsule` (peer storage, empty, a peer returned
-  a checkpoint; Recover channel funds runs the scripted SCB recovery).
+  a checkpoint; Recover channel funds runs the scripted SCB recovery),
+  `demo-lfbw` (lightning-first on `demo-main`; its Receive tab's "Receive
+  while offline" card shows an ACTIVE FFOR epoch of three vouchers, one
+  paid, one shared, one still to mint, and a return panel above the tabs
+  from the book before it; `demo-main` settles for it, so its Overview
+  carries the "Offline receives settled for siblings" card and its Edit
+  dialog the settle toggle). `/ffor/epoch/start` in the mock runs to
+  ACTIVE over about five seconds; `/ffor/recover` and the manager's
+  `ffor/return` close the book, marking every shared invoice paid.
 - Any non-API path other than the SPA routes gets proxied by Vite to the
   absent backend and 500s; always use the `/w/...` routes.
 - Demo mock state is per-page-load module state; a reload resets balances.

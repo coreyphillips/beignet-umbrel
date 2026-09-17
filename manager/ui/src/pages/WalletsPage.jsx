@@ -19,6 +19,7 @@ import {
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import GuardianServeField from '../components/GuardianServeField.jsx';
+import FforSettleField from '../components/FforSettleField.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
@@ -319,6 +320,10 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	// to stay online for whoever pins this node.
 	const [guardianServe, setGuardianServe] = useState(false);
 	const asksGuardianServe = !!config.guardianHostingAvailable && !onchainOnly;
+	// Settle offline receives for siblings (FFOR, beignet #729). Off by
+	// default: each book locks its whole amount on this wallet's side.
+	const [fforSettle, setFforSettle] = useState({ enabled: false });
+	const asksFfor = !!config.fforAvailable && !onchainOnly;
 	const [busy, setBusy] = useState(false);
 	const guardiansConfigured = (config.recoveryGuardians || []).length === 3;
 	const asksAutoApply =
@@ -341,6 +346,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					onchainOnly,
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
 					...(asksGuardianServe ? { guardianServe } : {}),
+					...(asksFfor ? { ffor: { settle: fforSettle } } : {}),
 					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
@@ -356,6 +362,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
 					...(asksAutoApply ? { recoveryAutoApply } : {}),
 					...(asksGuardianServe ? { guardianServe } : {}),
+					...(asksFfor ? { ffor: { settle: fforSettle } } : {}),
 					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				toast('Wallet imported. It will sync in the background.', 'success');
@@ -469,6 +476,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 			)}
 			{asksAutoApply && <RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} />}
 			{asksGuardianServe && <GuardianServeField value={guardianServe} onChange={setGuardianServe} announce={announce} />}
+			{asksFfor && <FforSettleField value={fforSettle} onChange={setFforSettle} />}
 
 			{config.lfbwAvailable && !onchainOnly && (
 				<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />

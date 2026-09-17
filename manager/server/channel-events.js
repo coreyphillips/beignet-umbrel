@@ -21,7 +21,13 @@ const LIFECYCLE_EVENTS = new Set([
 	'channel:pending-close',
 	'channel:force-closing',
 	'channel:closed',
-	'channel:resolved'
+	'channel:resolved',
+	// FFOR offline receive (beignet #729): the epoch's committed state
+	// changes and a peer contradicting an ACTIVE epoch at reconnect. An
+	// epoch's start, activation, settlements while the wallet was away and
+	// its close are exactly the history a user asks about later.
+	'ffor:state',
+	'ffor:enforce'
 ]);
 
 class ChannelEventLog {
@@ -54,6 +60,7 @@ class ChannelEventLog {
 			channelId: String(data.channelId)
 		};
 		if (data.initiator) entry.initiator = data.initiator;
+		if (name === 'ffor:state' && data.state) entry.state = String(data.state);
 		if (data.fundingTxid) entry.fundingTxid = String(data.fundingTxid);
 		if (isError) {
 			entry.code = data.code || 'ERROR';
