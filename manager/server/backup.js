@@ -35,6 +35,11 @@ const SCRYPT = { logN: 16, r: 8, p: 1 };
 // An archive states its own work factor, so an archive could ask for one that
 // exhausts the box. Nothing this app writes goes past 2^18 (256 MiB).
 const MAX_LOG_N = 18;
+// GCM cannot vouch for those parameters until after the key is derived, so
+// the cost itself is capped rather than each parameter: N*r*p is 2^21 at the
+// most this app would write (2^18 * 8 * 1), which is 256 MiB of scrypt memory
+// and a few seconds.
+const MAX_WORK = 2 ** 21;
 const SALT_BYTES = 16;
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
@@ -111,7 +116,14 @@ function openArchive(archive, passphrase) {
 			`This archive is format ${format} and this app reads format ${FORMAT}. Update the app and try again.`
 		);
 	}
-	if (kdf !== KDF_SCRYPT || logN < 1 || logN > MAX_LOG_N || r < 1 || p < 1) {
+	if (
+		kdf !== KDF_SCRYPT ||
+		logN < 1 ||
+		logN > MAX_LOG_N ||
+		r < 1 ||
+		p < 1 ||
+		2 ** logN * r * p > MAX_WORK
+	) {
 		throw new ArchiveError('BAD_ARCHIVE', 'This archive names an encryption this app cannot read.');
 	}
 	const saltAt = MAGIC.length + PARAM_BYTES;

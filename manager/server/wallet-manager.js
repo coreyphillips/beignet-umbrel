@@ -1854,6 +1854,10 @@ class WalletManager {
 			);
 		}
 		const createdAt = nowIso();
+		// settings.json is only written when settings are saved, and a box that
+		// has never saved any still has defaults worth carrying: write them out
+		// now, or the first archive off a box restores one with none.
+		this.settings.save();
 		const ids = this.registry.list().map((rec) => rec.id);
 		let archive;
 		try {
@@ -2335,6 +2339,10 @@ class WalletManager {
 				// Marked opened before the call resolves: a retry after a
 				// timeout must never open a second starting channel.
 				lf.initialChannelOpened = true;
+				// That flag is the whole of the guard, so an archive taken
+				// before it was set would open the starting channel a second
+				// time on a restore: the backup is stale from here.
+				rec.updatedAt = nowIso();
 				this.registry.upsert(rec);
 				await this._daemonCall(primary.rec, 'POST', '/channel/connect-and-open', {
 					pubkey: rec.nodeId,
@@ -2577,6 +2585,8 @@ class WalletManager {
 		if (turnOff) {
 			this._log(id, 'lightning-first: turning lightning-first off before closing the home channel, so the payout stays on-chain');
 			rec.lfbw = null;
+			// The same edit the dialog would make, so it stamps like one.
+			rec.updatedAt = nowIso();
 			this.registry.upsert(rec);
 			await this._restartWallet(id);
 			await this._waitDaemonHealthy(rec);

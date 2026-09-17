@@ -203,6 +203,15 @@ test('a wrong passphrase fails cleanly and writes nothing', async () => {
 		() => fresh.restoreBackup({ passphrase: PASSPHRASE, archive: Buffer.from('hello there, not an archive').toString('base64') }),
 		(err) => err.code === 'BAD_ARCHIVE'
 	);
+	// A header asking for more work than the app ever writes is refused
+	// before scrypt is asked for it: logN, r and p sit at 16, 17 and 18,
+	// after the 14-byte magic and the format and kdf bytes.
+	const greedy = Buffer.from(out.archive);
+	greedy.set([18, 255, 255], 16);
+	assert.throws(
+		() => fresh.restoreBackup({ passphrase: PASSPHRASE, archive: greedy.toString('base64') }),
+		(err) => err.code === 'BAD_ARCHIVE'
+	);
 });
 
 test('a passphrase too short to be worth typing is refused before anything is read', async () => {
