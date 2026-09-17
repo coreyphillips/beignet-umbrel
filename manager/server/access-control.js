@@ -25,6 +25,11 @@ const dns = require('dns').promises;
  *  - Set BEIGNET_TRUST_ALL=1 to disable the guard entirely.
  *  - Until app_proxy resolves at least once, the guard fails open (allows) so a
  *    transient DNS problem cannot brick the dashboard.
+ *
+ * `guard.strict` is the same guard without that second safeguard, for routes
+ * where failing open is the worse outcome: an unresolved app_proxy costs a
+ * dashboard feature, where a bulk seed export to a co-installed app costs the
+ * coins. It admits loopback and a resolved app_proxy, nothing else.
  */
 
 // app_proxy is reachable under a few app-scoped names depending on the umbrelOS
@@ -49,10 +54,16 @@ function isEnabled() {
 	return !(v === '1' || v === 'true');
 }
 
+function forbidden(res) {
+	return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+}
+
 function createAccessGuard({ log = () => {} } = {}) {
 	if (!isEnabled()) {
 		log('access-control: BEIGNET_TRUST_ALL set; manager API is not source-restricted');
-		return (req, res, next) => next();
+		const open = (req, res, next) => next();
+		open.strict = open;
+		return open;
 	}
 
 	let allowed = new Set();
@@ -83,7 +94,7 @@ function createAccessGuard({ log = () => {} } = {}) {
 	const timer = setInterval(refresh, REFRESH_MS);
 	if (timer.unref) timer.unref();
 
-	return function accessGuard(req, res, next) {
+	function accessGuard(req, res, next) {
 		const ip = normalizeIp(req.socket && req.socket.remoteAddress);
 		if (LOOPBACK.has(ip) || allowed.has(ip)) return next();
 		if (!everResolved) {
@@ -100,10 +111,18 @@ function createAccessGuard({ log = () => {} } = {}) {
 		// Re-resolve in case app_proxy's IP just changed; this request is judged
 		// on the current set, the next one on the refreshed set.
 		refresh();
-		return res
-			.status(403)
-			.json({ ok: false, error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+		return forbidden(res);
+	}
+
+	accessGuard.strict = function strictGuard(req, res, next) {
+		const ip = normalizeIp(req.socket && req.socket.remoteAddress);
+		if (LOOPBACK.has(ip) || allowed.has(ip)) return next();
+		refresh();
+		log(`access-control: refused ${req.method} ${req.originalUrl || req.url} from ${ip}`);
+		return forbidden(res);
 	};
+
+	return accessGuard;
 }
 
 module.exports = { createAccessGuard, normalizeIp };

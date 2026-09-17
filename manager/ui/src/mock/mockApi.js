@@ -339,11 +339,16 @@ const DEMO_GUARDIANS = [
 	`${hex(64)}@https://guardian.example.net`
 ];
 
+// The box was backed up a week ago, so wallets older than that read as backed
+// up and the ones made since read as waiting for the next archive.
+const DEMO_BACKUP_AT = new Date(now - 7 * DAY).toISOString();
+
 const store = {
 	settings: {
 		defaultNetwork: 'mainnet',
 		defaultElectrum: { host: 'umbrel.local', port: 50001, tls: false },
-		recoveryGuardians: DEMO_GUARDIANS.slice()
+		recoveryGuardians: DEMO_GUARDIANS.slice(),
+		lastBackupAt: DEMO_BACKUP_AT
 	},
 	wallets: [
 		{
@@ -1239,6 +1244,11 @@ function publicRecord(w) {
 	};
 	rec.lastStartError = w.lastStartError || null;
 	rec.guardianServe = !!w.guardianServe && !w.onchainOnly;
+	// Backed up with the box, unless the wallet was made after the last
+	// archive was written (which is every wallet created in the demo).
+	const backedUp = w.lastBackupAt ?? (w.createdAt < Date.parse(DEMO_BACKUP_AT) ? DEMO_BACKUP_AT : null);
+	rec.lastBackupAt = backedUp;
+	rec.backupStale = !backedUp;
 	// Lightning-first fields, in the manager's shape.
 	rec.nodeId = w.onchainOnly ? null : nodeId(w.id);
 	rec.listenPort = w.onchainOnly ? null : 9101 + store.wallets.indexOf(w);
@@ -1398,12 +1408,31 @@ function managerRequest(path, method, body) {
 			engineVersion: '0.12.0',
 			recoveryAvailable: true,
 			recoveryGuardians: store.settings.recoveryGuardians.slice(),
+			lastBackupAt: store.settings.lastBackupAt,
 			lfbwAvailable: true,
 			jitQuoteAvailable: true,
 			recoveryAutoApplyAvailable: true,
 			guardianHostingAvailable: true,
 			guardianRotationAvailable: true
 		};
+	}
+	if ((path === '/backup/inspect' || path === '/backup/restore') && method === 'POST') {
+		const archive = readDemoArchive(body);
+		const wallets = archive.wallets.map((w) => ({
+			...w,
+			action: store.wallets.some((x) => x.id === w.id) ? 'present' : 'restore',
+			duplicateOf: null
+		}));
+		const restorable = wallets.filter((w) => w.action === 'restore');
+		const summary = { createdAt: archive.createdAt, app: archive.app, engine: archive.engine, settings: true };
+		if (path === '/backup/inspect') return { ...summary, wallets, conflicts: [] };
+		for (const { action, duplicateOf, ...w } of restorable) {
+			// Stopped, as the manager leaves a restored wallet, and with an
+			// empty state: the chain is where its history comes back from.
+			store.wallets.push({ ...w, status: 'stopped', electrum: { ...store.settings.defaultElectrum }, createdAt: Date.now(), lastBackupAt: archive.createdAt });
+			store.state[w.id] = walletState({ blockHeight: 908214, channels: [], txs: [], payments: [], utxos: [], invoices: [], offers: [], peers: [] });
+		}
+		return { ...summary, restored: restorable, skipped: wallets.filter((w) => w.action !== 'restore') };
 	}
 	if (path === '/recovery/resolve-guardian' && method === 'POST') {
 		// The daemon opens a bolt8 session to the node and asks its guardian
@@ -3009,6 +3038,61 @@ function walletRequest(id, path, method, body) {
 		default:
 			throw err(`Unknown demo endpoint ${route}`, 'NOT_FOUND');
 	}
+}
+
+/**
+ * The demo's backup archive. The real one is scrypt and AES-GCM done by the
+ * manager, and there is no manager here, so this is plain JSON carrying its
+ * own passphrase: it round-trips, so the export and restore flows can be
+ * walked end to end, and it protects nothing, which is true of every secret
+ * in demo mode.
+ */
+function demoArchive(passphrase, createdAt) {
+	return JSON.stringify({
+		demo: true,
+		passphrase,
+		createdAt,
+		app: 'demo',
+		engine: '0.12.0',
+		wallets: store.wallets.map((w) => ({
+			id: w.id,
+			name: w.name,
+			network: w.network,
+			onchainOnly: !!w.onchainOnly,
+			nodeId: w.onchainOnly ? null : nodeId(w.id)
+		}))
+	});
+}
+
+function readDemoArchive(body) {
+	let parsed;
+	try {
+		parsed = JSON.parse(atob(String((body && body.archive) || '')));
+	} catch (_) {
+		parsed = null;
+	}
+	if (!parsed || !parsed.demo) throw err('That file is not a Beignet backup archive.', 'BAD_ARCHIVE');
+	if (parsed.passphrase !== String((body && body.passphrase) || '')) {
+		throw err('That passphrase does not open this archive (or the file is damaged).', 'BAD_PASSPHRASE');
+	}
+	return parsed;
+}
+
+/** The one response that is a file rather than JSON: the backup archive. */
+export async function mockDownload(path, body) {
+	await latency();
+	if (path !== '/api/backup/export') throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
+	if (String((body && body.passphrase) || '').length < 8) {
+		throw err('The backup passphrase must be at least 8 characters.', 'WEAK_PASSPHRASE');
+	}
+	const createdAt = new Date().toISOString();
+	const text = demoArchive(body.passphrase, createdAt);
+	store.settings.lastBackupAt = createdAt;
+	for (const w of store.wallets) w.lastBackupAt = createdAt;
+	return {
+		blob: new Blob([text], { type: 'application/octet-stream' }),
+		filename: `beignet-backup-${createdAt.replace(/[:.]/g, '-')}.beignet`
+	};
 }
 
 export async function mockRequest(path, { method = 'GET', body } = {}) {

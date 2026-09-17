@@ -31,6 +31,11 @@ RUN if [ -f /vendor/beignet-local.tgz ]; then       npm install --omit=dev --no-
 
 # ---- runtime ----
 FROM ${NODE_IMAGE}
+# The app release this image is, from the git tag the build ran on. Nothing
+# else in the container carries it (umbrel-app.yml is not copied in), and a
+# backup archive records the version it came from.
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
 # gosu drops privileges after the entrypoint fixes ownership of the data volume.
 # Zombie reaping is handled by Docker's own init (compose `init: true`).
 RUN apt-get update && apt-get install -y --no-install-recommends \

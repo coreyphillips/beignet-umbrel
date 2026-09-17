@@ -45,6 +45,34 @@ async function request(path, { method = 'GET', body, timeoutMs, headers } = {}) 
 	return data.result;
 }
 
+/**
+ * A response that is a file rather than JSON (the backup archive). Errors
+ * still come back as the usual JSON envelope, so they are read the same way.
+ */
+async function download(path, body) {
+	if (DEMO) return (await import('./mock/mockApi.js')).mockDownload(path, body);
+	const res = await fetch(path, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) {
+		let data = {};
+		try {
+			data = await res.json();
+		} catch (_) {
+			/* non-JSON */
+		}
+		const err = new Error((data.error && data.error.message) || `Request failed (${res.status})`);
+		err.code = data.error && data.error.code;
+		err.status = res.status;
+		throw err;
+	}
+	const disposition = res.headers.get('content-disposition') || '';
+	const named = /filename="([^"]+)"/.exec(disposition);
+	return { blob: await res.blob(), filename: named ? named[1] : 'beignet-backup.beignet' };
+}
+
 // Manager (control plane) API
 export const manager = {
 	config: () => request('/api/config'),
@@ -68,6 +96,14 @@ export const manager = {
 	lfbwMoveHome: (id) => request(`/api/wallets/${id}/lfbw/move-home`, { method: 'POST' }),
 	// Close the home channel, optionally turning lightning-first off first.
 	lfbwCloseHome: (id, body) => request(`/api/wallets/${id}/lfbw/close-home`, { method: 'POST', body }),
+	// Everything that is not on the chain (records, settings, seeds, tokens)
+	// in one passphrase-encrypted archive, and the two halves of putting it
+	// back: a preview that writes nothing, then the restore itself.
+	exportBackup: (passphrase) => download('/api/backup/export', { passphrase }),
+	inspectBackup: (passphrase, archive) =>
+		request('/api/backup/inspect', { method: 'POST', body: { passphrase, archive } }),
+	restoreBackup: (passphrase, archive, confirm) =>
+		request('/api/backup/restore', { method: 'POST', body: { passphrase, archive, confirm } }),
 	// A beignet node's Lightning URI to a guardian entry, asked through any
 	// running wallet's daemon (beignet #699). Adopts nothing.
 	resolveGuardian: (uri) => request('/api/recovery/resolve-guardian', { method: 'POST', body: { uri } }),
