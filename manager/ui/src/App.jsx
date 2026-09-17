@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link, Route, Routes, useLocation } from 'react-router-dom';
 import { AnimatePresence, m } from 'motion/react';
 import { manager } from './api.js';
+import { BACKUP_EVENT } from './lib/backup.js';
 import { useToast } from './components/Toast.jsx';
+import BackupModal from './components/BackupModal.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import WalletsPage from './pages/WalletsPage.jsx';
 import WalletPage from './pages/WalletPage.jsx';
@@ -60,9 +62,18 @@ export default function App() {
 	const toast = useToast();
 	useSpotlight();
 	const [settings, setSettings] = useState(null); // { config, origin } | null
+	// The backup dialog: asked for by the Settings dialog and by the empty
+	// first-run screen, so it is held here rather than in either of them.
+	const [backup, setBackup] = useState(null); // { mode, origin } | null
 	// Key pages on `/w/:id` (not the tab segment) so switching tabs animates
 	// inside WalletPage instead of remounting the whole page.
 	const pageKey = location.pathname.split('/').slice(0, 3).join('/') || '/';
+
+	useEffect(() => {
+		const onBackup = (e) => setBackup({ mode: e.detail?.mode || 'export', origin: e.detail?.origin });
+		window.addEventListener(BACKUP_EVENT, onBackup);
+		return () => window.removeEventListener(BACKUP_EVENT, onBackup);
+	}, []);
 
 	const openSettings = async (e) => {
 		const origin = { x: e.clientX, y: e.clientY };
@@ -112,6 +123,14 @@ export default function App() {
 						// Let any mounted page (WalletsPage) refresh its copy of config.
 						window.dispatchEvent(new CustomEvent('beignet:config', { detail: c }));
 					}}
+				/>
+			)}
+			{backup && (
+				<BackupModal
+					mode={backup.mode}
+					origin={backup.origin}
+					onClose={() => setBackup(null)}
+					onRestored={() => toast('Wallets restored. Start each one when you are ready.', 'success')}
 				/>
 			)}
 			<AnimatePresence mode="popLayout" initial={false}>

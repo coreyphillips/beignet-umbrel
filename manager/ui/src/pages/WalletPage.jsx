@@ -15,6 +15,7 @@ import GuardianRotateFields from '../components/GuardianRotateFields.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
 import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
 import { shortId } from '../lib/format.js';
+import { backupStamp } from '../lib/backup.js';
 import { isClosedChannel } from '../lib/channels.js';
 import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
@@ -292,6 +293,12 @@ export default function WalletPage() {
 						`electrum ${rec.electrum.host}:${rec.electrum.port}`
 					) : (
 						'Loading…'
+					)}
+					{rec && (
+						<span data-testid="backup-stamp">
+							{' · '}
+							{backupStamp(rec)}
+						</span>
 					)}
 				</div>
 			</m.div>

@@ -19,8 +19,19 @@ Beignet runs one or many self-custodial wallets on your Umbrel:
 - **Bring your own Electrum server**: no full node needed. Point at any Electrum server, or connect to your Umbrel's Electrs/Fulcrum with a one-click preset. Set an app-wide default and override it per wallet.
 - A per-wallet **API explorer** (Swagger UI) over the full beignet JSON API.
 - **Channel backup** per wallet, through beignet's Recovery Protocol (see below).
+- **One encrypted backup of the whole box**, and a restore flow on a fresh install (see below).
 - **Closed channels keep their story.** A channel's detail view records what happened to it (funding, ready, close started and by whom, the watchdog reason when this wallet force-closed it, every output swept) in a durable per-wallet log that survives restarts, and for a closing or closed channel adds the close itself: who closed it and why, the closing transaction, whether it has confirmed, what is being swept, and when a force close's balance becomes spendable. A close the network may not have yet can be rebroadcast from there.
 - **Lightning-first wallets**: one balance held in a single channel with a primary node (one of your own wallets, or an external beignet node). Deposits move into the channel by themselves once they confirm, invoices are payable before the channel exists (the primary provides the capacity when the payment arrives), a beignet payer's transaction can fund the channel directly, and sending to a bitcoin address spends from the channel. See [docs/LFBW.md](docs/LFBW.md). Needs an engine newer than 0.9.3; the controls stay hidden until the bundled engine carries the routes.
+
+### Backing up the box
+
+A seed phrase recovers coins. It does not recover a wallet: not its name, network or Electrum server, not its Tor settings, not its API token, not its channel backup mode or the three guardians it is pinned to, not the lightning-first link to its primary node. Settings' **Back up all wallets** writes all of that, for every wallet at once, into one file encrypted with a passphrase you type twice (scrypt and AES-256-GCM, no key material anywhere but in that passphrase). The archive names the app and engine version it came from.
+
+Channel databases are not in it: they are large, and channels are what the Recovery Protocol above restores. Restoring the archive onto a fresh box recreates the records, the seeds, the API tokens and the app defaults, and starts nothing. Each wallet then boots exactly as an imported seed does, syncing from the chain and running whatever channel backup it was configured for.
+
+**Restoring.** From the empty first-run screen or from Settings, pick the file and type the passphrase. The archive is opened and its contents listed before anything is written: which wallets it holds, which are already on this box, and which of them run a node this box already runs. That last one has to be confirmed, because two records on one seed both believe they own its channels, and that is how channel funds are lost.
+
+The wallet list shows when the box was last backed up and how many wallets have been created or edited since, and each wallet says whether it is in the last archive. Keep the file off this Umbrel, and the passphrase somewhere else again: nothing here can recover it.
 
 ### Channel backup
 
@@ -133,6 +144,7 @@ The `check-release` workflow enforces this: it requires the compose image to be 
 ## Security notes
 
 - Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase; it is shown once at creation.
+- The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered. Writing one is behind the same sign-on as everything else here.
 - The manager and all wallet dashboards sit behind Umbrel's single sign-on.
 - The manager's API is restricted to Umbrel's `app_proxy` (which enforces that sign-on) and loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
 - The wallet daemons bind only to `127.0.0.1` inside the container and are never exposed to your network.

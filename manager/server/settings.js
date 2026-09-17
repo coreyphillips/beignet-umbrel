@@ -18,7 +18,10 @@ class Settings {
 			// The guardian set new guardian-mode wallets register with (empty
 			// when none is configured). Each wallet pins its own copy at the
 			// moment it first enables a guardian mode; this is only the default.
-			recoveryGuardians: []
+			recoveryGuardians: [],
+			// When this box last wrote a backup archive. Per-wallet stamps live
+			// on the records; this is the one the wallet list shows.
+			lastBackupAt: null
 		};
 	}
 
@@ -57,6 +60,9 @@ class Settings {
 		}
 		if (patch.recoveryGuardians !== undefined) {
 			this.data.recoveryGuardians = patch.recoveryGuardians;
+		}
+		if (patch.lastBackupAt !== undefined) {
+			this.data.lastBackupAt = patch.lastBackupAt;
 		}
 		this.save();
 		return this.data;

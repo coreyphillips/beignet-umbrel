@@ -112,6 +112,10 @@ async function main() {
 		return proxy(req, res, next);
 	});
 
+	// A restore carries the whole archive in its body (base64), which on a box
+	// with many wallets is larger than any other request here. Mounted first so
+	// the general parser below leaves an already-parsed body alone.
+	app.use('/api/backup', express.json({ limit: '32mb' }));
 	app.use(express.json({ limit: '1mb' }));
 
 	// --- Management API ---
@@ -148,6 +152,9 @@ async function main() {
 				engineVersion: manager.engineVersion,
 				recoveryAvailable: manager.recoveryAvailable(),
 				recoveryGuardians: settings.recoveryGuardians,
+				// When this box last wrote a backup archive, so the wallet list
+				// can say so without a second call.
+				lastBackupAt: settings.lastBackupAt,
 				// Lightning-first wallets need JIT receive and direct funding,
 				// which the engine gained after 0.9.3; probed on the bundle.
 				lfbwAvailable: manager.lfbwAvailable(),
@@ -174,6 +181,41 @@ async function main() {
 		'/settings',
 		asyncHandler(async (req, res) => {
 			res.json({ ok: true, result: manager.updateSettings(req.body || {}) });
+		})
+	);
+
+	// Everything about this box that the chain does not hold: the wallet
+	// records, the app settings, and every wallet's seed and API token, in one
+	// passphrase-encrypted archive. The response is the file itself.
+	api.post(
+		'/backup/export',
+		asyncHandler(async (req, res) => {
+			const { archive, filename } = await manager.exportBackup(req.body || {});
+			res.setHeader('Content-Type', 'application/octet-stream');
+			res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+			res.setHeader('Content-Length', String(archive.length));
+			// Nothing about a file holding every seed on the box belongs in a
+			// cache, a proxy's or the browser's.
+			res.setHeader('Cache-Control', 'no-store');
+			res.end(archive);
+		})
+	);
+
+	// What an archive holds and what restoring it here would do, before
+	// anything is written.
+	api.post(
+		'/backup/inspect',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: manager.inspectBackup(req.body || {}) });
+		})
+	);
+
+	// Recreate records, secrets and settings from an archive. Starts nothing:
+	// each restored wallet waits until it is started by hand.
+	api.post(
+		'/backup/restore',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: manager.restoreBackup(req.body || {}) });
 		})
 	);
 

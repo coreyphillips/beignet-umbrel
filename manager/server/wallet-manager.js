@@ -28,6 +28,23 @@ const {
 	validateGuardianSet
 } = require('./recovery');
 const {
+	ArchiveError,
+	assertPassphrase,
+	sealArchive,
+	openArchive,
+	buildPayload,
+	payloadFiles,
+	payloadRegistry,
+	payloadSettings,
+	planRestore,
+	backupStale,
+	describePayload,
+	seedDigest,
+	mnemonicPath,
+	tokenPath,
+	backupFilename
+} = require('./backup');
+const {
 	engineVersion,
 	recoveryAvailable,
 	lfbwAvailable,
@@ -549,7 +566,8 @@ class WalletManager {
 		return {
 			defaultNetwork: this.defaultNetwork(),
 			defaultElectrum: this.defaultElectrum(),
-			recoveryGuardians: this.recoveryGuardians()
+			recoveryGuardians: this.recoveryGuardians(),
+			lastBackupAt: this.settings.get().lastBackupAt || null
 		};
 	}
 
@@ -927,6 +945,10 @@ class WalletManager {
 		if (liquidityProvider !== undefined) rec.liquidityProvider = !!liquidityProvider;
 		if (nextJit !== undefined) rec.jit = nextJit;
 		if (nextSwaps !== undefined) rec.swaps = nextSwaps;
+		// An edit is what makes a backup stale, so it is stamped here and not
+		// in upsert: the record is also saved on every start, stop and node-id
+		// capture, none of which change anything an archive holds.
+		rec.updatedAt = nowIso();
 		this.registry.upsert(rec);
 		// Restart a running daemon so it reconnects with the new Electrum config.
 		if (rt.proc) await this._restartWallet(id);
@@ -1784,6 +1806,180 @@ class WalletManager {
 		}
 	}
 
+	// ── Backup and restore of identity and settings ──
+
+	/** An archive error as an HTTP one, with its own code kept. */
+	_backupError(err) {
+		if (!(err instanceof ArchiveError)) return err;
+		const status = err.code === 'BACKUP_INCOMPLETE' ? 500 : 400;
+		return httpError(status, err.code, err.message);
+	}
+
+	/**
+	 * Every wallet already on this box, by the two things that identify one:
+	 * its Lightning node id (null until a daemon has been asked for it) and
+	 * the fingerprint of its seed, which needs no daemon at all.
+	 */
+	_identities() {
+		return this.registry.list().map((rec) => {
+			let seedHash = null;
+			try {
+				seedHash = seedDigest(fs.readFileSync(this.paths(rec.id).mnemonicFile, 'utf8'));
+			} catch (_) {
+				/* a record whose seed is gone cannot be matched by it */
+			}
+			return { id: rec.id, name: rec.name, nodeId: rec.nodeId || null, seedHash };
+		});
+	}
+
+	/**
+	 * One passphrase-encrypted archive of everything that is not derivable
+	 * from the chain: the registry, the app settings, and each wallet's seed
+	 * and API token. Exporting stamps every wallet as backed up, which is what
+	 * the dashboard's reminder reads.
+	 */
+	async exportBackup({ passphrase } = {}) {
+		try {
+			assertPassphrase(passphrase);
+		} catch (err) {
+			throw this._backupError(err);
+		}
+		// The registry file is the archive's copy of every wallet record. One
+		// that could not be parsed is not one to hand out as a backup.
+		if (this.registry.loadError) {
+			throw httpError(
+				409,
+				'REGISTRY_UNREADABLE',
+				`The wallet list on this box could not be read (${this.registry.loadError.message}), so a backup of it would restore nothing.`
+			);
+		}
+		const createdAt = nowIso();
+		const ids = this.registry.list().map((rec) => rec.id);
+		let archive;
+		try {
+			archive = sealArchive(
+				buildPayload({
+					dataDir: config.dataDir,
+					walletIds: ids,
+					app: config.appVersion,
+					engine: this.engineVersion,
+					createdAt
+				}),
+				passphrase
+			);
+		} catch (err) {
+			throw this._backupError(err);
+		}
+		// Stamped only once the archive exists, and in one write rather than
+		// one per wallet: a failed export must not claim a backup happened.
+		for (const rec of this.registry.list()) rec.lastBackupAt = createdAt;
+		this.registry.save();
+		this.settings.update({ lastBackupAt: createdAt });
+		console.log(`backup: exported ${ids.length} wallet(s) at ${createdAt}`);
+		return { archive, filename: backupFilename(createdAt), createdAt, walletCount: ids.length };
+	}
+
+	_openBackup({ passphrase, archive }) {
+		try {
+			const payload = openArchive(Buffer.from(String(archive || ''), 'base64'), passphrase);
+			const files = payloadFiles(payload);
+			return { payload, files, records: payloadRegistry(files) };
+		} catch (err) {
+			throw this._backupError(err);
+		}
+	}
+
+	/** What an archive holds and what restoring it here would do. Writes nothing. */
+	inspectBackup({ passphrase, archive } = {}) {
+		const { payload, files, records } = this._openBackup({ passphrase, archive });
+		return {
+			...describePayload(payload),
+			...planRestore({ records, files, existing: this._identities() }),
+			settings: !!payloadSettings(files)
+		};
+	}
+
+	/**
+	 * Recreate records, secrets and app settings from an archive. Nothing is
+	 * started: each restored wallet waits stopped until it is started by hand,
+	 * and then boots exactly as an imported seed does, running its normal
+	 * recovery against the chain and its guardians.
+	 */
+	restoreBackup({ passphrase, archive, confirm = false } = {}) {
+		// Every restored record has to be written to the registry file, and a
+		// file that could not be parsed is never written over.
+		if (this.registry.loadError) {
+			throw httpError(
+				409,
+				'REGISTRY_UNREADABLE',
+				`The wallet list on this box could not be read (${this.registry.loadError.message}), and it will not be written over. Repair or remove it first.`
+			);
+		}
+		const { payload, files, records } = this._openBackup({ passphrase, archive });
+		const plan = planRestore({ records, files, existing: this._identities() });
+		if (plan.conflicts.length && !confirm) {
+			const names = plan.conflicts
+				.map((w) => `"${w.name}" (already here as "${w.duplicateOf.name}")`)
+				.join(', ');
+			const err = httpError(
+				409,
+				'DUPLICATE_NODE_ID',
+				`This box already holds ${names}. Running one seed from two records is how channels get lost; confirm to restore anyway.`
+			);
+			err.details = { conflicts: plan.conflicts };
+			throw err;
+		}
+		const restored = [];
+		for (const entry of plan.wallets) {
+			if (entry.action !== 'restore') continue;
+			const rec = { ...records.find((r) => r.id === entry.id) };
+			// A port another wallet here already holds would leave two daemons
+			// fighting over one listener.
+			if (this.registry.list().some((other) => other.id !== rec.id && other.port === rec.port)) {
+				rec.port = this._allocatePort();
+			}
+			rec.running = false;
+			rec.lastBackupAt = payload.createdAt || null;
+			const p = this.paths(rec.id);
+			fs.mkdirSync(p.home, { recursive: true });
+			fs.mkdirSync(p.data, { recursive: true });
+			fs.mkdirSync(p.secrets, { recursive: true, mode: 0o700 });
+			this._writeSecret(p.mnemonicFile, files.get(mnemonicPath(rec.id)));
+			this._writeSecret(p.tokenFile, files.get(tokenPath(rec.id)));
+			this.registry.upsert(rec);
+			restored.push({ id: rec.id, name: rec.name, port: rec.port });
+			this._log(rec.id, `restored from a backup archive written ${payload.createdAt}; start it when ready`);
+		}
+		// The app defaults come back too: a guardian-mode wallet cannot start
+		// without the guardian set that is kept here rather than on the record.
+		const settings = payloadSettings(files);
+		if (settings) {
+			this.settings.update({
+				defaultNetwork: settings.defaultNetwork,
+				defaultElectrum: settings.defaultElectrum,
+				recoveryGuardians: Array.isArray(settings.recoveryGuardians)
+					? settings.recoveryGuardians
+					: undefined,
+				lastBackupAt: payload.createdAt || null
+			});
+		}
+		console.log(`backup: restored ${restored.length} wallet(s) from an archive written ${payload.createdAt}`);
+		return {
+			...describePayload(payload),
+			restored,
+			skipped: plan.wallets.filter((w) => w.action !== 'restore'),
+			settings: !!settings
+		};
+	}
+
+	// The archive carries each file's mode. It is set again after the write
+	// because writeFileSync only applies one when it creates the file, and a
+	// umask can narrow the one it asks for.
+	_writeSecret(file, entry) {
+		fs.writeFileSync(file, entry.data, { mode: entry.mode });
+		fs.chmodSync(file, entry.mode);
+	}
+
 	// ── Lightning-first wallets ──
 
 	/**
@@ -1857,6 +2053,8 @@ class WalletManager {
 		// The daemon is on the new set; the record follows so the next start
 		// names it too, and the status route's configuredSetStale clears.
 		rec.recovery = { ...rec.recovery, guardians: entries };
+		// A set the old archive no longer names: the backup is now stale.
+		rec.updatedAt = nowIso();
 		this.registry.upsert(rec);
 		this._log(id, `guardian set rotated to generation ${result && result.generation}`);
 		return { record: this.publicRecord(id), generation: result && result.generation, retired: result && result.retired };
@@ -2428,6 +2626,11 @@ class WalletManager {
 			healthy: rt.healthy,
 			lastStartError: rt.lastStartError,
 			createdAt: rec.createdAt,
+			// The backup stamp and whether the wallet has been edited since it
+			// was taken: what is on this record is the half of a wallet no
+			// amount of chain scanning brings back.
+			lastBackupAt: rec.lastBackupAt || null,
+			backupStale: backupStale(rec),
 			// Lightning-first: the node id lets the dashboard name sibling
 			// peers; listenPort and reach are what a payment request can
 			// advertise; lfbw is the primary-node block; the provider fields

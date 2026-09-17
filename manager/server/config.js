@@ -27,6 +27,10 @@ const torControlPort = 29051;
 const config = {
 	port: parseInt(process.env.PORT || '3000', 10),
 	dataDir: process.env.DATA_DIR || '/data',
+	// The app release this image was built from, baked in by the build (the
+	// git tag) since nothing inside the container carries umbrel-app.yml. Null
+	// outside a release build; a backup archive records it either way.
+	appVersion: process.env.APP_VERSION || null,
 	torProxy,
 	torProxyIp,
 	torControlPort,

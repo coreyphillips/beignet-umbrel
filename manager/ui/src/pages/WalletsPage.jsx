@@ -23,6 +23,7 @@ import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
+import { backupStamp, backupSummary, openBackup } from '../lib/backup.js';
 
 function statusTone(s) {
 	if (s === 'running') return 'green';
@@ -135,6 +136,7 @@ export default function WalletsPage() {
 		navigate(`/w/${w.id}`, { state: { wallet: w, info: infos[w.id] || null } });
 
 	const hasWallets = wallets && wallets.length > 0;
+	const backup = backupSummary(wallets, config.lastBackupAt);
 	const walletsCard = (
 		<Card title="Wallets" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
 			{!wallets ? (
@@ -143,13 +145,35 @@ export default function WalletsPage() {
 					<Skeleton height={74} />
 				</>
 			) : !hasWallets ? (
-				<div className="empty">No wallets yet. Create or import one below.</div>
+				<div className="empty">
+					No wallets yet. Create or import one below, or put a box back as it was.
+					<div className="center-actions" style={{ justifyContent: 'center' }}>
+						<Button
+							data-testid="first-run-restore"
+							onClick={(e) => openBackup('restore', { x: e.clientX, y: e.clientY })}
+						>
+							Restore from backup
+						</Button>
+					</div>
+				</div>
 			) : (
 				<m.div
 					variants={staggerContainer}
 					initial={staggered.current ? false : 'hidden'}
 					animate="show"
 				>
+					<div className={backup.stale > 0 ? 'error-note' : 'info-note'} data-testid="backup-summary">
+						{backup.text}{' '}
+						<a
+							href="#backup"
+							onClick={(e) => {
+								e.preventDefault();
+								openBackup('export', { x: e.clientX, y: e.clientY });
+							}}
+						>
+							Back up all wallets
+						</a>
+					</div>
 					{wallets.map((w) => {
 						const info = infos[w.id];
 						return (
@@ -171,6 +195,8 @@ export default function WalletsPage() {
 										{w.lfbwDependents?.length > 0
 											? ` · primary for ${w.lfbwDependents.length}`
 											: ''}
+										{' · '}
+										<span data-testid={`backup-stamp-${w.id}`}>{backupStamp(w)}</span>
 									</div>
 									{w.lfbw?.enabled && w.lfbw.setup === 'failed' && (
 										<div className="wallet-meta">Primary node setup failed: {w.lfbw.setupError}</div>

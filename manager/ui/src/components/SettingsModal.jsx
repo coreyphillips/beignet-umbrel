@@ -4,6 +4,7 @@ import { useToast } from './Toast.jsx';
 import { Button, Field, Modal } from './ui.jsx';
 import ElectrumFields from './ElectrumFields.jsx';
 import { guardianEntryLabel, isNodeUri } from '../lib/recovery.js';
+import { openBackup, timeAgo } from '../lib/backup.js';
 
 /** App-level defaults dialog, opened from the header. */
 export default function SettingsModal({ config, origin, onClose, onSaved }) {
@@ -180,6 +181,32 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 					)}
 				</>
 			)}
+			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+				Backup
+			</div>
+			<div className="info-note">
+				An encrypted archive of every wallet&apos;s recovery phrase, API token and record, with the
+				defaults above. It is what a fresh box needs to become this one;{' '}
+				{config.lastBackupAt
+					? `the last one was written ${timeAgo(config.lastBackupAt)}.`
+					: 'nothing has been backed up yet.'}
+			</div>
+			{/* Opened over this dialog rather than in place of it, so settings
+			    typed but not yet saved are still here afterwards. */}
+			<div className="center-actions">
+				<Button
+					data-testid="settings-backup"
+					onClick={(e) => openBackup('export', { x: e.clientX, y: e.clientY })}
+				>
+					Back up all wallets
+				</Button>
+				<Button
+					data-testid="settings-restore"
+					onClick={(e) => openBackup('restore', { x: e.clientX, y: e.clientY })}
+				>
+					Restore from backup
+				</Button>
+			</div>
 			<div className="center-actions">
 				<Button variant="primary" busy={busy} onClick={save}>
 					Save settings
