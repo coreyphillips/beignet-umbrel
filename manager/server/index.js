@@ -33,7 +33,8 @@ async function main() {
 	// Restrict the API to Umbrel's app_proxy (which fronts the browser with SSO)
 	// and loopback, so other apps on the shared network cannot reach the wallet
 	// control plane directly. Mounted first so it covers every route below.
-	app.use(createAccessGuard({ log: (m) => console.log(m) }));
+	const accessGuard = createAccessGuard({ log: (m) => console.log(m) });
+	app.use(accessGuard);
 
 	// --- Reverse proxy to the per-wallet beignet daemons. Mounted BEFORE the
 	// JSON body parser so request bodies (e.g. POST /send) stream through intact.
@@ -111,6 +112,11 @@ async function main() {
 		}
 		return proxy(req, res, next);
 	});
+
+	// An export hands out every seed on the box, so these routes do not get the
+	// guard's fail-open window: while app_proxy is unresolved they answer
+	// loopback only, rather than any app on the shared network.
+	app.use('/api/backup', accessGuard.strict);
 
 	// A restore carries the whole archive in its body (base64), which on a box
 	// with many wallets is larger than any other request here. Mounted first so

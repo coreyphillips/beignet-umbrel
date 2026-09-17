@@ -144,7 +144,7 @@ The `check-release` workflow enforces this: it requires the compose image to be 
 ## Security notes
 
 - Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase; it is shown once at creation.
-- The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered. Writing one is behind the same sign-on as everything else here.
+- The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered. Writing one is behind the same sign-on as everything else here. The rest of the API falls back to allowing every source while `app_proxy` cannot be resolved; the backup routes do not, and answer loopback only until it resolves.
 - The manager and all wallet dashboards sit behind Umbrel's single sign-on.
 - The manager's API is restricted to Umbrel's `app_proxy` (which enforces that sign-on) and loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
 - The wallet daemons bind only to `127.0.0.1` inside the container and are never exposed to your network.

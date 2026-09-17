@@ -132,7 +132,14 @@ function openArchive(archive, passphrase) {
 	const iv = buf.subarray(saltAt + SALT_BYTES, HEADER_BYTES);
 	const body = buf.subarray(HEADER_BYTES, buf.length - TAG_BYTES);
 	const tag = buf.subarray(buf.length - TAG_BYTES);
-	const key = deriveKey(normalizePassphrase(passphrase), salt, { logN, r, p });
+	let key;
+	try {
+		key = deriveKey(normalizePassphrase(passphrase), salt, { logN, r, p });
+	} catch (_) {
+		// Within the bounds above and still not a combination scrypt accepts
+		// (2^1 * 1 * 1 is one): the archive names an encryption, not a fault here.
+		throw new ArchiveError('BAD_ARCHIVE', 'This archive names an encryption this app cannot read.');
+	}
 	const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
 	decipher.setAAD(header);
 	decipher.setAuthTag(tag);
