@@ -562,6 +562,21 @@ class WalletManager {
 		return recoveryAvailable(this.engineVersion);
 	}
 
+	/**
+	 * What this manager knows to be wrong with its own two files on the data
+	 * volume, for /api/health. A registry that could not be read hides every
+	 * wallet it lists and refuses every save; settings that could not be read
+	 * are being served as defaults, and the next save writes those defaults
+	 * over the file. Both keep a copy of what they could not read.
+	 */
+	health() {
+		const failure = (err) =>
+			err ? { error: err.message, backup: err.backup || null, at: err.at || null } : null;
+		const registry = failure(this.registry.loadError);
+		const settings = failure(this.settings.loadError);
+		return { status: registry || settings ? 'degraded' : 'ok', registry, settings };
+	}
+
 	getSettings() {
 		return {
 			defaultNetwork: this.defaultNetwork(),
@@ -1859,7 +1874,10 @@ class WalletManager {
 			throw httpError(
 				409,
 				'SETTINGS_UNREADABLE',
-				`The app settings on this box could not be read (${this.settings.loadError.message}), and a backup would replace them with defaults. Repair or remove settings.json first.`
+				`The app settings on this box could not be read (${this.settings.loadError.message}), and a backup would replace them with defaults. Repair or remove settings.json first` +
+					(this.settings.loadError.backup
+						? `; a copy of it was kept at ${this.settings.loadError.backup}.`
+						: '.')
 			);
 		}
 		const createdAt = nowIso();
