@@ -141,9 +141,12 @@ function RestorePanel({ onClose, onRestored }) {
 	};
 
 	const open = async () => {
+		const opened = archive;
 		setBusy(true);
 		try {
-			setPreview(await manager.inspectBackup(passphrase, archive.base64));
+			// The preview keeps the archive it describes, so a file picked
+			// while this request was out cannot be the one that gets restored.
+			setPreview({ ...(await manager.inspectBackup(passphrase, opened.base64)), archive: opened });
 			setConfirm(false);
 		} catch (e) {
 			toast(e.message, 'error');
@@ -155,7 +158,7 @@ function RestorePanel({ onClose, onRestored }) {
 	const restore = async () => {
 		setBusy(true);
 		try {
-			setDone(await manager.restoreBackup(passphrase, archive.base64, confirm));
+			setDone(await manager.restoreBackup(passphrase, preview.archive.base64, confirm));
 			await announceConfig();
 			if (onRestored) onRestored();
 		} catch (e) {
@@ -169,10 +172,16 @@ function RestorePanel({ onClose, onRestored }) {
 		return (
 			<>
 				<div className="info-note" data-testid="restore-done">
-					Restored {done.restored.length} wallet{done.restored.length === 1 ? '' : 's'}. They are
-					stopped: start each one when you are sure the box it came from is not still running it.
-					A restored wallet then syncs from the chain like an imported seed and runs its own
-					channel backup.
+					{done.restored.length === 0 ? (
+						'Restored the app defaults. Every wallet in the archive was already on this box.'
+					) : (
+						<>
+							Restored {done.restored.length} wallet{done.restored.length === 1 ? '' : 's'}. They are
+							stopped: start each one when you are sure the box it came from is not still running it.
+							A restored wallet then syncs from the chain like an imported seed and runs its own
+							channel backup.
+						</>
+					)}
 				</div>
 				<div className="center-actions">
 					<Button variant="primary" onClick={onClose}>
@@ -244,7 +253,7 @@ function RestorePanel({ onClose, onRestored }) {
 									<span className="wallet-meta"> · no seed in the archive, cannot be restored</span>
 								)}
 								{w.duplicateOf && (
-									<span className="wallet-meta"> · same node as &ldquo;{w.duplicateOf.name}&rdquo; here</span>
+									<span className="wallet-meta"> · same node as &ldquo;{w.duplicateOf.name}&rdquo;</span>
 								)}
 							</li>
 						))}
@@ -253,10 +262,9 @@ function RestorePanel({ onClose, onRestored }) {
 						<>
 							<div className="error-note" role="alert">
 								{preview.conflicts.length === 1 ? 'A wallet' : `${preview.conflicts.length} wallets`} in
-								this archive already {preview.conflicts.length === 1 ? 'runs' : 'run'} here under
-								another record. Two records on one seed both think they own its channels, and that
-								is how channel funds are lost. Restore only if you know the other record is not the
-								same wallet.
+								this archive would leave this box running one seed from two records. Both records
+								think they own its channels, and that is how channel funds are lost. Restore only if
+								you know the other record is not the same wallet.
 							</div>
 							<label className="checkbox field">
 								<input
@@ -279,13 +287,15 @@ function RestorePanel({ onClose, onRestored }) {
 						<Button
 							variant="primary"
 							busy={busy}
-							disabled={restorable.length === 0 || blocked}
+							disabled={(restorable.length === 0 && !preview.settings) || blocked}
 							data-testid="restore-run"
 							onClick={restore}
 						>
-							{restorable.length === 0
-								? 'Nothing to restore'
-								: `Restore ${restorable.length} wallet${restorable.length === 1 ? '' : 's'}`}
+							{restorable.length > 0
+								? `Restore ${restorable.length} wallet${restorable.length === 1 ? '' : 's'}`
+								: preview.settings
+									? 'Restore the app defaults'
+									: 'Nothing to restore'}
 						</Button>
 					</div>
 				</>

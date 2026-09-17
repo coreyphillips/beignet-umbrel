@@ -1923,15 +1923,23 @@ class WalletManager {
 		const plan = planRestore({ records, files, existing: this._identities() });
 		if (plan.conflicts.length && !confirm) {
 			const names = plan.conflicts
-				.map((w) => `"${w.name}" (already here as "${w.duplicateOf.name}")`)
+				.map((w) => `"${w.name}" (the same node as "${w.duplicateOf.name}")`)
 				.join(', ');
 			const err = httpError(
 				409,
 				'DUPLICATE_NODE_ID',
-				`This box already holds ${names}. Running one seed from two records is how channels get lost; confirm to restore anyway.`
+				`Restoring would leave this box holding ${names}. Running one seed from two records is how channels get lost; confirm to restore anyway.`
 			);
 			err.details = { conflicts: plan.conflicts };
 			throw err;
+		}
+		// A record comes out of the archive as it went in, and its network
+		// names a file the daemon writes (the engine's instance lock), so an
+		// archive that names one this app does not run is refused before any
+		// of it is written.
+		const networks = new Map();
+		for (const entry of plan.wallets) {
+			if (entry.action === 'restore') networks.set(entry.id, this._validateNetwork(entry.network));
 		}
 		const restored = [];
 		for (const entry of plan.wallets) {
@@ -1942,6 +1950,7 @@ class WalletManager {
 			if (this.registry.list().some((other) => other.id !== rec.id && other.port === rec.port)) {
 				rec.port = this._allocatePort();
 			}
+			rec.network = networks.get(rec.id);
 			rec.running = false;
 			rec.lastBackupAt = payload.createdAt || null;
 			const p = this.paths(rec.id);

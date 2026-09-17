@@ -252,28 +252,36 @@ function tokenPath(id) {
  *
  * A wallet already here under the same id is the same wallet, so it is left
  * alone. The same seed under a DIFFERENT id is the case worth stopping on:
- * two records on one box running one seed is how channels get lost.
+ * two records on one box running one seed is how channels get lost. A twin is
+ * looked for among the wallets this restore would leave on the box, not only
+ * the ones already here: an archive holding two records on one seed puts the
+ * box in that state just as surely.
  */
 function planRestore({ records, files, existing }) {
+	const identities = existing.slice();
 	const wallets = records.map((rec) => {
 		const seedHash = seedDigest(
 			files.has(mnemonicPath(rec.id)) ? files.get(mnemonicPath(rec.id)).data.toString('utf8') : ''
 		);
 		const here = existing.find((w) => w.id === rec.id);
-		const twin = existing.find(
+		const twin = identities.find(
 			(w) =>
 				w.id !== rec.id &&
 				((w.nodeId && rec.nodeId && w.nodeId === rec.nodeId) ||
 					(w.seedHash && seedHash && w.seedHash === seedHash))
 		);
 		const complete = files.has(mnemonicPath(rec.id)) && files.has(tokenPath(rec.id));
+		const action = here ? 'present' : complete ? 'restore' : 'incomplete';
+		if (action === 'restore') {
+			identities.push({ id: rec.id, name: rec.name || rec.id, nodeId: rec.nodeId || null, seedHash });
+		}
 		return {
 			id: rec.id,
 			name: rec.name || rec.id,
 			network: rec.network || null,
 			nodeId: rec.nodeId || null,
 			onchainOnly: !!rec.onchainOnly,
-			action: here ? 'present' : complete ? 'restore' : 'incomplete',
+			action,
 			presentAs: here ? here.name : null,
 			duplicateOf: twin ? { id: twin.id, name: twin.name } : null
 		};

@@ -130,7 +130,13 @@ export default function App() {
 					mode={backup.mode}
 					origin={backup.origin}
 					onClose={() => setBackup(null)}
-					onRestored={() => toast('Wallets restored. Start each one when you are ready.', 'success')}
+					onRestored={() => {
+						// The Settings dialog this may have been opened over is
+						// holding the defaults the restore just replaced; saving
+						// it now would put them straight back.
+						setSettings(null);
+						toast('Wallets restored. Start each one when you are ready.', 'success');
+					}}
 				/>
 			)}
 			<AnimatePresence mode="popLayout" initial={false}>

@@ -259,6 +259,51 @@ test('a wallet whose node id is already here is refused until it is confirmed', 
 	assert.notEqual(manager().registry.get(a.id).port, 3101);
 });
 
+test('two records on one seed inside one archive are the same conflict', async () => {
+	// A box can hold the same seed twice (importing it twice is allowed), so
+	// its archive can too; restoring both silently would leave the new box in
+	// the state the confirm exists to stop.
+	wipe();
+	const one = seedWallet({ id: 'dddddddd-0000-4000-8000-000000000004', name: 'Spending', port: 3101, mnemonic: SEED_A });
+	const two = seedWallet({ id: 'eeeeeeee-0000-4000-8000-000000000005', name: 'The same seed again', port: 3102, mnemonic: SEED_A });
+	writeRegistry([one, two]);
+	const out = await quiet(() => manager().exportBackup({ passphrase: PASSPHRASE }));
+	const archive = out.archive.toString('base64');
+
+	wipe();
+	const m = manager();
+	const preview = m.inspectBackup({ passphrase: PASSPHRASE, archive });
+	assert.equal(preview.conflicts.length, 1);
+	assert.equal(preview.conflicts[0].id, two.id);
+	assert.deepEqual(preview.conflicts[0].duplicateOf, { id: one.id, name: one.name });
+
+	assert.throws(
+		() => m.restoreBackup({ passphrase: PASSPHRASE, archive }),
+		(err) => err.code === 'DUPLICATE_NODE_ID' && err.statusCode === 409
+	);
+	assert.equal(m.list().length, 0);
+	const result = await quiet(() => m.restoreBackup({ passphrase: PASSPHRASE, archive, confirm: true }));
+	assert.equal(result.restored.length, 2);
+});
+
+test('an archive naming a network this app does not run is refused before anything is written', async () => {
+	// The record is written to the registry as the archive states it, and the
+	// network names the instance lock file the daemon writes beside its data.
+	wipe();
+	const rogue = seedWallet({ id: 'ffffffff-0000-4000-8000-000000000006', name: 'Rogue', port: 3105, mnemonic: SEED_B });
+	writeRegistry([{ ...rogue, network: '../../../victim' }]);
+	const out = await quiet(() => manager().exportBackup({ passphrase: PASSPHRASE }));
+
+	wipe();
+	const m = manager();
+	assert.throws(
+		() => m.restoreBackup({ passphrase: PASSPHRASE, archive: out.archive.toString('base64') }),
+		(err) => err.code === 'BAD_NETWORK' && err.statusCode === 400
+	);
+	assert.equal(m.list().length, 0);
+	assert.equal(fs.existsSync(path.join(DATA_DIR, 'wallets', rogue.id)), false);
+});
+
 test('a wallet already here under the same id is left exactly as it is', async () => {
 	const { a, b } = twoWalletBox();
 	const out = await quiet(() => manager().exportBackup({ passphrase: PASSPHRASE }));

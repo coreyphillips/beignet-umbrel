@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { click, render, settle, type } from '../../test/render.mjs';
 import { manager } from '../api.js';
 import { ToastProvider } from './Toast.jsx';
@@ -49,7 +49,7 @@ const archiveFile = (bytes = 'sealed') =>
 async function attach(input, file) {
 	Object.defineProperty(input, 'files', { value: [file], configurable: true });
 	await click(input);
-	input.dispatchEvent(new globalThis.window.Event('change', { bubbles: true }));
+	await act(async () => input.dispatchEvent(new globalThis.window.Event('change', { bubbles: true })));
 	await settle(10);
 }
 
@@ -156,6 +156,39 @@ test('a restore opens the archive first and says what it holds before writing an
 		assert.equal(restored.length, 1);
 		assert.match(r.$('[data-testid="restore-done"]').textContent, /Restored 1 wallet\b/);
 		assert.match(r.$('[data-testid="restore-done"]').textContent, /They are stopped/);
+	} finally {
+		restores.forEach((f) => f());
+		await r.unmount();
+	}
+});
+
+test('the archive that was opened is the one that gets restored', async () => {
+	const sent = [];
+	const restores = [
+		// Slow enough to pick another file while it is out.
+		stub('inspectBackup', (passphrase, archive) => {
+			sent.push(archive);
+			return new Promise((resolve) => setTimeout(() => resolve(PREVIEW), 150));
+		}),
+		stub('restoreBackup', async (passphrase, archive) => {
+			sent.push(archive);
+			return { restored: [{ id: 'w1', name: 'Spending' }], skipped: [], settings: true };
+		})
+	];
+	const r = await mount({ mode: 'restore' });
+	try {
+		await attach(r.$('[data-testid="restore-file"]'), archiveFile('archive A'));
+		await type(r.$('[data-testid="restore-passphrase"]'), 'a good long passphrase');
+		await click(r.$('[data-testid="restore-open"]'));
+		// A second file picked while the first one is still being opened. The
+		// preview that arrives describes the first, and that is what a restore
+		// must send: the other file has never been looked at.
+		await attach(r.$('[data-testid="restore-file"]'), archiveFile('archive B'));
+		await settle(200);
+		await click(r.$('[data-testid="restore-run"]'));
+		await settle(20);
+		assert.equal(sent.length, 2);
+		assert.equal(sent[1], sent[0]);
 	} finally {
 		restores.forEach((f) => f());
 		await r.unmount();
