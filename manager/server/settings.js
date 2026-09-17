@@ -64,6 +64,19 @@ class Settings {
 	}
 
 	save() {
+		// The copy load() kept aside is what makes writing over an unreadable
+		// file safe. Without one these defaults would be all that is left of it,
+		// so try the copy again (the disk or the data dir may have been fixed
+		// since boot) and refuse if it still cannot be made. A file that is gone
+		// has nothing left to lose: removing it is the remedy we tell people.
+		if (this.loadError && !this.loadError.backup) {
+			this.loadError.backup = this._keepUnreadable();
+			if (!this.loadError.backup && fs.existsSync(this.file)) {
+				throw new Error(
+					`settings file could not be read and no copy of it could be kept; refusing to overwrite it (${this.loadError.message})`
+				);
+			}
+		}
 		fs.mkdirSync(path.dirname(this.file), { recursive: true });
 		const tmp = `${this.file}.tmp`;
 		fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2));

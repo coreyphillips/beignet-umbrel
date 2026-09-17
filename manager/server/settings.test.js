@@ -70,6 +70,35 @@ test('a second load of the same unreadable file keeps one copy, not two', () => 
 	assert.equal(copies(file).length, 1);
 });
 
+test('a save is refused while the unreadable file is the only copy left', () => {
+	const file = tmpFile();
+	const corrupt = `{"defaultNetwork":"regtest","recoveryGuardians":["${GUARDIAN}"`;
+	fs.writeFileSync(file, corrupt);
+	const s = new Settings(file, SEED);
+	// The copy can fail on its own: a full disk, or a data dir that was not
+	// writable at boot.
+	s._keepUnreadable = () => null;
+	quiet(() => s.load());
+	assert.equal(s.loadError.backup, null);
+	quiet(() => assert.throws(() => s.update({ lastBackupAt: '2026-09-17T00:00:00.000Z' }), /refusing to overwrite/));
+	assert.equal(fs.readFileSync(file, 'utf8'), corrupt, 'the only copy is still on disk');
+
+	// Once a copy can be made, the save goes through.
+	delete s._keepUnreadable;
+	quiet(() => s.update({ lastBackupAt: '2026-09-17T00:00:00.000Z' }));
+	assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).recoveryGuardians, []);
+	assert.equal(fs.readFileSync(path.join(path.dirname(file), copies(file)[0]), 'utf8'), corrupt);
+
+	// Removing the file is what the refusal asks for, and it must not wedge.
+	const gone = new Settings(tmpFile(), SEED);
+	gone._keepUnreadable = () => null;
+	fs.writeFileSync(gone.file, 'not json');
+	quiet(() => gone.load());
+	fs.rmSync(gone.file);
+	gone.save();
+	assert.equal(JSON.parse(fs.readFileSync(gone.file, 'utf8')).defaultNetwork, 'bitcoin');
+});
+
 test('a missing settings file is not a failure: the first save creates it', () => {
 	const file = tmpFile();
 	const s = new Settings(file, SEED);
