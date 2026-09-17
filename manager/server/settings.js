@@ -12,6 +12,10 @@ const path = require('path');
 class Settings {
 	constructor(file, seed) {
 		this.file = file;
+		// A file that exists but could not be read: { message }. Settings are
+		// only ever written whole, so while it is set the file on disk holds
+		// something these defaults would replace.
+		this.loadError = null;
 		this.data = {
 			defaultNetwork: seed.defaultNetwork,
 			defaultElectrum: seed.defaultElectrum || null,
@@ -34,6 +38,7 @@ class Settings {
 			}
 		} catch (err) {
 			if (err.code !== 'ENOENT') {
+				this.loadError = { message: err.message };
 				console.error(`settings: failed to read ${this.file}: ${err.message}`);
 			}
 		}
@@ -44,6 +49,9 @@ class Settings {
 		const tmp = `${this.file}.tmp`;
 		fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2));
 		fs.renameSync(tmp, this.file);
+		// What could not be read has now been replaced deliberately, so there
+		// is nothing left on disk to preserve.
+		this.loadError = null;
 	}
 
 	get() {

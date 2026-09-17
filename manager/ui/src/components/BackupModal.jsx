@@ -206,6 +206,7 @@ function RestorePanel({ onClose, onRestored }) {
 					type="file"
 					accept=".beignet"
 					data-testid="restore-file"
+					disabled={busy}
 					onChange={(e) => pick(e.target.files && e.target.files[0])}
 				/>
 			</Field>

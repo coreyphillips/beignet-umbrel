@@ -1853,6 +1853,15 @@ class WalletManager {
 				`The wallet list on this box could not be read (${this.registry.loadError.message}), so a backup of it would restore nothing.`
 			);
 		}
+		// Export writes settings.json before it reads it, so one that could not
+		// be parsed would be replaced by defaults and archived as defaults.
+		if (this.settings.loadError) {
+			throw httpError(
+				409,
+				'SETTINGS_UNREADABLE',
+				`The app settings on this box could not be read (${this.settings.loadError.message}), and a backup would replace them with defaults. Repair or remove settings.json first.`
+			);
+		}
 		const createdAt = nowIso();
 		// settings.json is only written when settings are saved, and a box that
 		// has never saved any still has defaults worth carrying: write them out
@@ -1921,7 +1930,9 @@ class WalletManager {
 		}
 		const { payload, files, records } = this._openBackup({ passphrase, archive });
 		const plan = planRestore({ records, files, existing: this._identities() });
-		if (plan.conflicts.length && !confirm) {
+		// Strictly true: the guard against running one seed twice is not one to
+		// let a JSON body satisfy with "false" or a stray 1.
+		if (plan.conflicts.length && confirm !== true) {
 			const names = plan.conflicts
 				.map((w) => `"${w.name}" (the same node as "${w.duplicateOf.name}")`)
 				.join(', ');

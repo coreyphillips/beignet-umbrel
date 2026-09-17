@@ -223,6 +223,26 @@ test('a passphrase too short to be worth typing is refused before anything is re
 	assert.equal(manager().getSettings().lastBackupAt, null, 'a refused export claims no backup');
 });
 
+test('settings that could not be read are not replaced by the export that would archive them', async () => {
+	twoWalletBox();
+	// Truncated, and holding a guardian set that exists nowhere else.
+	const corrupt = `{"defaultNetwork":"regtest","recoveryGuardians":["${GUARDIANS[0]}"`;
+	fs.writeFileSync(path.join(DATA_DIR, 'settings.json'), corrupt);
+	const error = console.error;
+	console.error = () => {};
+	let m;
+	try {
+		m = manager();
+	} finally {
+		console.error = error;
+	}
+	await assert.rejects(
+		() => m.exportBackup({ passphrase: PASSPHRASE }),
+		(err) => err.code === 'SETTINGS_UNREADABLE' && err.statusCode === 409
+	);
+	assert.equal(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8'), corrupt);
+});
+
 test('a wallet whose node id is already here is refused until it is confirmed', async () => {
 	const { a, b } = twoWalletBox();
 	const out = await quiet(() => manager().exportBackup({ passphrase: PASSPHRASE }));
