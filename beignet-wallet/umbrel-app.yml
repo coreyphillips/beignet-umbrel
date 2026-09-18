@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.20.11"
+version: "0.21.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,24 +30,36 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.21.4, a wallet history fix. A transaction that a chain
-  reorg undid no longer sits in your history as confirmed at a block the
-  chain no longer has. It goes back to unconfirmed, keeps its place in
-  Activity, and is watched until it confirms again or stops existing. It
-  lands there whether your Electrum server reports the transaction with no
-  confirmations or, on a server without a transaction index, reports it as
-  gone.
+  Receive while offline. A wallet can now be paid while its daemon is off:
+  before going away it pre-signs a book of fixed-amount vouchers with a
+  sibling wallet that stays online (your lightning-first wallet's primary
+  node is the natural one), hands out one invoice per voucher from the
+  Receive tab, and the sibling settles each payment at once. When the
+  wallet is back, the app collects what was paid by itself and the money
+  lands in the channel balance. This is FFOR (Fast-Forward Offline Receive),
+  bundled here on beignet 0.21.5.
 
 
-  A refresh no longer reads a busy or failing Electrum server as an answer
-  about where a transaction is: the wallet keeps what it already knows and
-  asks again on the next refresh. A transaction left out of a lookup that
-  failed keeps its record too, so one bad batch no longer stops the wallet
-  watching it for a reorg.
+  To use it, open the Edit dialog of the wallet that stays online and turn
+  on "Settle offline receives for sibling wallets" (it restarts with the
+  role, and can cap what one book may lock). On any other wallet with an
+  open channel to it, the Receive tab gains a "Receive while offline" card:
+  pick the peer, the amount per voucher, how many, and how long you will be
+  away, then create an invoice per voucher and share it. The card lists
+  each voucher's state, the Overview shows the book, and the header carries
+  a badge while it is live.
 
 
-  A lightning-first wallet waits on a deposit a reorg undid rather than
-  opening a channel on it.
+  What happens on return is said above the tabs: how many vouchers were
+  paid, or that the sibling could not be reached, with Try again and, as a
+  last resort, Enforce on-chain, which force-closes the channel claiming
+  every paid voucher. Come back before the return-by height the card shows;
+  blocks come about ten minutes apart, sometimes much slower.
+
+
+  Witnesses and the BOLT 12 issuer the engine also offers are not wired
+  yet; that is the next phase.
+
 
 dependencies: []
 path: ""
