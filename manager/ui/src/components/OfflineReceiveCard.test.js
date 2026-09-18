@@ -85,6 +85,23 @@ test('an active epoch lists the vouchers, and creating an invoice for a slot sho
 	}
 });
 
+test('an exposed slot whose invoice the engine carries on the view is shown without a mint in this session', async () => {
+	stubManager([{ id: 's1', name: 'Main', nodeId: PEER, running: true }]);
+	const api = stubApi({
+		epochs: [{ ...active, slots: [{ k: 1, amountMsat: '50000000', state: 'exposed', bolt11: BOLT11 }] }]
+	});
+	const view = await mount(api);
+	try {
+		sessionStorage.clear();
+		assert.doesNotMatch(view.text(), /Created in another session/);
+		await click(view.$$('button').find((b) => b.textContent.trim() === 'Show'));
+		await settle(200);
+		assert.ok(view.$('.qr'), 'the view\'s invoice is shown as a code');
+	} finally {
+		await view.unmount();
+	}
+});
+
 test('with no epoch and no opted-in sibling, the card says where to turn the role on', async () => {
 	stubManager([]);
 	const api = stubApi({ epochs: [] });
