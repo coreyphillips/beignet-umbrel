@@ -70,6 +70,10 @@ function stubDaemon(m, { epochs, channelState = 'NORMAL', recover }) {
 		}
 		if (path === '/channels') return [{ channelId: CH, state: channelState }];
 		if (path.startsWith('/ffor/epoch?')) return recover && recover.epoch ? recover.epoch : activeEpoch();
+		if (path === '/ffor/enforce') {
+			if (m.enforceAnswer instanceof Error) throw m.enforceAnswer;
+			return m.enforceAnswer || { ok: true, commitmentTxid: 'cc'.repeat(32), preimagesKnown: 1 };
+		}
 		if (path === '/ffor/recover') {
 			if (recover instanceof Error) throw recover;
 			return recover;
@@ -134,8 +138,65 @@ test('a peer that never reestablishes is reported as unreachable, after one reco
 	assert.equal(m.calls.filter(([, p]) => p === '/ffor/recover').length, 1);
 	const rec = m.publicRecord('r1');
 	assert.equal(rec.fforReturn.action, 'nothing');
+	assert.equal(rec.fforReturn.outcome, 'unreachable');
 	assert.equal(ffor.describeReturn(rec.fforReturn).complete, false);
 	assert.match(m.logs.join('\n'), /settlement peer not reachable, 0 of 2 slots settled so far/);
+});
+
+test('a drain in progress answers nothing too, and is a return in progress rather than an unreachable peer', async () => {
+	const { m } = managerWith({ r1: receiver() });
+	m.runtimeState('r1').proc = {};
+	const draining = { ...activeEpoch('DRAINING'), slots: [{ k: 1, state: 'settled' }, { k: 2, state: 'unsettled' }] };
+	stubDaemon(m, { epochs: [draining], recover: { action: 'nothing', preimagesKnown: [], witnesses: [], epoch: draining } });
+	const orig = m._waitEpochSettled;
+	m._waitEpochSettled = (rec, ch) => orig.call(m, rec, ch, 10);
+	await m._fforReturn('r1');
+	const rec = m.publicRecord('r1');
+	assert.equal(rec.fforReturn.outcome, 'draining');
+	assert.equal(ffor.describeReturn(rec.fforReturn).complete, false);
+	assert.match(m.logs.join('\n'), /closing with the peer, 1 of 2 slots settled so far/);
+	assert.ok(m.runtimeState('r1').fforDrainTimer, 'the manager keeps watching the drain');
+	clearTimeout(m.runtimeState('r1').fforDrainTimer);
+	// And an epoch that already closed reads closed, whatever the action said.
+	const closed = { ...activeEpoch('CLOSED'), slots: [{ k: 1, state: 'settled' }, { k: 2, state: 'unsettled' }] };
+	stubDaemon(m, { epochs: [closed], recover: { action: 'nothing', preimagesKnown: [], witnesses: [], epoch: closed } });
+	await m.fforReturn('r1', { channelId: CH });
+	assert.equal(m.publicRecord('r1').fforReturn.outcome, 'closed');
+});
+
+test('an epoch on a force-closed channel is not reconciled on start: it is enforced on-chain', async () => {
+	const { m } = managerWith({ r1: receiver() });
+	m.runtimeState('r1').proc = {};
+	stubDaemon(m, { epochs: [activeEpoch()], channelState: 'FORCE_CLOSED', recover: { action: 'nothing', preimagesKnown: [], witnesses: [], epoch: activeEpoch() } });
+	await m._fforReturn('r1');
+	assert.equal(m.calls.filter(([, p]) => p === '/ffor/recover').length, 0);
+	// Asked by hand, the record says so rather than blaming the peer.
+	const orig = m._waitEpochSettled;
+	m._waitEpochSettled = (rec, ch) => orig.call(m, rec, ch, 10);
+	await m.fforReturn('r1', { channelId: CH });
+	assert.equal(m.publicRecord('r1').fforReturn.outcome, 'enforced');
+});
+
+test('enforce reads the refusal the daemon answers inside a 200, and a broadcast clears the warning', async () => {
+	const { m } = managerWith({ r1: receiver() });
+	const rt = m.runtimeState('r1');
+	rt.proc = {};
+	rt.fforEnforce = { at: 1, channelId: CH };
+	stubDaemon(m, { epochs: [activeEpoch()] });
+	m.enforceAnswer = { ok: false, error: 'channel restored from a capsule: pass acceptStaleStateRisk' };
+	await assert.rejects(m.fforEnforce('r1', { channelId: CH }), (err) => err.code === 'FFOR_ENFORCE_REFUSED' && /capsule/.test(err.message));
+	assert.deepEqual(rt.fforEnforce, { at: 1, channelId: CH }, 'a refusal leaves the warning up');
+	assert.equal(m.publicRecord('r1').fforEnforced, null);
+	m.enforceAnswer = null;
+	const done = await m.fforEnforce('r1', { channelId: CH });
+	assert.equal(done.commitmentTxid, 'cc'.repeat(32));
+	assert.equal(rt.fforEnforce, null, 'the warning is answered by the broadcast');
+	rt.fforReturn = { at: 1, channelId: CH, action: 'nothing', outcome: 'unreachable', epoch: activeEpoch() };
+	await m.fforEnforce('r1', { channelId: CH });
+	assert.equal(m.publicRecord('r1').fforReturn.outcome, 'enforced', 'the unreachable return is superseded by the broadcast');
+	assert.equal(m.publicRecord('r1').fforEnforced.channelId, CH);
+	assert.match(m.logs.join('\n'), /force close broadcast/);
+	await assert.rejects(m.fforEnforce('r1', {}), (err) => err.code === 'INVALID_PARAMS');
 });
 
 test('a refused recover is kept on the record with its reason, and surfaces as a 502 to the caller', async () => {

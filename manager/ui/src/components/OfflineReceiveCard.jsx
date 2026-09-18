@@ -134,7 +134,8 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 		}
 	};
 
-	const described = epoch ? describeEpoch(epoch, tip) : null;
+	const epochChannel = epoch && Array.isArray(channels) ? channels.find((c) => c.channelId === epoch.channelId) || null : null;
+	const described = epoch ? describeEpoch(epoch, tip, epochChannel) : null;
 	// An aborted setup goes straight back to the form with the reason above
 	// it; a closed book waits for "Start another" so its summary can be read.
 	const showForm = !epoch || epoch.state === 'ABORTED' || (epoch.state === 'CLOSED' && another);
@@ -236,7 +237,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 				<>
 					<div className={described.warn || described.mismatch ? 'error-note' : 'info-note'} data-testid="ffor-epoch">
 						<Badge tone={described.tone}>{described.label}</Badge>{' '}
-						{epoch.state === 'ACTIVE' && !described.mismatch
+						{epoch.state === 'ACTIVE' && !described.mismatch && !described.enforced
 							? `with ${epochPeer}. ${described.detail} Blocks come about ten minutes apart, sometimes much slower; come back with a day to spare.`
 							: described.detail}
 						{described.warn ? ' Under a day of margin is left: return now.' : ''}
@@ -263,7 +264,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 												<Badge tone={slotTone(slot)}>{slotLabel(slot)}</Badge>
 											</td>
 											<td>
-												{slot.state === 'unissued' && epoch.state === 'ACTIVE' && (
+												{slot.state === 'unissued' && epoch.state === 'ACTIVE' && !described.enforced && (
 													<Button className="sm" busy={busy} onClick={() => mint(slot.k)} data-testid={`ffor-mint-${slot.k}`}>
 														Create invoice
 													</Button>
@@ -296,7 +297,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 							</tbody>
 						</table>
 					</div>
-					{epoch.state === 'ACTIVE' && (
+					{epoch.state === 'ACTIVE' && !described.enforced && (
 						<div className="center-actions" style={{ justifyContent: 'flex-start', marginTop: 10 }}>
 							<Button className="sm" busy={busy} onClick={closeNow}>
 								Close the book now
@@ -306,7 +307,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 							</span>
 						</div>
 					)}
-					{(epoch.state === 'CLOSED' || epoch.state === 'ABORTED') && (
+					{(epoch.state === 'CLOSED' || epoch.state === 'ABORTED' || described.enforced) && (
 						<div className="center-actions" style={{ justifyContent: 'flex-start', marginTop: 10 }}>
 							<Button className="sm" onClick={() => setAnother(true)}>
 								Start another

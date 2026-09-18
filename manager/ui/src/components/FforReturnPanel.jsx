@@ -28,13 +28,19 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 	const [dismissed, setDismissed] = useState(() => readDismissed(id));
 	const [busy, setBusy] = useState(false);
 	const [confirming, setConfirming] = useState(false);
-	const ret = rec?.fforReturn && (rec.fforReturn.at || 0) > dismissed ? describeReturn(rec.fforReturn) : null;
 	const enforce = rec?.fforEnforce || null;
-	if (!ret && !enforce) return null;
-	const channelId = (enforce && enforce.channelId) || (ret && ret.channelId) || null;
+	// A force close this box broadcast: said once, until dismissed, and in
+	// place of a return that read the peer as unreachable before it.
+	const enforced = rec?.fforEnforced && (rec.fforEnforced.at || 0) > dismissed ? rec.fforEnforced : null;
+	const staleReturn =
+		!!enforced && !!rec?.fforReturn && rec.fforReturn.channelId === enforced.channelId && (rec.fforReturn.at || 0) <= (enforced.at || 0);
+	const ret =
+		rec?.fforReturn && (rec.fforReturn.at || 0) > dismissed && !staleReturn ? describeReturn(rec.fforReturn) : null;
+	if (!ret && !enforce && !enforced) return null;
+	const channelId = (enforce && enforce.channelId) || (ret && ret.channelId) || (enforced && enforced.channelId) || null;
 
 	const dismiss = () => {
-		const at = rec?.fforReturn?.at || Date.now();
+		const at = Math.max(rec?.fforReturn?.at || 0, rec?.fforEnforced?.at || 0) || Date.now();
 		setDismissed(at);
 		try {
 			sessionStorage.setItem(KEY(id), String(at));
@@ -54,10 +60,14 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 			setBusy(false);
 		}
 	};
+	// Through the manager: the daemon answers a refusal inside a 200 (the
+	// force-close route's shape), and the manager reads it, records a real
+	// broadcast and answers the enforce warning. A refusal arrives here as
+	// an error with the daemon's reason.
 	const doEnforce = async () => {
 		setBusy(true);
 		try {
-			const r = await api.post('/ffor/enforce', { channelId });
+			const r = await manager.fforEnforce(id, { channelId });
 			toast(`Force close broadcast${r?.commitmentTxid ? ` (${String(r.commitmentTxid).slice(0, 12)}…)` : ''}`, 'success');
 			setConfirming(false);
 			onChanged?.();
@@ -68,14 +78,22 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 		}
 	};
 
-	const tone = enforce ? 'red' : ret.tone;
+	const tone = enforce ? 'red' : ret ? ret.tone : 'yellow';
 	const className = tone === 'red' ? 'error-note' : 'info-note';
-	const title = enforce ? 'Your settlement peer contradicted the offline-receive epoch' : ret.title;
+	const title = enforce
+		? 'Your settlement peer contradicted the offline-receive epoch'
+		: ret
+		? ret.title
+		: 'Enforced on-chain';
 	const detail = enforce
 		? 'At reconnect the peer reported a different epoch than this wallet holds. Payments made to your vouchers can still be claimed on-chain: enforcing force-closes the channel with every known preimage.'
-		: ret.detail;
-	const offersEnforce = enforce || (ret && (ret.action === 'nothing' || ret.state === 'ACTIVE'));
-	const offersRetry = !enforce && ret && ret.action === 'nothing';
+		: ret
+		? ret.detail
+		: `The channel with your settlement peer was force-closed${
+				enforced.commitmentTxid ? ` (${String(enforced.commitmentTxid).slice(0, 12)}…)` : ''
+		  }; the paid vouchers are claimed as the close confirms and the funds return to your on-chain balance.`;
+	const offersEnforce = !!enforce || (ret && ret.outcome === 'unreachable');
+	const offersRetry = !enforce && ret && ret.outcome === 'unreachable';
 	return (
 		<div className={className} style={{ gridColumn: '1 / -1', marginBottom: 14 }} data-testid="ffor-return">
 			<strong>{title}.</strong> {detail}

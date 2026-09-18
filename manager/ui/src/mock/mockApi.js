@@ -1301,6 +1301,7 @@ function publicRecord(w) {
 	rec.ffor = { settle: { ...FFOR_SETTLE_DEFAULTS, ...((w.ffor && w.ffor.settle) || {}) } };
 	rec.fforReturn = w.fforReturn || null;
 	rec.fforEnforce = w.fforEnforce || null;
+	rec.fforEnforced = w.fforEnforced || null;
 	return rec;
 }
 
@@ -1851,6 +1852,17 @@ function managerRequest(path, method, body) {
 		if (w.status !== 'running') throw err('The wallet is not running', 'NOT_RUNNING');
 		return fforReturn(w, body && body.channelId);
 	}
+	if (sub === 'ffor/enforce' && method === 'POST') {
+		if (w.status !== 'running') throw err('The wallet is not running', 'NOT_RUNNING');
+		const res = fforRequest(w, store.state[w.id], '/ffor/enforce', '', 'POST', body || {});
+		if (!res || res.ok === false) throw err((res && res.error) || 'the daemon refused the force close', 'FFOR_ENFORCE_REFUSED');
+		w.fforEnforced = { at: Date.now(), channelId: body.channelId, commitmentTxid: res.commitmentTxid, preimagesKnown: res.preimagesKnown };
+		w.fforEnforce = null;
+		if (w.fforReturn && w.fforReturn.channelId === body.channelId) {
+			w.fforReturn = { ...w.fforReturn, at: w.fforEnforced.at, outcome: 'enforced', channelState: 'FORCE_CLOSED' };
+		}
+		return w.fforEnforced;
+	}
 	throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
 }
 
@@ -1928,9 +1940,10 @@ function fforReturn(w, channelId) {
 	const e = fforEpochsOf(w.id).find((x) => x.role === 'R' && x.channelId === channelId);
 	if (!e) throw err('no FFOR epoch on this channel', 'NOT_FOUND');
 	const peer = store.wallets.find((x) => nodeId(x.id) === e.peerNodeId);
-	const reachable = !!peer && peer.status === 'running';
+	const ch0 = store.state[w.id].channels.find((c) => c.channelId === channelId);
+	const reachable = !!peer && peer.status === 'running' && !!ch0 && ch0.state === 'NORMAL';
 	let action = 'nothing';
-	if (reachable && (e.state === 'ACTIVE' || e.state === 'DRAINING')) {
+	if (reachable && e.state === 'ACTIVE') {
 		// The demo: every shared invoice was paid while away.
 		for (const s of e.slots) if (s.state === 'exposed') s.state = 'settled';
 		for (const s of e.slots) if (s.state === 'unissued') s.state = 'unsettled';
@@ -1951,10 +1964,16 @@ function fforReturn(w, channelId) {
 		fforEmitState(w.id, e);
 		action = 'closed';
 	}
+	const channelState = ch0 ? ch0.state : null;
+	const closedChannel = channelState === 'CLOSED' || channelState === 'FORCE_CLOSED';
+	const outcome =
+		e.state === 'CLOSED' || e.state === 'ABORTED' ? 'closed' : e.state === 'DRAINING' ? 'draining' : closedChannel ? 'enforced' : 'unreachable';
 	w.fforReturn = {
 		at: Date.now(),
 		channelId,
 		action,
+		outcome,
+		channelState,
 		preimagesKnown: e.slots.filter((s) => s.state === 'settled').map((s) => s.k),
 		witnesses: [],
 		epoch: { state: e.state, epochId: e.epochId, slots: e.slots.map(fforSlotView), activationMismatch: false },
@@ -2049,15 +2068,18 @@ function fforRequest(w, st, route, query, method, body) {
 			return { action: ret.action, preimagesKnown: ret.preimagesKnown, witnesses: [], epoch: fforView(e) };
 		}
 		case '/ffor/enforce': {
+			// Like the daemon: a force close carrying every known preimage,
+			// answered in the force-close route's shape (a refusal inside
+			// the 200), and the epoch stays ACTIVE on the record.
 			const e = byChannel(body.channelId, 'R');
-			if (!e) throw err('no FFOR epoch on this channel', 'NOT_FOUND');
-			for (const s of e.slots) if (s.state === 'exposed') s.state = 'settled';
-			e.state = 'CLOSED';
+			if (!e) throw err('no FFOR epoch of ours on this channel', 'NOT_FOUND');
 			const ch = st.channels.find((c) => c.channelId === body.channelId);
-			if (ch) ch.state = 'FORCE_CLOSED';
-			w.fforEnforce = null;
-			fforEmitState(w.id, e);
-			return { ok: true, commitmentTxid: hex(64), preimagesKnown: e.slots.filter((s) => s.state === 'settled').map((s) => s.k) };
+			if (!ch) return { ok: false, error: 'Channel not found' };
+			if (ch.state === 'FORCE_CLOSED' || ch.state === 'CLOSED') return { ok: false, error: `Channel is already ${ch.state}` };
+			ch.state = 'FORCE_CLOSED';
+			recordChannelEvent(w.id, { timestamp: Date.now(), event: 'channel:force-closing', channelId: ch.channelId, initiator: 'local' });
+			emit(w.id, 'channel:force-closing', { channelId: ch.channelId, initiator: 'local' });
+			return { ok: true, commitmentTxid: hex(64), preimagesKnown: e.slots.filter((s) => s.state === 'settled').length };
 		}
 		case '/ffor/witness/status':
 			return { enabled: false, mailboxes: [] };

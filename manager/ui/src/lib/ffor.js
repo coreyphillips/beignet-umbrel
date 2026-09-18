@@ -28,6 +28,13 @@ export const RETURN_WARN_BLOCKS = 144;
 export const MAX_SLOTS = 483;
 
 const SETUP_STATES = ['NEGOTIATING', 'VOUCHERS_COMMITTED', 'ACTIVATING'];
+// A channel in one of these states takes no channel actions any more: an
+// epoch on it is being claimed on-chain, not paid against.
+const CLOSED_CHANNEL_STATES = ['CLOSED', 'FORCE_CLOSED'];
+
+export function isClosedChannelState(state) {
+	return CLOSED_CHANNEL_STATES.includes(state);
+}
 
 // The engine's abort reasons (FforAbortReason), in the receiver's words. A
 // peer that refuses the book answers after the start call returned, so the
@@ -170,13 +177,17 @@ export function slotCounts(epoch) {
  * a label, its tone, a detail sentence, the return-by height and how far
  * off it is, and whether the margin is under a day.
  */
-export function describeEpoch(epoch, tip) {
+export function describeEpoch(epoch, tip, channel = null) {
 	if (!epoch) return null;
 	const counts = slotCounts(epoch);
 	const state = epoch.state || 'NEGOTIATING';
 	const mismatch = !!epoch.activationMismatch;
-	const label = mismatch ? 'peer disagrees' : LABELS[state] || state.toLowerCase();
-	const tone = mismatch ? 'red' : TONES[state] || 'muted';
+	// A force close leaves the epoch ACTIVE on the record by design: the
+	// settled vouchers are claimed through the commitment. The channel's
+	// state is what says so.
+	const enforced = !!channel && isClosedChannelState(channel.state) && state !== 'CLOSED' && state !== 'ABORTED';
+	const label = enforced ? 'enforced on-chain' : mismatch ? 'peer disagrees' : LABELS[state] || state.toLowerCase();
+	const tone = enforced ? 'yellow' : mismatch ? 'red' : TONES[state] || 'muted';
 	const deadline = Number(epoch.settlementDeadline) || null;
 	const blocksLeft = deadline && tip > 0 ? deadline - tip : null;
 	const returnBy = deadline
@@ -191,9 +202,11 @@ export function describeEpoch(epoch, tip) {
 						: `by block ${deadline}, ${fmtBlocksDuration(blocksLeft)} from now at ten minutes a block`
 		  }
 		: null;
-	const warn = state === 'ACTIVE' && blocksLeft != null && blocksLeft < RETURN_WARN_BLOCKS;
+	const warn = !enforced && state === 'ACTIVE' && blocksLeft != null && blocksLeft < RETURN_WARN_BLOCKS;
 	let detail;
-	if (mismatch) {
+	if (enforced) {
+		detail = `The channel was force-closed with ${counts.settled} of ${counts.total} vouchers known paid; they are claimed on-chain as the close confirms, and the rest time out back to the peer at block ${epoch.voucherExpiry || '?'}.`;
+	} else if (mismatch) {
 		detail = 'The settlement peer reported a different epoch at reconnect. Enforce on-chain to claim what was paid.';
 	} else if (state === 'ACTIVE') {
 		detail = `${counts.settled} of ${counts.total} vouchers paid so far. Return ${returnBy ? returnBy.text : 'before the deadline'}.`;
@@ -206,7 +219,7 @@ export function describeEpoch(epoch, tip) {
 	} else {
 		detail = 'Committing the voucher book with the settlement peer.';
 	}
-	return { label, tone, detail, state, mismatch, ...counts, returnBy, warn };
+	return { label, tone, detail, state, mismatch, enforced, ...counts, returnBy, warn };
 }
 
 /** A slot's state in plain words. */
@@ -280,20 +293,28 @@ export function describeReturn(ret) {
 	const credited = Math.max(Array.isArray(ret.preimagesKnown) ? ret.preimagesKnown.length : 0, counts.settled);
 	const action = ret.action || (ret.error ? 'failed' : 'nothing');
 	const state = ret.epoch ? ret.epoch.state : null;
-	const closed = state === 'CLOSED' || state === 'ABORTED';
-	const complete = action !== 'nothing' && action !== 'failed' && closed && counts.unsettled === 0;
+	const outcome = ret.outcome || returnOutcome({ action, state, channelState: ret.channelState, error: ret.error });
+	const complete = (outcome === 'closed' || outcome === 'force-closed') && counts.unsettled === 0;
 	let tone = 'green';
 	let title;
 	let detail;
-	if (ret.error) {
+	if (outcome === 'failed') {
 		tone = 'red';
 		title = 'The return failed';
-		detail = ret.error;
-	} else if (action === 'nothing') {
+		detail = ret.error || 'The daemon refused.';
+	} else if (outcome === 'unreachable') {
 		tone = 'yellow';
 		title = 'Your settlement peer was not reachable';
 		detail = `${counts.settled} of ${counts.total} vouchers are known paid so far. The epoch stays open until the peer is back, or you enforce it on-chain.`;
-	} else if (action === 'force-closed') {
+	} else if (outcome === 'draining') {
+		tone = 'blue';
+		title = 'Closing the book with your settlement peer';
+		detail = `${counts.settled} of ${counts.total} vouchers known paid so far; the rest are settling. This updates by itself.`;
+	} else if (outcome === 'enforced') {
+		tone = 'yellow';
+		title = 'Enforced on-chain';
+		detail = `The channel is closed with ${counts.settled} of ${counts.total} vouchers known paid; they are claimed as the close confirms.`;
+	} else if (outcome === 'force-closed') {
 		tone = 'yellow';
 		title = 'Enforced on-chain';
 		detail = `${credited} voucher${credited === 1 ? '' : 's'} claimed through the force close. The funds return as the close confirms.`;
@@ -306,7 +327,22 @@ export function describeReturn(ret) {
 						counts.unsettled > 0 ? `; ${counts.unsettled} not paid` : ''
 				  }.`;
 	}
-	return { action, credited, complete, tone, title, detail, state, at: ret.at || null, channelId: ret.channelId || null, ...counts };
+	return { action, outcome, credited, complete, tone, title, detail, state, at: ret.at || null, channelId: ret.channelId || null, ...counts };
+}
+
+/**
+ * What a return came to, from the epoch and the channel rather than the
+ * daemon's action alone: the action says what the recover call initiated,
+ * and it is 'nothing' for a drain in progress and for an epoch already
+ * closed as well as for a peer that is not there. Mirrors the manager.
+ */
+export function returnOutcome({ action, state, channelState, error }) {
+	if (error) return 'failed';
+	if (state === 'CLOSED' || state === 'ABORTED') return action === 'force-closed' ? 'force-closed' : 'closed';
+	if (action === 'force-closed') return 'force-closed';
+	if (state === 'DRAINING') return 'draining';
+	if (isClosedChannelState(channelState)) return 'enforced';
+	return 'unreachable';
 }
 
 // The invoice for a slot is handed out once by the daemon and never again

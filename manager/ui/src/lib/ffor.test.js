@@ -6,6 +6,7 @@ import {
 	settlementChannels,
 	describeEpoch,
 	describeReturn,
+	returnOutcome,
 	currentEpoch,
 	refusalText,
 	slotLabel,
@@ -93,6 +94,11 @@ test('describeEpoch says the state, the count and the return-by height in blocks
 	assert.equal(closed.label, 'closed');
 	assert.match(closed.detail, /1 of 2 vouchers were paid while away; 1 not paid/);
 	assert.equal(describeEpoch(epoch('NEGOTIATING', []), 1).label, 'setting up');
+	const enforced = describeEpoch(epoch('ACTIVE', ['settled', 'exposed']), 900, { state: 'FORCE_CLOSED' });
+	assert.equal(enforced.label, 'enforced on-chain');
+	assert.equal(enforced.enforced, true);
+	assert.equal(enforced.warn, false);
+	assert.match(enforced.detail, /force-closed with 1 of 2 vouchers known paid/);
 	assert.match(describeEpoch(epoch('ABORTED', [], { abortReason: 2 }), 1).detail, /does not settle offline receives/);
 	assert.equal(describeEpoch(null, 1), null);
 });
@@ -111,6 +117,16 @@ test('describeReturn is complete only once the epoch closed with every slot acco
 	assert.equal(away.complete, false);
 	assert.equal(away.tone, 'yellow');
 	assert.match(away.title, /not reachable/);
+	const drain = describeReturn({ action: 'nothing', preimagesKnown: [], epoch: epoch('DRAINING', ['settled', 'exposed']) });
+	assert.equal(drain.outcome, 'draining');
+	assert.equal(drain.complete, false);
+	assert.match(drain.title, /Closing the book/);
+	const closedAnyway = describeReturn({ action: 'nothing', preimagesKnown: [], epoch: epoch('CLOSED', ['settled']) });
+	assert.equal(closedAnyway.outcome, 'closed', 'an epoch that already closed is not an unreachable peer');
+	assert.equal(closedAnyway.complete, true);
+	const enforcedRet = describeReturn({ action: 'nothing', preimagesKnown: [], channelState: 'FORCE_CLOSED', epoch: epoch('ACTIVE', ['settled']) });
+	assert.equal(enforcedRet.outcome, 'enforced');
+	assert.equal(returnOutcome({ action: 'nothing', state: 'ACTIVE', channelState: 'NORMAL' }), 'unreachable');
 	const failed = describeReturn({ action: null, error: 'boom', epoch: null });
 	assert.equal(failed.tone, 'red');
 	assert.equal(failed.detail, 'boom');

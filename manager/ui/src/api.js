@@ -117,6 +117,9 @@ export const manager = {
 	// performs with that peer after every start.
 	fforCandidates: (id) => request(`/api/wallets/${id}/ffor/candidates`),
 	fforReturn: (id, body) => request(`/api/wallets/${id}/ffor/return`, { method: 'POST', body }),
+	// Enforce an epoch on-chain through the manager, which reads the refusal
+	// the daemon answers inside a 200 and answers the enforce warning.
+	fforEnforce: (id, body) => request(`/api/wallets/${id}/ffor/enforce`, { method: 'POST', body }),
 	errors: (id, since) =>
 		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
 	channelEvents: (id, channelId) =>

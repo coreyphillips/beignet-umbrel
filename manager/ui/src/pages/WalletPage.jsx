@@ -16,7 +16,7 @@ import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx'
 import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
 import FforReturnPanel from '../components/FforReturnPanel.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
-import { currentEpoch, isLiveEpoch } from '../lib/ffor.js';
+import { currentEpoch, describeEpoch } from '../lib/ffor.js';
 import { shortId } from '../lib/format.js';
 import { backupStamp } from '../lib/backup.js';
 import { isClosedChannel } from '../lib/channels.js';
@@ -236,6 +236,16 @@ export default function WalletPage() {
 		[id, tick, fforOn]
 	);
 	const liveEpoch = fforOn && Array.isArray(epochs) ? currentEpoch(epochs) : null;
+	// The channel the epoch runs on: a force close leaves the epoch ACTIVE
+	// on the record, so the channel's state decides between the two badges.
+	const { data: fforChannels } = usePoll(
+		() => (liveEpoch ? api.get('/channels').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, !!liveEpoch]
+	);
+	const epochBadge = liveEpoch
+		? describeEpoch(liveEpoch, info?.blockHeight || 0, (fforChannels || []).find((c) => c.channelId === liveEpoch.channelId) || null)
+		: null;
 
 	// An on-chain only wallet gets no Lightning apparatus: not hidden features,
 	// absent ones. A URL pointing at a withheld tab falls back to Overview the
@@ -290,10 +300,13 @@ export default function WalletPage() {
 					{backup?.degraded && !rec?.onchainOnly && (
 						<Badge tone={backup.tone}>{backup.tier}</Badge>
 					)}
-					{liveEpoch && isLiveEpoch(liveEpoch) && !liveEpoch.activationMismatch && (
+					{epochBadge && epochBadge.state === 'ACTIVE' && !epochBadge.mismatch && !epochBadge.enforced && (
 						<Badge tone="green">receiving offline</Badge>
 					)}
-					{(rec?.fforEnforce || liveEpoch?.activationMismatch) && <Badge tone="red">enforce on-chain</Badge>}
+					{epochBadge && epochBadge.enforced && <Badge tone="yellow">enforced on-chain</Badge>}
+					{(rec?.fforEnforce || (epochBadge && epochBadge.mismatch && !epochBadge.enforced)) && (
+						<Badge tone="red">enforce on-chain</Badge>
+					)}
 					<Button className="sm" onClick={(e) => setEditing({ x: e.clientX, y: e.clientY })}>
 						Edit
 					</Button>

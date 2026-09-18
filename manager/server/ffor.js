@@ -72,8 +72,16 @@ const FFOR_CHANNEL_EVENTS = Object.freeze(['ffor:state', 'ffor:enforce']);
 const RETURN_REESTABLISH_TIMEOUT_MS = 90000;
 const RETURN_POLL_MS = 2000;
 // How long a return waits for the cooperative close to drain after the
-// peer accepted it, before recording whatever the epoch reads.
+// peer accepted it, before recording whatever the epoch reads; and how
+// long the manager keeps watching a drain that outlasted that, updating
+// the record when it completes.
 const RETURN_DRAIN_TIMEOUT_MS = 30000;
+const DRAIN_TRACK_TIMEOUT_MS = 10 * 60 * 1000;
+const DRAIN_TRACK_POLL_MS = 5000;
+
+// A channel in one of these states takes no channel actions any more: an
+// epoch on it is enforced on-chain (or long gone), never reconciled.
+const CLOSED_CHANNEL_STATES = Object.freeze(['CLOSED', 'FORCE_CLOSED']);
 
 function httpError(status, code, message) {
 	const err = new Error(message);
@@ -175,11 +183,45 @@ function settlementCandidates(records, self, runningOf = () => false) {
 		}));
 }
 
-/** The channel ids of this wallet's own epochs a fresh start should reconcile. */
-function returnJobs(epochs) {
+/**
+ * The channel ids of this wallet's own epochs a fresh start should
+ * reconcile: ACTIVE or DRAINING, on a channel that still operates. An
+ * epoch on a force-closed channel is being claimed on-chain; asking the
+ * daemon to recover it would only report the peer as unreachable.
+ */
+function returnJobs(epochs, channels) {
+	const closed = new Set(
+		(Array.isArray(channels) ? channels : [])
+			.filter((c) => c && CLOSED_CHANNEL_STATES.includes(c.state))
+			.map((c) => String(c.channelId))
+	);
 	return (Array.isArray(epochs) ? epochs : [])
-		.filter((e) => e && e.role === 'R' && RETURN_STATES.includes(e.state) && e.channelId)
+		.filter((e) => e && e.role === 'R' && RETURN_STATES.includes(e.state) && e.channelId && !closed.has(String(e.channelId)))
 		.map((e) => String(e.channelId));
+}
+
+/**
+ * What a return came to, read off the epoch and the channel rather than
+ * the daemon's action: the action says what the recover call initiated,
+ * and it answers 'nothing' for a drain in progress and for an epoch that
+ * already closed as well as for a peer that is not there.
+ *
+ *   closed      the epoch closed cooperatively (credit through the bitmap)
+ *   force-closed the recover call force-closed the channel
+ *   draining    the peer accepted the close; the vouchers are settling
+ *   enforced    the channel is closed on-chain while the epoch reads
+ *               ACTIVE: the settled vouchers are claimed as it confirms
+ *   unreachable the epoch is live and the peer did not answer
+ *   failed      the daemon refused the call
+ */
+function returnOutcome({ action, epoch, channelState, error }) {
+	if (error) return 'failed';
+	const state = epoch ? epoch.state : null;
+	if (state === 'CLOSED' || state === 'ABORTED') return action === 'force-closed' ? 'force-closed' : 'closed';
+	if (action === 'force-closed') return 'force-closed';
+	if (state === 'DRAINING') return 'draining';
+	if (channelState && CLOSED_CHANNEL_STATES.includes(channelState)) return 'enforced';
+	return 'unreachable';
 }
 
 /**
@@ -199,15 +241,16 @@ function describeReturn(result) {
 	// the two is what the wallet can claim.
 	const credited = Math.max(Array.isArray(result.preimagesKnown) ? result.preimagesKnown.length : 0, settled);
 	const action = result.action || 'nothing';
-	const closed = !!epoch && (epoch.state === 'CLOSED' || epoch.state === 'ABORTED');
+	const outcome = result.outcome || returnOutcome({ action, epoch, channelState: result.channelState, error: result.error });
 	return {
 		action,
+		outcome,
 		credited,
 		settled,
 		unsettled,
 		total: slots.length,
 		state: epoch ? epoch.state : null,
-		complete: action !== 'nothing' && closed && unsettled === 0
+		complete: (outcome === 'closed' || outcome === 'force-closed') && unsettled === 0
 	};
 }
 
@@ -217,12 +260,18 @@ function returnLogLine(channelId, result, err) {
 	if (err) return `ffor return ${short}: failed, ${err.message}`;
 	const d = describeReturn(result);
 	if (!d) return `ffor return ${short}: no answer`;
-	if (d.action === 'nothing') {
-		return `ffor return ${short}: settlement peer not reachable, ${d.settled} of ${d.total} slots settled so far`;
+	switch (d.outcome) {
+		case 'unreachable':
+			return `ffor return ${short}: settlement peer not reachable, ${d.settled} of ${d.total} slots settled so far`;
+		case 'draining':
+			return `ffor return ${short}: closing with the peer, ${d.settled} of ${d.total} slots settled so far`;
+		case 'enforced':
+			return `ffor return ${short}: the channel is closed on-chain, ${d.settled} of ${d.total} slots claimed through it`;
+		default:
+			return `ffor return ${short}: ${d.outcome}, ${d.settled} of ${d.total} slots settled, ${d.credited} preimage${
+				d.credited === 1 ? '' : 's'
+			} known`;
 	}
-	return `ffor return ${short}: ${d.action}, ${d.settled} of ${d.total} slots settled, ${d.credited} preimage${
-		d.credited === 1 ? '' : 's'
-	} known`;
 }
 
 module.exports = {
@@ -235,6 +284,10 @@ module.exports = {
 	RETURN_REESTABLISH_TIMEOUT_MS,
 	RETURN_POLL_MS,
 	RETURN_DRAIN_TIMEOUT_MS,
+	DRAIN_TRACK_TIMEOUT_MS,
+	DRAIN_TRACK_POLL_MS,
+	CLOSED_CHANNEL_STATES,
+	returnOutcome,
 	normalizeFfor,
 	isSettler,
 	fforEnv,

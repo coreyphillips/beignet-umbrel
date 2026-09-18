@@ -115,3 +115,24 @@ test('describeReturn credits through the settled bitmap when no witness returned
 	assert.equal(d.credited, 1);
 	assert.equal(d.settled, 1);
 });
+
+test('returnJobs skips an epoch whose channel is closed on-chain', () => {
+	const epochs = [{ channelId: 'aa', role: 'R', state: 'ACTIVE' }, { channelId: 'bb', role: 'R', state: 'ACTIVE' }];
+	assert.deepEqual(ffor.returnJobs(epochs, [{ channelId: 'aa', state: 'FORCE_CLOSED' }, { channelId: 'bb', state: 'NORMAL' }]), ['bb']);
+	assert.deepEqual(ffor.returnJobs(epochs), ['aa', 'bb'], 'no channel list, no exclusion');
+});
+
+test('returnOutcome reads the epoch and the channel, not the action alone', () => {
+	const ep = (state) => ({ state, slots: [] });
+	assert.equal(ffor.returnOutcome({ action: 'nothing', epoch: ep('CLOSED') }), 'closed');
+	assert.equal(ffor.returnOutcome({ action: 'closed', epoch: ep('CLOSED') }), 'closed');
+	assert.equal(ffor.returnOutcome({ action: 'nothing', epoch: ep('DRAINING') }), 'draining');
+	assert.equal(ffor.returnOutcome({ action: 'closed', epoch: ep('DRAINING') }), 'draining');
+	assert.equal(ffor.returnOutcome({ action: 'nothing', epoch: ep('ACTIVE'), channelState: 'FORCE_CLOSED' }), 'enforced');
+	assert.equal(ffor.returnOutcome({ action: 'nothing', epoch: ep('ACTIVE'), channelState: 'AWAITING_REESTABLISH' }), 'unreachable');
+	assert.equal(ffor.returnOutcome({ action: 'force-closed', epoch: ep('ACTIVE') }), 'force-closed');
+	assert.equal(ffor.returnOutcome({ action: null, epoch: null, error: 'x' }), 'failed');
+	const d = ffor.describeReturn({ action: 'nothing', preimagesKnown: [], epoch: { state: 'CLOSED', slots: [{ k: 1, state: 'settled' }] } });
+	assert.equal(d.outcome, 'closed');
+	assert.equal(d.complete, true);
+});

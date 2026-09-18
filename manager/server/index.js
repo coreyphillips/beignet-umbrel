@@ -282,6 +282,14 @@ async function main() {
 	);
 
 	api.post(
+		'/wallets/:id/ffor/enforce',
+		asyncHandler(async (req, res) => {
+			const { channelId } = req.body || {};
+			res.json({ ok: true, result: await manager.fforEnforce(req.params.id, { channelId }) });
+		})
+	);
+
+	api.post(
 		'/wallets/:id/ffor/return',
 		asyncHandler(async (req, res) => {
 			const { channelId } = req.body || {};

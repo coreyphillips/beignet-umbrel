@@ -375,7 +375,9 @@ class WalletManager {
 				// on-chain), and the guard against two returns at once.
 				fforReturn: null,
 				fforEnforce: null,
-				fforReturning: false
+				fforEnforced: null,
+				fforReturning: false,
+				fforDrainTimer: null
 			});
 		}
 		return this.runtime.get(id);
@@ -1447,6 +1449,17 @@ class WalletManager {
 					) {
 						rt.fforEnforce = null;
 					}
+				}
+				// A force close does not close the FFOR epoch (the settled
+				// vouchers are claimed through the commitment), so the channel
+				// closing is what answers an enforce warning.
+				if (
+					/^channel:(force-closing|closed|resolved)$/.test(name) &&
+					data &&
+					rt.fforEnforce &&
+					rt.fforEnforce.channelId === String(data.channelId)
+				) {
+					rt.fforEnforce = null;
 				}
 				// The home channel's splice lifecycle (beignet #760): a stranger's
 				// direct funding now splices the channel and locks at depth, and
@@ -2523,7 +2536,9 @@ class WalletManager {
 		const rec = this.registry.get(id);
 		if (!rec || rec.onchainOnly || !this.fforAvailable()) return;
 		const epochs = await this._daemonCall(rec, 'GET', '/ffor/epochs').catch(() => null);
-		for (const channelId of ffor.returnJobs(epochs)) {
+		if (!ffor.returnJobs(epochs).length) return;
+		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+		for (const channelId of ffor.returnJobs(epochs, channels)) {
 			await this.fforReturn(id, { channelId, waitForPeer: true }).catch(() => {});
 		}
 	}
@@ -2561,15 +2576,24 @@ class WalletManager {
 			// was sent; the settled bitmap and the preimages arrive with the
 			// peer's close_ack and the drain a moment later. Wait for the
 			// epoch to settle so the record says what was actually credited.
+			// The daemon's action says what the call initiated ('nothing' for
+			// a drain in progress and for an epoch already closed as well as
+			// for a peer that is not there), so the outcome is read off the
+			// epoch and the channel instead.
 			let epoch = result && result.epoch ? result.epoch : null;
-			if (result && result.action !== 'nothing') {
+			if (result && (result.action !== 'nothing' || (epoch && epoch.state === 'DRAINING'))) {
 				epoch = (await this._waitEpochSettled(rec, channelId)) || epoch;
 			}
-			if (epoch && result) result = { ...result, epoch };
+			const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+			const ch = Array.isArray(channels) ? channels.find((c) => c.channelId === channelId) : null;
+			const channelState = ch ? ch.state : null;
+			const outcome = ffor.returnOutcome({ action: result && result.action, epoch, channelState });
 			rt.fforReturn = {
 				at: Date.now(),
 				channelId,
 				action: (result && result.action) || 'nothing',
+				outcome,
+				channelState,
 				preimagesKnown: (result && result.preimagesKnown) || [],
 				witnesses: (result && result.witnesses) || [],
 				epoch: epoch
@@ -2577,11 +2601,90 @@ class WalletManager {
 					: null,
 				error: null
 			};
-			this._log(id, ffor.returnLogLine(channelId, result));
+			this._log(id, ffor.returnLogLine(channelId, rt.fforReturn));
+			// A drain that outlasted the wait is still a return in progress:
+			// keep watching it and update the record when it completes.
+			if (outcome === 'draining') this._fforTrackDrain(id, channelId);
 			return rt.fforReturn;
 		} finally {
 			rt.fforReturning = false;
 		}
+	}
+
+	// Keep a return whose drain is still running updated: poll the epoch
+	// until it closes (or the watch runs out), then rewrite the record and
+	// log the outcome. One watch per wallet; a new return replaces it.
+	_fforTrackDrain(id, channelId) {
+		const rt = this.runtimeState(id);
+		if (rt.fforDrainTimer) clearTimeout(rt.fforDrainTimer);
+		const deadline = Date.now() + ffor.DRAIN_TRACK_TIMEOUT_MS;
+		const tick = async () => {
+			rt.fforDrainTimer = null;
+			const rec = this.registry.get(id);
+			if (!rec || !rt.proc || !rt.fforReturn || rt.fforReturn.channelId !== channelId) return;
+			const view = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
+			if (view && (view.state === 'CLOSED' || view.state === 'ABORTED')) {
+				rt.fforReturn = {
+					...rt.fforReturn,
+					at: Date.now(),
+					outcome: ffor.returnOutcome({ action: rt.fforReturn.action, epoch: view }),
+					epoch: { state: view.state, epochId: view.epochId, slots: view.slots, activationMismatch: !!view.activationMismatch }
+				};
+				this._log(id, ffor.returnLogLine(channelId, rt.fforReturn));
+				return;
+			}
+			if (Date.now() < deadline) rt.fforDrainTimer = setTimeout(tick, ffor.DRAIN_TRACK_POLL_MS);
+		};
+		rt.fforDrainTimer = setTimeout(tick, ffor.DRAIN_TRACK_POLL_MS);
+	}
+
+	/**
+	 * Enforce an epoch on-chain: force-close the channel carrying every
+	 * known preimage. The daemon answers the refusal inside a 200 (the
+	 * force-close route's shape), so it is read here and turned into an
+	 * error rather than reported as a broadcast. The epoch stays ACTIVE on
+	 * the record after a force close by design (the vouchers are claimed
+	 * through the commitment), so the enforce warning is answered here and
+	 * by the channel's closing events, not by the epoch's state.
+	 */
+	async fforEnforce(id, { channelId } = {}) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		const rt = this.runtimeState(id);
+		if (!rt.proc) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
+		if (!channelId || typeof channelId !== 'string') {
+			throw httpError(400, 'INVALID_PARAMS', 'channelId is required');
+		}
+		let res;
+		try {
+			res = await this._daemonCall(rec, 'POST', '/ffor/enforce', { channelId });
+		} catch (err) {
+			throw httpError(502, err.code || 'FFOR_ENFORCE_FAILED', err.message);
+		}
+		if (!res || res.ok === false) {
+			const reason = (res && res.error) || 'the daemon refused the force close';
+			this._log(id, `ffor enforce ${channelId.slice(0, 16)}: refused, ${reason}`);
+			throw httpError(502, 'FFOR_ENFORCE_REFUSED', reason);
+		}
+		rt.fforEnforced = {
+			at: Date.now(),
+			channelId,
+			commitmentTxid: res.commitmentTxid || null,
+			preimagesKnown: res.preimagesKnown ?? null
+		};
+		rt.fforEnforce = null;
+		// A return that read the peer as unreachable is answered by the
+		// broadcast: the epoch is now enforced on-chain.
+		if (rt.fforReturn && rt.fforReturn.channelId === channelId) {
+			rt.fforReturn = { ...rt.fforReturn, at: rt.fforEnforced.at, outcome: 'enforced', channelState: 'FORCE_CLOSED' };
+		}
+		this._log(
+			id,
+			`ffor enforce ${channelId.slice(0, 16)}: force close broadcast${res.commitmentTxid ? ` ${String(res.commitmentTxid).slice(0, 16)}` : ''}, ${
+				res.preimagesKnown ?? 0
+			} preimage${res.preimagesKnown === 1 ? '' : 's'} known`
+		);
+		return rt.fforEnforced;
 	}
 
 	// Poll the epoch until the close has drained (CLOSED or ABORTED), or the
@@ -2902,7 +3005,8 @@ class WalletManager {
 			// contradicted an ACTIVE epoch (enforce on-chain).
 			ffor: ffor.normalizeFfor(undefined, rec.ffor),
 			fforReturn: rt.fforReturn || null,
-			fforEnforce: rt.fforEnforce || null
+			fforEnforce: rt.fforEnforce || null,
+			fforEnforced: rt.fforEnforced || null
 		};
 	}
 

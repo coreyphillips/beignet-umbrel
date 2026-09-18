@@ -26,10 +26,20 @@ Two things the engine leaves to the host, and this app does:
 - **The return is not automatic in the engine.** On reestablish it only
   notices a mismatch; nothing credits the settled slots. The manager calls
   `POST /ffor/recover` (cooperative only, never a force close on its own)
-  after every healthy start, for every epoch the wallet receives on, once
-  the channel to S is back in NORMAL. The outcome is on the wallet record
-  (`fforReturn`) and in the wallet log, and the dashboard shows it above the
-  tabs. Enforce stays a user action.
+  after every healthy start, for every epoch the wallet receives on whose
+  channel still operates, once the channel to S is back in NORMAL. The
+  daemon's `action` only says what the call initiated (it answers
+  `nothing` for a drain in progress and for an epoch already closed as
+  well as for a peer that is not there), so the manager reads the outcome
+  off the epoch and the channel: `closed`, `draining` (kept watched until
+  the drain completes), `enforced` (the channel is closed on-chain),
+  `unreachable`, `failed`. The outcome is on the wallet record
+  (`fforReturn`) and in the wallet log, and the dashboard shows it above
+  the tabs. Enforce stays a user action, through the manager: the daemon
+  answers a refusal inside a 200 (the force-close route's shape), the
+  manager turns it into an error, records a real broadcast
+  (`fforEnforced`) and answers the enforce warning, which the epoch's state
+  never does since a force close leaves the epoch ACTIVE by design.
 - **A settlement peer must opt in.** Without `BEIGNET_FFOR_SETTLE=true` a
   daemon refuses every book. Every beignet node advertises the protocol's
   feature bit whether or not it settles, so "which peer can I use" cannot
