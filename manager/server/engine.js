@@ -135,7 +135,14 @@ function fforAvailable(bin = process.env.BEIGNET_BIN) {
 	return probe(bin, 'openapi.js', FFOR_ROUTE_MARKERS) && probe(bin, 'daemon-options.js', FFOR_ROLE_MARKERS);
 }
 
+function offlineReceiveAvailable(bin = process.env.BEIGNET_BIN) {
+	return (
+		probe(bin, 'openapi.js', ["'/receive/status'", "'/receive/quote'", "'/receive/invoice'"]) &&
+		probe(bin, 'config.js', ['BEIGNET_FFOR_RECEIVE_FUNDING'])
+	);
+}
 module.exports = {
+	offlineReceiveAvailable,
 	engineVersion,
 	fforAvailable,
 	recoveryAvailable,

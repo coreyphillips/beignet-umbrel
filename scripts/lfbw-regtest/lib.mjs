@@ -160,7 +160,7 @@ export async function fund(id, sats, { confirm = true, settle = confirm, key, bo
 		if (settle) { await waitTx(r.txid, { confirmations: confirm ? 1 : 0 }); await waitWalletSeesTx(id, r.txid, { confirmed: confirm }); }
 		return { address, txid: r.txid, vout: r.vout, amountSats: r.amountSats, blockHash: r.blockHash, blockHeight: r.blockHeight, minedBlocks: r.minedBlocks, bootstrap: r.bootstrap };
 	}
-	const txid = btc(`sendtoaddress ${address} ${(sats / 1e8).toFixed(8)}`);
+	const txid = await btc(`sendtoaddress ${address} ${(sats / 1e8).toFixed(8)}`);
 	if (confirm) await mine(1);
 	if (settle) await waitWalletSeesTx(id, txid, { confirmed: confirm });
 	return { address, txid, vout: null, amountSats: sats, blockHash: null, blockHeight: null, minedBlocks: null, bootstrap: null };

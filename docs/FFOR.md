@@ -7,6 +7,58 @@ sees, the constraints the engine imposes, and how to verify it against real
 daemons. The engine side is beignet's `/ffor/*` surface (beignet #729) and
 the role switches it honours from 0.21.4 on (beignet #865).
 
+## Optional receiving for regular wallets
+
+Regular Lightning wallets show an unchecked **Receive offline** option in the
+ordinary invoice form. It becomes available once a fixed amount of at least
+354 sats is entered and the engine supports the automatic receive API. Leaving
+it unchecked preserves ordinary receiving, including amountless invoices.
+
+When checked, select a connected receiving node and review its sender fee terms.
+Known settlement wallets are listed first. The daemon checks protocol support
+before creation; unsupported peers and failed preparation never fall back to an
+online-only invoice. An external connected node can be used too. The node needs
+the same settlement and funding policy described below.
+
+Changing the checkbox or receiving node clears the displayed invoice and its
+BIP21 attachment. Create a new invoice for the new choice. An invoice already
+shared is not changed or cancelled. The form distinguishes stopping the wallet
+from closing the browser, which leaves the Umbrel daemon running. Manual voucher
+book controls remain under **Advanced offline receive**.
+
+Lightning-first wallets continue to prepare every invoice for offline receiving
+automatically and do not show the checkbox. RN and web wallet behavior is unchanged.
+
+## Automatic Lightning-first receiving
+
+Lightning-first wallets use their ordinary Receive form to prepare a fixed-amount
+invoice that remains payable while the wallet daemon is stopped. Users do not
+select channels, create voucher books or trigger a return. The primary must
+support the automatic receive protocol and opt into settlement. If another
+channel is needed, it must also opt into funding with explicit cumulative caps.
+The Edit form exposes total channels, channels per peer, maximum channel size
+and total funding budget. Connected external peers can request funding too.
+
+The daemon persists preparation before exposing an invoice and discovers
+receipts while running, including after restart. Paid reservations reconcile
+into the normal invoice history and balance. Unpaid invoices remain active for
+their ten-minute lifetime plus a two-minute settlement grace period. Receipt
+query failures retain the reservation. Recovery still requires the settlement
+peer to return; this path never force closes automatically.
+
+The manager excludes `/receive/status` reservations from channelization and
+legacy startup return. If it cannot read the journal, it postpones those actions.
+Retries after a lost creation response reuse the same request id. Fixed amounts
+below 354 sats and amountless requests are refused. Unsupported engines or peers
+show an error instead of silently producing an online-only invoice.
+
+**Engine requirement:** the daemon `/receive/*` API and funding-policy environment
+variable require Beignet 0.21.9 or newer. The image workflow pins 0.21.9. Older
+engines fail the capability check and cannot create automatic offline invoices.
+
+The advanced manual workflow below remains available for other Lightning wallets.
+Its startup return does not own automatic reservations.
+
 ## How it works
 
 Before going away, the wallet (the receiver, R in the spec) pre-signs a book
@@ -21,9 +73,9 @@ land in the wallet's channel balance. If S is gone or contradicts the
 epoch, the wallet can **enforce** on-chain: a force close that claims every
 settled voucher through the signature S gave at setup.
 
-Two things the engine leaves to the host, and this app does:
+The legacy manual workflow leaves these responsibilities to the host:
 
-- **The return is not automatic in the engine.** On reestablish it only
+- **Manual books use the manager return.** On reestablish it only
   notices a mismatch; nothing credits the settled slots. The manager calls
   `POST /ffor/recover` (cooperative only, never a force close on its own)
   after every healthy start, for every epoch the wallet receives on whose

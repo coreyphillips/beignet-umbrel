@@ -1177,13 +1177,7 @@ function lightningBalance(id) {
 		if (c.state === 'NORMAL' || c.state === 'AWAITING_REESTABLISH')
 			return a + c.localBalanceSats;
 		if (c.state === 'SPLICING' && c.payThroughSplice)
-			return (
-				a +
-				Math.min(
-					c.localBalanceSats,
-					c.pendingSpliceLocalBalanceSats ?? c.localBalanceSats
-				)
-			);
+			return a + Math.min(c.localBalanceSats, c.pendingSpliceLocalBalanceSats ?? c.localBalanceSats);
 		return a;
 	}, 0);
 }
@@ -1315,7 +1309,7 @@ function publicRecord(w) {
 	// otherwise), so gate it the same way here: turning announce off drops the
 	// advertised Tor address, and anything keyed on it disappears with it.
 	const { ...rec } = w;
-	rec.onionAddress = w.announce ? (w.onionAddress ?? null) : null;
+	rec.onionAddress = w.announce ? w.onionAddress ?? null : null;
 	rec.recovery = {
 		mode: w.recovery?.mode || 'off',
 		guardians: (w.recovery?.guardians || []).slice(),
@@ -1498,6 +1492,7 @@ function managerRequest(path, method, body) {
 			lastBackupAt: store.settings.lastBackupAt,
 			lfbwAvailable: true,
 			jitQuoteAvailable: true,
+			offlineReceiveAvailable: true,
 			recoveryAutoApplyAvailable: true,
 			guardianHostingAvailable: true,
 			guardianRotationAvailable: true,
@@ -2743,6 +2738,34 @@ function walletRequest(id, path, method, body) {
 		}
 		case '/invoices':
 			return st.invoices.map(invoiceInfo);
+
+		case '/receive/status':
+			return { available: true, reservedChannelIds: [], requests: [] };
+		case '/receive/quote': {
+			const q = new URLSearchParams(query || '');
+			return {
+				peer: q.get('peer'),
+				amountSats: Number(q.get('amountSats')),
+				terms: { feeBaseMsat: 0, feePpm: 0 },
+				expiresAt: Date.now() + 60000
+			};
+		}
+		case '/receive/invoice': {
+			const old = st.invoices.find((i) => i.requestId === body.requestId);
+			if (old) return { ...invoiceInfo(old), offlineReceive: true };
+			const inv = {
+				paymentHash: hex(64),
+				bolt11: demoInvoice(w.network, body.amountSats),
+				amountSats: body.amountSats,
+				description: body.description || '',
+				createdAt: inSeconds(Date.now()),
+				expiry: 600,
+				paid: false,
+				requestId: body.requestId
+			};
+			st.invoices.unshift(inv);
+			return { ...invoiceInfo(inv), offlineReceive: true };
+		}
 		case '/jit/invoice': {
 			// The wallet asks the LSP over the peer connection for an intercept
 			// SCID and a fee quote, refusing a quote above its own ceilings

@@ -1,7 +1,7 @@
 # Lightning-first wallets
 
 A lightning-first wallet is a Beignet wallet with one balance the user sees,
-held in a single Lightning channel with a **primary node**. Bitcoin that lands
+held in Lightning channels with a **primary node**. Bitcoin that lands
 on its deposit address moves into that channel by itself once it confirms,
 invoices are payable even before the channel exists, and sending to a bitcoin
 address spends from the channel. The user never manages a channel; the
@@ -11,6 +11,23 @@ This document is the product and trust model as built. The protocol behind
 the direct-funding request is in `bolt-draft-direct-funding.md` (revision 2,
 the envelope the engine implements); the engine work is tracked in
 coreyphillips/beignet#532.
+
+## Automatic receive update
+
+The ordinary Lightning Receive form now always prepares offline payment before
+showing an invoice, including when an existing channel has enough inbound
+capacity. Enter a fixed amount of at least 354 sats, review the primary's sender
+fee and create the invoice. It stays payable for ten minutes while the wallet is
+closed, and reopening credits paid funds automatically. No separate offline
+mode or manual recovery is needed.
+
+Preparation uses an empty inbound channel or requests one from the primary.
+Existing spendable funds remain on an available channel. The primary must opt
+into settlement and, when needed, channel funding with cumulative limits.
+Unsupported setup is explicit and does not fall back to an online invoice.
+Lightning-first invoice creation uses `/receive/invoice`. The existing JIT
+provider role remains available for older clients.
+See [automatic receive and its engine requirements](FFOR.md#automatic-lightning-first-receiving).
 
 ## What the user sees
 
@@ -34,9 +51,9 @@ coreyphillips/beignet#532.
   direct-funding request (`bgnq`), so a beignet wallet paying it funds the
   channel in one transaction. Any other wallet pays the address and the
   deposit moves into Lightning after one confirmation. The Lightning invoice
-  is provisioned through the primary just in time when the home channel
-  cannot cover the amount, and the fee the primary quotes (zero for your own
-  wallets) is said on screen.
+  is prepared for offline payment before it is displayed, and the sender fee
+  the primary quotes is shown on screen. When that invoice is attached to
+  the BIP21 request, the direct-funding attachment is omitted.
 - **Send**: opens on Lightning. "Bitcoin address" is a splice-out of the home
   channel, priced by the daemon; the slider stops at what the channel can
   release net of fee and reserve. A pasted request from a beignet wallet is

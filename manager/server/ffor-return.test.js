@@ -94,7 +94,7 @@ test('a start reconciles every receiver epoch once its channel is back, and keep
 	stubDaemon(m, { epochs: [activeEpoch(), { channelId: 'cc', role: 'S', state: 'ACTIVE' }], recover: closed });
 	await m._fforReturn('r1');
 	const recovers = m.calls.filter(([, p]) => p === '/ffor/recover');
-	assert.equal(recovers.length, 1, 'the S-side record is the sibling\'s business, not a return');
+	assert.equal(recovers.length, 1, "the S-side record is the sibling's business, not a return");
 	assert.deepEqual(recovers[0][2], { channelId: CH, forceCloseIfUnreachable: false });
 	const rec = m.publicRecord('r1');
 	assert.equal(rec.fforReturn.action, 'closed');
@@ -239,4 +239,25 @@ test('settlement candidates are the opted-in siblings, marked by health', () => 
 	m.runtimeState('s1').healthy = true;
 	assert.deepEqual(m.fforCandidates('r1'), [{ id: 's1', name: 'Settler', nodeId: '02' + 'cd'.repeat(32), running: true, settles: true, witnesses: false, issues: false }]);
 	assert.throws(() => m.fforCandidates('nope'), (err) => err.code === 'NOT_FOUND');
+});
+
+test('startup leaves automatic requests to the daemon coordinator and fails closed on unreadable status', async () => {
+	const { m } = managerWith({ r1: receiver() });
+	m.offlineReceiveSupported = true;
+	m.runtimeState('r1').proc = {};
+	const calls = [];
+	m._daemonCall = async (_r, method, path) => {
+		calls.push(path);
+		if (path === '/ffor/epochs') return [activeEpoch()];
+		if (path === '/receive/status') return { requests: [{ channelId: CH }] };
+		if (path === '/channels') return [{ channelId: CH, state: 'NORMAL' }];
+		throw Error('Must not close an automatic request');
+	};
+	await m._fforReturn('r1');
+	assert.equal(calls.includes('/ffor/recover'), false);
+	m._daemonCall = async (_r, _m, path) => {
+		if (path === '/ffor/epochs') return [activeEpoch()];
+		throw Error('journal unavailable');
+	};
+	await assert.rejects(m._fforReturn('r1'), /journal unavailable/);
 });

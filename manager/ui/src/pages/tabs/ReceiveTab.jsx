@@ -6,26 +6,23 @@ import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
-import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
-import { manager } from '../../api.js';
 import OfflineReceiveCard from '../../components/OfflineReceiveCard.jsx';
+import { manager } from '../../api.js';
 
 // A direct-funding request is re-minted when the amount changes (the
 // receiver signs the amount into it), after the hand has settled.
 const FUNDING_DEBOUNCE_MS = 400;
-// A JIT invoice's lifetime, and with it the intent the primary holds open.
-const JIT_INVOICE_EXPIRY_SECS = 15 * 60;
 
 export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, info }) {
 	const onchainOnly = !!rec?.onchainOnly;
 	// A lightning-first wallet's on-chain request also carries a direct-funding
-	// request, and its invoices are provisioned by the primary node just in
-	// time when the home channel cannot take the amount as it stands.
+	// request. Its Lightning invoices are prepared for offline payment before
+	// they are shown to the user.
 	const isLfbw = !!rec?.lfbw?.enabled;
 	const lfbwReady = isLfbw && rec.lfbw.setup === 'ready';
 	const toast = useToast();
 	const [funding, setFunding] = useState(null);
-	const [jitInfo, setJitInfo] = useState(null);
+
 	const [address, setAddress] = useState('');
 	const [onchainAmount, setOnchainAmount] = useState('');
 	const [onchainMessage, setOnchainMessage] = useState('');
@@ -34,122 +31,101 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 	const [amount, setAmount] = useState('');
 	const [description, setDescription] = useState('');
 	const [busy, setBusy] = useState(false);
+	const [offlineRequested, setOfflineRequested] = useState(false);
+	const [selectedPeer, setSelectedPeer] = useState('');
+	const wantsOffline = isLfbw || offlineRequested;
+	useEffect(() => {
+		setOfflineRequested(false);
+		setSelectedPeer('');
+		setInvoice(null);
+	}, [id]);
 	const { data: invoices, refresh } = usePoll(
 		() => (onchainOnly ? Promise.resolve([]) : api.get('/invoices').catch(() => [])),
 		10000,
 		[id, tick, onchainOnly]
 	);
-	const { data: channels } = usePoll(
-		() => (isLfbw ? api.get('/channels').catch(() => null) : Promise.resolve(null)),
-		15000,
-		[id, tick, isLfbw]
-	);
-	// Whether the primary is on the other end of a live peer connection: a
-	// primary whose daemon runs but whose connection is down cannot
-	// provision, so the invoice is refused before it is minted (umbrel #89).
 	const { data: peers } = usePoll(
-		() => (isLfbw ? api.get('/peers').catch(() => null) : Promise.resolve(null)),
+		() => (wantsOffline ? api.get('/peers').catch(() => []) : Promise.resolve([])),
 		15000,
-		[id, tick, isLfbw]
+		[id, tick, wantsOffline]
 	);
-	const primaryConnected = useMemo(
+	const { data: candidates } = usePoll(
+		() => (offlineRequested ? manager.fforCandidates(id).catch(() => []) : Promise.resolve([])),
+		15000,
+		[id, tick, offlineRequested]
+	);
+	const receivingNodes = useMemo(
 		() =>
-			!isLfbw || !peers
-				? true
-				: peers.some(
-						(p) =>
-							p.pubkey === rec.lfbw.primaryPubkey &&
-							(p.state === 'connected' || p.state === 'ready' || p.connected === true)
-				  ),
-		[isLfbw, peers, rec?.lfbw?.primaryPubkey]
+			(peers || [])
+				.filter((p) => p.state === 'connected' || p.state === 'ready' || p.connected === true)
+				.map((p) => {
+					const known = (candidates || []).find((c) => c.nodeId === p.pubkey);
+					return { pubkey: p.pubkey, name: known?.name || p.alias || shortId(p.pubkey), settles: !!known?.settles };
+				})
+				.sort((a, b) => Number(b.settles) - Number(a.settles) || a.pubkey.localeCompare(b.pubkey)),
+		[peers, candidates]
 	);
+	const receivePeer = isLfbw ? rec?.lfbw?.primaryPubkey : selectedPeer || receivingNodes[0]?.pubkey;
+	const peerConnected = receivingNodes.some((p) => p.pubkey === receivePeer);
+	const nodeLabel = isLfbw ? 'primary node' : 'receiving node';
 
-	// Which invoice the amount typed would mint, read off the polled channels
-	// so the price can be said before anything exists. The primary's
-	// running state is asked at creation, where it decides the refusal text.
-	const wantedSats = parseInt(amount, 10) || 0;
-	const plan = useMemo(
-		() =>
-			isLfbw && channels
-				? planInvoice({ wantedSats, channels, primaryPubkey: rec.lfbw.primaryPubkey, setup: rec.lfbw.setup, primaryConnected })
-				: null,
-		[isLfbw, channels, wantedSats, rec?.lfbw?.primaryPubkey, rec?.lfbw?.setup, primaryConnected]
-	);
-	// The price of a just-in-time receive, asked of the primary before the
-	// invoice exists (beignet #687): the quote registers nothing with it, so
-	// asking is free, and the answer says whether the primary would front
-	// this at all right now. Engines before the route get no line.
-	const jitQuote = useQuote(
+	const wantedSats = Number(amount) || 0;
+	const [quoteTick, setQuoteTick] = useState(0);
+	useEffect(() => {
+		if (!wantsOffline) return;
+		const timer = setInterval(() => setQuoteTick((n) => n + 1), 45000);
+		return () => clearInterval(timer);
+	}, [wantsOffline]);
+	const receiveQuote = useQuote(
 		api,
-		{
-			lspPubkey: rec?.lfbw?.primaryPubkey,
-			amountSats: wantedSats > 0 ? wantedSats : undefined,
-			targetRemainingInboundSat: INBOUND_HEADROOM_SATS
-		},
-		!!config?.jitQuoteAvailable && lfbwReady && plan?.kind === 'jit',
-		'/jit/quote',
+		{ peer: receivePeer, amountSats: wantedSats, refresh: quoteTick },
+		wantsOffline &&
+			!!config?.offlineReceiveAvailable &&
+			(!isLfbw || lfbwReady) &&
+			peerConnected &&
+			Number.isSafeInteger(wantedSats) &&
+			wantedSats >= 354,
+		'/receive/quote',
 		'GET'
 	);
 	const quoteLine = useMemo(() => {
-		if (lfbwReady && plan?.kind === 'refuse' && plan.code === 'PRIMARY_DOWN') {
-			return {
-				tone: 'error',
-				blocks: true,
-				text: 'Your primary node is not connected, and this invoice needs it to provide inbound capacity. Wait for it to reconnect, or ask for an amount the channel already covers.'
-			};
-		}
-		if (!config?.jitQuoteAvailable || !lfbwReady || plan?.kind !== 'jit') return null;
-		const { quote, error, errorCode } = jitQuote;
-		if (errorCode === 'PEER_NOT_CONNECTED') {
-			return { tone: 'error', blocks: true, text: 'Your primary node is not connected, and this invoice needs it to provide inbound capacity.' };
-		}
-		if (error && !quote) {
-			return { tone: 'error', blocks: false, text: `Could not get a price from your primary node: ${error}` };
-		}
-		if (!quote) return null;
-		if (quote.accepted === false) {
-			return {
-				tone: 'error',
-				blocks: true,
-				text: `Your primary cannot fund this invoice right now${quote.reason ? `: ${quote.reason}` : '.'}`
-			};
-		}
-		const flat = quote.flatFeeSat || 0;
-		const ppm = quote.feePpm || 0;
-		// The provider would front it, but at a price this wallet's own
-		// ceilings refuse (the daemon refuses the invoice on the same
-		// numbers), so it is a refusal with its own reason.
-		if (quote.withinCeilings === false) {
-			const c = quote.client || {};
-			return {
-				tone: 'error',
-				blocks: true,
-				text: `Your primary asks ${fmtSats(flat)}${ppm > 0 ? ` plus ${ppm} ppm` : ''} for this, more than this wallet accepts${
-					c.maxFlatFeeSat != null || c.maxFeePpm != null
-						? ` (up to ${fmtSats(c.maxFlatFeeSat || 0)}${c.maxFeePpm > 0 ? ` plus ${c.maxFeePpm} ppm` : ''})`
-						: ''
-				}.`
-			};
-		}
-		const terms = flat > 0 || ppm > 0 ? `${fmtSats(flat)}${ppm > 0 ? ` plus ${ppm} ppm` : ''}` : null;
-		if (wantedSats > 0) {
-			const fee = quote.feeSats ?? flat + Math.floor((wantedSats * ppm) / 1_000_000);
-			return {
-				tone: 'info',
-				blocks: false,
-				text: terms
-					? `Your primary will fund this receive for ${fmtSats(fee)} (${terms}), taken from the delivery.`
-					: 'Your primary will fund this receive at no charge.'
-			};
-		}
+		if (!wantsOffline) return null;
+		const block = (text) => ({ tone: 'error', blocks: true, text });
+		if (!config?.offlineReceiveAvailable) return block('Update the app engine to enable automatic receiving.');
+		if (isLfbw && !lfbwReady)
+			return block('Your primary node connection is being prepared. Try again when it is ready.');
+		if (!peerConnected)
+			return block(
+				isLfbw
+					? 'Your primary node is not connected. Wait for it to reconnect.'
+					: 'Connect a node that supports offline receiving in Peers.'
+			);
+		if (!Number.isSafeInteger(wantedSats) || wantedSats < 354) return block('Enter an amount of at least 354 sats.');
+		if (receiveQuote.error) return block(receiveQuote.error);
+		const q = receiveQuote.quote;
+		if (receiveQuote.pending || !q || q.amountSats !== wantedSats || q.peer !== receivePeer)
+			return { tone: 'info', blocks: true, text: 'Checking receive availability…' };
 		return {
 			tone: 'info',
 			blocks: false,
-			text: terms
-				? `Your primary funds what the channel cannot take for ${terms}, taken from the delivery.`
-				: 'Your primary funds what the channel cannot take, at no charge.'
+			text:
+				q.terms.feeBaseMsat || q.terms.feePpm
+					? `You receive the full amount. The payer covers your ${nodeLabel}'s fee of ${q.terms.feeBaseMsat} msat plus ${q.terms.feePpm} ppm.`
+					: `You receive the full amount. Your ${nodeLabel} charges no receive fee.`
 		};
-	}, [config?.jitQuoteAvailable, lfbwReady, plan, jitQuote, wantedSats]);
+	}, [
+		isLfbw,
+		config?.offlineReceiveAvailable,
+		lfbwReady,
+		peerConnected,
+		wantsOffline,
+		nodeLabel,
+		wantedSats,
+		receiveQuote.quote,
+		receiveQuote.pending,
+		receiveQuote.error,
+		receivePeer
+	]);
 
 	const newAddress = async () => {
 		try {
@@ -203,7 +179,11 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [lfbwReady, address, onchainSats, rec?.reach?.host, rec?.reach?.port, api]);
 	const carriesFunding =
-		!!funding && funding.address === address && funding.amountSats === onchainSats && funding.expiresAt > Date.now();
+		!invoice?.offlineReceive &&
+		!!funding &&
+		funding.address === address &&
+		funding.amountSats === onchainSats &&
+		funding.expiresAt > Date.now();
 
 	// A request can carry the invoice from the card beside it, which makes it one
 	// thing to hand out that a payer can settle on either rail: the address for a
@@ -246,8 +226,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 
 	// A settled invoice cannot be paid again, so it has no place in a request
 	// still being handed out.
-	const carriesInvoice =
-		!onchainOnly && !!invoice && !paid && includeInvoice && !invoiceConflicts;
+	const carriesInvoice = !onchainOnly && !!invoice && !paid && includeInvoice && !invoiceConflicts;
 
 	const request = useMemo(
 		// `message` rather than `label`: BIP21 defines label as the recipient's own
@@ -271,67 +250,37 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			const body = { description };
 			if (amount) body.amountSats = parseInt(amount, 10);
 			let r;
-			let jit = null;
-			if (isLfbw) {
-				// Provision inbound first when the home channel cannot take the
-				// amount: the invoice is payable through a channel the primary
-				// funds the moment the payment arrives (a zero-conf open, or a
-				// splice of the home channel), minus the fee it quotes.
-				const lf = rec.lfbw;
-				let primaryRunning = true;
-				if (lf.mode === 'internal' && lf.primaryWalletId) {
-					primaryRunning = await manager
-						.getWallet(lf.primaryWalletId)
-						.then((w) => w.status === 'running')
-						.catch(() => true);
+			if (wantsOffline) {
+				if (quoteLine?.blocks || !receiveQuote.quote) throw new Error(quoteLine?.text || 'Review the amount again.');
+				const peer = receivePeer;
+				const key = `receive-request:${id}`;
+				const fingerprint = JSON.stringify({ peer, ...body });
+				let saved;
+				try {
+					saved = JSON.parse(sessionStorage.getItem(key));
+				} catch {
+					/* No pending request. */
 				}
-				const decided = planInvoice({
-					wantedSats: body.amountSats || 0,
-					channels: channels || (await api.get('/channels').catch(() => [])),
-					primaryPubkey: lf.primaryPubkey,
-					setup: lf.setup,
-					primaryRunning,
-					primaryConnected
+				if (!saved || saved.fingerprint !== fingerprint) saved = { fingerprint, requestId: crypto.randomUUID() };
+				sessionStorage.setItem(key, JSON.stringify(saved));
+				r = await api.post('/receive/invoice', {
+					...body,
+					peer,
+					requestId: saved.requestId,
+					quote: receiveQuote.quote
 				});
-				if (decided.kind === 'refuse') {
-					throw new Error(
-						decided.code === 'PRIMARY_DOWN'
-							? decided.reason === 'not-connected'
-								? 'Your primary node is not connected, and this invoice needs it to provide inbound capacity. Wait for it to reconnect, or ask for an amount the channel already covers.'
-								: 'Your primary node is not running, and this invoice needs it to provide inbound capacity. Start it, or ask for an amount the channel already covers.'
-							: 'The link to your primary node is not set up yet. Retry setup from the Overview tab.'
-					);
-				}
-				if (decided.kind === 'jit') {
-					r = await api.post('/jit/invoice', {
-						lspPubkey: lf.primaryPubkey,
-						...(body.amountSats ? { amountSats: body.amountSats } : {}),
-						description: body.description,
-						targetRemainingInboundSat: INBOUND_HEADROOM_SATS,
-						// The primary holds an intent open for as long as the invoice
-						// lives and allows a few per wallet, so an unpaid invoice must
-						// not hold its slot for an hour (beignet #674).
-						expirySecs: JIT_INVOICE_EXPIRY_SECS
-					});
-					jit = { flatFeeSat: r.flatFeeSat || 0, feePpm: r.feePpm || 0 };
-				}
+				if (r.offlineReceive !== true) throw new Error('Your payment request could not be prepared. Try again.');
+				sessionStorage.removeItem(key);
 			}
 			if (!r) r = await api.post('/invoice/create', body);
 			setInvoice(r);
-			setJitInfo(jit);
-			toast(
-				jit
-					? jit.flatFeeSat > 0 || jit.feePpm > 0
-						? `Invoice created. Your primary node provides the capacity when it is paid, for ${fmtSats(jit.flatFeeSat)}${jit.feePpm > 0 ? ` plus ${jit.feePpm} ppm` : ''}.`
-						: 'Invoice created. Your primary node provides the capacity when it is paid.'
-					: 'Invoice created',
-				'success'
-			);
+			toast('Invoice created', 'success');
 			// The list below polls every ten seconds, which is a long time to look
 			// at a table that does not yet have the invoice you just made in it.
 			refresh();
 		} catch (e) {
 			toast(e.message, 'error');
+			setQuoteTick((n) => n + 1);
 		} finally {
 			setBusy(false);
 		}
@@ -345,8 +294,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 					<Button className="sm" onClick={newAddress}>
 						New address
 					</Button>
-				}
-			>
+				}>
 				<div className="row">
 					<Field label="Amount (sats, optional)">
 						<input
@@ -357,11 +305,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 					</Field>
 				</div>
 				<Field label="Message (optional)">
-					<input
-						value={onchainMessage}
-						onChange={(e) => setOnchainMessage(e.target.value)}
-						placeholder="Coffee"
-					/>
+					<input value={onchainMessage} onChange={(e) => setOnchainMessage(e.target.value)} placeholder="Coffee" />
 				</Field>
 				<div style={{ textAlign: 'center' }}>
 					<QR value={request} />
@@ -379,12 +323,8 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 					{!isRequest
 						? 'Nothing attached, so this is a plain address. Anyone can pay it any amount.'
 						: [
-								onchainSats > 0
-									? `A wallet that scans this fills in ${fmtSats(onchainSats)} for the payer.`
-									: null,
-								trimmedMessage
-									? 'The message travels with the request and is never written to the chain.'
-									: null,
+								onchainSats > 0 ? `A wallet that scans this fills in ${fmtSats(onchainSats)} for the payer.` : null,
+								trimmedMessage ? 'The message travels with the request and is never written to the chain.' : null,
 								carriesInvoice
 									? 'It also carries the Lightning invoice below, so whoever scans it can settle on either rail.'
 									: null,
@@ -412,8 +352,8 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 						{invoiceConflicts && (
 							<div className="info-note">
 								The invoice below asks for {fmtSats(invoice.amountSats)} and this request asks for{' '}
-								{fmtSats(onchainSats)}. A payer's wallet reads the request's amount as binding on
-								both rails, so the two have to agree before they can be handed out as one thing.
+								{fmtSats(onchainSats)}. A payer's wallet reads the request's amount as binding on both rails, so the two
+								have to agree before they can be handed out as one thing.
 							</div>
 						)}
 					</>
@@ -422,123 +362,179 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 
 			{!onchainOnly && (
 				<Card title="Lightning invoice">
-				<div className="row">
-					<Field label="Amount (sats, optional)">
+					<div className="row">
+						<Field label={wantsOffline ? 'Amount (sats)' : 'Amount (sats, optional)'}>
+							<input
+								value={amount}
+								disabled={busy}
+								onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
+								placeholder={isLfbw ? 'Enter amount' : 'any amount'}
+							/>
+						</Field>
+					</div>
+					<Field label="Description">
 						<input
-							value={amount}
-							onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
-							placeholder="any amount"
+							disabled={busy}
+							value={description}
+							onChange={(e) => setDescription(e.target.value)}
+							placeholder="Coffee"
 						/>
 					</Field>
-				</div>
-				<Field label="Description">
-					<input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Coffee" />
-				</Field>
-				{quoteLine && (
-					<div className={quoteLine.tone === 'error' ? 'error-note' : 'info-note'} role="status" data-testid="jit-quote">
-						{quoteLine.text}
-					</div>
-				)}
-				<Button variant="primary" busy={busy} disabled={!!quoteLine?.blocks} onClick={createInvoice}>
-					Create invoice
-				</Button>
-				<AnimatePresence mode="wait">
-					{invoice && !paid && (
-						<m.div
-							key={invoice.bolt11}
-							style={{ textAlign: 'center', marginTop: 16 }}
-							initial={{ opacity: 0, scale: 0.92, y: 8 }}
-							animate={{ opacity: 1, scale: 1, y: 0 }}
-							exit={{ opacity: 0, scale: 0.96 }}
-						>
-							<QR value={invoice.bolt11} />
-							<div style={{ marginTop: 12 }}>
-								<CopyText value={invoice.bolt11} truncate />
+					{!isLfbw && (
+						<>
+							<label className="checkbox field">
+								<input
+									type="checkbox"
+									data-testid="receive-offline"
+									checked={offlineRequested}
+									disabled={
+										busy ||
+										(!offlineRequested &&
+											(!config?.offlineReceiveAvailable || !Number.isSafeInteger(wantedSats) || wantedSats < 354))
+									}
+									onChange={(e) => {
+										setOfflineRequested(e.target.checked);
+										setInvoice(null);
+									}}
+								/>
+								Receive offline
+							</label>
+							<div className="field-hint">
+								{!config?.offlineReceiveAvailable
+									? 'Update the app engine to enable offline receiving.'
+									: wantedSats < 354
+									? 'Enter an amount of at least 354 sats to receive offline.'
+									: 'Accept this payment even while this wallet is stopped. Closing the browser alone does not stop the wallet.'}
 							</div>
-							{jitInfo && (
-								<div className="field-hint" style={{ marginTop: 10 }} role="status">
-									Payable now: your primary node provides the inbound capacity the moment this is paid
-									{jitInfo.flatFeeSat > 0 || jitInfo.feePpm > 0
-										? `, and takes ${fmtSats(jitInfo.flatFeeSat)}${jitInfo.feePpm > 0 ? ` plus ${jitInfo.feePpm} ppm` : ''} from the delivery for it.`
-										: ', at no charge.'}
-								</div>
+							{offlineRequested && receivingNodes.length > 0 && (
+								<Field label="Receiving node">
+									<select
+										value={receivePeer || ''}
+										disabled={busy}
+										onChange={(e) => {
+											setSelectedPeer(e.target.value);
+											setInvoice(null);
+										}}>
+										{selectedPeer && !peerConnected && <option value={selectedPeer}>Disconnected node</option>}
+										{receivingNodes.map((p) => (
+											<option key={p.pubkey} value={p.pubkey}>
+												{p.name}
+											</option>
+										))}
+									</select>
+								</Field>
 							)}
-						</m.div>
+							<div className="field-hint">
+								Changing this option requires a new invoice. Already shared invoices stay unchanged.
+							</div>
+						</>
 					)}
-					{invoice && paid && (
-						// The receipt takes the QR's place outright. A paid invoice
-						// cannot be paid again, so leaving its code on screen invites
-						// the one scan that is guaranteed to fail.
-						<m.div
-							key={`paid-${invoice.bolt11}`}
-							className="paid-receipt"
+					{quoteLine && (
+						<div
+							className={quoteLine.tone === 'error' ? 'error-note' : 'info-note'}
 							role="status"
-							initial={{ opacity: 0, scale: 0.9 }}
-							animate={{ opacity: 1, scale: 1 }}
-						>
-							<div className="paid-check" aria-hidden="true">
-								✓
-							</div>
-							<div className="paid-title">Paid</div>
-							<div className="wallet-meta">
-								{paidInfo.amountSats != null
-									? `${fmtSats(paidInfo.amountSats)} received over Lightning.`
-									: 'Received over Lightning.'}
-							</div>
-						</m.div>
+							data-testid="receive-quote">
+							{quoteLine.text}
+						</div>
 					)}
-				</AnimatePresence>
-			</Card>
+					<Button variant="primary" busy={busy} disabled={!!quoteLine?.blocks} onClick={createInvoice}>
+						Create invoice
+					</Button>
+					<AnimatePresence mode="wait">
+						{invoice && !paid && (
+							<m.div
+								key={invoice.bolt11}
+								style={{ textAlign: 'center', marginTop: 16 }}
+								initial={{ opacity: 0, scale: 0.92, y: 8 }}
+								animate={{ opacity: 1, scale: 1, y: 0 }}
+								exit={{ opacity: 0, scale: 0.96 }}>
+								<QR value={invoice.bolt11} />
+								<div style={{ marginTop: 12 }}>
+									<CopyText value={invoice.bolt11} truncate />
+								</div>
+								{invoice.offlineReceive && (
+									<div className="info-note" role="status">
+										You can close your wallet. Payments will appear when you reopen it.
+									</div>
+								)}
+							</m.div>
+						)}
+						{invoice && paid && (
+							// The receipt takes the QR's place outright. A paid invoice
+							// cannot be paid again, so leaving its code on screen invites
+							// the one scan that is guaranteed to fail.
+							<m.div
+								key={`paid-${invoice.bolt11}`}
+								className="paid-receipt"
+								role="status"
+								initial={{ opacity: 0, scale: 0.9 }}
+								animate={{ opacity: 1, scale: 1 }}>
+								<div className="paid-check" aria-hidden="true">
+									✓
+								</div>
+								<div className="paid-title">Paid</div>
+								<div className="wallet-meta">
+									{paidInfo.amountSats != null
+										? `${fmtSats(paidInfo.amountSats)} received over Lightning.`
+										: 'Received over Lightning.'}
+								</div>
+							</m.div>
+						)}
+					</AnimatePresence>
+				</Card>
 			)}
 
 			{/* Receive while offline (FFOR): a voucher book pre-signed with a
 			    sibling that stays online, one invoice per voucher, payable with
 			    this wallet off. Only on an engine that carries the routes. */}
-			{!onchainOnly && config?.fforAvailable && (
-				<OfflineReceiveCard id={id} api={api} rec={rec} tick={tick} info={info} />
+			{!onchainOnly && !isLfbw && config?.fforAvailable && (
+				<details className="grid-full">
+					<summary>Advanced offline receive</summary>
+					<OfflineReceiveCard id={id} api={api} rec={rec} tick={tick} info={info} />
+				</details>
 			)}
 
 			{!onchainOnly && (
 				<Card title="Recent invoices" className="grid-full">
-				{!invoices || invoices.length === 0 ? (
-					<div className="empty">No invoices yet.</div>
-				) : (
-					<div className="table-wrap">
-						<table>
-							<thead>
-								<tr>
-									<th>Amount</th>
-									<th>Description</th>
-									<th>Invoice</th>
-									<th>Status</th>
-								</tr>
-							</thead>
-							<tbody>
-								{invoices.slice(0, 20).map((inv) => (
-									<tr key={inv.paymentHash}>
-										<td>{inv.amountSats ? fmtSats(inv.amountSats) : 'any'}</td>
-										<td>{inv.description || '-'}</td>
-										{/* The invoice itself rather than its hash: an invoice you cannot
-										    hand out again is of no use to anyone, and the hash never was. */}
-										<td>
-											{inv.bolt11 ? (
-												<CopyText value={inv.bolt11} label={shortId(inv.bolt11)} />
-											) : (
-												<span className="mono">{shortId(inv.paymentHash)}</span>
-											)}
-										</td>
-										<td>
-											<Badge tone={inv.status === 'PAID' || inv.status === 'COMPLETED' ? 'green' : 'muted'}>
-												{inv.status || 'open'}
-											</Badge>
-										</td>
+					{!invoices || invoices.length === 0 ? (
+						<div className="empty">No invoices yet.</div>
+					) : (
+						<div className="table-wrap">
+							<table>
+								<thead>
+									<tr>
+										<th>Amount</th>
+										<th>Description</th>
+										<th>Invoice</th>
+										<th>Status</th>
 									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				)}
-			</Card>
+								</thead>
+								<tbody>
+									{invoices.slice(0, 20).map((inv) => (
+										<tr key={inv.paymentHash}>
+											<td>{inv.amountSats ? fmtSats(inv.amountSats) : 'any'}</td>
+											<td>{inv.description || '-'}</td>
+											{/* The invoice itself rather than its hash: an invoice you cannot
+										    hand out again is of no use to anyone, and the hash never was. */}
+											<td>
+												{inv.bolt11 ? (
+													<CopyText value={inv.bolt11} label={shortId(inv.bolt11)} />
+												) : (
+													<span className="mono">{shortId(inv.paymentHash)}</span>
+												)}
+											</td>
+											<td>
+												<Badge tone={inv.status === 'PAID' || inv.status === 'COMPLETED' ? 'green' : 'muted'}>
+													{inv.status || 'open'}
+												</Badge>
+											</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
+					)}
+				</Card>
 			)}
 		</div>
 	);

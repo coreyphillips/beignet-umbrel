@@ -22,7 +22,12 @@ const settler = (extra = {}) => ({
 });
 
 test('normalizeFfor fills defaults, validates the caps and clears an optional one on null', () => {
-	assert.deepEqual(ffor.normalizeFfor(undefined), { settle: { ...ffor.SETTLE_DEFAULTS }, witness: { ...ffor.WITNESS_DEFAULTS }, issuer: { ...ffor.ISSUER_DEFAULTS } });
+	assert.deepEqual(ffor.normalizeFfor(undefined), {
+		funding: { enabled: false, maxChannels: 20, maxChannelsPerPeer: 5, maxChannelSats: 1000000, maxTotalSats: 5000000 },
+		settle: { ...ffor.SETTLE_DEFAULTS },
+		witness: { ...ffor.WITNESS_DEFAULTS },
+		issuer: { ...ffor.ISSUER_DEFAULTS }
+	});
 	const on = ffor.normalizeFfor({ settle: { enabled: 1, maxBudgetMsat: '5000000', feePpm: 250 } });
 	assert.deepEqual(on.settle, { enabled: true, maxBudgetMsat: 5000000, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 250 });
 	const kept = ffor.normalizeFfor({ settle: { maxBudgetMsat: null } }, on);
@@ -168,9 +173,25 @@ test('candidates carry every role a sibling holds', () => {
 	]);
 });
 
-test('a sibling settlement peer\'s book carries its own forwarding policy, raised to its floor', () => {
+test("a sibling settlement peer's book carries its own forwarding policy, raised to its floor", () => {
 	const settler = { ffor: { settle: { enabled: true, feeBaseMsat: 0, feePpm: 50 } } };
 	assert.deepEqual(ffor.settlerTerms({ feeBaseMsat: 1000, feeProportionalMillionths: 1 }, settler), { feeBaseMsat: 1000, feeProportionalMillionths: 50 });
 	assert.equal(ffor.settlerTerms(null, settler), null);
 	assert.deepEqual(ffor.settlerTerms({ feeBaseMsat: '2000', feeProportionalMillionths: 10 }, {}), { feeBaseMsat: 2000, feeProportionalMillionths: 10 });
+});
+
+test('automatic channel funding is explicit, bounded, and carried to the daemon', () => {
+	const rec = {
+		ffor: ffor.normalizeFfor({
+			settle: { enabled: true },
+			funding: { enabled: true, maxChannels: 2, maxChannelsPerPeer: 1, maxChannelSats: 80000, maxTotalSats: 160000 }
+		})
+	};
+	assert.deepEqual(JSON.parse(ffor.fforEnv(rec).BEIGNET_FFOR_RECEIVE_FUNDING), rec.ffor.funding);
+	assert.equal(ffor.fforEnv({ ffor: { settle: { enabled: true } } }).BEIGNET_FFOR_RECEIVE_FUNDING, undefined);
+	assert.throws(() => ffor.normalizeFfor({ funding: { enabled: true } }), /Enable settlement/);
+	for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])
+		assert.throws(() =>
+			ffor.normalizeFfor({ settle: { enabled: true }, funding: { enabled: true, maxTotalSats: bad } })
+		);
 });
