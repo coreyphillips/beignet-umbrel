@@ -28,6 +28,20 @@ const SETTLE_DEFAULTS = Object.freeze({
 // _MAX_BYTES, unset means the engine's defaults) and the issuer switch,
 // which the daemon refuses to start with unless the witness is on: the
 // issuer is co-hosted with the first receipt witness.
+const FUNDING_DEFAULTS = Object.freeze({
+	enabled: false,
+	maxChannels: 20,
+	maxChannelsPerPeer: 5,
+	maxChannelSats: 1000000,
+	maxTotalSats: 5000000
+});
+const FUNDING_BOUNDS = Object.freeze({
+	maxChannels: [1, 100000, false],
+	maxChannelsPerPeer: [1, 100000, false],
+	maxChannelSats: [1, Number.MAX_SAFE_INTEGER, false],
+	maxTotalSats: [1, Number.MAX_SAFE_INTEGER, false]
+});
+
 const WITNESS_DEFAULTS = Object.freeze({ enabled: false, maxMailboxes: null, maxBytes: null });
 const ISSUER_DEFAULTS = Object.freeze({ enabled: false });
 const WITNESS_BOUNDS = Object.freeze({
@@ -145,6 +159,7 @@ function normalizeFfor(input, existing) {
 	const ex = existing || {};
 	const base = {
 		settle: { ...SETTLE_DEFAULTS, ...(ex.settle || {}) },
+		funding: { ...FUNDING_DEFAULTS, ...(ex.funding || {}) },
 		witness: { ...WITNESS_DEFAULTS, ...(ex.witness || {}) },
 		issuer: { ...ISSUER_DEFAULTS, ...(ex.issuer || {}) }
 	};
@@ -152,12 +167,15 @@ function normalizeFfor(input, existing) {
 	if (typeof input !== 'object') throw httpError(400, 'BAD_FFOR', 'ffor must be an object');
 	const out = {
 		settle: normalizeRole('settle', input.settle, base.settle, SETTLE_BOUNDS),
+		funding: normalizeRole('funding', input.funding, base.funding, FUNDING_BOUNDS),
 		witness: normalizeRole('witness', input.witness, base.witness, WITNESS_BOUNDS),
 		issuer: normalizeRole('issuer', input.issuer, base.issuer, {})
 	};
 	// The daemon refuses to start with the issuer and no witness (the
 	// issuer is co-hosted with the first receipt witness), so the record
 	// refuses the same combination on the request that made it.
+	if (out.funding.enabled && !out.settle.enabled)
+		throw httpError(400, 'BAD_FFOR', 'Enable settlement before receive-channel funding.');
 	if (out.issuer.enabled && !out.witness.enabled) {
 		throw httpError(400, 'BAD_FFOR', 'The issuer runs on a receipt witness: turn on the witness too.');
 	}
@@ -192,10 +210,11 @@ function hasFforRole(rec) {
  */
 function fforEnv(rec) {
 	if (!hasFforRole(rec)) return {};
-	const { settle, witness, issuer } = normalizeFfor(undefined, rec.ffor);
+	const { settle, witness, issuer, funding } = normalizeFfor(undefined, rec.ffor);
 	const env = {};
 	if (settle.enabled) {
 		env.BEIGNET_FFOR_SETTLE = 'true';
+		if (funding.enabled) env.BEIGNET_FFOR_RECEIVE_FUNDING = JSON.stringify(funding);
 		env.BEIGNET_FFOR_FEE_BASE_MSAT = String(settle.feeBaseMsat);
 		env.BEIGNET_FFOR_FEE_PPM = String(settle.feePpm);
 		if (settle.maxBudgetMsat !== null && settle.maxBudgetMsat !== undefined) {
@@ -299,16 +318,22 @@ function planSetup({ witnessWalletIds = [], issuer = null }, candidates, settler
 	for (const walletId of witnessWalletIds) {
 		const c = byId.get(walletId);
 		if (c && settlerNodeId && c.nodeId === settlerNodeId) {
-			throw httpError(400, 'BAD_FFOR_SETUP', `"${c.name}" is the settlement peer; a witness sits on the path before it`);
+			throw httpError(
+				400,
+				'BAD_FFOR_SETUP',
+				`"${c.name}" is the settlement peer; a witness sits on the path before it`
+			);
 		}
-		if (!c || !c.witnesses) throw httpError(400, 'BAD_FFOR_SETUP', `"${walletId}" is not a sibling that keeps receipts`);
+		if (!c || !c.witnesses)
+			throw httpError(400, 'BAD_FFOR_SETUP', `"${walletId}" is not a sibling that keeps receipts`);
 		if (!c.running) throw httpError(400, 'BAD_FFOR_SETUP', `"${c.name}" is not running`);
 		if (!witnesses.some((w) => w.id === c.id)) witnesses.push(c);
 	}
 	let issuerParty = null;
 	if (issuer && issuer.walletId) {
 		const c = byId.get(issuer.walletId);
-		if (!c || !c.issues) throw httpError(400, 'BAD_FFOR_SETUP', `"${issuer.walletId}" is not a sibling that issues invoices`);
+		if (!c || !c.issues)
+			throw httpError(400, 'BAD_FFOR_SETUP', `"${issuer.walletId}" is not a sibling that issues invoices`);
 		if (!witnesses.some((w) => w.id === c.id)) {
 			throw httpError(400, 'BAD_FFOR_SETUP', `The issuer "${c.name}" must be one of the witnesses`);
 		}
@@ -332,7 +357,9 @@ function returnJobs(epochs, channels) {
 			.map((c) => String(c.channelId))
 	);
 	return (Array.isArray(epochs) ? epochs : [])
-		.filter((e) => e && e.role === 'R' && RETURN_STATES.includes(e.state) && e.channelId && !closed.has(String(e.channelId)))
+		.filter(
+			(e) => e && e.role === 'R' && RETURN_STATES.includes(e.state) && e.channelId && !closed.has(String(e.channelId))
+		)
 		.map((e) => String(e.channelId));
 }
 
@@ -377,7 +404,8 @@ function describeReturn(result) {
 	// the two is what the wallet can claim.
 	const credited = Math.max(Array.isArray(result.preimagesKnown) ? result.preimagesKnown.length : 0, settled);
 	const action = result.action || 'nothing';
-	const outcome = result.outcome || returnOutcome({ action, epoch, channelState: result.channelState, error: result.error });
+	const outcome =
+		result.outcome || returnOutcome({ action, epoch, channelState: result.channelState, error: result.error });
 	return {
 		action,
 		outcome,

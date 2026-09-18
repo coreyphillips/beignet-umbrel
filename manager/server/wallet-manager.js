@@ -52,7 +52,8 @@ const {
 	recoveryAutoApplyAvailable,
 	guardianHostingAvailable,
 	guardianRotationAvailable,
-	fforAvailable
+	fforAvailable,
+	offlineReceiveAvailable
 } = require('./engine');
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
@@ -177,6 +178,7 @@ class WalletManager {
 		// FFOR offline receive (beignet #729, #865): the routes and, from
 		// 0.21.4, the role switches the daemon honours; probed on the bundle.
 		this.fforSupported = fforAvailable();
+		this.offlineReceiveSupported = offlineReceiveAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 	}
@@ -575,6 +577,10 @@ class WalletManager {
 		return this.guardianRotationSupported === true;
 	}
 
+	offlineReceiveAvailable() {
+		return this.offlineReceiveSupported === true;
+	}
+
 	fforAvailable() {
 		return this.fforSupported === true;
 	}
@@ -591,8 +597,7 @@ class WalletManager {
 	 * over the file. Both keep a copy of what they could not read.
 	 */
 	health() {
-		const failure = (err) =>
-			err ? { error: err.message, backup: err.backup || null, at: err.at || null } : null;
+		const failure = (err) => (err ? { error: err.message, backup: err.backup || null, at: err.at || null } : null);
 		const registry = failure(this.registry.loadError);
 		const settings = failure(this.settings.loadError);
 		return { status: registry || settings ? 'degraded' : 'ok', registry, settings };
@@ -698,6 +703,8 @@ class WalletManager {
 	 */
 	_normalizeFfor(input, existing, onchainOnly) {
 		const next = ffor.normalizeFfor(input, existing);
+		if (next.funding?.enabled && !this.offlineReceiveAvailable())
+			throw httpError(400, 'RECEIVE_UNSUPPORTED', 'Update the engine before enabling automatic receive funding.');
 		if (!next.settle.enabled && !next.witness.enabled) return next;
 		if (!this.fforAvailable()) {
 			throw httpError(
@@ -1022,7 +1029,12 @@ class WalletManager {
 		if (rec.onchainOnly && rec.ffor && ffor.hasFforRole({ ...rec, onchainOnly: false })) {
 			// Parking Lightning stops the listener every FFOR role runs on.
 			rec.ffor = ffor.normalizeFfor(
-				{ settle: { enabled: false }, witness: { enabled: false }, issuer: { enabled: false } },
+				{
+					settle: { enabled: false },
+					witness: { enabled: false },
+					issuer: { enabled: false },
+					funding: { enabled: false }
+				},
 				rec.ffor
 			);
 		}
@@ -2546,9 +2558,12 @@ class WalletManager {
 		const rec = this.registry.get(id);
 		if (!rec || rec.onchainOnly || !this.fforAvailable()) return;
 		const epochs = await this._daemonCall(rec, 'GET', '/ffor/epochs').catch(() => null);
+		// The daemon preserves automatic requests until paid or expired. Fail closed if its journal is unavailable.
+		const managed = this.offlineReceiveAvailable() ? await this._daemonCall(rec, 'GET', '/receive/status') : null;
+		const owned = new Set((managed?.requests || []).map((j) => j.channelId));
 		if (!ffor.returnJobs(epochs).length) return;
 		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
-		for (const channelId of ffor.returnJobs(epochs, channels)) {
+		for (const channelId of ffor.returnJobs(epochs, channels).filter((channelId) => !owned.has(channelId))) {
 			await this.fforReturn(id, { channelId, waitForPeer: true }).catch(() => {});
 		}
 	}
@@ -3097,7 +3112,15 @@ class WalletManager {
 			// An unanswered channel list says nothing about the previous
 			// primary: only a list that was read can show its channel gone.
 			if (Array.isArray(channels)) this._forgetPreviousPrimary(rec, channels);
-			const target = lfbw.channelizeTarget({ onchainSats, utxos, channels, primaryPubkey: lf.primaryPubkey });
+			const receive = this.offlineReceiveAvailable() ? await this._daemonCall(rec, 'GET', '/receive/status') : null;
+			const reserved = new Set(receive?.reservedChannelIds || []);
+			const availableChannels = Array.isArray(channels) ? channels.filter((c) => !reserved.has(c.channelId)) : channels;
+			const target = lfbw.channelizeTarget({
+				onchainSats,
+				utxos,
+				channels: availableChannels,
+				primaryPubkey: lf.primaryPubkey
+			});
 			if (target.action === 'wait') return decided(target);
 			const fees = await this._daemonCall(rec, 'GET', '/fees/estimates').catch(() => null);
 			const feeNormal = fees && fees.normal > 0 ? fees.normal : 0;

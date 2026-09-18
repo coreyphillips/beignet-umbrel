@@ -150,3 +150,19 @@ test('FFOR needs the routes and the role wiring, which arrived in different rele
 	}
 	assert.equal(fforAvailable(undefined), false);
 });
+
+test('automatic receive capability needs all daemon routes and funding configuration', () => {
+	const { offlineReceiveAvailable } = require('./engine');
+	const { root, bin } = fakeInstall('0.21.8');
+	const dir = path.dirname(bin);
+	try {
+		fs.writeFileSync(path.join(dir, 'openapi.js'), "'/receive/status' '/receive/quote' '/receive/invoice'");
+		assert.equal(offlineReceiveAvailable(bin), false);
+		fs.writeFileSync(path.join(dir, 'config.js'), 'BEIGNET_FFOR_RECEIVE_FUNDING');
+		assert.equal(offlineReceiveAvailable(bin), true);
+		fs.writeFileSync(path.join(dir, 'openapi.js'), "'/receive/status'");
+		assert.equal(offlineReceiveAvailable(bin), false);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

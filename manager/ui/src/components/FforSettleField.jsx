@@ -19,8 +19,15 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 	const settle = block.settle || {};
 	const witness = block.witness || {};
 	const issuer = block.issuer || {};
+	const funding = block.funding || {};
+	const patchFunding = (key, raw) => onChange({ ...block, funding: { ...funding, [key]: raw } });
 	const [advanced, setAdvanced] = useState(false);
-	const patchSettle = (key, raw) => onChange({ ...block, settle: { ...settle, [key]: raw } });
+	const patchSettle = (key, raw) =>
+		onChange({
+			...block,
+			settle: { ...settle, [key]: raw },
+			funding: key === 'enabled' && !raw ? { ...funding, enabled: false } : funding
+		});
 	const patchWitness = (key, raw) => {
 		const next = { ...witness, [key]: raw };
 		// The issuer runs on the witness: dropping the witness drops it too.
@@ -48,6 +55,44 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 					? 'A sibling wallet with a channel to this one can pre-sign a book of fixed-amount vouchers here before it goes offline. While it is away, this wallet settles payments to those vouchers at once from its own side of the channel, and the sibling collects them when it returns. Each book locks its whole amount on this side of the channel until the sibling closes it; the caps below bound what one book may ask for.'
 					: 'Off: this wallet settles no offline receives for anyone. Turn it on for a wallet that stays online, such as the primary node of your lightning-first wallets; the sibling picks it from its Receive tab.'}
 			</div>
+			{settle.enabled && (
+				<>
+					<label className="checkbox field">
+						<input
+							type="checkbox"
+							checked={!!funding.enabled}
+							disabled={disabled}
+							data-testid="ffor-funding"
+							onChange={(e) => patchFunding('enabled', e.target.checked)}
+						/>
+						Fund channels for automatic receiving
+					</label>
+					<div className="info-note">
+						Allow connected wallets, including external clients, to request channels funded by this node. Limits are
+						cumulative across restarts and include failed allocations.
+					</div>
+					{funding.enabled && (
+						<div className="row">
+							{[
+								['maxChannels', 'Total channel limit', 20],
+								['maxChannelsPerPeer', 'Channels per wallet', 5],
+								['maxChannelSats', 'Largest channel (sats)', 1000000],
+								['maxTotalSats', 'Total funding budget (sats)', 5000000]
+							].map(([key, label, fallback]) => (
+								<Field key={key} label={label}>
+									<input
+										disabled={disabled}
+										inputMode="numeric"
+										value={funding[key] ?? fallback}
+										onChange={(e) => patchFunding(key, digits(e))}
+									/>
+								</Field>
+							))}
+						</div>
+					)}
+				</>
+			)}
+
 			<label className="checkbox field">
 				<input
 					type="checkbox"
@@ -82,17 +127,29 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 			</div>
 			{(settle.enabled || witness.enabled) && (
 				<>
-					<button type="button" className="wnav-toggle" onClick={() => setAdvanced((v) => !v)} style={{ marginBottom: 8 }}>
+					<button
+						type="button"
+						className="wnav-toggle"
+						onClick={() => setAdvanced((v) => !v)}
+						style={{ marginBottom: 8 }}>
 						{advanced ? 'Hide limits' : 'Limits and fees'}
 					</button>
 					{advanced && settle.enabled && (
 						<>
 							<div className="row">
 								<Field label="Largest book (msat, blank for no cap)">
-									<input value={settle.maxBudgetMsat ?? ''} placeholder="no cap" onChange={(e) => patchSettle('maxBudgetMsat', digits(e))} />
+									<input
+										value={settle.maxBudgetMsat ?? ''}
+										placeholder="no cap"
+										onChange={(e) => patchSettle('maxBudgetMsat', digits(e))}
+									/>
 								</Field>
 								<Field label="Longest epoch (blocks, blank for no cap)">
-									<input value={settle.maxEpochBlocks ?? ''} placeholder="no cap" onChange={(e) => patchSettle('maxEpochBlocks', digits(e))} />
+									<input
+										value={settle.maxEpochBlocks ?? ''}
+										placeholder="no cap"
+										onChange={(e) => patchSettle('maxEpochBlocks', digits(e))}
+									/>
 								</Field>
 							</div>
 							<div className="row">
@@ -111,10 +168,18 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 					{advanced && witness.enabled && (
 						<div className="row">
 							<Field label="Most mailboxes kept (blank for the engine default)">
-								<input value={witness.maxMailboxes ?? ''} placeholder="default" onChange={(e) => patchWitness('maxMailboxes', digits(e))} />
+								<input
+									value={witness.maxMailboxes ?? ''}
+									placeholder="default"
+									onChange={(e) => patchWitness('maxMailboxes', digits(e))}
+								/>
 							</Field>
 							<Field label="Most bytes kept (blank for the engine default)">
-								<input value={witness.maxBytes ?? ''} placeholder="default" onChange={(e) => patchWitness('maxBytes', digits(e))} />
+								<input
+									value={witness.maxBytes ?? ''}
+									placeholder="default"
+									onChange={(e) => patchWitness('maxBytes', digits(e))}
+								/>
 							</Field>
 						</div>
 					)}

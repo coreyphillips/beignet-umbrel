@@ -170,7 +170,8 @@ async function main() {
 				guardianRotationAvailable: manager.guardianRotationAvailable(),
 				// FFOR offline receive (beignet #729, #865): a wallet paid while
 				// it is offline through a settlement peer, probed on the bundle.
-				fforAvailable: manager.fforAvailable()
+				fforAvailable: manager.fforAvailable(),
+				offlineReceiveAvailable: manager.offlineReceiveAvailable()
 			}
 		});
 	});

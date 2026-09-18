@@ -133,3 +133,16 @@ reaching the wallet's own view, and `tips(id)` prints all three side by side.
 Read it as: `chain > electrs` is electrs lag, `electrs > wallet` is that
 daemon's Electrum client, and all three equal with the assertion still
 failing is the engine.
+
+## Automatic offline receive
+
+`node scripts/lfbw-regtest/11-automatic-receive.mjs` creates three disposable
+regtest wallets on `MANAGER_URL` and stops them on completion. It needs the
+companion daemon `/receive/*` API, Bitcoin funding/mining and Electrum. It uses
+a Beignet payer, so CLN is not required. Run against a disposable manager data
+directory, never a production wallet manager.
+
+The assertions cover a lost-response retry returning the same invoice, an
+unpaid restart retaining the reservation, payment with the receiver stopped,
+automatic credit on reopening and a duplicate-free second restart. Failures
+exit nonzero. The existing environment table controls funding and mining.

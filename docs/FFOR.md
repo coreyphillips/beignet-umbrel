@@ -7,6 +7,37 @@ sees, the constraints the engine imposes, and how to verify it against real
 daemons. The engine side is beignet's `/ffor/*` surface (beignet #729) and
 the role switches it honours from 0.21.4 on (beignet #865).
 
+## Automatic Lightning-first receiving
+
+Lightning-first wallets use their ordinary Receive form to prepare a fixed-amount
+invoice that remains payable while the wallet daemon is stopped. Users do not
+select channels, create voucher books or trigger a return. The primary must
+support the automatic receive protocol and opt into settlement. If another
+channel is needed, it must also opt into funding with explicit cumulative caps.
+The Edit form exposes total channels, channels per peer, maximum channel size
+and total funding budget. Connected external peers can request funding too.
+
+The daemon persists preparation before exposing an invoice and discovers
+receipts while running, including after restart. Paid reservations reconcile
+into the normal invoice history and balance. Unpaid invoices remain active for
+their ten-minute lifetime plus a two-minute settlement grace period. Receipt
+query failures retain the reservation. Recovery still requires the settlement
+peer to return; this path never force closes automatically.
+
+The manager excludes `/receive/status` reservations from channelization and
+legacy startup return. If it cannot read the journal, it postpones those actions.
+Retries after a lost creation response reuse the same request id. Fixed amounts
+below 354 sats and amountless requests are refused. Unsupported engines or peers
+show an error instead of silently producing an online-only invoice.
+
+**Release dependency:** the daemon `/receive/*` API and funding-policy environment
+variable require the companion Beignet change after 0.21.8. Before releasing this
+app, publish that engine change and update `BEIGNET_VERSION` in the image workflow.
+The current 0.21.8 baseline deliberately fails the capability check.
+
+The advanced manual workflow below remains available for other Lightning wallets.
+Its startup return does not own automatic reservations.
+
 ## How it works
 
 Before going away, the wallet (the receiver, R in the spec) pre-signs a book
@@ -21,9 +52,9 @@ land in the wallet's channel balance. If S is gone or contradicts the
 epoch, the wallet can **enforce** on-chain: a force close that claims every
 settled voucher through the signature S gave at setup.
 
-Two things the engine leaves to the host, and this app does:
+The legacy manual workflow leaves these responsibilities to the host:
 
-- **The return is not automatic in the engine.** On reestablish it only
+- **Manual books use the manager return.** On reestablish it only
   notices a mismatch; nothing credits the settled slots. The manager calls
   `POST /ffor/recover` (cooperative only, never a force close on its own)
   after every healthy start, for every epoch the wallet receives on whose

@@ -286,3 +286,34 @@ test('a wait below the floor and a failed attempt are recorded for the dashboard
 	assert.equal(failing.m.runtimeState('w1').lfbwLast.action, 'failed');
 	await assert.rejects(failing.m.channelizeNow('w1'), (e) => e.code === 'CHANNELIZE_FAILED' && /peer disconnected/.test(e.message));
 });
+
+test('automatic receive reservations are excluded from deposit channelization', async () => {
+	const { m } = harness({
+		answers: {
+			'w1 GET /balance': { onchain: 50000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [usable, { ...usable, channelId: 'spendable' }],
+			'w1 GET /receive/status': { reservedChannelIds: ['c1'] },
+			'w1 POST /channel/splice-quote': { maxAmountSats: 48000 }
+		}
+	});
+	m.offlineReceiveSupported = true;
+	await m._lfbwChannelize('w1');
+	assert.equal(m.calls.find((c) => c.path === '/channel/splice-in').body.channelId, 'spendable');
+});
+test('an unreadable reservation journal prevents channelization', async () => {
+	const { m } = harness({
+		answers: {
+			'w1 GET /balance': { onchain: 50000 },
+			'w1 GET /utxos': confirmed,
+			'w1 GET /channels': [usable],
+			'w1 GET /receive/status': new Error('unavailable')
+		}
+	});
+	m.offlineReceiveSupported = true;
+	await m._lfbwChannelize('w1');
+	assert.equal(
+		m.calls.some((c) => c.method === 'POST'),
+		false
+	);
+});
