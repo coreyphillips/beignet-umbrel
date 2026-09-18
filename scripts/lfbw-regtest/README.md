@@ -78,6 +78,23 @@ node 05-paired-and-outgrow.mjs '<json with L2>'
 node 06-external-primary.mjs '<json from 01>'
 ```
 
+`08-ffor-plain.mjs` and `09-ffor-lfbw.mjs` (offline receive, FFOR) take no
+argument and need no CLN: the payer is a sibling wallet. Run them against
+the manager above, in either order:
+
+```sh
+REGTEST_API=http://<dashboard>/api CLN_CONTAINER= node 08-ffor-plain.mjs
+REGTEST_API=http://<dashboard>/api CLN_CONTAINER= node 09-ffor-lfbw.mjs
+```
+
+Each creates its own wallets, opens the channels it needs, starts a
+two-voucher book on the receiver's channel to the settling sibling, mints
+the first invoice, stops the receiver, pays the invoice from the payer
+while it is down, starts the receiver, and asserts the manager's return
+closed the book with the voucher credited. `08` also checks the record
+model (an on-chain only wallet cannot settle, a peer without the role
+aborts the book with the engine's reason 2). See `docs/FFOR.md`.
+
 `07-recovery.mjs` is separate and takes no argument. Run it against its own
 manager, on its own `DATA_DIR` and port window, because the guardian set is
 app-wide settings and quorum mode is sticky per wallet: pinning a set inside

@@ -259,3 +259,18 @@ test('serving as a guardian rides the Lightning listener (beignet #699)', () => 
 	const parked = m._daemonEnv(rec({ guardianServe: true, onchainOnly: true }), PATHS, 's', 't');
 	assert.equal(parked.BEIGNET_GUARDIAN_SERVE, undefined, 'no listener, no guardian');
 });
+
+test('settling offline receives rides the Lightning listener (FFOR, beignet #729)', () => {
+	const m = bareManager();
+	const settling = m._daemonEnv(rec({ ffor: { settle: { enabled: true, maxBudgetMsat: 5000000, feePpm: 100 } } }), PATHS, 's', 't');
+	assert.equal(settling.BEIGNET_FFOR_SETTLE, 'true', 'the daemon reads exactly the string true');
+	assert.equal(settling.BEIGNET_FFOR_MAX_BUDGET_MSAT, '5000000');
+	assert.equal(settling.BEIGNET_FFOR_MAX_EPOCH_BLOCKS, undefined, 'an unset cap is not sent');
+	assert.equal(settling.BEIGNET_FFOR_FEE_BASE_MSAT, '0');
+	assert.equal(settling.BEIGNET_FFOR_FEE_PPM, '100');
+	assert.equal(settling.BEIGNET_LISTEN_PORT, String(3001 + 6000));
+	const quiet = m._daemonEnv(rec(), PATHS, 's', 't');
+	assert.equal(quiet.BEIGNET_FFOR_SETTLE, undefined, 'off contributes nothing an older engine would trip on');
+	const parked = m._daemonEnv(rec({ ffor: { settle: { enabled: true } }, onchainOnly: true }), PATHS, 's', 't');
+	assert.equal(parked.BEIGNET_FFOR_SETTLE, undefined, 'no listener, no settlement');
+});

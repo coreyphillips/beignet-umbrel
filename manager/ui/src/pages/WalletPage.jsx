@@ -14,6 +14,9 @@ import GuardianServeField from '../components/GuardianServeField.jsx';
 import GuardianRotateFields from '../components/GuardianRotateFields.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
 import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
+import FforReturnPanel from '../components/FforReturnPanel.jsx';
+import FforSettleField from '../components/FforSettleField.jsx';
+import { currentEpoch, describeEpoch } from '../lib/ffor.js';
 import { shortId } from '../lib/format.js';
 import { backupStamp } from '../lib/backup.js';
 import { isClosedChannel } from '../lib/channels.js';
@@ -92,7 +95,21 @@ const EVENT_LABELS = {
 	'jit:failed': 'A held payment could not be delivered',
 	'direct-funding:offer:accepted': 'A direct funding was accepted',
 	'direct-funding:offer:completed': 'Direct funding landed in your channel',
-	'direct-funding:offer:failed': 'A direct funding failed'
+	'direct-funding:offer:failed': 'A direct funding failed',
+	// FFOR offline receive (beignet #729). On the wallet being paid: the
+	// book's state changes. On the sibling settling for it: each settlement
+	// and each refusal. The enforce case is the one that needs the owner.
+	'ffor:settled': 'Settled an offline receive for a sibling wallet',
+	'ffor:delegated-failed': 'Could not settle an offline receive for a sibling wallet',
+	'ffor:enforce': 'Your settlement peer contradicted the offline-receive epoch: enforce on-chain'
+};
+// The book's state, said with the state itself; only the committed states
+// arrive, so each one is worth a word.
+const FFOR_STATE_LABELS = {
+	ACTIVE: 'Offline receive is active: the vouchers can be paid while this wallet is off',
+	DRAINING: 'Closing the offline-receive book with the settlement peer',
+	CLOSED: 'Offline-receive book closed',
+	ABORTED: 'Offline-receive setup aborted'
 };
 const ERROR_EVENTS = new Set([
 	'payment:failed',
@@ -100,7 +117,9 @@ const ERROR_EVENTS = new Set([
 	'recovery:guardian_unreachable',
 	'recovery:backfill-lost',
 	'jit:failed',
-	'direct-funding:offer:failed'
+	'direct-funding:offer:failed',
+	'ffor:delegated-failed',
+	'ffor:enforce'
 ]);
 
 export default function WalletPage() {
@@ -203,7 +222,30 @@ export default function WalletPage() {
 		bump();
 		receiveEvent(name, data);
 		if (EVENT_LABELS[name]) toast(EVENT_LABELS[name], ERROR_EVENTS.has(name) ? 'error' : 'success');
+		if (name === 'ffor:state' && data && FFOR_STATE_LABELS[data.state]) {
+			toast(FFOR_STATE_LABELS[data.state], data.state === 'ABORTED' ? 'error' : 'success');
+		}
 	});
+	// FFOR offline receive: a live voucher book earns a badge in the header,
+	// in the place the degraded backup badge sits, since both change what
+	// the owner should do next (come back before the deadline).
+	const fforOn = !!config?.fforAvailable && running && !rec?.onchainOnly;
+	const { data: epochs } = usePoll(
+		() => (fforOn ? api.get('/ffor/epochs').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, fforOn]
+	);
+	const liveEpoch = fforOn && Array.isArray(epochs) ? currentEpoch(epochs) : null;
+	// The channel the epoch runs on: a force close leaves the epoch ACTIVE
+	// on the record, so the channel's state decides between the two badges.
+	const { data: fforChannels } = usePoll(
+		() => (liveEpoch ? api.get('/channels').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, !!liveEpoch]
+	);
+	const epochBadge = liveEpoch
+		? describeEpoch(liveEpoch, info?.blockHeight || 0, (fforChannels || []).find((c) => c.channelId === liveEpoch.channelId) || null)
+		: null;
 
 	// An on-chain only wallet gets no Lightning apparatus: not hidden features,
 	// absent ones. A URL pointing at a withheld tab falls back to Overview the
@@ -257,6 +299,13 @@ export default function WalletPage() {
 					)}
 					{backup?.degraded && !rec?.onchainOnly && (
 						<Badge tone={backup.tone}>{backup.tier}</Badge>
+					)}
+					{epochBadge && epochBadge.state === 'ACTIVE' && !epochBadge.mismatch && !epochBadge.enforced && (
+						<Badge tone="green">receiving offline</Badge>
+					)}
+					{epochBadge && epochBadge.enforced && <Badge tone="yellow">enforced on-chain</Badge>}
+					{(rec?.fforEnforce || (epochBadge && epochBadge.mismatch && !epochBadge.enforced)) && (
+						<Badge tone="red">enforce on-chain</Badge>
 					)}
 					<Button className="sm" onClick={(e) => setEditing({ x: e.clientX, y: e.clientY })}>
 						Edit
@@ -353,6 +402,17 @@ export default function WalletPage() {
 			) : (
 				<div className="wallet-layout">
 					<ResumeBanner recovery={recovery} />
+					{fforOn && (
+						<FforReturnPanel
+							id={id}
+							api={api}
+							rec={rec}
+							onChanged={() => {
+								refreshRec();
+								bump();
+							}}
+						/>
+					)}
 					{capsuleOffer(recovery, info) && (
 						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							<CapsuleRestoreCard
@@ -436,6 +496,7 @@ export default function WalletPage() {
 					guardianRotationAvailable={!!config?.guardianRotationAvailable}
 					walletRunning={rec.status === 'running'}
 					lfbwAvailable={!!config?.lfbwAvailable}
+					fforAvailable={!!config?.fforAvailable}
 					settingsGuardians={config?.recoveryGuardians || []}
 					restoring={rec.status === 'restore-required' || recovery?.state === 'restoring'}
 					onClose={() => setEditing(null)}
@@ -488,6 +549,7 @@ function EditWalletModal({
 	guardianRotationAvailable = false,
 	walletRunning = false,
 	lfbwAvailable = false,
+	fforAvailable = false,
 	settingsGuardians = [],
 	restoring = false,
 	onClose,
@@ -538,6 +600,9 @@ function EditWalletModal({
 	const [recoveryMode, setRecoveryMode] = useState(rec.recovery?.mode || 'off');
 	const [recoveryAutoApply, setRecoveryAutoApply] = useState(!!rec.recovery?.autoApply);
 	const [guardianServe, setGuardianServe] = useState(!!rec.guardianServe);
+	// FFOR: settling offline receives for siblings, with its caps.
+	const [fforSettle, setFforSettle] = useState(() => ({ ...((rec.ffor && rec.ffor.settle) || {}) }));
+	const fforWas = !!(rec.ffor && rec.ffor.settle && rec.ffor.settle.enabled);
 	const pinnedGuardians = rec.recovery?.guardians || [];
 	const [busy, setBusy] = useState(false);
 	// Whether this wallet has OPEN channels, asked the moment the modal opens.
@@ -585,6 +650,9 @@ function EditWalletModal({
 					tls: !!electrum.tls
 				}
 			};
+			if (fforAvailable) {
+				body.ffor = { settle: onchainOnly ? { enabled: false } : fforSettle };
+			}
 			if (lfbwAvailable) {
 				body.lfbw = onchainOnly ? { enabled: false } : lfbwBody(lfbw);
 				body.liquidityProvider = onchainOnly ? rec.liquidityProvider : provider;
@@ -710,6 +778,19 @@ function EditWalletModal({
 							Changing this restarts the wallet.
 							{!guardianServe && rec.guardianServe
 								? ' Nodes that pinned this wallet as a guardian lose one of their three until it serves again; their sets cannot be changed.'
+								: ''}
+						</div>
+					)}
+				</>
+			)}
+			{fforAvailable && !onchainOnly && (
+				<>
+					<FforSettleField value={fforSettle} onChange={setFforSettle} />
+					{!!fforSettle.enabled !== fforWas && (
+						<div className="info-note">
+							Changing this restarts the wallet.
+							{!fforSettle.enabled && fforWas
+								? ' A sibling with an open voucher book here keeps it: the book was signed and stays claimable, but no new one can be started.'
 								: ''}
 						</div>
 					)}

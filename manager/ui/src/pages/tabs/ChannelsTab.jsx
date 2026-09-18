@@ -933,6 +933,12 @@ function historyLabel(e) {
 			return 'Every output of the close swept';
 		case 'node:error':
 			return `${e.code}: ${e.message}`;
+		// FFOR offline receive (beignet #729): the voucher book's committed
+		// states, and the peer contradicting an ACTIVE one at reconnect.
+		case 'ffor:state':
+			return `Offline receive ${e.state ? String(e.state).toLowerCase().replace(/_/g, ' ') : 'changed'}`;
+		case 'ffor:enforce':
+			return 'Offline receive: the peer contradicted the epoch at reconnect, enforce on-chain';
 		default:
 			return e.event;
 	}

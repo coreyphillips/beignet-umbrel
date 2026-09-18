@@ -183,3 +183,17 @@ test('channel:resolved is recorded as the terminal event of a close', (t) => {
 		['channel:closed', 'channel:resolved']
 	);
 });
+
+test('FFOR epoch events join the channel they run on, with the state kept (beignet #729)', (t) => {
+	const log = new ChannelEventLog(tmpdir(t));
+	const active = log.record('ffor:state', { channelId: 'aa', state: 'ACTIVE', epoch: { slots: [] } });
+	assert.equal(active.entry.state, 'ACTIVE');
+	assert.equal(active.entry.event, 'ffor:state');
+	log.record('ffor:enforce', { channelId: 'aa', epoch: {} });
+	assert.equal(log.record('ffor:settled', { channelId: 'aa', k: 1 }), null, 'a settlement for a sibling is not this channel history');
+	assert.equal(log.record('ffor:state', { state: 'ACTIVE' }), null, 'no channel, no entry');
+	assert.deepEqual(
+		log.list({ channelId: 'aa' }).map((e) => e.event),
+		['ffor:state', 'ffor:enforce']
+	);
+});

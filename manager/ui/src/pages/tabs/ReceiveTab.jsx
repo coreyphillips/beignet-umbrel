@@ -8,6 +8,7 @@ import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
 import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
 import { manager } from '../../api.js';
+import OfflineReceiveCard from '../../components/OfflineReceiveCard.jsx';
 
 // A direct-funding request is re-minted when the amount changes (the
 // receiver signs the amount into it), after the hand has settled.
@@ -15,7 +16,7 @@ const FUNDING_DEBOUNCE_MS = 400;
 // A JIT invoice's lifetime, and with it the intent the primary holds open.
 const JIT_INVOICE_EXPIRY_SECS = 15 * 60;
 
-export default function ReceiveTab({ id, api, rec, tick, lastReceive, config }) {
+export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, info }) {
 	const onchainOnly = !!rec?.onchainOnly;
 	// A lightning-first wallet's on-chain request also carries a direct-funding
 	// request, and its invoices are provisioned by the primary node just in
@@ -488,6 +489,13 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config }) 
 					)}
 				</AnimatePresence>
 			</Card>
+			)}
+
+			{/* Receive while offline (FFOR): a voucher book pre-signed with a
+			    sibling that stays online, one invoice per voucher, payable with
+			    this wallet off. Only on an engine that carries the routes. */}
+			{!onchainOnly && config?.fforAvailable && (
+				<OfflineReceiveCard id={id} api={api} rec={rec} tick={tick} info={info} />
 			)}
 
 			{!onchainOnly && (

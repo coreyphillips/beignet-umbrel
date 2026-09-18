@@ -14,7 +14,8 @@ const os = require('os');
 const path = require('path');
 const { engineVersion, recoveryAvailable, lfbwAvailable, jitQuoteAvailable, recoveryAutoApplyAvailable,
 	guardianHostingAvailable,
-	guardianRotationAvailable
+	guardianRotationAvailable,
+	fforAvailable
 } = require('./engine');
 
 function fakeInstall(version) {
@@ -131,4 +132,21 @@ test('guardian rotation is probed on the OpenAPI module (beignet #701)', () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 	assert.equal(guardianRotationAvailable(undefined), false);
+});
+
+test('FFOR needs the routes and the role wiring, which arrived in different releases (beignet #865)', () => {
+	const { root, bin } = fakeInstall('0.21.3');
+	try {
+		const dir = path.dirname(bin);
+		assert.equal(fforAvailable(bin), false, 'no openapi module at all');
+		fs.writeFileSync(path.join(dir, 'openapi.js'), "paths: { '/ffor/epoch/start': {}, '/ffor/recover': {} }");
+		assert.equal(fforAvailable(bin), false, '0.15.0 to 0.21.3: the routes exist but the role env is dropped');
+		fs.writeFileSync(path.join(dir, 'daemon-options.js'), 'fforSettle: config.fforSettle,');
+		assert.equal(fforAvailable(bin), true);
+		fs.writeFileSync(path.join(dir, 'openapi.js'), "paths: { '/ffor/epoch/start': {} }");
+		assert.equal(fforAvailable(bin), false, 'the start route alone is not the whole surface');
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	assert.equal(fforAvailable(undefined), false);
 });
