@@ -105,15 +105,16 @@ Two things the engine leaves to the host, and this app does:
   chain. The card derives both from the days away at 144 blocks a day and
   words the date conservatively.
 - **One invoice per slot, once.** The daemon hands the invoice out on
-  `/ffor/invoice` and never again; the epoch view says the slot is exposed
-  but not what was minted. The card keeps what it minted in the browser
-  session; an invoice minted elsewhere has to be shared from there. An
-  engine change to carry the invoice on the epoch view is requested
-  upstream.
-- **The slot invoice also lists under Recent invoices, and stays PENDING
-  there.** The receiver never sees the HTLC (S settled it), so the
-  daemon's invoice list never flips the row to paid; the slot table on the
-  card and the epoch view are the record of what was paid (beignet #876).
+  `/ffor/invoice` and refuses the slot afterwards. From beignet 0.21.5 the
+  epoch view carries the invoice on every exposed slot (`bolt11`, beignet
+  #875), so the card shows it wherever it was minted; on an older engine
+  the card only knows what this browser session minted.
+- **The slot invoice also lists under Recent invoices.** The receiver never
+  sees the HTLC (S settled it), so on engines before 0.21.5 the row stayed
+  PENDING for a voucher the channel balance already carried. From 0.21.5
+  the close completes each credited voucher's payment record and emits
+  `payment:received` and `invoice:settled` (beignet #876): the row reads
+  PAID and the receive toasts like any other.
 - **Payers are unrestricted.** The card sends `witnessPeers: []`. A named
   list makes S refuse HTLCs from anyone but those peers, which is the
   witness path this phase does not use.

@@ -78,6 +78,12 @@ export async function offlineReceiveRound({ R, S, X, label }) {
 	check(`${label}: slot 1 invoice minted for exactly the voucher amount`, !!inv.bolt11 && inv.amountMsat === String(VOUCHER_SATS * 1000) && inv.k === 1, JSON.stringify({ k: inv.k, amountMsat: inv.amountMsat }));
 	const exposed = await epochOn(R, channel.channelId);
 	check(`${label}: slot 1 reads exposed, slot 2 unissued`, exposed.slots[0].state === 'exposed' && exposed.slots[1].state === 'unissued');
+	// beignet 0.21.5: the view carries the invoice back on the exposed slot (#875).
+	if ('bolt11' in exposed.slots[0]) {
+		check(`${label}: the epoch view carries slot 1's invoice and none for slot 2`, exposed.slots[0].bolt11 === inv.bolt11 && !exposed.slots[1].bolt11);
+	} else {
+		log('  (engine predates #875: no bolt11 on the view)');
+	}
 	try {
 		await w(R, '/ffor/invoice', { method: 'POST', body: { channelId: channel.channelId, k: 1 } });
 		check(`${label}: a second invoice for the same slot is refused`, false);
@@ -115,6 +121,10 @@ export async function offlineReceiveRound({ R, S, X, label }) {
 	check(`${label}: the wallet log carries the return line`, logs.some((l) => /ffor return .*closed, 1 of 2 slots settled, 1 preimage known/.test(l)), logs.filter((l) => /ffor/.test(l)).slice(-2).join(' | '));
 	const events = await api(`/wallets/${R}/channel-events?channelId=${channel.channelId}`);
 	check(`${label}: the channel history records the epoch's states`, events.some((e) => e.event === 'ffor:state' && e.state === 'ACTIVE') && events.some((e) => e.event === 'ffor:state' && e.state === 'CLOSED'), JSON.stringify(events.filter((e) => e.event.startsWith('ffor')).map((e) => e.state)));
+	// beignet 0.21.5: the credited voucher's invoice reads PAID (#876).
+	const rows = await w(R, '/invoices');
+	const row = rows.find((i) => i.paymentHash === inv.paymentHash);
+	check(`${label}: the voucher invoice reads PAID in the invoice list`, !!row && /PAID|COMPLETED/.test(row.status), row ? row.status : 'missing');
 	const sClosed = (await w(S, '/ffor/settlements')).find((x) => x.epochId === active.epochId);
 	check(`${label}: S reads the epoch CLOSED too`, !!sClosed && sClosed.state === 'CLOSED', sClosed ? sClosed.state : 'gone');
 	return { channel, epochId: active.epochId, invoice: inv, localBefore, localAfter: after.localBalanceSats };

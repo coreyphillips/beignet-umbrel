@@ -497,7 +497,18 @@ env:
   # only beignet-node.js and daemon-options.js changed: cli.js, config.js,
   # daemon.js and openapi.js are byte-identical to 0.21.3, so no routes,
   # no env, no openapi change.
-  BEIGNET_VERSION: "0.21.4"
+  #
+  # 0.21.5 (2026-09-18): the two FFOR follow-ups this app's first offline
+  # receive round surfaced. Every exposed slot on the epoch view carries
+  # its bolt11 (#875), read back from the invoice store, so the Receive
+  # tab shows an invoice minted in another session instead of keeping it
+  # in the browser; and once an epoch closes, every voucher the drain
+  # credited completes its payment record and emits payment:received and
+  # invoice:settled (#876), so Recent invoices reads PAID and the receive
+  # toasts. In dist only beignet-node.js, openapi.js and
+  # lightning-node.js changed; no env, no new routes, dependency set
+  # identical.
+  BEIGNET_VERSION: "0.21.5"
 
 jobs:
   build:

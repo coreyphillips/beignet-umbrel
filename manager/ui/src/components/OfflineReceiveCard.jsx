@@ -63,8 +63,9 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 	const [busy, setBusy] = useState(false);
 	const [refusal, setRefusal] = useState(null);
 	const [another, setAnother] = useState(false);
-	// The invoice for a slot is minted once and never handed out again by
-	// the daemon, so what this session minted is kept per epoch.
+	// The invoice for a slot is minted once; from beignet 0.21.5 the epoch
+	// view carries it back on the slot (bolt11), and before that only what
+	// this session minted is known, kept per epoch.
 	const [minted, setMinted] = useState({});
 	const [openSlot, setOpenSlot] = useState(null);
 	useEffect(() => {
@@ -254,7 +255,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 							</thead>
 							<tbody>
 								{(epoch.slots || []).map((slot) => {
-									const inv = minted[slot.k];
+									const inv = minted[slot.k] || (slot.bolt11 ? { bolt11: slot.bolt11 } : null);
 									const sats = Math.floor(Number(slot.amountMsat || 0) / 1000);
 									return [
 										<tr key={slot.k}>
@@ -275,7 +276,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 													</Button>
 												)}
 												{slot.state === 'exposed' && !inv && (
-													<span className="wallet-meta">Created in another session; share it from there.</span>
+													<span className="wallet-meta">Created in another session; share it from there, or update the app for an engine that carries it here.</span>
 												)}
 											</td>
 										</tr>,

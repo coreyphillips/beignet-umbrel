@@ -1880,7 +1880,8 @@ function fforEpochsOf(id) {
 }
 
 function fforSlotView(s) {
-	return { k: s.k, amountMsat: s.amountMsat, paymentHash: s.paymentHash, state: s.state };
+	// From beignet 0.21.5 an exposed slot carries the invoice it was minted with.
+	return { k: s.k, amountMsat: s.amountMsat, paymentHash: s.paymentHash, state: s.state, ...(s.bolt11 ? { bolt11: s.bolt11 } : {}) };
 }
 
 function fforView(e) {
@@ -1899,7 +1900,8 @@ function seedFforEpoch({ receiverId, settlerId, channelId, state, amountsSats, s
 		k: i + 1,
 		amountMsat: String(sats * 1000),
 		paymentHash: hex(64),
-		state: slotStates[i] || 'unissued'
+		state: slotStates[i] || 'unissued',
+		...(slotStates[i] === 'exposed' || slotStates[i] === 'settled' ? { bolt11: demoInvoice('mainnet', sats) } : {})
 	}));
 	const base = {
 		channelId,
@@ -2059,7 +2061,8 @@ function fforRequest(w, st, route, query, method, body) {
 			if (slot.state !== 'unissued') throw err(`slot ${slot.k} already has an invoice`, 'FFOR_REFUSED');
 			slot.state = 'exposed';
 			const sats = Math.floor(Number(slot.amountMsat) / 1000);
-			return { bolt11: demoInvoice(w.network, sats), paymentHash: slot.paymentHash, k: slot.k, amountMsat: slot.amountMsat };
+			slot.bolt11 = demoInvoice(w.network, sats);
+			return { bolt11: slot.bolt11, paymentHash: slot.paymentHash, k: slot.k, amountMsat: slot.amountMsat };
 		}
 		case '/ffor/recover': {
 			const e = byChannel(body.channelId, 'R');
