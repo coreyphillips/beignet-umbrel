@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.22.0"
+version: "0.23.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,29 +30,25 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Offline receive gains witnesses and an issuer. A sibling wallet that
-  stays online can now keep an encrypted receipt of every payment made to
-  a wallet's vouchers while it is off, so what was paid is collected even
-  if the settlement peer disappears. Turn on "Keep receipts for sibling
-  wallets receiving offline" in that wallet's Edit dialog, give it a
-  public channel to the settlement peer, and tick it as a witness when
-  starting a book on the Receive tab. Payments then route through the
-  witness, and the panel above the tabs says what each witness answered
-  when the wallet returns.
+  Lightning-first wallets now prepare Lightning invoices for offline payment
+  automatically. Create an invoice, stop the wallet, and payments appear in
+  your balance and history when you reopen it. Unpaid invoices stay payable
+  through restarts until they expire, and reopening does not duplicate payments.
 
 
-  The same sibling can issue invoices to payers who hold none. Turn on
-  "Issue invoices for sibling wallets receiving offline" as well, pick it
-  as the issuer when starting the book, and the Receive tab shows a BOLT
-  12 offer to share instead of invoices: a payer who scans it asks the
-  issuer for one and gets the next unused voucher, while the wallet is off.
+  Regular Lightning wallets gain a "Receive offline" checkbox in the invoice
+  form, off by default. Enter at least 354 sats to enable it, choose a connected
+  receiving node, and review its fee before creating the invoice. Leaving it
+  off preserves ordinary receiving, including invoices where the payer chooses
+  the amount. Changing the option requires a new invoice; already shared
+  invoices stay unchanged.
 
 
-  Starting a book now runs as one setup the app carries through step by
-  step: the book, the signatures, each witness connected and provisioned,
-  then the issuer. Bundles beignet 0.21.6, which lets channels between two
-  beignet wallets be announced; before it a payer could not find a
-  witness's channel to the settlement peer.
+  The receiving node must support offline receiving and stay available to
+  settle payments. Providers can explicitly enable channel funding with
+  cumulative limits. Existing spendable balances are kept available, and
+  recovery never force closes a channel automatically. Manual voucher books
+  remain under Advanced offline receive. Bundles beignet 0.21.9.
 
 
 dependencies: []
