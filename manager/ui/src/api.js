@@ -120,6 +120,11 @@ export const manager = {
 	// Enforce an epoch on-chain through the manager, which reads the refusal
 	// the daemon answers inside a 200 and answers the enforce warning.
 	fforEnforce: (id, body) => request(`/api/wallets/${id}/ffor/enforce`, { method: 'POST', body }),
+	// Start an epoch with witnesses and an issuer in one go, or provision
+	// them on an epoch that is already running. Both take as long as the
+	// signing and the provisioning round trips, so no timeout.
+	fforEpoch: (id, body) => request(`/api/wallets/${id}/ffor/epoch`, { method: 'POST', body }),
+	fforProvision: (id, body) => request(`/api/wallets/${id}/ffor/provision`, { method: 'POST', body }),
 	errors: (id, since) =>
 		request(`/api/wallets/${id}/errors${since ? `?since=${since}` : ''}`),
 	channelEvents: (id, channelId) =>

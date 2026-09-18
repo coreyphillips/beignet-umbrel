@@ -322,7 +322,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	const asksGuardianServe = !!config.guardianHostingAvailable && !onchainOnly;
 	// Settle offline receives for siblings (FFOR, beignet #729). Off by
 	// default: each book locks its whole amount on this wallet's side.
-	const [fforSettle, setFforSettle] = useState({ enabled: false });
+	const [fforBlock, setFforBlock] = useState({ settle: { enabled: false }, witness: { enabled: false }, issuer: { enabled: false } });
 	const asksFfor = !!config.fforAvailable && !onchainOnly;
 	const [busy, setBusy] = useState(false);
 	const guardiansConfigured = (config.recoveryGuardians || []).length === 3;
@@ -346,7 +346,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					onchainOnly,
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
 					...(asksGuardianServe ? { guardianServe } : {}),
-					...(asksFfor ? { ffor: { settle: fforSettle } } : {}),
+					...(asksFfor ? { ffor: fforBlock } : {}),
 					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
@@ -362,7 +362,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
 					...(asksAutoApply ? { recoveryAutoApply } : {}),
 					...(asksGuardianServe ? { guardianServe } : {}),
-					...(asksFfor ? { ffor: { settle: fforSettle } } : {}),
+					...(asksFfor ? { ffor: fforBlock } : {}),
 					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
 				});
 				toast('Wallet imported. It will sync in the background.', 'success');
@@ -476,7 +476,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 			)}
 			{asksAutoApply && <RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} />}
 			{asksGuardianServe && <GuardianServeField value={guardianServe} onChange={setGuardianServe} announce={announce} />}
-			{asksFfor && <FforSettleField value={fforSettle} onChange={setFforSettle} />}
+			{asksFfor && <FforSettleField value={fforBlock} onChange={setFforBlock} />}
 
 			{config.lfbwAvailable && !onchainOnly && (
 				<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />

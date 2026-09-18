@@ -214,7 +214,7 @@ test('a refused recover is kept on the record with its reason, and surfaces as a
 
 test('the settlement role is validated like the daemon would, on create and on edit', async () => {
 	const { m, store } = managerWith({ r1: receiver() });
-	assert.deepEqual(m._normalizeFfor(undefined, null, false), { settle: { ...ffor.SETTLE_DEFAULTS } });
+	assert.deepEqual(m._normalizeFfor(undefined, null, false).settle, { ...ffor.SETTLE_DEFAULTS });
 	assert.throws(() => m._normalizeFfor({ settle: { enabled: true } }, null, true), (err) => err.code === 'FFOR_NEEDS_LIGHTNING');
 	const { m: old } = managerWith({});
 	old.fforSupported = false;
@@ -237,6 +237,6 @@ test('settlement candidates are the opted-in siblings, marked by health', () => 
 		s2: { ...receiver(), id: 's2', name: 'Quiet', nodeId: '02' + 'ef'.repeat(32) }
 	});
 	m.runtimeState('s1').healthy = true;
-	assert.deepEqual(m.fforCandidates('r1'), [{ id: 's1', name: 'Settler', nodeId: '02' + 'cd'.repeat(32), running: true }]);
+	assert.deepEqual(m.fforCandidates('r1'), [{ id: 's1', name: 'Settler', nodeId: '02' + 'cd'.repeat(32), running: true, settles: true, witnesses: false, issues: false }]);
 	assert.throws(() => m.fforCandidates('nope'), (err) => err.code === 'NOT_FOUND');
 });

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Button, Modal } from './ui.jsx';
+import { Badge, Button, Modal } from './ui.jsx';
 import { useToast } from './Toast.jsx';
-import { describeReturn } from '../lib/ffor.js';
+import { describeReturn, witnessLines } from '../lib/ffor.js';
+import { usePoll } from '../hooks/usePoll.js';
 import { manager } from '../api.js';
 
 // A return a session has seen and put away stays away: the stamp of the last
@@ -28,6 +29,9 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 	const [dismissed, setDismissed] = useState(() => readDismissed(id));
 	const [busy, setBusy] = useState(false);
 	const [confirming, setConfirming] = useState(false);
+	// The witnesses' answers name the siblings by their node ids.
+	const { data: candidates } = usePoll(() => manager.fforCandidates(id).catch(() => []), 60000, [id]);
+	const witnessAnswers = rec?.fforReturn && Array.isArray(rec.fforReturn.witnesses) ? witnessLines(rec.fforReturn.witnesses, candidates || []) : [];
 	const enforce = rec?.fforEnforce || null;
 	// A force close this box broadcast: said once, until dismissed, and in
 	// place of a return that read the peer as unreachable before it.
@@ -97,6 +101,15 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 	return (
 		<div className={className} style={{ gridColumn: '1 / -1', marginBottom: 14 }} data-testid="ffor-return">
 			<strong>{title}.</strong> {detail}
+			{ret && witnessAnswers.length > 0 && (
+				<div style={{ marginTop: 6 }} data-testid="ffor-witness-answers">
+					{witnessAnswers.map((w, i) => (
+						<div key={i} className="wallet-meta">
+							<Badge tone={w.tone}>witness</Badge> {w.text}
+						</div>
+					))}
+				</div>
+			)}
 			<div className="center-actions" style={{ justifyContent: 'flex-start', marginTop: 8 }}>
 				{offersRetry && (
 					<Button className="sm" busy={busy} onClick={retry}>

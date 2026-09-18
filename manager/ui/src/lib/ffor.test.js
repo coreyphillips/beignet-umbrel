@@ -140,3 +140,28 @@ test('refusalText and slotLabel say the daemon words in plain ones', () => {
 	assert.equal(slotLabel({ state: 'settled' }), 'Paid while away');
 	assert.equal(slotLabel({ state: 'unissued' }), 'Waiting for an invoice');
 });
+
+test('witnesses, the issuer offer and the setup progress are read off the record', async () => {
+	const { witnessCandidates, issuanceFor, describeSetup, witnessLines } = await import('./ffor.js');
+	const cands = [
+		{ id: 's', name: 'S', nodeId: '02s', settles: true, witnesses: true },
+		{ id: 'w', name: 'W', nodeId: '02w', settles: false, witnesses: true, issues: true },
+		{ id: 'x', name: 'X', nodeId: '02x', settles: true, witnesses: false }
+	];
+	assert.deepEqual(witnessCandidates(cands, '02s').map((c) => c.id), ['w'], 'the settlement peer is not a witness of its own book');
+	const rec = { fforIssuance: { ch: { epochId: 'e1', offerId: 'o', encoded: 'lno1' } } };
+	assert.equal(issuanceFor(rec, { channelId: 'ch', epochId: 'e1' }).encoded, 'lno1');
+	assert.equal(issuanceFor(rec, { channelId: 'ch', epochId: 'e2' }), null, 'an old offer does not carry over to a new book');
+	const setup = describeSetup({ running: true, step: 'provisioning', witnesses: [{ name: 'W', step: 'connecting' }], issuer: { name: 'W', step: 'pending' }, error: null });
+	assert.equal(setup.label, 'Provisioning the witnesses');
+	assert.equal(setup.witnesses[0].text, 'W: connecting');
+	const failed = describeSetup({ running: false, step: 'issuing', witnesses: [{ name: 'W', step: 'acknowledged' }], issuer: { name: 'W', step: 'failed', error: 'no channel' }, error: 'no channel' });
+	assert.equal(failed.failed, true);
+	assert.equal(failed.issuer.tone, 'red');
+	const lines = witnessLines([
+		{ witnessNodeId: '02w', ok: true, credited: 1, records: [{ k: 1, verified: true }] },
+		{ witnessNodeId: '02zz', ok: false, error: 'did not answer type 55059', credited: 0, records: [] }
+	], cands);
+	assert.equal(lines[0].text, 'W: 1 receipt, 1 credited');
+	assert.match(lines[1].text, /02zz… did not answer/);
+});

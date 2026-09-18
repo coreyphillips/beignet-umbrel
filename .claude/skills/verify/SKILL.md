@@ -47,6 +47,14 @@ Use Playwright (chromium) headless. Install into the scratchpad, not the repo.
   dialog the settle toggle). `/ffor/epoch/start` in the mock runs to
   ACTIVE over about five seconds; `/ffor/recover` and the manager's
   `ffor/return` close the book, marking every shared invoice paid.
+  `demo-witness` (mainnet, keeps receipts and issues invoices for
+  siblings, one channel to `demo-main`): its Overview carries the
+  "Receipts kept for siblings" and "Invoices issued for siblings" cards,
+  and the seeded epoch on `demo-lfbw` names it as an acknowledged witness.
+  Starting a new book on `demo-lfbw` with the witness ticked and the
+  issuer picked runs the mock's setup over about four seconds
+  (`[data-testid="ffor-setup"]`) and then shows the offer QR
+  (`[data-testid="ffor-offer"]`) with no Create invoice buttons.
 - Any non-API path other than the SPA routes gets proxied by Vite to the
   absent backend and 500s; always use the `/w/...` routes.
 - Demo mock state is per-page-load module state; a reload resets balances.
