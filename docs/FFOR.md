@@ -7,6 +7,28 @@ sees, the constraints the engine imposes, and how to verify it against real
 daemons. The engine side is beignet's `/ffor/*` surface (beignet #729) and
 the role switches it honours from 0.21.4 on (beignet #865).
 
+## Optional receiving for regular wallets
+
+Regular Lightning wallets show an unchecked **Receive offline** option in the
+ordinary invoice form. It becomes available once a fixed amount of at least
+354 sats is entered and the engine supports the automatic receive API. Leaving
+it unchecked preserves ordinary receiving, including amountless invoices.
+
+When checked, select a connected receiving node and review its sender fee terms.
+Known settlement wallets are listed first. The daemon checks protocol support
+before creation; unsupported peers and failed preparation never fall back to an
+online-only invoice. An external connected node can be used too. The node needs
+the same settlement and funding policy described below.
+
+Changing the checkbox or receiving node clears the displayed invoice and its
+BIP21 attachment. Create a new invoice for the new choice. An invoice already
+shared is not changed or cancelled. The form distinguishes stopping the wallet
+from closing the browser, which leaves the Umbrel daemon running. Manual voucher
+book controls remain under **Advanced offline receive**.
+
+Lightning-first wallets continue to prepare every invoice for offline receiving
+automatically and do not show the checkbox. RN and web wallet behavior is unchanged.
+
 ## Automatic Lightning-first receiving
 
 Lightning-first wallets use their ordinary Receive form to prepare a fixed-amount

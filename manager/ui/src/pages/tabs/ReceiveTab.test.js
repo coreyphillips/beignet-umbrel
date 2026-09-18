@@ -247,6 +247,7 @@ test('every LFBW invoice is prepared for offline receipt, even with existing inb
 		const api = stubLfbwApi({ channels });
 		const view = await mountLfbw(api, lfbwRec());
 		try {
+			assert.equal(view.$('[data-testid="receive-offline"]'), null);
 			await createInvoice(view, '30000');
 			const call = api.calls.find(([m, p]) => m === 'POST' && p === '/receive/invoice');
 			assert.equal(call[2].amountSats, 30000);
@@ -360,5 +361,163 @@ test('a lost response retries the same durable request and does not show unsuppo
 		assert.match(view.text(), /You can close your wallet/);
 	} finally {
 		await view.unmount();
+	}
+});
+
+function stubReceivingNodes() {
+	globalThis.fetch = async () => ({
+		ok: true,
+		status: 200,
+		json: async () => ({
+			ok: true,
+			result: [{ id: 'p1', name: 'Always online', nodeId: PK, settles: true, running: true }]
+		})
+	});
+}
+const regularRec = { id: 'w1', network: 'mainnet' };
+const optionalConfig = { offlineReceiveAvailable: true };
+const offlineBox = (view) => view.$('[data-testid="receive-offline"]');
+const enterAmount = (view, amount) => type(view.$$('input[placeholder="any amount"]')[1], amount);
+
+test('regular wallets default to ordinary receiving, including amountless invoices', async () => {
+	const api = stubLfbwApi();
+	const view = await mountLfbw(api, regularRec, optionalConfig);
+	try {
+		assert.equal(offlineBox(view).checked, false);
+		assert.equal(offlineBox(view).disabled, true);
+		assert.match(view.text(), /Enter an amount of at least 354 sats to receive offline/);
+		await createInvoice(view);
+		assert.equal(api.calls.find(([, p]) => p === '/invoice/create')[2].amountSats, undefined);
+		await createInvoice(view, '10000');
+		assert.equal(offlineBox(view).disabled, false);
+		assert.equal(offlineBox(view).checked, false);
+		assert.equal(api.calls.filter(([, p]) => p === '/invoice/create').length, 2);
+		assert.equal(
+			api.calls.some(([, p]) => p.startsWith('/receive/')),
+			false
+		);
+		assert.doesNotMatch(view.text(), /You can close your wallet/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('regular wallets opt into automatic receipt with reviewed terms and no manual book setup', async () => {
+	stubReceivingNodes();
+	const api = stubLfbwApi({ quote: { terms: { feeBaseMsat: 1000, feePpm: 50 } } });
+	const view = await mountLfbw(api, regularRec, optionalConfig);
+	try {
+		await enterAmount(view, '20000');
+		await click(offlineBox(view));
+		await settle(400);
+		assert.match(view.text(), /receiving node's fee of 1000 msat plus 50 ppm/);
+		assert.equal(view.$('select').value, PK);
+		await click(createButton(view));
+		await settle(100);
+		const body = api.calls.find(([, p]) => p === '/receive/invoice')[2];
+		assert.equal(body.peer, PK);
+		assert.equal(body.amountSats, 20000);
+		assert.equal(body.quote.terms.feePpm, 50);
+		assert.match(view.text(), /You can close your wallet/);
+		assert.equal(
+			api.calls.some(([, p]) => p === '/invoice/create'),
+			false
+		);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('switching receive mode clears the displayed invoice and requires a new one', async () => {
+	stubReceivingNodes();
+	const api = stubLfbwApi();
+	const view = await mountLfbw(api, regularRec, optionalConfig);
+	try {
+		await createInvoice(view, '20000');
+		assert.equal(view.$$('.qr').length, 2);
+		await click(offlineBox(view));
+		await settle(400);
+		assert.equal(view.$$('.qr').length, 1);
+		assert.doesNotMatch(view.text(), /Carry the Lightning invoice/);
+		assert.match(view.text(), /Already shared invoices stay unchanged/);
+		await click(createButton(view));
+		await settle(100);
+		assert.match(view.text(), /You can close your wallet/);
+		await click(offlineBox(view));
+		await settle(400);
+		assert.equal(view.$$('.qr').length, 1);
+		assert.doesNotMatch(view.text(), /You can close your wallet/);
+		await click(createButton(view));
+		await settle(100);
+		assert.equal(api.calls.filter(([, p]) => p === '/invoice/create').length, 2);
+		assert.equal(api.calls.filter(([, p]) => p === '/receive/invoice').length, 1);
+		assert.equal(
+			api.calls.some(([, p]) => p === '/ffor/recover' || p === '/ffor/epoch/abort'),
+			false
+		);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('an offline selection never silently falls back when the amount becomes ineligible', async () => {
+	stubReceivingNodes();
+	const api = stubLfbwApi();
+	const view = await mountLfbw(api, regularRec, optionalConfig);
+	try {
+		await enterAmount(view, '354');
+		await click(offlineBox(view));
+		await settle(400);
+		await enterAmount(view, '');
+		assert.equal(offlineBox(view).checked, true);
+		assert.equal(createButton(view).disabled, true);
+		assert.equal(offlineBox(view).disabled, false, 'user can explicitly return to amountless online receiving');
+		await click(offlineBox(view));
+		assert.equal(createButton(view).disabled, false);
+		assert.equal(
+			api.calls.some(([m, p]) => m === 'POST' && p.includes('invoice')),
+			false
+		);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('unsupported engines disable only the optional feature for regular wallets', async () => {
+	const api = stubLfbwApi();
+	const view = await mountLfbw(api, regularRec, {});
+	try {
+		await createInvoice(view, '20000');
+		assert.equal(offlineBox(view).disabled, true);
+		assert.match(view.text(), /Update the app engine to enable offline receiving/);
+		assert.equal(api.calls.filter(([, p]) => p === '/invoice/create').length, 1);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('offline requests block on unavailable peers or quote failures without an online fallback', async () => {
+	stubReceivingNodes();
+	for (const disconnected of [true, false]) {
+		const api = stubLfbwApi({ quote: new Error('Offline receiving is unavailable at this node.') });
+		const get = api.get;
+		if (disconnected) api.get = (p) => (p === '/peers' ? Promise.resolve([]) : get(p));
+		const view = await mountLfbw(api, regularRec, optionalConfig);
+		try {
+			await enterAmount(view, '20000');
+			await click(offlineBox(view));
+			await settle(400);
+			assert.equal(createButton(view).disabled, true);
+			assert.match(
+				view.text(),
+				disconnected ? /Connect a node that supports offline receiving/ : /Offline receiving is unavailable/
+			);
+			assert.equal(
+				api.calls.some(([m, p]) => m === 'POST' && p.includes('invoice')),
+				false
+			);
+		} finally {
+			await view.unmount();
+		}
 	}
 });

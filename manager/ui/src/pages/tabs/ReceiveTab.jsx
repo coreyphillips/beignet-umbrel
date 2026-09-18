@@ -7,6 +7,7 @@ import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.js
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
 import OfflineReceiveCard from '../../components/OfflineReceiveCard.jsx';
+import { manager } from '../../api.js';
 
 // A direct-funding request is re-minted when the amount changes (the
 // receiver signs the amount into it), after the hand has settled.
@@ -30,74 +31,100 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 	const [amount, setAmount] = useState('');
 	const [description, setDescription] = useState('');
 	const [busy, setBusy] = useState(false);
+	const [offlineRequested, setOfflineRequested] = useState(false);
+	const [selectedPeer, setSelectedPeer] = useState('');
+	const wantsOffline = isLfbw || offlineRequested;
+	useEffect(() => {
+		setOfflineRequested(false);
+		setSelectedPeer('');
+		setInvoice(null);
+	}, [id]);
 	const { data: invoices, refresh } = usePoll(
 		() => (onchainOnly ? Promise.resolve([]) : api.get('/invoices').catch(() => [])),
 		10000,
 		[id, tick, onchainOnly]
 	);
-	// Whether the primary is on the other end of a live peer connection: a
-	// primary whose daemon runs but whose connection is down cannot
-	// provision, so the invoice is refused before it is minted (umbrel #89).
-	const { data: peers } = usePoll(() => (isLfbw ? api.get('/peers').catch(() => null) : Promise.resolve(null)), 15000, [
-		id,
-		tick,
-		isLfbw
-	]);
-	const primaryConnected = useMemo(
-		() =>
-			!isLfbw || !peers
-				? true
-				: peers.some(
-						(p) =>
-							p.pubkey === rec.lfbw.primaryPubkey &&
-							(p.state === 'connected' || p.state === 'ready' || p.connected === true)
-				  ),
-		[isLfbw, peers, rec?.lfbw?.primaryPubkey]
+	const { data: peers } = usePoll(
+		() => (wantsOffline ? api.get('/peers').catch(() => []) : Promise.resolve([])),
+		15000,
+		[id, tick, wantsOffline]
 	);
+	const { data: candidates } = usePoll(
+		() => (offlineRequested ? manager.fforCandidates(id).catch(() => []) : Promise.resolve([])),
+		15000,
+		[id, tick, offlineRequested]
+	);
+	const receivingNodes = useMemo(
+		() =>
+			(peers || [])
+				.filter((p) => p.state === 'connected' || p.state === 'ready' || p.connected === true)
+				.map((p) => {
+					const known = (candidates || []).find((c) => c.nodeId === p.pubkey);
+					return { pubkey: p.pubkey, name: known?.name || p.alias || shortId(p.pubkey), settles: !!known?.settles };
+				})
+				.sort((a, b) => Number(b.settles) - Number(a.settles) || a.pubkey.localeCompare(b.pubkey)),
+		[peers, candidates]
+	);
+	const receivePeer = isLfbw ? rec?.lfbw?.primaryPubkey : selectedPeer || receivingNodes[0]?.pubkey;
+	const peerConnected = receivingNodes.some((p) => p.pubkey === receivePeer);
+	const nodeLabel = isLfbw ? 'primary node' : 'receiving node';
 
 	const wantedSats = Number(amount) || 0;
 	const [quoteTick, setQuoteTick] = useState(0);
 	useEffect(() => {
-		if (!isLfbw) return;
+		if (!wantsOffline) return;
 		const timer = setInterval(() => setQuoteTick((n) => n + 1), 45000);
 		return () => clearInterval(timer);
-	}, [isLfbw]);
+	}, [wantsOffline]);
 	const receiveQuote = useQuote(
 		api,
-		{ peer: rec?.lfbw?.primaryPubkey, amountSats: wantedSats, refresh: quoteTick },
-		!!config?.offlineReceiveAvailable && lfbwReady && primaryConnected && wantedSats >= 354,
+		{ peer: receivePeer, amountSats: wantedSats, refresh: quoteTick },
+		wantsOffline &&
+			!!config?.offlineReceiveAvailable &&
+			(!isLfbw || lfbwReady) &&
+			peerConnected &&
+			Number.isSafeInteger(wantedSats) &&
+			wantedSats >= 354,
 		'/receive/quote',
 		'GET'
 	);
 	const quoteLine = useMemo(() => {
-		if (!isLfbw) return null;
+		if (!wantsOffline) return null;
 		const block = (text) => ({ tone: 'error', blocks: true, text });
 		if (!config?.offlineReceiveAvailable) return block('Update the app engine to enable automatic receiving.');
-		if (!lfbwReady) return block('Your primary node connection is being prepared. Try again when it is ready.');
-		if (!primaryConnected) return block('Your primary node is not connected. Wait for it to reconnect.');
+		if (isLfbw && !lfbwReady)
+			return block('Your primary node connection is being prepared. Try again when it is ready.');
+		if (!peerConnected)
+			return block(
+				isLfbw
+					? 'Your primary node is not connected. Wait for it to reconnect.'
+					: 'Connect a node that supports offline receiving in Peers.'
+			);
 		if (!Number.isSafeInteger(wantedSats) || wantedSats < 354) return block('Enter an amount of at least 354 sats.');
 		if (receiveQuote.error) return block(receiveQuote.error);
 		const q = receiveQuote.quote;
-		if (receiveQuote.pending || !q || q.amountSats !== wantedSats || q.peer !== rec?.lfbw?.primaryPubkey)
+		if (receiveQuote.pending || !q || q.amountSats !== wantedSats || q.peer !== receivePeer)
 			return { tone: 'info', blocks: true, text: 'Checking receive availability…' };
 		return {
 			tone: 'info',
 			blocks: false,
 			text:
 				q.terms.feeBaseMsat || q.terms.feePpm
-					? `You receive the full amount. The payer covers your primary node's fee of ${q.terms.feeBaseMsat} msat plus ${q.terms.feePpm} ppm.`
-					: 'You receive the full amount. Your primary node charges no receive fee.'
+					? `You receive the full amount. The payer covers your ${nodeLabel}'s fee of ${q.terms.feeBaseMsat} msat plus ${q.terms.feePpm} ppm.`
+					: `You receive the full amount. Your ${nodeLabel} charges no receive fee.`
 		};
 	}, [
 		isLfbw,
 		config?.offlineReceiveAvailable,
 		lfbwReady,
-		primaryConnected,
+		peerConnected,
+		wantsOffline,
+		nodeLabel,
 		wantedSats,
 		receiveQuote.quote,
 		receiveQuote.pending,
 		receiveQuote.error,
-		rec?.lfbw?.primaryPubkey
+		receivePeer
 	]);
 
 	const newAddress = async () => {
@@ -223,9 +250,9 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			const body = { description };
 			if (amount) body.amountSats = parseInt(amount, 10);
 			let r;
-			if (isLfbw) {
+			if (wantsOffline) {
 				if (quoteLine?.blocks || !receiveQuote.quote) throw new Error(quoteLine?.text || 'Review the amount again.');
-				const peer = rec.lfbw.primaryPubkey;
+				const peer = receivePeer;
 				const key = `receive-request:${id}`;
 				const fingerprint = JSON.stringify({ peer, ...body });
 				let saved;
@@ -336,7 +363,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			{!onchainOnly && (
 				<Card title="Lightning invoice">
 					<div className="row">
-						<Field label={isLfbw ? 'Amount (sats)' : 'Amount (sats, optional)'}>
+						<Field label={wantsOffline ? 'Amount (sats)' : 'Amount (sats, optional)'}>
 							<input
 								value={amount}
 								disabled={busy}
@@ -353,6 +380,55 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 							placeholder="Coffee"
 						/>
 					</Field>
+					{!isLfbw && (
+						<>
+							<label className="checkbox field">
+								<input
+									type="checkbox"
+									data-testid="receive-offline"
+									checked={offlineRequested}
+									disabled={
+										busy ||
+										(!offlineRequested &&
+											(!config?.offlineReceiveAvailable || !Number.isSafeInteger(wantedSats) || wantedSats < 354))
+									}
+									onChange={(e) => {
+										setOfflineRequested(e.target.checked);
+										setInvoice(null);
+									}}
+								/>
+								Receive offline
+							</label>
+							<div className="field-hint">
+								{!config?.offlineReceiveAvailable
+									? 'Update the app engine to enable offline receiving.'
+									: wantedSats < 354
+									? 'Enter an amount of at least 354 sats to receive offline.'
+									: 'Accept this payment even while this wallet is stopped. Closing the browser alone does not stop the wallet.'}
+							</div>
+							{offlineRequested && receivingNodes.length > 0 && (
+								<Field label="Receiving node">
+									<select
+										value={receivePeer || ''}
+										disabled={busy}
+										onChange={(e) => {
+											setSelectedPeer(e.target.value);
+											setInvoice(null);
+										}}>
+										{selectedPeer && !peerConnected && <option value={selectedPeer}>Disconnected node</option>}
+										{receivingNodes.map((p) => (
+											<option key={p.pubkey} value={p.pubkey}>
+												{p.name}
+											</option>
+										))}
+									</select>
+								</Field>
+							)}
+							<div className="field-hint">
+								Changing this option requires a new invoice. Already shared invoices stay unchanged.
+							</div>
+						</>
+					)}
 					{quoteLine && (
 						<div
 							className={quoteLine.tone === 'error' ? 'error-note' : 'info-note'}
@@ -412,7 +488,10 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			    sibling that stays online, one invoice per voucher, payable with
 			    this wallet off. Only on an engine that carries the routes. */}
 			{!onchainOnly && !isLfbw && config?.fforAvailable && (
-				<OfflineReceiveCard id={id} api={api} rec={rec} tick={tick} info={info} />
+				<details className="grid-full">
+					<summary>Advanced offline receive</summary>
+					<OfflineReceiveCard id={id} api={api} rec={rec} tick={tick} info={info} />
+				</details>
 			)}
 
 			{!onchainOnly && (
