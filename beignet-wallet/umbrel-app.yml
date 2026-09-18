@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.21.0"
+version: "0.22.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,35 +30,29 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Receive while offline. A wallet can now be paid while its daemon is off:
-  before going away it pre-signs a book of fixed-amount vouchers with a
-  sibling wallet that stays online (your lightning-first wallet's primary
-  node is the natural one), hands out one invoice per voucher from the
-  Receive tab, and the sibling settles each payment at once. When the
-  wallet is back, the app collects what was paid by itself and the money
-  lands in the channel balance. This is FFOR (Fast-Forward Offline Receive),
-  bundled here on beignet 0.21.5.
+  Offline receive gains witnesses and an issuer. A sibling wallet that
+  stays online can now keep an encrypted receipt of every payment made to
+  a wallet's vouchers while it is off, so what was paid is collected even
+  if the settlement peer disappears. Turn on "Keep receipts for sibling
+  wallets receiving offline" in that wallet's Edit dialog, give it a
+  public channel to the settlement peer, and tick it as a witness when
+  starting a book on the Receive tab. Payments then route through the
+  witness, and the panel above the tabs says what each witness answered
+  when the wallet returns.
 
 
-  To use it, open the Edit dialog of the wallet that stays online and turn
-  on "Settle offline receives for sibling wallets" (it restarts with the
-  role, and can cap what one book may lock). On any other wallet with an
-  open channel to it, the Receive tab gains a "Receive while offline" card:
-  pick the peer, the amount per voucher, how many, and how long you will be
-  away, then create an invoice per voucher and share it. The card lists
-  each voucher's state, the Overview shows the book, and the header carries
-  a badge while it is live.
+  The same sibling can issue invoices to payers who hold none. Turn on
+  "Issue invoices for sibling wallets receiving offline" as well, pick it
+  as the issuer when starting the book, and the Receive tab shows a BOLT
+  12 offer to share instead of invoices: a payer who scans it asks the
+  issuer for one and gets the next unused voucher, while the wallet is off.
 
 
-  What happens on return is said above the tabs: how many vouchers were
-  paid, or that the sibling could not be reached, with Try again and, as a
-  last resort, Enforce on-chain, which force-closes the channel claiming
-  every paid voucher. Come back before the return-by height the card shows;
-  blocks come about ten minutes apart, sometimes much slower.
-
-
-  Witnesses and the BOLT 12 issuer the engine also offers are not wired
-  yet; that is the next phase.
+  Starting a book now runs as one setup the app carries through step by
+  step: the book, the signatures, each witness connected and provisioned,
+  then the issuer. Bundles beignet 0.21.6, which lets channels between two
+  beignet wallets be announced; before it a payer could not find a
+  witness's channel to the settlement peer.
 
 
 dependencies: []
