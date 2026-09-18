@@ -133,7 +133,9 @@ export function bookFits(budgetSats, channel) {
 
 /** The wallet's channels a settlement candidate is on the other end of, tagged with its name. */
 export function settlementChannels(channels, candidates) {
-	const byNode = new Map((candidates || []).map((c) => [c.nodeId, c]));
+	// A candidate that holds only the witness or issuer role is not a
+	// settlement peer; older managers sent no role flags, so absent means yes.
+	const byNode = new Map((candidates || []).filter((c) => c.settles !== false).map((c) => [c.nodeId, c]));
 	return (channels || [])
 		.filter((c) => c.state === 'NORMAL' && byNode.has(c.peerPubkey))
 		.map((c) => ({ ...c, settler: byNode.get(c.peerPubkey) }));
@@ -343,6 +345,83 @@ export function returnOutcome({ action, state, channelState, error }) {
 	if (state === 'DRAINING') return 'draining';
 	if (isClosedChannelState(channelState)) return 'enforced';
 	return 'unreachable';
+}
+
+/** The siblings the card may name as witnesses: those that keep receipts, other than the settlement peer. */
+export function witnessCandidates(candidates, settlerNodeId) {
+	return (candidates || []).filter((c) => c.witnesses && c.nodeId !== settlerNodeId);
+}
+
+/** The offer an issuer answers for this epoch, if the manager holds one for it. */
+export function issuanceFor(rec, epoch) {
+	if (!rec || !epoch || !rec.fforIssuance) return null;
+	const iss = rec.fforIssuance[epoch.channelId];
+	return iss && iss.epochId === epoch.epochId ? iss : null;
+}
+
+const SETUP_STEPS = {
+	starting: 'Starting the book with the settlement peer',
+	activating: 'The two sides are signing the book',
+	provisioning: 'Provisioning the witnesses',
+	issuing: 'Handing the issuer its offer',
+	done: 'Set up',
+	failed: 'Failed'
+};
+
+/**
+ * The manager's epoch setup (rec.fforSetup) in the card's words: the
+ * current step, one line per witness, the issuer's line, and the error.
+ */
+export function describeSetup(setup) {
+	if (!setup) return null;
+	const witnesses = (setup.witnesses || []).map((w) => ({
+		name: w.name,
+		text:
+			w.step === 'acknowledged'
+				? `${w.name}: acknowledged the book`
+				: w.step === 'failed'
+				? `${w.name}: ${w.error || 'failed'}`
+				: w.step === 'pending'
+				? `${w.name}: waiting`
+				: `${w.name}: ${w.step}`,
+		tone: w.step === 'acknowledged' ? 'green' : w.step === 'failed' ? 'red' : 'muted'
+	}));
+	const issuer = setup.issuer
+		? {
+				name: setup.issuer.name,
+				text:
+					setup.issuer.step === 'provisioned'
+						? `${setup.issuer.name}: issues invoices for this book`
+						: setup.issuer.step === 'failed'
+						? `${setup.issuer.name}: ${setup.issuer.error || 'failed'}`
+						: `${setup.issuer.name}: ${setup.issuer.step}`,
+				tone: setup.issuer.step === 'provisioned' ? 'green' : setup.issuer.step === 'failed' ? 'red' : 'muted'
+		  }
+		: null;
+	return {
+		running: !!setup.running,
+		step: setup.step,
+		label: SETUP_STEPS[setup.step] || setup.step,
+		error: setup.error || null,
+		witnesses,
+		issuer,
+		failed: !!setup.error
+	};
+}
+
+/** One line per witness the return asked, from /ffor/recover's witnesses[]. */
+export function witnessLines(witnesses, candidates = []) {
+	const names = new Map((candidates || []).map((c) => [c.nodeId, c.name]));
+	return (witnesses || []).map((w) => {
+		const name = names.get(w.witnessNodeId) || `${String(w.witnessNodeId).slice(0, 8)}…`;
+		if (!w.ok) return { name, tone: 'red', text: `${name} did not answer${w.error ? ` (${w.error})` : ''}` };
+		const bad = (w.records || []).filter((r) => r.verified === false).length;
+		return {
+			name,
+			tone: w.credited > 0 ? 'green' : 'muted',
+			text: `${name}: ${(w.records || []).length} receipt${(w.records || []).length === 1 ? '' : 's'}, ${w.credited} credited${bad > 0 ? `, ${bad} did not verify` : ''}`
+		};
+	});
 }
 
 // The invoice for a slot is handed out once by the daemon and never again

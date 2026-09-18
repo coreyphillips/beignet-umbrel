@@ -274,3 +274,16 @@ test('settling offline receives rides the Lightning listener (FFOR, beignet #729
 	const parked = m._daemonEnv(rec({ ffor: { settle: { enabled: true } }, onchainOnly: true }), PATHS, 's', 't');
 	assert.equal(parked.BEIGNET_FFOR_SETTLE, undefined, 'no listener, no settlement');
 });
+
+test('witnessing and issuing ride the Lightning listener too, the issuer never without the witness', () => {
+	const m = bareManager();
+	const both = m._daemonEnv(rec({ ffor: { witness: { enabled: true, maxBytes: 4096 }, issuer: { enabled: true } } }), PATHS, 's', 't');
+	assert.equal(both.BEIGNET_FFOR_WITNESS, 'true');
+	assert.equal(both.BEIGNET_FFOR_WITNESS_MAX_BYTES, '4096');
+	assert.equal(both.BEIGNET_FFOR_WITNESS_MAX_MAILBOXES, undefined);
+	assert.equal(both.BEIGNET_FFOR_ISSUER, 'true');
+	assert.equal(both.BEIGNET_FFOR_SETTLE, undefined);
+	const parked = m._daemonEnv(rec({ ffor: { witness: { enabled: true }, issuer: { enabled: true } }, onchainOnly: true }), PATHS, 's', 't');
+	assert.equal(parked.BEIGNET_FFOR_WITNESS, undefined);
+	assert.equal(parked.BEIGNET_FFOR_ISSUER, undefined);
+});

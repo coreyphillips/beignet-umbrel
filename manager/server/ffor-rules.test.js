@@ -22,7 +22,7 @@ const settler = (extra = {}) => ({
 });
 
 test('normalizeFfor fills defaults, validates the caps and clears an optional one on null', () => {
-	assert.deepEqual(ffor.normalizeFfor(undefined), { settle: { ...ffor.SETTLE_DEFAULTS } });
+	assert.deepEqual(ffor.normalizeFfor(undefined), { settle: { ...ffor.SETTLE_DEFAULTS }, witness: { ...ffor.WITNESS_DEFAULTS }, issuer: { ...ffor.ISSUER_DEFAULTS } });
 	const on = ffor.normalizeFfor({ settle: { enabled: 1, maxBudgetMsat: '5000000', feePpm: 250 } });
 	assert.deepEqual(on.settle, { enabled: true, maxBudgetMsat: 5000000, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 250 });
 	const kept = ffor.normalizeFfor({ settle: { maxBudgetMsat: null } }, on);
@@ -77,7 +77,7 @@ test('settlementCandidates are the opted-in siblings on the same network with a 
 		settler({ id: 's5', onchainOnly: true })
 	];
 	assert.deepEqual(ffor.settlementCandidates(records, self, (rec) => rec.id === 's1'), [
-		{ id: 's1', name: 'Settler', nodeId: '02' + 'ab'.repeat(32), running: true }
+		{ id: 's1', name: 'Settler', nodeId: '02' + 'ab'.repeat(32), running: true, settles: true, witnesses: false, issues: false }
 	]);
 });
 
@@ -135,4 +135,42 @@ test('returnOutcome reads the epoch and the channel, not the action alone', () =
 	const d = ffor.describeReturn({ action: 'nothing', preimagesKnown: [], epoch: { state: 'CLOSED', slots: [{ k: 1, state: 'settled' }] } });
 	assert.equal(d.outcome, 'closed');
 	assert.equal(d.complete, true);
+});
+
+test('the witness and issuer roles: defaults, the issuer needing the witness, the env each contributes', () => {
+	const off = ffor.normalizeFfor(undefined);
+	assert.deepEqual(off.witness, { enabled: false, maxMailboxes: null, maxBytes: null });
+	assert.deepEqual(off.issuer, { enabled: false });
+	assert.throws(() => ffor.normalizeFfor({ issuer: { enabled: true } }), (err) => err.code === 'BAD_FFOR' && /witness/.test(err.message));
+	const both = ffor.normalizeFfor({ witness: { enabled: true, maxMailboxes: '8' }, issuer: { enabled: true } });
+	assert.equal(both.witness.maxMailboxes, 8);
+	assert.equal(both.issuer.enabled, true);
+	assert.throws(() => ffor.normalizeFfor({ witness: { maxBytes: 10 } }), (err) => err.code === 'BAD_FFOR');
+	const rec = { nodeId: '02' + 'ab'.repeat(32), ffor: both };
+	assert.deepEqual(ffor.fforEnv(rec), { BEIGNET_FFOR_WITNESS: 'true', BEIGNET_FFOR_WITNESS_MAX_MAILBOXES: '8', BEIGNET_FFOR_ISSUER: 'true' });
+	assert.equal(ffor.isWitness(rec), true);
+	assert.equal(ffor.isIssuer(rec), true);
+	assert.equal(ffor.isSettler(rec), false);
+	assert.deepEqual(ffor.fforEnv({ ffor: { witness: { enabled: true }, issuer: { enabled: true }, settle: { enabled: true } } }).BEIGNET_FFOR_SETTLE, 'true');
+	assert.deepEqual(ffor.fforEnv({ ffor: both, onchainOnly: true }), {});
+	// Dropping the witness in an edit takes the issuer with it, or the daemon would refuse to start.
+	assert.throws(() => ffor.normalizeFfor({ witness: { enabled: false } }, both), (err) => err.code === 'BAD_FFOR');
+	assert.equal(ffor.fforRoleChanged(ffor.fforEnv(rec), { ...rec, ffor: { ...both, issuer: { enabled: false } } }), true);
+});
+
+test('candidates carry every role a sibling holds', () => {
+	const self = { id: 'r1', network: 'regtest' };
+	const w = { id: 'w1', name: 'Witness', network: 'regtest', nodeId: '02' + 'cd'.repeat(32), ffor: { witness: { enabled: true }, issuer: { enabled: true } } };
+	const s = { id: 's1', name: 'Settler', network: 'regtest', nodeId: '02' + 'ef'.repeat(32), ffor: { settle: { enabled: true } } };
+	assert.deepEqual(ffor.settlementCandidates([self, w, s], self), [
+		{ id: 'w1', name: 'Witness', nodeId: w.nodeId, running: false, settles: false, witnesses: true, issues: true },
+		{ id: 's1', name: 'Settler', nodeId: s.nodeId, running: false, settles: true, witnesses: false, issues: false }
+	]);
+});
+
+test('a sibling settlement peer\'s book carries its own forwarding policy, raised to its floor', () => {
+	const settler = { ffor: { settle: { enabled: true, feeBaseMsat: 0, feePpm: 50 } } };
+	assert.deepEqual(ffor.settlerTerms({ feeBaseMsat: 1000, feeProportionalMillionths: 1 }, settler), { feeBaseMsat: 1000, feeProportionalMillionths: 50 });
+	assert.equal(ffor.settlerTerms(null, settler), null);
+	assert.deepEqual(ffor.settlerTerms({ feeBaseMsat: '2000', feeProportionalMillionths: 10 }, {}), { feeBaseMsat: 2000, feeProportionalMillionths: 10 });
 });

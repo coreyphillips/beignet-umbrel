@@ -59,11 +59,19 @@ Two things the engine leaves to the host, and this app does:
   online.
 - **Receiving** needs no role: any Lightning wallet with an open channel to
   a settling sibling can start an epoch.
-- **Witness and issuer** (receipt witnesses that keep an encrypted copy of
-  every settlement, and a BOLT 12 issuer for payers with no invoice) are in
-  the engine and reachable over the proxied daemon API, but the app sets
-  neither role yet and the dashboard does not drive them. That is the
-  follow-up phase of umbrel #98.
+- **Keep receipts for sibling wallets receiving offline (witness)**: the
+  same toggle group (`ffor.witness`, with optional caps on mailboxes and
+  bytes) sets `BEIGNET_FFOR_WITNESS=true`. A sibling going offline can name
+  this wallet in its book; payments to the book then route through this
+  wallet, which stores an encrypted receipt of each before passing the
+  fulfil on, so the sibling can collect what it was paid even if its
+  settlement peer disappears. The receipts are opaque to the witness.
+- **Issue invoices for sibling wallets receiving offline (issuer)**:
+  `ffor.issuer` sets `BEIGNET_FFOR_ISSUER=true` and needs the witness on
+  the same wallet (the daemon refuses to start otherwise, and so does the
+  manager). A sibling hands it a BOLT 12 offer; a payer who holds no
+  invoice asks this wallet and gets the invoice for the next unused
+  voucher, one per request.
 
 ## What the user sees
 
@@ -82,13 +90,33 @@ Two things the engine leaves to the host, and this app does:
 - **The header** carries a green `receiving offline` badge while an epoch
   is ACTIVE and a red `enforce on-chain` badge when the peer contradicted
   it.
+- **Witnesses and the issuer on the card.** When a sibling keeps receipts,
+  the start form offers it as a witness (never the settlement peer itself:
+  a witness sits on the path before it), and among the chosen witnesses
+  one that issues can be named as the issuer with an offer description.
+  The manager runs the whole setup in one call (`POST
+  /api/wallets/:id/ffor/epoch`): the book names the witnesses, setup runs
+  to ACTIVE, each witness is connected over loopback and provisioned, and
+  the issuer gets the offer and its path template, built from the issuer's
+  own channel toward the settlement peer and the forwarding policy it
+  applies on it. The card shows the progress step by step and offers Retry
+  provisioning when a step failed (`POST /api/wallets/:id/ffor/provision`).
+  With an issuer, the whole book is the issuer's to hand out: the card
+  shows the offer as a QR to share and mints no invoices itself.
 - **Above the tabs** (`FforReturnPanel`): what the last return produced,
   with Try again when the peer was unreachable and Enforce on-chain behind
   a confirmation that explains the force close. A return is never presented
   as complete while a slot the wallet could be owed still reads unsettled.
 - **Overview**: an Offline receive row in Node status, and on a settling
   wallet a card listing the books it holds for siblings with what each has
-  settled.
+  settled; on a witness the mailboxes it keeps (`/ffor/witness/status`),
+  on an issuer the offers it answers (`/ffor/issuer/status`).
+- **The return with witnesses**: the manager connects every sibling
+  witness over loopback before asking the daemon to recover, and the panel
+  lists what each witness answered (receipts, credited, or did not
+  answer). With the settlement peer away, the receipts alone credit the
+  paid vouchers on the record; the book still closes once the peer is
+  back, or is enforced on-chain.
 - **Channel history** records every `ffor:state` and `ffor:enforce` on the
   epoch's channel; the Logs tab carries every `ffor:*` event and the
   return line.
@@ -115,9 +143,25 @@ Two things the engine leaves to the host, and this app does:
   the close completes each credited voucher's payment record and emits
   `payment:received` and `invoice:settled` (beignet #876): the row reads
   PAID and the receive toasts like any other.
-- **Payers are unrestricted.** The card sends `witnessPeers: []`. A named
-  list makes S refuse HTLCs from anyone but those peers, which is the
-  witness path this phase does not use.
+- **Witnesses change who may pay.** With witnesses named in the book, the
+  settlement peer settles a delegated HTLC only when it arrives from one of
+  them (TLV 13), so payers must route through a witness. A hand-minted
+  BOLT 11 invoice still hints only the last hop (S to R); the payer finds
+  the witness's channel to S from gossip, so that channel must be public
+  and confirmed. An issuer's BOLT 12 invoices carry a blinded path through
+  the witness, so a payer needs a route to the witness and a live peer
+  connection to it for the request. Without witnesses the book sends
+  `witnessPeers: []` and any payer may pay.
+- **Nothing dials.** Provisioning, the return's witness fetch and a
+  payer's offer request all ride existing peer connections. The manager
+  connects siblings over loopback before each; a witness or issuer off the
+  box needs the wallet's own reconnect to reach it.
+- **The book is not shared between hand-minted invoices and the issuer.**
+  The issuer's ledger lives on the issuer; R's record only learns a slot
+  was issued once it is paid. The card therefore gives the whole book to
+  the issuer when one is named.
+- **`minReceipts` stays 0.** The engine's witness refuses guardian
+  receipts today; the manager never sends the field.
 - **A refusal by the peer is an ABORTED epoch, not a 400.** The start call
   returns NEGOTIATING; the peer's `ff_abort` (reason 2 for a peer that does
   not settle or refuses the terms) arrives a moment later. The card and the
@@ -132,7 +176,11 @@ Two things the engine leaves to the host, and this app does:
 `scripts/lfbw-regtest/08-ffor-plain.mjs` and `09-ffor-lfbw.mjs` drive the
 whole round on the bitcoin-regtest-dashboard chain: a settling sibling, a
 receiver (a plain wallet in 08, a lightning-first wallet on its primary in
-09) and a payer sibling, no CLN needed. Each creates the wallets, funds
+09) and a payer sibling, no CLN needed. `10-ffor-witness-issuer.mjs` adds a
+witness and issuer sibling on a public channel to the settlement peer and
+a payer behind it: round A pays a hand-minted invoice through the witness
+and returns with the settlement peer away, so the receipt alone credits the
+voucher; round B pays the issuer's offer with no invoice in hand. Each creates the wallets, funds
 and channels them, starts a two-voucher book, mints the first invoice,
 stops the receiver, pays the invoice from the payer while it is down,
 starts the receiver, and asserts the manager's return closed the epoch,

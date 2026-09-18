@@ -102,6 +102,81 @@ test('an exposed slot whose invoice the engine carries on the view is shown with
 	}
 });
 
+test('a sibling that keeps receipts is offered as a witness, and an issuer among the chosen witnesses; the manager runs the setup', async () => {
+	const W = '02' + 'ef'.repeat(32);
+	stubManager([
+		{ id: 's1', name: 'Main', nodeId: PEER, running: true, settles: true, witnesses: false, issues: false },
+		{ id: 'w1', name: 'Witness', nodeId: W, running: true, settles: false, witnesses: true, issues: true }
+	]);
+	const posted = [];
+	globalThis.fetch = async (url, opts) => {
+		if (/ffor\/epoch$/.test(url) && opts && opts.method === 'POST') {
+			posted.push(JSON.parse(opts.body));
+			return { ok: true, status: 200, json: async () => ({ ok: true, result: { step: 'done' } }) };
+		}
+		return {
+			ok: true,
+			status: 200,
+			json: async () => ({
+				ok: true,
+				result: /ffor\/candidates$/.test(url)
+					? [
+							{ id: 's1', name: 'Main', nodeId: PEER, running: true, settles: true, witnesses: false, issues: false },
+							{ id: 'w1', name: 'Witness', nodeId: W, running: true, settles: false, witnesses: true, issues: true }
+					  ]
+					: null
+			})
+		};
+	};
+	const api = stubApi({ epochs: [] });
+	const view = await mount(api);
+	try {
+		const { type } = await import('../../test/render.mjs');
+		assert.ok(view.$('[data-testid="ffor-witness-w1"]'), 'the witness is offered');
+		assert.equal(view.$('[data-testid="ffor-issuer"]'), null, 'no issuer until a witness is chosen');
+		await click(view.$('[data-testid="ffor-witness-w1"]'));
+		await settle(100);
+		assert.ok(view.$('[data-testid="ffor-issuer"]'));
+		await type(view.$('[data-testid="ffor-amount"]'), '50000');
+		await settle(100);
+		const { select } = await import('../../test/render.mjs');
+		await select(view.$('[data-testid="ffor-issuer"]'), 'w1');
+		await settle(100);
+		await click(view.$$('button').find((b) => /Start receiving offline/.test(b.textContent)));
+		await settle(300);
+		assert.equal(posted.length, 1, 'the manager runs the setup, not the daemon directly');
+		assert.deepEqual(posted[0].witnessWalletIds, ['w1']);
+		assert.equal(posted[0].issuer.walletId, 'w1');
+		assert.deepEqual(posted[0].witnessPeers, []);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('an epoch with an issuer shows the offer and hands out no invoices itself', async () => {
+	stubManager([{ id: 's1', name: 'Main', nodeId: PEER, running: true, settles: true, witnesses: false, issues: false }]);
+	const api = stubApi({ epochs: [{ ...active, witnesses: [{ witnessNodeId: '02' + 'ef'.repeat(32), mailboxId: 'aa', retentionUntil: 5, acknowledged: true }] }] });
+	const view = await render(ToastProvider, {
+		children: createElement(OfflineReceiveCard, {
+			id: 'w1',
+			api,
+			rec: { id: 'w1', fforIssuance: { [CH]: { epochId: 'e1', offerId: 'o', encoded: 'lno1offer', issuerName: 'Witness', description: 'Coffee' } } },
+			tick: 0,
+			info: { blockHeight: 1000 }
+		})
+	});
+	await settle(400);
+	try {
+		assert.ok(view.$('[data-testid="ffor-offer"]'));
+		assert.match(view.text(), /asks Witness for an invoice/);
+		assert.equal(view.$('[data-testid="ffor-mint-2"]'), null, 'the vouchers are the issuer\'s to hand out');
+		assert.match(view.text(), /Issued on request/);
+		assert.match(view.$('[data-testid="ffor-witnesses"]').textContent, /not acknowledged yet|acknowledged/);
+	} finally {
+		await view.unmount();
+	}
+});
+
 test('with no epoch and no opted-in sibling, the card says where to turn the role on', async () => {
 	stubManager([]);
 	const api = stubApi({ epochs: [] });
@@ -116,11 +191,19 @@ test('with no epoch and no opted-in sibling, the card says where to turn the rol
 
 test('with an opted-in sibling on an open channel, the form plans the book and starts it', async () => {
 	stubManager([{ id: 's1', name: 'Main', nodeId: PEER, running: true }]);
-	const api = stubApi({ epochs: [] });
-	api.post = async (path, body) => {
-		api.calls.push(['POST', path, body]);
-		return {};
+	const posted = [];
+	const baseFetch = globalThis.fetch;
+	globalThis.fetch = async (url, opts) => {
+		if (/ffor\/epoch$/.test(url) && opts && opts.method === 'POST') {
+			const body = JSON.parse(opts.body);
+			posted.push(body);
+			// The manager runs the daemon's start with the same body.
+			api.calls.push(['POST', '/ffor/epoch/start', body]);
+			return { ok: true, status: 200, json: async () => ({ ok: true, result: { step: 'done' } }) };
+		}
+		return baseFetch(url, opts);
 	};
+	const api = stubApi({ epochs: [] });
 	const view = await mount(api);
 	try {
 		const { type } = await import('../../test/render.mjs');

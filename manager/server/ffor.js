@@ -24,6 +24,17 @@ const SETTLE_DEFAULTS = Object.freeze({
 	feePpm: 0
 });
 
+// The receipt witness's caps (BEIGNET_FFOR_WITNESS_MAX_MAILBOXES and
+// _MAX_BYTES, unset means the engine's defaults) and the issuer switch,
+// which the daemon refuses to start with unless the witness is on: the
+// issuer is co-hosted with the first receipt witness.
+const WITNESS_DEFAULTS = Object.freeze({ enabled: false, maxMailboxes: null, maxBytes: null });
+const ISSUER_DEFAULTS = Object.freeze({ enabled: false });
+const WITNESS_BOUNDS = Object.freeze({
+	maxMailboxes: [1, 100000, true],
+	maxBytes: [1024, Number.MAX_SAFE_INTEGER, true]
+});
+
 // [min, max, optional]. An optional cap clears with null or ''.
 const SETTLE_BOUNDS = Object.freeze({
 	maxBudgetMsat: [1, Number.MAX_SAFE_INTEGER, true],
@@ -66,6 +77,12 @@ const FFOR_EVENTS = Object.freeze([
 // The two that name the epoch's channel and belong in its history.
 const FFOR_CHANNEL_EVENTS = Object.freeze(['ffor:state', 'ffor:enforce']);
 
+// How long an epoch start waits for the two sides to sign the book, and
+// how long a witness provision waits for the acknowledgement to land on
+// the epoch record (the daemon awaits the ack, so this is a backstop).
+const SETUP_ACTIVE_TIMEOUT_MS = 60000;
+const SETUP_ACK_TIMEOUT_MS = 15000;
+
 // How long a fresh start waits for the channel to the settlement peer to
 // reestablish before asking the daemon to reconcile anyway. A sibling on
 // loopback is back within seconds; a peer through Tor can take a minute.
@@ -91,38 +108,58 @@ function httpError(status, code, message) {
 	return err;
 }
 
+// One role block: the switch plus its bounded caps, an edit keeping what
+// it does not name, an optional cap clearing on null or ''.
+function normalizeRole(name, input, base, bounds) {
+	const out = { ...base };
+	if (input === undefined) return out;
+	if (input === null || typeof input !== 'object') {
+		throw httpError(400, 'BAD_FFOR', `ffor.${name} must be an object`);
+	}
+	if ('enabled' in input) out.enabled = !!input.enabled;
+	for (const key of Object.keys(bounds)) {
+		if (!(key in input)) continue;
+		const raw = input[key];
+		const [lo, hi, optional] = bounds[key];
+		if (raw === null || raw === '') {
+			if (optional) {
+				out[key] = null;
+				continue;
+			}
+			throw httpError(400, 'BAD_FFOR', `${key} must be a whole number`);
+		}
+		if (typeof raw !== 'number' && typeof raw !== 'string') {
+			throw httpError(400, 'BAD_FFOR', `${key} must be a whole number`);
+		}
+		const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
+		if (!Number.isInteger(n) || n < lo || n > hi) {
+			throw httpError(400, 'BAD_FFOR', `${key} must be a whole number between ${lo} and ${hi}`);
+		}
+		out[key] = n;
+	}
+	return out;
+}
+
 /** Validated FFOR block for a record, defaults filled in, or throws. */
 function normalizeFfor(input, existing) {
-	const base = { settle: { ...SETTLE_DEFAULTS, ...((existing && existing.settle) || {}) } };
+	const ex = existing || {};
+	const base = {
+		settle: { ...SETTLE_DEFAULTS, ...(ex.settle || {}) },
+		witness: { ...WITNESS_DEFAULTS, ...(ex.witness || {}) },
+		issuer: { ...ISSUER_DEFAULTS, ...(ex.issuer || {}) }
+	};
 	if (input === undefined || input === null) return base;
 	if (typeof input !== 'object') throw httpError(400, 'BAD_FFOR', 'ffor must be an object');
-	const out = { settle: { ...base.settle } };
-	if ('settle' in input && input.settle !== undefined) {
-		const settle = input.settle;
-		if (settle === null || typeof settle !== 'object') {
-			throw httpError(400, 'BAD_FFOR', 'ffor.settle must be an object');
-		}
-		if ('enabled' in settle) out.settle.enabled = !!settle.enabled;
-		for (const key of Object.keys(SETTLE_BOUNDS)) {
-			if (!(key in settle)) continue;
-			const raw = settle[key];
-			const [lo, hi, optional] = SETTLE_BOUNDS[key];
-			if (raw === null || raw === '') {
-				if (optional) {
-					out.settle[key] = null;
-					continue;
-				}
-				throw httpError(400, 'BAD_FFOR', `${key} must be a whole number`);
-			}
-			if (typeof raw !== 'number' && typeof raw !== 'string') {
-				throw httpError(400, 'BAD_FFOR', `${key} must be a whole number`);
-			}
-			const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
-			if (!Number.isInteger(n) || n < lo || n > hi) {
-				throw httpError(400, 'BAD_FFOR', `${key} must be a whole number between ${lo} and ${hi}`);
-			}
-			out.settle[key] = n;
-		}
+	const out = {
+		settle: normalizeRole('settle', input.settle, base.settle, SETTLE_BOUNDS),
+		witness: normalizeRole('witness', input.witness, base.witness, WITNESS_BOUNDS),
+		issuer: normalizeRole('issuer', input.issuer, base.issuer, {})
+	};
+	// The daemon refuses to start with the issuer and no witness (the
+	// issuer is co-hosted with the first receipt witness), so the record
+	// refuses the same combination on the request that made it.
+	if (out.issuer.enabled && !out.witness.enabled) {
+		throw httpError(400, 'BAD_FFOR', 'The issuer runs on a receipt witness: turn on the witness too.');
 	}
 	return out;
 }
@@ -132,6 +169,21 @@ function isSettler(rec) {
 	return !!(rec && !rec.onchainOnly && rec.ffor && rec.ffor.settle && rec.ffor.settle.enabled);
 }
 
+/** True when the record serves as a receipt witness and runs Lightning. */
+function isWitness(rec) {
+	return !!(rec && !rec.onchainOnly && rec.ffor && rec.ffor.witness && rec.ffor.witness.enabled);
+}
+
+/** True when the record answers BOLT 12 requests as an issuer (implies witness). */
+function isIssuer(rec) {
+	return isWitness(rec) && !!(rec.ffor.issuer && rec.ffor.issuer.enabled);
+}
+
+/** True when the record holds any FFOR role. */
+function hasFforRole(rec) {
+	return isSettler(rec) || isWitness(rec);
+}
+
 /**
  * The env fragment for a wallet that settles offline receives. Nothing for
  * anyone else, so a wallet that does not opt in sees the env it always saw
@@ -139,18 +191,30 @@ function isSettler(rec) {
  * daemon reads exactly the string 'true'; the caps ride only when set.
  */
 function fforEnv(rec) {
-	if (!isSettler(rec)) return {};
-	const settle = normalizeFfor(undefined, rec.ffor).settle;
-	const env = {
-		BEIGNET_FFOR_SETTLE: 'true',
-		BEIGNET_FFOR_FEE_BASE_MSAT: String(settle.feeBaseMsat),
-		BEIGNET_FFOR_FEE_PPM: String(settle.feePpm)
-	};
-	if (settle.maxBudgetMsat !== null && settle.maxBudgetMsat !== undefined) {
-		env.BEIGNET_FFOR_MAX_BUDGET_MSAT = String(settle.maxBudgetMsat);
+	if (!hasFforRole(rec)) return {};
+	const { settle, witness, issuer } = normalizeFfor(undefined, rec.ffor);
+	const env = {};
+	if (settle.enabled) {
+		env.BEIGNET_FFOR_SETTLE = 'true';
+		env.BEIGNET_FFOR_FEE_BASE_MSAT = String(settle.feeBaseMsat);
+		env.BEIGNET_FFOR_FEE_PPM = String(settle.feePpm);
+		if (settle.maxBudgetMsat !== null && settle.maxBudgetMsat !== undefined) {
+			env.BEIGNET_FFOR_MAX_BUDGET_MSAT = String(settle.maxBudgetMsat);
+		}
+		if (settle.maxEpochBlocks !== null && settle.maxEpochBlocks !== undefined) {
+			env.BEIGNET_FFOR_MAX_EPOCH_BLOCKS = String(settle.maxEpochBlocks);
+		}
 	}
-	if (settle.maxEpochBlocks !== null && settle.maxEpochBlocks !== undefined) {
-		env.BEIGNET_FFOR_MAX_EPOCH_BLOCKS = String(settle.maxEpochBlocks);
+	if (witness.enabled) {
+		env.BEIGNET_FFOR_WITNESS = 'true';
+		if (witness.maxMailboxes !== null && witness.maxMailboxes !== undefined) {
+			env.BEIGNET_FFOR_WITNESS_MAX_MAILBOXES = String(witness.maxMailboxes);
+		}
+		if (witness.maxBytes !== null && witness.maxBytes !== undefined) {
+			env.BEIGNET_FFOR_WITNESS_MAX_BYTES = String(witness.maxBytes);
+		}
+		// The issuer rides the witness: the daemon refuses it alone.
+		if (issuer.enabled) env.BEIGNET_FFOR_ISSUER = 'true';
 	}
 	return env;
 }
@@ -167,20 +231,92 @@ function fforRoleChanged(spawnedEnv, rec) {
 }
 
 /**
- * The siblings a wallet can pick as its settlement peer: same network, not
- * itself, opted in, with a node id the dashboard can match against the
- * wallet's channels. Every beignet node advertises the FFOR feature bit
- * whether or not it settles, so the record is the only honest source.
+ * The siblings a wallet can pick an FFOR party among: same network, not
+ * itself, holding a role, with a node id the dashboard can match against
+ * the wallet's channels. Each carries which roles it holds (a settlement
+ * peer, a receipt witness, an issuer). Every beignet node advertises the
+ * FFOR feature bit whether or not it serves, so the record is the only
+ * honest source.
  */
 function settlementCandidates(records, self, runningOf = () => false) {
 	return (records || [])
-		.filter((rec) => rec && rec.id !== self.id && rec.network === self.network && isSettler(rec) && rec.nodeId)
+		.filter((rec) => rec && rec.id !== self.id && rec.network === self.network && hasFforRole(rec) && rec.nodeId)
 		.map((rec) => ({
 			id: rec.id,
 			name: rec.name,
 			nodeId: rec.nodeId,
-			running: !!runningOf(rec)
+			running: !!runningOf(rec),
+			settles: isSettler(rec),
+			witnesses: isWitness(rec),
+			issues: isIssuer(rec)
 		}));
+}
+
+/**
+ * The path-template hop a witness contributes to the issuer's blinded
+ * payment paths: the witness's own channel toward the settlement peer and
+ * the forwarding policy it applies on it (GET /channel/policy on the
+ * witness). The engine appends S (with the epoch's fee terms) and R.
+ */
+function witnessHop(witnessNodeId, channel, policy) {
+	if (!channel || !channel.shortChannelId) return null;
+	if (!policy) return null;
+	return {
+		nodeId: witnessNodeId,
+		shortChannelId: String(channel.shortChannelId),
+		feeBaseMsat: Number(policy.feeBaseMsat) || 0,
+		feeProportionalMillionths: Number(policy.feeProportionalMillionths) || 0,
+		cltvExpiryDelta: Number(policy.cltvExpiryDelta) || 0,
+		htlcMinimumMsat: policy.htlcMinimumMsat != null ? String(policy.htlcMinimumMsat) : '1',
+		htlcMaximumMsat: policy.htlcMaximumMsat != null ? String(policy.htlcMaximumMsat) : '0'
+	};
+}
+
+/**
+ * The fee terms a book on a channel with a sibling settlement peer must
+ * carry: the peer's own forwarding policy on that channel (what a payer
+ * reads off the graph when the channel is public), never under the floor
+ * the peer's settle role sets. Null when the policy could not be read.
+ */
+function settlerTerms(policy, settler) {
+	if (!policy || policy.feeBaseMsat == null || policy.feeProportionalMillionths == null) return null;
+	const floor = normalizeFfor(undefined, settler && settler.ffor).settle;
+	return {
+		feeBaseMsat: Math.max(Number(policy.feeBaseMsat) || 0, floor.feeBaseMsat || 0),
+		feeProportionalMillionths: Math.max(Number(policy.feeProportionalMillionths) || 0, floor.feePpm || 0)
+	};
+}
+
+/**
+ * Validate an epoch setup request against the siblings: every witness a
+ * sibling that witnesses, none of them the settlement peer itself (the
+ * witness sits upstream of S), the issuer one of the witnesses and an
+ * issuer. Returns the resolved parties or throws a 400.
+ */
+function planSetup({ witnessWalletIds = [], issuer = null }, candidates, settlerNodeId) {
+	const byId = new Map((candidates || []).map((c) => [c.id, c]));
+	const witnesses = [];
+	for (const walletId of witnessWalletIds) {
+		const c = byId.get(walletId);
+		if (c && settlerNodeId && c.nodeId === settlerNodeId) {
+			throw httpError(400, 'BAD_FFOR_SETUP', `"${c.name}" is the settlement peer; a witness sits on the path before it`);
+		}
+		if (!c || !c.witnesses) throw httpError(400, 'BAD_FFOR_SETUP', `"${walletId}" is not a sibling that keeps receipts`);
+		if (!c.running) throw httpError(400, 'BAD_FFOR_SETUP', `"${c.name}" is not running`);
+		if (!witnesses.some((w) => w.id === c.id)) witnesses.push(c);
+	}
+	let issuerParty = null;
+	if (issuer && issuer.walletId) {
+		const c = byId.get(issuer.walletId);
+		if (!c || !c.issues) throw httpError(400, 'BAD_FFOR_SETUP', `"${issuer.walletId}" is not a sibling that issues invoices`);
+		if (!witnesses.some((w) => w.id === c.id)) {
+			throw httpError(400, 'BAD_FFOR_SETUP', `The issuer "${c.name}" must be one of the witnesses`);
+		}
+		const description = typeof issuer.description === 'string' ? issuer.description.trim() : '';
+		if (!description) throw httpError(400, 'BAD_FFOR_SETUP', 'The offer needs a description');
+		issuerParty = { ...c, description };
+	}
+	return { witnesses, issuer: issuerParty };
 }
 
 /**
@@ -277,6 +413,17 @@ function returnLogLine(channelId, result, err) {
 module.exports = {
 	SETTLE_DEFAULTS,
 	SETTLE_BOUNDS,
+	SETUP_ACTIVE_TIMEOUT_MS,
+	SETUP_ACK_TIMEOUT_MS,
+	witnessHop,
+	planSetup,
+	settlerTerms,
+	WITNESS_DEFAULTS,
+	WITNESS_BOUNDS,
+	ISSUER_DEFAULTS,
+	isWitness,
+	isIssuer,
+	hasFforRole,
 	EPOCH_STATES,
 	RETURN_STATES,
 	FFOR_EVENTS,

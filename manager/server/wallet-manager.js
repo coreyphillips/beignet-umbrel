@@ -377,7 +377,10 @@ class WalletManager {
 				fforEnforce: null,
 				fforEnforced: null,
 				fforReturning: false,
-				fforDrainTimer: null
+				fforDrainTimer: null,
+				// An epoch setup in progress or its last outcome: the start,
+				// then each witness connected and provisioned, then the issuer.
+				fforSetup: null
 			});
 		}
 		return this.runtime.get(id);
@@ -695,19 +698,19 @@ class WalletManager {
 	 */
 	_normalizeFfor(input, existing, onchainOnly) {
 		const next = ffor.normalizeFfor(input, existing);
-		if (!next.settle.enabled) return next;
+		if (!next.settle.enabled && !next.witness.enabled) return next;
 		if (!this.fforAvailable()) {
 			throw httpError(
 				400,
 				'FFOR_UNSUPPORTED',
-				'The bundled engine cannot settle offline receives yet; update the app first.'
+				'The bundled engine cannot serve offline receives yet; update the app first.'
 			);
 		}
 		if (onchainOnly) {
 			throw httpError(
 				400,
 				'FFOR_NEEDS_LIGHTNING',
-				'An on-chain only wallet runs no Lightning listener, so it cannot settle offline receives.'
+				'An on-chain only wallet runs no Lightning listener, so it cannot serve offline receives.'
 			);
 		}
 		return next;
@@ -1016,9 +1019,12 @@ class WalletManager {
 		if (nextJit !== undefined) rec.jit = nextJit;
 		if (nextSwaps !== undefined) rec.swaps = nextSwaps;
 		if (nextFfor !== undefined) rec.ffor = nextFfor;
-		if (rec.onchainOnly && rec.ffor && rec.ffor.settle && rec.ffor.settle.enabled) {
-			// Parking Lightning stops the listener the settlement runs on.
-			rec.ffor = ffor.normalizeFfor({ settle: { enabled: false } }, rec.ffor);
+		if (rec.onchainOnly && rec.ffor && ffor.hasFforRole({ ...rec, onchainOnly: false })) {
+			// Parking Lightning stops the listener every FFOR role runs on.
+			rec.ffor = ffor.normalizeFfor(
+				{ settle: { enabled: false }, witness: { enabled: false }, issuer: { enabled: false } },
+				rec.ffor
+			);
 		}
 		// An edit is what makes a backup stale, so it is stamped here and not
 		// in upsert: the record is also saved on every start, stop and node-id
@@ -1448,6 +1454,10 @@ class WalletManager {
 						rt.fforEnforce.channelId === String(data.channelId)
 					) {
 						rt.fforEnforce = null;
+					}
+					// The offer an issuer answered for this epoch retires with it.
+					if (name === 'ffor:state' && data && (data.state === 'CLOSED' || data.state === 'ABORTED') && data.channelId) {
+						this._forgetIssuance(id, String(data.channelId));
 					}
 				}
 				// A force close does not close the FFOR epoch (the settled
@@ -2561,6 +2571,11 @@ class WalletManager {
 		rt.fforReturning = true;
 		try {
 			if (waitForPeer) await this._waitChannelNormal(rec, channelId);
+			// The daemon fetches each witness over an existing peer connection
+			// and never dials, so every witness that is a sibling is connected
+			// over loopback first; a witness off the box is the daemon's own
+			// reconnect to reach.
+			await this._connectEpochWitnesses(rec, channelId);
 			let result;
 			try {
 				result = await this._daemonCall(rec, 'POST', '/ffor/recover', {
@@ -2685,6 +2700,311 @@ class WalletManager {
 			} preimage${res.preimagesKnown === 1 ? '' : 's'} known`
 		);
 		return rt.fforEnforced;
+	}
+
+	// Connect this wallet's daemon to a sibling's over loopback; an existing
+	// connection answers as such and is not an error.
+	async _connectSibling(rec, sibling) {
+		if (!sibling || !sibling.nodeId) return false;
+		try {
+			await this._daemonCall(rec, 'POST', '/peer/connect', {
+				pubkey: sibling.nodeId,
+				host: '127.0.0.1',
+				port: this.listenPort(sibling)
+			});
+			return true;
+		} catch (err) {
+			if (/already/i.test(err.message || '')) return true;
+			this._log(rec.id, `ffor: could not connect to "${sibling.name}": ${err.message}`);
+			return false;
+		}
+	}
+
+	async _connectEpochWitnesses(rec, channelId) {
+		const view = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
+		const witnesses = view && Array.isArray(view.witnesses) ? view.witnesses : [];
+		for (const w of witnesses) {
+			const sibling = this.registry.list().find((r) => r.nodeId === w.witnessNodeId);
+			if (sibling && this.runtimeState(sibling.id).proc) await this._connectSibling(rec, sibling);
+		}
+	}
+
+	_forgetIssuance(id, channelId) {
+		const rec = this.registry.get(id);
+		if (!rec || !rec.fforIssuance || !rec.fforIssuance[channelId]) return;
+		const next = { ...rec.fforIssuance };
+		delete next[channelId];
+		rec.fforIssuance = next;
+		this.registry.upsert(rec);
+	}
+
+	/**
+	 * Start an epoch with witnesses and an issuer in one go (FFOR, spec
+	 * sections 9.6 and 9.7): the book names the witnesses (the settlement
+	 * peer settles delegated HTLCs only from them), setup runs to ACTIVE,
+	 * then each witness is connected over loopback and provisioned, then the
+	 * issuer gets the offer and its path template. Progress is kept on the
+	 * runtime for the dashboard; a step that fails stops the run and says
+	 * why, and provisioning can be re-run on the ACTIVE epoch.
+	 */
+	async fforSetupEpoch(id, { channelId, witnessWalletIds = [], issuer = null, ...start } = {}) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		const rt = this.runtimeState(id);
+		if (!rt.proc) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
+		if (!channelId || typeof channelId !== 'string') throw httpError(400, 'INVALID_PARAMS', 'channelId is required');
+		if (rt.fforSetup && rt.fforSetup.running) throw httpError(409, 'FFOR_SETUP_IN_PROGRESS', 'An epoch setup is already running');
+		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => []);
+		const ch = (channels || []).find((c) => c.channelId === channelId);
+		const plan = ffor.planSetup({ witnessWalletIds, issuer }, this.fforCandidates(id), ch ? ch.peerPubkey : null);
+		// The book's fee terms are what the settlement peer charges on the
+		// last hop. A payer prices that hop from the peer's channel_update
+		// when the channel is public and from the invoice hint when it is
+		// private, so the two must agree: for a sibling the terms are its own
+		// forwarding policy on this channel, raised to its floor. An external
+		// peer keeps what the caller sent.
+		const settler = ch ? this.registry.list().find((r) => r.nodeId === ch.peerPubkey && ffor.isSettler(r)) : null;
+		if (settler && this.runtimeState(settler.id).proc) {
+			const policy = await this._daemonCall(settler, 'GET', `/channel/policy?channelId=${channelId}`).catch(() => null);
+			const terms = ffor.settlerTerms(policy, settler);
+			if (terms) {
+				start.feeBaseMsat = terms.feeBaseMsat;
+				start.feeProportionalMillionths = terms.feeProportionalMillionths;
+			}
+		}
+		const setup = {
+			at: Date.now(),
+			running: true,
+			channelId,
+			epochId: null,
+			step: 'starting',
+			witnesses: plan.witnesses.map((w) => ({ walletId: w.id, name: w.name, nodeId: w.nodeId, step: 'pending', error: null })),
+			issuer: plan.issuer ? { walletId: plan.issuer.id, name: plan.issuer.name, nodeId: plan.issuer.nodeId, step: 'pending', error: null } : null,
+			error: null
+		};
+		rt.fforSetup = setup;
+		try {
+			let started;
+			try {
+				started = await this._daemonCall(rec, 'POST', '/ffor/epoch/start', {
+					...start,
+					channelId,
+					witnessPeers: plan.witnesses.map((w) => w.nodeId)
+				});
+			} catch (err) {
+				setup.step = 'failed';
+				throw httpError(err.code === 'INVALID_PARAMS' ? 400 : 502, err.code || 'FFOR_REFUSED', err.message);
+			}
+			setup.epochId = started && started.epochId ? started.epochId : null;
+			setup.step = 'activating';
+			this._log(id, `ffor setup ${channelId.slice(0, 16)}: book started with ${plan.witnesses.length} witness${plan.witnesses.length === 1 ? '' : 'es'}`);
+			const active = await this._waitEpochState(rec, channelId, ['ACTIVE', 'ABORTED'], ffor.SETUP_ACTIVE_TIMEOUT_MS);
+			if (!active || active.state !== 'ACTIVE') {
+				setup.step = 'failed';
+				const reason =
+					active && active.state === 'ABORTED'
+						? `the settlement peer aborted the book (reason ${active.abortReason})`
+						: 'the book did not reach ACTIVE in time';
+				throw httpError(502, 'FFOR_SETUP_FAILED', reason);
+			}
+			await this._fforProvision(rec, rt, setup, plan);
+			setup.step = 'done';
+			return setup;
+		} catch (err) {
+			setup.error = err.message;
+			this._log(id, `ffor setup ${channelId.slice(0, 16)}: failed at ${setup.step}, ${err.message}`);
+			throw err;
+		} finally {
+			setup.running = false;
+		}
+	}
+
+	/** Provision witnesses and the issuer on an epoch that is already ACTIVE. */
+	async fforProvision(id, { channelId, witnessWalletIds = [], issuer = null } = {}) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		const rt = this.runtimeState(id);
+		if (!rt.proc) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
+		if (!channelId || typeof channelId !== 'string') throw httpError(400, 'INVALID_PARAMS', 'channelId is required');
+		if (rt.fforSetup && rt.fforSetup.running) throw httpError(409, 'FFOR_SETUP_IN_PROGRESS', 'An epoch setup is already running');
+		const view = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
+		if (!view || view.role !== 'R') throw httpError(404, 'NOT_FOUND', 'No epoch of this wallet on that channel');
+		if (view.state !== 'ACTIVE') throw httpError(409, 'FFOR_NOT_ACTIVE', `The epoch is ${view.state}, not ACTIVE`);
+		const plan = ffor.planSetup({ witnessWalletIds, issuer }, this.fforCandidates(id), view.peerNodeId);
+		// A witness the book did not name cannot sit on the path: the
+		// settlement peer refuses delegated HTLCs from anyone else.
+		const named = new Set(Array.isArray(view.witnessPeers) ? view.witnessPeers : []);
+		for (const w of plan.witnesses) {
+			if (!named.has(w.nodeId)) {
+				throw httpError(400, 'BAD_FFOR_SETUP', `"${w.name}" was not named as a witness when the book was started; start a new book with it`);
+			}
+		}
+		const setup = {
+			at: Date.now(),
+			running: true,
+			channelId,
+			epochId: view.epochId,
+			step: 'provisioning',
+			witnesses: plan.witnesses.map((w) => ({ walletId: w.id, name: w.name, nodeId: w.nodeId, step: 'pending', error: null })),
+			issuer: plan.issuer ? { walletId: plan.issuer.id, name: plan.issuer.name, nodeId: plan.issuer.nodeId, step: 'pending', error: null } : null,
+			error: null
+		};
+		rt.fforSetup = setup;
+		try {
+			await this._fforProvision(rec, rt, setup, plan);
+			setup.step = 'done';
+			return setup;
+		} catch (err) {
+			setup.error = err.message;
+			this._log(id, `ffor setup ${channelId.slice(0, 16)}: failed at ${setup.step}, ${err.message}`);
+			throw err;
+		} finally {
+			setup.running = false;
+		}
+	}
+
+	async _fforProvision(rec, rt, setup, plan) {
+		const id = rec.id;
+		const { channelId } = setup;
+		const view0 = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
+		const already = new Map(((view0 && view0.witnesses) || []).map((w) => [w.witnessNodeId, w]));
+		for (const [i, w] of plan.witnesses.entries()) {
+			const entry = setup.witnesses[i];
+			setup.step = 'provisioning';
+			if (already.get(w.nodeId) && already.get(w.nodeId).acknowledged) {
+				entry.step = 'acknowledged';
+				continue;
+			}
+			entry.step = 'connecting';
+			const sibling = this.registry.get(w.id);
+			if (!(await this._connectSibling(rec, sibling))) {
+				entry.step = 'failed';
+				entry.error = 'could not connect';
+				throw httpError(502, 'FFOR_WITNESS_UNREACHABLE', `Could not connect to "${w.name}"`);
+			}
+			entry.step = 'provisioning';
+			try {
+				const r = await this._daemonCall(rec, 'POST', '/ffor/witness/provision', { channelId, witnessNodeId: w.nodeId });
+				entry.mailboxId = r && r.mailboxId ? r.mailboxId : null;
+				entry.retentionUntil = r && r.retentionUntil != null ? r.retentionUntil : null;
+			} catch (err) {
+				entry.step = 'failed';
+				entry.error = err.message;
+				throw httpError(502, err.code || 'FFOR_REFUSED', `"${w.name}" refused: ${err.message}`);
+			}
+			const acked = await this._waitWitnessAcked(rec, channelId, w.nodeId);
+			if (!acked) {
+				entry.step = 'failed';
+				entry.error = 'no acknowledgement';
+				throw httpError(502, 'FFOR_WITNESS_NO_ACK', `"${w.name}" did not acknowledge the book`);
+			}
+			entry.step = 'acknowledged';
+			this._log(id, `ffor setup ${channelId.slice(0, 16)}: witness "${w.name}" acknowledged`);
+		}
+		if (!plan.issuer) return;
+		const issuer = plan.issuer;
+		const e = setup.issuer;
+		setup.step = 'issuing';
+		const view = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
+		if (!view) throw httpError(502, 'FFOR_SETUP_FAILED', 'Could not read the epoch back');
+		const existing = rec.fforIssuance && rec.fforIssuance[channelId];
+		if (existing && existing.epochId === view.epochId && existing.issuerNodeId === issuer.nodeId) {
+			e.step = 'provisioned';
+			e.offerId = existing.offerId;
+			return;
+		}
+		// The issuer's hop of the path template: its channel toward the
+		// settlement peer, with the policy it forwards under.
+		const issuerRec = this.registry.get(issuer.id);
+		// The issuer's channel to the settlement peer may still be
+		// reestablishing (the peer just came back, say): give it a moment.
+		let toS = null;
+		const deadline = Date.now() + ffor.SETUP_ACTIVE_TIMEOUT_MS;
+		while (!toS && Date.now() < deadline) {
+			const wChannels = await this._daemonCall(issuerRec, 'GET', '/channels').catch(() => []);
+			toS = (wChannels || []).find((c) => c.peerPubkey === view.peerNodeId && c.state === 'NORMAL' && c.shortChannelId) || null;
+			if (!toS) {
+				const any = (wChannels || []).some((c) => c.peerPubkey === view.peerNodeId && !ffor.CLOSED_CHANNEL_STATES.includes(c.state));
+				if (!any) break;
+				await sleep(ffor.RETURN_POLL_MS);
+			}
+		}
+		if (!toS) {
+			e.step = 'failed';
+			e.error = 'no confirmed channel to the settlement peer';
+			throw httpError(400, 'BAD_FFOR_SETUP', `"${issuer.name}" has no confirmed channel to the settlement peer, so payers cannot route through it`);
+		}
+		const policy = await this._daemonCall(issuerRec, 'GET', `/channel/policy?channelId=${toS.channelId}`).catch(() => null);
+		const hop = ffor.witnessHop(issuer.nodeId, toS, policy);
+		if (!hop) {
+			e.step = 'failed';
+			e.error = 'no forwarding policy';
+			throw httpError(502, 'FFOR_SETUP_FAILED', `Could not read "${issuer.name}"'s forwarding policy`);
+		}
+		// One amount for the whole book lets the offer name it; a mixed book
+		// leaves the amount to the payer, who must hit a slot exactly.
+		const amounts = (view.slots || []).map((s) => String(s.amountMsat));
+		const uniform = amounts.length > 0 && amounts.every((a) => a === amounts[0]);
+		let offer;
+		try {
+			offer = await this._daemonCall(rec, 'POST', '/ffor/issuer/offer', {
+				issuerNodeId: issuer.nodeId,
+				description: issuer.description,
+				...(uniform ? { amountMsat: amounts[0] } : {})
+			});
+			e.offerId = offer.offerId;
+			e.step = 'provisioning';
+			await this._connectSibling(rec, issuerRec);
+			await this._daemonCall(rec, 'POST', '/ffor/issuer/provision', {
+				channelId,
+				issuerNodeId: issuer.nodeId,
+				offer: offer.encoded,
+				witnessHops: [hop]
+			});
+		} catch (err) {
+			e.step = 'failed';
+			e.error = err.message;
+			throw httpError(502, err.code || 'FFOR_REFUSED', `The issuer "${issuer.name}" could not be provisioned: ${err.message}`);
+		}
+		rec.fforIssuance = {
+			...(rec.fforIssuance || {}),
+			[channelId]: {
+				epochId: view.epochId,
+				offerId: offer.offerId,
+				encoded: offer.encoded,
+				issuerWalletId: issuer.id,
+				issuerName: issuer.name,
+				issuerNodeId: issuer.nodeId,
+				description: issuer.description,
+				at: Date.now()
+			}
+		};
+		this.registry.upsert(rec);
+		e.step = 'provisioned';
+		this._log(id, `ffor setup ${channelId.slice(0, 16)}: issuer "${issuer.name}" provisioned, offer ${String(offer.offerId).slice(0, 12)}`);
+	}
+
+	async _waitEpochState(rec, channelId, states, timeoutMs) {
+		const deadline = Date.now() + timeoutMs;
+		let last = null;
+		while (Date.now() < deadline) {
+			const view = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
+			if (view) last = view;
+			if (view && states.includes(view.state)) return view;
+			await sleep(1000);
+		}
+		return last;
+	}
+
+	async _waitWitnessAcked(rec, channelId, witnessNodeId, timeoutMs = ffor.SETUP_ACK_TIMEOUT_MS) {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			const view = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
+			const w = view && Array.isArray(view.witnesses) ? view.witnesses.find((x) => x.witnessNodeId === witnessNodeId) : null;
+			if (w && w.acknowledged) return true;
+			await sleep(500);
+		}
+		return false;
 	}
 
 	// Poll the epoch until the close has drained (CLOSED or ABORTED), or the
@@ -3006,7 +3326,10 @@ class WalletManager {
 			ffor: ffor.normalizeFfor(undefined, rec.ffor),
 			fforReturn: rt.fforReturn || null,
 			fforEnforce: rt.fforEnforce || null,
-			fforEnforced: rt.fforEnforced || null
+			fforEnforced: rt.fforEnforced || null,
+			fforSetup: rt.fforSetup || null,
+			// The offers an issuer answers for this wallet's epochs, by channel.
+			fforIssuance: rec.fforIssuance || {}
 		};
 	}
 

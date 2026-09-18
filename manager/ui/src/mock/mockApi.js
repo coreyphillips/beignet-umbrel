@@ -374,6 +374,20 @@ const store = {
 			createdAt: now - 90 * DAY
 		},
 		{
+			// A sibling that stays online and keeps receipts for the others
+			// (FFOR witness) and answers BOLT 12 requests for them (issuer).
+			id: 'demo-witness',
+			name: 'Witness',
+			network: 'mainnet',
+			status: 'running',
+			electrum: { host: 'umbrel.local', port: 50001, tls: false },
+			tor: false,
+			announce: false,
+			recovery: { mode: 'off', guardians: [] },
+			ffor: { witness: { enabled: true, maxMailboxes: null, maxBytes: null }, issuer: { enabled: true } },
+			createdAt: now - 20 * DAY
+		},
+		{
 			// Lightning-first: one balance, one channel with Main, deposits
 			// that move into it by themselves.
 			id: 'demo-lfbw',
@@ -899,7 +913,17 @@ const channelEvents = {};
 // FFOR offline receive: the settlement role's defaults and, per wallet, the
 // epoch views in both roles, exactly the daemon's shape (seeded below).
 const FFOR_SETTLE_DEFAULTS = { enabled: false, maxBudgetMsat: null, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 0 };
+const FFOR_WITNESS_DEFAULTS = { enabled: false, maxMailboxes: null, maxBytes: null };
+const FFOR_ISSUER_DEFAULTS = { enabled: false };
+const fforBlockOf = (w) => ({
+	settle: { ...FFOR_SETTLE_DEFAULTS, ...((w.ffor && w.ffor.settle) || {}) },
+	witness: { ...FFOR_WITNESS_DEFAULTS, ...((w.ffor && w.ffor.witness) || {}) },
+	issuer: { ...FFOR_ISSUER_DEFAULTS, ...((w.ffor && w.ffor.issuer) || {}) }
+});
 const fforEpochs = {};
+// Witness mailboxes and issuer manifests, per hosting wallet.
+const fforMailboxes = {};
+const fforManifests = {};
 
 function recordChannelEvent(walletId, entry) {
 	if (!channelEvents[walletId]) channelEvents[walletId] = [];
@@ -1057,8 +1081,11 @@ seedFforEpoch({
 	slotStates: ['settled', 'exposed', 'unissued'],
 	settlementDeadline: 908214 + 900,
 	voucherExpiry: 908214 + 900 + 1152,
-	startedAt: 908214 - 120
+	startedAt: 908214 - 120,
+	witnessPeers: [nodeId('demo-witness')],
+	witnesses: [{ witnessNodeId: nodeId('demo-witness'), mailboxId: hex(64), retentionUntil: 908214 + 900 + 1152 + 288, acknowledged: true }]
 });
+fforMailboxes['demo-witness'] = [{ mailboxId: fforEpochsOf('demo-lfbw')[0].witnesses[0].mailboxId, state: 'PROVISIONED', slots: 3, records: 1, retentionUntil: 908214 + 900 + 1152 + 288, provisionedAt: now - 2 * 60 * 60 * 1000 }];
 store.wallets.find((w) => w.id === 'demo-lfbw').fforReturn = {
 	at: now - 2 * 60 * 1000,
 	channelId: store.state['demo-lfbw'].channels[0].channelId,
@@ -1076,6 +1103,20 @@ store.wallets.find((w) => w.id === 'demo-lfbw').fforReturn = {
 	},
 	error: null
 };
+store.state['demo-witness'] = walletState({
+	blockHeight: 908214,
+	channels: (() => {
+		const chans = makeChannels([[2000000, 50, 'NORMAL', false]]);
+		chans[0].peerPubkey = nodeId('demo-main');
+		return chans;
+	})(),
+	txs: makeTxs(2, 908214),
+	payments: makePayments(2),
+	utxos: [],
+	invoices: [],
+	offers: [],
+	peers: [{ pubkey: nodeId('demo-main'), host: '127.0.0.1', port: 9101, state: 'connected' }]
+});
 store.state['demo-lfbw-setup'] = walletState({
 	blockHeight: 908214,
 	channels: [],
@@ -1298,10 +1339,12 @@ function publicRecord(w) {
 	rec.lfbwDependents = lfbwDependentsOf(w);
 	// FFOR offline receive: the settlement role, the last return, and whether
 	// a peer contradicted an ACTIVE epoch (enforce on-chain).
-	rec.ffor = { settle: { ...FFOR_SETTLE_DEFAULTS, ...((w.ffor && w.ffor.settle) || {}) } };
+	rec.ffor = fforBlockOf(w);
 	rec.fforReturn = w.fforReturn || null;
 	rec.fforEnforce = w.fforEnforce || null;
 	rec.fforEnforced = w.fforEnforced || null;
+	rec.fforSetup = w.fforSetup || null;
+	rec.fforIssuance = w.fforIssuance || {};
 	return rec;
 }
 
@@ -1638,25 +1681,33 @@ function managerRequest(path, method, body) {
 				if (w.lfbw && (!was || was.setup !== 'ready' || w.lfbw.setup !== 'ready')) runDemoLfbwSetup(w);
 			}
 			if (body.liquidityProvider !== undefined) w.liquidityProvider = !!body.liquidityProvider;
-			if (body.ffor && body.ffor.settle) {
-				const settle = { ...FFOR_SETTLE_DEFAULTS, ...((w.ffor && w.ffor.settle) || {}) };
-				const s = body.ffor.settle;
-				if ('enabled' in s) settle.enabled = !!s.enabled;
-				for (const k of ['maxBudgetMsat', 'maxEpochBlocks', 'feeBaseMsat', 'feePpm']) {
-					if (!(k in s)) continue;
-					if (s[k] === null || s[k] === '') {
-						if (k === 'maxBudgetMsat' || k === 'maxEpochBlocks') settle[k] = null;
-						else throw err(`${k} must be a whole number`, 'BAD_FFOR');
-						continue;
+			if (body.ffor) {
+				const block = fforBlockOf(w);
+				const role = (name, bounds, optional) => {
+					const s = body.ffor[name];
+					if (s === undefined) return;
+					if (s === null || typeof s !== 'object') throw err(`ffor.${name} must be an object`, 'BAD_FFOR');
+					if ('enabled' in s) block[name].enabled = !!s.enabled;
+					for (const k of bounds) {
+						if (!(k in s)) continue;
+						if (s[k] === null || s[k] === '') {
+							if (optional.includes(k)) block[name][k] = null;
+							else throw err(`${k} must be a whole number`, 'BAD_FFOR');
+							continue;
+						}
+						const n = Number(s[k]);
+						if (!Number.isInteger(n) || n < 0) throw err(`${k} must be a whole number`, 'BAD_FFOR');
+						block[name][k] = n;
 					}
-					const n = Number(s[k]);
-					if (!Number.isInteger(n) || n < 0) throw err(`${k} must be a whole number`, 'BAD_FFOR');
-					settle[k] = n;
-				}
-				if (settle.enabled && w.onchainOnly) throw err('An on-chain only wallet runs no Lightning listener, so it cannot settle offline receives.', 'FFOR_NEEDS_LIGHTNING');
-				w.ffor = { settle };
+				};
+				role('settle', ['maxBudgetMsat', 'maxEpochBlocks', 'feeBaseMsat', 'feePpm'], ['maxBudgetMsat', 'maxEpochBlocks']);
+				role('witness', ['maxMailboxes', 'maxBytes'], ['maxMailboxes', 'maxBytes']);
+				role('issuer', [], []);
+				if (block.issuer.enabled && !block.witness.enabled) throw err('The issuer runs on a receipt witness: turn on the witness too.', 'BAD_FFOR');
+				if ((block.settle.enabled || block.witness.enabled) && w.onchainOnly) throw err('An on-chain only wallet runs no Lightning listener, so it cannot serve offline receives.', 'FFOR_NEEDS_LIGHTNING');
+				w.ffor = block;
 			}
-			if (w.onchainOnly && w.ffor && w.ffor.settle) w.ffor.settle.enabled = false;
+			if (w.onchainOnly && w.ffor) w.ffor = { settle: { ...w.ffor.settle, enabled: false }, witness: { ...w.ffor.witness, enabled: false }, issuer: { enabled: false } };
 			if (body.swaps) {
 				const swaps = { ...SWAP_DEFAULTS, ...(w.swaps || {}) };
 				if ('enabled' in body.swaps) swaps.enabled = !!body.swaps.enabled;
@@ -1852,6 +1903,10 @@ function managerRequest(path, method, body) {
 		if (w.status !== 'running') throw err('The wallet is not running', 'NOT_RUNNING');
 		return fforReturn(w, body && body.channelId);
 	}
+	if ((sub === 'ffor/epoch' || sub === 'ffor/provision') && method === 'POST') {
+		if (w.status !== 'running') throw err('The wallet is not running', 'NOT_RUNNING');
+		return fforSetupEpoch(w, body || {}, sub === 'ffor/provision');
+	}
 	if (sub === 'ffor/enforce' && method === 'POST') {
 		if (w.status !== 'running') throw err('The wallet is not running', 'NOT_RUNNING');
 		const res = fforRequest(w, store.state[w.id], '/ffor/enforce', '', 'POST', body || {});
@@ -1871,8 +1926,18 @@ function managerRequest(path, method, body) {
 
 function fforCandidatesOf(self) {
 	return store.wallets
-		.filter((x) => x.id !== self.id && x.network === self.network && !x.onchainOnly && x.ffor && x.ffor.settle && x.ffor.settle.enabled)
-		.map((x) => ({ id: x.id, name: x.name, nodeId: nodeId(x.id), running: x.status === 'running' }));
+		.filter((x) => x.id !== self.id && x.network === self.network && !x.onchainOnly && x.ffor)
+		.map((x) => ({ x, b: fforBlockOf(x) }))
+		.filter(({ b }) => b.settle.enabled || b.witness.enabled)
+		.map(({ x, b }) => ({
+			id: x.id,
+			name: x.name,
+			nodeId: nodeId(x.id),
+			running: x.status === 'running',
+			settles: b.settle.enabled,
+			witnesses: b.witness.enabled,
+			issues: b.witness.enabled && b.issuer.enabled
+		}));
 }
 
 function fforEpochsOf(id) {
@@ -1894,7 +1959,7 @@ function fforEmitState(walletId, e) {
 }
 
 /** Seed an epoch on a channel between two demo wallets: R's view and S's mirror. */
-function seedFforEpoch({ receiverId, settlerId, channelId, state, amountsSats, slotStates, settlementDeadline, voucherExpiry, startedAt }) {
+function seedFforEpoch({ receiverId, settlerId, channelId, state, amountsSats, slotStates, settlementDeadline, voucherExpiry, startedAt, witnessPeers = [], witnesses = [] }) {
 	const epochId = hex(64);
 	const slots = amountsSats.map((sats, i) => ({
 		k: i + 1,
@@ -1911,7 +1976,7 @@ function seedFforEpoch({ receiverId, settlerId, channelId, state, amountsSats, s
 		budgetMsat: String(amountsSats.reduce((a, b) => a + b, 0) * 1000),
 		numSlots: slots.length,
 		hashChain: false,
-		witnessPeers: [],
+		witnessPeers,
 		settlementDeadline,
 		voucherExpiry,
 		feeBaseMsat: 1000,
@@ -1924,7 +1989,7 @@ function seedFforEpoch({ receiverId, settlerId, channelId, state, amountsSats, s
 		activationMismatch: false,
 		closeSent: false
 	};
-	const r = { ...base, role: 'R', state, peerNodeId: nodeId(settlerId), slots };
+	const r = { ...base, role: 'R', state, peerNodeId: nodeId(settlerId), slots, witnesses: witnesses.slice() };
 	const sTable = { unissued: 'unused', exposed: 'unused', settled: 'settled', unsettled: 'unused' };
 	const s = { ...base, role: 'S', state, peerNodeId: nodeId(receiverId), slots: slots.map((x) => ({ ...x, state: sTable[x.state] || 'unused' })) };
 	fforEpochsOf(receiverId).push(r);
@@ -1977,17 +2042,108 @@ function fforReturn(w, channelId) {
 		outcome,
 		channelState,
 		preimagesKnown: e.slots.filter((s) => s.state === 'settled').map((s) => s.k),
-		witnesses: [],
+		witnesses: (e.witnesses || []).map((wit) => {
+			const host = store.wallets.find((x) => nodeId(x.id) === wit.witnessNodeId);
+			const settled = e.slots.filter((s) => s.state === 'settled');
+			return host && host.status === 'running'
+				? { witnessNodeId: wit.witnessNodeId, ok: true, error: null, credited: settled.length, records: settled.map((s) => ({ k: s.k, unbarriered: false, verified: true })) }
+				: { witnessNodeId: wit.witnessNodeId, ok: false, error: `witness ${String(wit.witnessNodeId).slice(0, 12)} did not answer type 55059`, credited: 0, records: [] };
+		}),
 		epoch: { state: e.state, epochId: e.epochId, slots: e.slots.map(fforSlotView), activationMismatch: false },
 		error: null
 	};
 	return w.fforReturn;
 }
 
+/** The manager's setup: start, sign, provision each witness, then the issuer. */
+async function fforSetupEpoch(w, body, provisionOnly) {
+	const st = store.state[w.id];
+	const cands = fforCandidatesOf(w);
+	const witnesses = (body.witnessWalletIds || []).map((wid) => {
+		const c = cands.find((x) => x.id === wid);
+		if (!c || !c.witnesses) throw err(`"${wid}" is not a sibling that keeps receipts`, 'BAD_FFOR_SETUP');
+		return c;
+	});
+	let issuer = null;
+	if (body.issuer && body.issuer.walletId) {
+		issuer = cands.find((x) => x.id === body.issuer.walletId);
+		if (!issuer || !issuer.issues) throw err('not a sibling that issues invoices', 'BAD_FFOR_SETUP');
+		if (!witnesses.some((x) => x.id === issuer.id)) throw err(`The issuer "${issuer.name}" must be one of the witnesses`, 'BAD_FFOR_SETUP');
+		if (!String(body.issuer.description || '').trim()) throw err('The offer needs a description', 'BAD_FFOR_SETUP');
+	}
+	const setup = {
+		at: Date.now(),
+		running: true,
+		channelId: body.channelId,
+		epochId: null,
+		step: provisionOnly ? 'provisioning' : 'starting',
+		witnesses: witnesses.map((c) => ({ walletId: c.id, name: c.name, nodeId: c.nodeId, step: 'pending', error: null })),
+		issuer: issuer ? { walletId: issuer.id, name: issuer.name, nodeId: issuer.nodeId, step: 'pending', error: null } : null,
+		error: null
+	};
+	w.fforSetup = setup;
+	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+	try {
+		let e;
+		if (!provisionOnly) {
+			e = fforRequest(w, st, '/ffor/epoch/start', '', 'POST', { ...body, witnessPeers: witnesses.map((c) => c.nodeId) });
+			setup.epochId = e.epochId;
+			setup.step = 'activating';
+			e = fforEpochsOf(w.id).find((x) => x.epochId === setup.epochId);
+			while (e.state !== 'ACTIVE' && e.state !== 'ABORTED') await sleep(500);
+			if (e.state === 'ABORTED') throw err(`the settlement peer aborted the book (reason ${e.abortReason})`, 'FFOR_SETUP_FAILED');
+		} else {
+			e = fforEpochsOf(w.id).find((x) => x.role === 'R' && x.channelId === body.channelId);
+			if (!e) throw err('No epoch of this wallet on that channel', 'NOT_FOUND');
+			if (e.state !== 'ACTIVE') throw err(`The epoch is ${e.state}, not ACTIVE`, 'FFOR_NOT_ACTIVE');
+			setup.epochId = e.epochId;
+			for (const c of witnesses) {
+				if (!(e.witnessPeers || []).includes(c.nodeId)) throw err(`"${c.name}" was not named as a witness when the book was started; start a new book with it`, 'BAD_FFOR_SETUP');
+			}
+		}
+		for (const [i, c] of witnesses.entries()) {
+			setup.step = 'provisioning';
+			const entry = setup.witnesses[i];
+			if (e.witnesses.some((x) => x.witnessNodeId === c.nodeId && x.acknowledged)) {
+				entry.step = 'acknowledged';
+				continue;
+			}
+			entry.step = 'connecting';
+			await sleep(600);
+			entry.step = 'provisioning';
+			await sleep(600);
+			const r = fforRequest(w, st, '/ffor/witness/provision', '', 'POST', { channelId: e.channelId, witnessNodeId: c.nodeId });
+			entry.mailboxId = r.mailboxId;
+			entry.step = 'acknowledged';
+		}
+		if (issuer) {
+			setup.step = 'issuing';
+			await sleep(600);
+			const offer = fforRequest(w, st, '/ffor/issuer/offer', '', 'POST', { issuerNodeId: issuer.nodeId, description: body.issuer.description, amountMsat: e.slots[0].amountMsat });
+			setup.issuer.offerId = offer.offerId;
+			setup.issuer.step = 'provisioning';
+			await sleep(600);
+			fforRequest(w, st, '/ffor/issuer/provision', '', 'POST', { channelId: e.channelId, issuerNodeId: issuer.nodeId, offer: offer.encoded, witnessHops: [{ nodeId: issuer.nodeId }] });
+			w.fforIssuance = { ...(w.fforIssuance || {}), [e.channelId]: { epochId: e.epochId, offerId: offer.offerId, encoded: offer.encoded, issuerWalletId: issuer.id, issuerName: issuer.name, issuerNodeId: issuer.nodeId, description: body.issuer.description, at: Date.now() } };
+			setup.issuer.step = 'provisioned';
+		}
+		setup.step = 'done';
+		return setup;
+	} catch (x) {
+		setup.error = x.message;
+		if (setup.step === 'starting' || setup.step === 'activating') setup.step = 'failed';
+		throw x;
+	} finally {
+		setup.running = false;
+	}
+}
+
 /** The daemon's /ffor/* surface for one wallet. */
 function fforRequest(w, st, route, query, method, body) {
 	const mine = fforEpochsOf(w.id);
-	const byChannel = (cid, role) => mine.find((x) => x.channelId === cid && (!role || x.role === role));
+	// The daemon keeps one epoch record per channel, the latest; the demo
+	// keeps history, so the newest record on the channel is the one.
+	const byChannel = (cid, role) => [...mine].reverse().find((x) => x.channelId === cid && (!role || x.role === role));
 	switch (route) {
 		case '/ffor/epochs':
 			return mine.map(fforView);
@@ -2021,6 +2177,7 @@ function fforRequest(w, st, route, query, method, body) {
 				settlerId: peer.id,
 				channelId: ch.channelId,
 				state: 'NEGOTIATING',
+				witnessPeers: Array.isArray(body.witnessPeers) ? body.witnessPeers : [],
 				amountsSats: amounts,
 				slotStates: [],
 				settlementDeadline: Number(body.settlementDeadline),
@@ -2084,10 +2241,48 @@ function fforRequest(w, st, route, query, method, body) {
 			emit(w.id, 'channel:force-closing', { channelId: ch.channelId, initiator: 'local' });
 			return { ok: true, commitmentTxid: hex(64), preimagesKnown: e.slots.filter((s) => s.state === 'settled').length };
 		}
-		case '/ffor/witness/status':
-			return { enabled: false, mailboxes: [] };
-		case '/ffor/issuer/status':
-			return { enabled: false, manifests: [] };
+		case '/ffor/witness/provision': {
+			const e = byChannel(body.channelId, 'R');
+			if (!e) throw err('no FFOR epoch of ours on this channel', 'NOT_FOUND');
+			if (e.state !== 'ACTIVE') throw err('witnesses are provisioned on an ACTIVE epoch', 'FFOR_REFUSED');
+			const host = store.wallets.find((x) => nodeId(x.id) === body.witnessNodeId);
+			const hb = host && fforBlockOf(host);
+			if (!host || host.status !== 'running' || !hb.witness.enabled) throw err(`witness ${String(body.witnessNodeId).slice(0, 12)} did not answer type 55055`, 'FFOR_REFUSED');
+			const known = e.witnesses.find((x) => x.witnessNodeId === body.witnessNodeId);
+			if (known) return { mailboxId: known.mailboxId, retentionUntil: known.retentionUntil };
+			const mailboxId = hex(64);
+			const retentionUntil = e.voucherExpiry + 288;
+			e.witnesses.push({ witnessNodeId: body.witnessNodeId, mailboxId, retentionUntil, acknowledged: true });
+			(fforMailboxes[host.id] = fforMailboxes[host.id] || []).push({ mailboxId, state: 'PROVISIONED', slots: e.slots.length, records: 0, retentionUntil, provisionedAt: Date.now(), epochId: e.epochId });
+			emit(host.id, 'ffor:witness-provisioned', { mailboxId, slots: e.slots.length, retentionUntil, peer: nodeId(w.id) });
+			return { mailboxId, retentionUntil };
+		}
+		case '/ffor/issuer/offer': {
+			if (!/^0[23][0-9a-fA-F]{64}$/.test(String(body.issuerNodeId || ''))) throw err('issuerNodeId must be a compressed node id', 'INVALID_PARAMS');
+			if (!String(body.description || '').trim()) throw err('description required', 'INVALID_PARAMS');
+			const offerId = hex(64);
+			return { offerId, encoded: `lno1${hex(120)}` };
+		}
+		case '/ffor/issuer/provision': {
+			const e = byChannel(body.channelId, 'R');
+			if (!e) throw err('no FFOR epoch of ours on this channel', 'NOT_FOUND');
+			const wit = e.witnesses.find((x) => x.witnessNodeId === body.issuerNodeId && x.acknowledged);
+			if (!wit) throw err('the issuer must first be provisioned as a witness', 'FFOR_REFUSED');
+			const host = store.wallets.find((x) => nodeId(x.id) === body.issuerNodeId);
+			const hb = host && fforBlockOf(host);
+			if (!host || !hb.issuer.enabled) throw err('issuer refused the manifest: no offer path terminates at this node', 'FFOR_REFUSED');
+			(fforManifests[host.id] = fforManifests[host.id] || []).push({ mailboxId: wit.mailboxId, offerId: hex(64), state: 'ISSUING', slots: e.slots.length, issued: [], issueUntil: e.settlementDeadline });
+			emit(host.id, 'ffor:issuer-provisioned', { mailboxId: wit.mailboxId, offerId: hex(64), slots: e.slots.length });
+			return { mailboxId: wit.mailboxId, blindedNodeIds: [pubkey()] };
+		}
+		case '/ffor/witness/status': {
+			const b = fforBlockOf(w);
+			return { enabled: !!b.witness.enabled, mailboxes: b.witness.enabled ? (fforMailboxes[w.id] || []).map(({ epochId: _e, ...m }) => m) : [] };
+		}
+		case '/ffor/issuer/status': {
+			const b = fforBlockOf(w);
+			return { enabled: !!(b.witness.enabled && b.issuer.enabled), manifests: b.issuer.enabled ? (fforManifests[w.id] || []).slice() : [] };
+		}
 		default:
 			return undefined;
 	}

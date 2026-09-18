@@ -51,8 +51,9 @@ export async function offlineReceiveRound({ R, S, X, label }) {
 	const settlementDeadline = tip + 144;
 	const voucherExpiry = settlementDeadline + 1008 + 144;
 
-	// 1. The book.
-	const started = await w(R, '/ffor/epoch/start', {
+	// 1. The book, through the manager (which carries the settlement peer's
+	// own policy as the fee terms and runs the setup to ACTIVE).
+	const started = await api(`/wallets/${R}/ffor/epoch`, {
 		method: 'POST',
 		body: {
 			channelId: channel.channelId,
@@ -60,11 +61,10 @@ export async function offlineReceiveRound({ R, S, X, label }) {
 			settlementDeadline,
 			voucherExpiry,
 			feeBaseMsat: FEE_BASE_MSAT,
-			feeProportionalMillionths: FEE_PPM,
-			witnessPeers: []
+			feeProportionalMillionths: FEE_PPM
 		}
 	});
-	log('  epoch start ->', started.state, 'slots', started.numSlots);
+	log('  epoch setup ->', started.step, started.error || '');
 	const active = await waitFor('epoch ACTIVE on R', async () => { const e = await epochOn(R, channel.channelId); return e && e.state === 'ACTIVE' ? e : null; }, { timeoutMs: 60000 });
 	check(`${label}: epoch ACTIVE with two unissued slots`, active.slots.length === 2 && active.slots.every((s) => s.state === 'unissued'), JSON.stringify(active.slots.map((s) => s.state)));
 	const settlements = await w(S, '/ffor/settlements');

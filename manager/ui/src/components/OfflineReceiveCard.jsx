@@ -9,13 +9,16 @@ import {
 	bookFits,
 	currentEpoch,
 	describeEpoch,
+	describeSetup,
+	issuanceFor,
 	planEpoch,
 	refusalText,
 	rememberSlotInvoice,
 	settlementChannels,
 	slotInvoices,
 	slotLabel,
-	slotTone
+	slotTone,
+	witnessCandidates
 } from '../lib/ffor.js';
 
 const SETUP_STATES = ['NEGOTIATING', 'VOUCHERS_COMMITTED', 'ACTIVATING'];
@@ -63,6 +66,11 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 	const [busy, setBusy] = useState(false);
 	const [refusal, setRefusal] = useState(null);
 	const [another, setAnother] = useState(false);
+	// Receipt witnesses named in the book (spec 9.6), and the one of them
+	// that answers payers who hold no invoice (the issuer, spec 9.7).
+	const [witnessIds, setWitnessIds] = useState([]);
+	const [issuerId, setIssuerId] = useState('');
+	const [offerDescription, setOfferDescription] = useState('');
 	// The invoice for a slot is minted once; from beignet 0.21.5 the epoch
 	// view carries it back on the slot (bolt11), and before that only what
 	// this session minted is known, kept per epoch.
@@ -83,17 +91,49 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 	);
 	const chosen = eligible.find((c) => c.channelId === channelId) || null;
 	const fit = plan.body ? bookFits(plan.budgetSats, chosen) : null;
+	const witnessOptions = useMemo(() => witnessCandidates(candidates, chosen ? chosen.peerPubkey : null), [candidates, chosen]);
+	const issuerOptions = witnessOptions.filter((c) => c.issues && witnessIds.includes(c.id));
+	useEffect(() => {
+		if (issuerId && !issuerOptions.some((c) => c.id === issuerId)) setIssuerId('');
+	}, [issuerId, issuerOptions]);
+	const toggleWitness = (id) => setWitnessIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+	const setup = describeSetup(rec?.fforSetup);
+	const issuance = issuanceFor(rec, epoch);
 
+	// The manager runs the whole setup: the start, then each witness
+	// connected over loopback and provisioned, then the issuer's offer and
+	// path template. Its progress is read off the record while it runs.
 	const start = async () => {
 		if (!plan.body) return;
 		setBusy(true);
 		setRefusal(null);
 		try {
-			await api.post('/ffor/epoch/start', plan.body);
+			await manager.fforEpoch(id, {
+				...plan.body,
+				witnessWalletIds: witnessIds,
+				...(issuerId ? { issuer: { walletId: issuerId, description: offerDescription || 'Offline receive' } } : {})
+			});
 			setAnother(false);
-			toast('Setting up the voucher book with your settlement peer', 'success');
+			toast(witnessIds.length > 0 ? 'The book is set up with its witnesses' : 'The book is set up with your settlement peer', 'success');
 		} catch (e) {
 			setRefusal(refusalText(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const retryProvision = async () => {
+		if (!epoch || !rec?.fforSetup) return;
+		setBusy(true);
+		try {
+			const s = rec.fforSetup;
+			await manager.fforProvision(id, {
+				channelId: epoch.channelId,
+				witnessWalletIds: (s.witnesses || []).map((w) => w.walletId),
+				...(s.issuer ? { issuer: { walletId: s.issuer.walletId, description: issuance?.description || offerDescription || 'Offline receive' } } : {})
+			});
+			toast('Provisioned', 'success');
+		} catch (e) {
+			toast(refusalText(e), 'error');
 		} finally {
 			setBusy(false);
 		}
@@ -193,9 +233,69 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 									<input value={awayDays} onChange={(e) => setAwayDays(e.target.value.replace(/[^0-9.]/g, ''))} data-testid="ffor-days" />
 								</Field>
 							</div>
+							{witnessOptions.length > 0 && (
+								<>
+									<div className="field-label" style={{ marginTop: 4, marginBottom: 6 }}>
+										Witnesses (optional)
+									</div>
+									{witnessOptions.map((c) => (
+										<label key={c.id} className="checkbox field">
+											<input
+												type="checkbox"
+												checked={witnessIds.includes(c.id)}
+												onChange={() => toggleWitness(c.id)}
+												data-testid={`ffor-witness-${c.id}`}
+											/>
+											{c.name}
+											{c.issues ? ' (can issue invoices)' : ''}
+										</label>
+									))}
+									<div className="field-hint" style={{ marginBottom: 8 }}>
+										A witness sits on the payment path before the settlement peer and keeps an encrypted receipt of
+										every payment, so what was paid can be collected even if the peer disappears. Payments must then
+										route through a witness: it needs a public channel to the settlement peer, and payers need a route
+										to it.
+									</div>
+									{issuerOptions.length > 0 && (
+										<>
+											<div className="row">
+												<Field label="Issuer for payers with no invoice (optional)">
+													<select value={issuerId} onChange={(e) => setIssuerId(e.target.value)} data-testid="ffor-issuer">
+														<option value="">None: hand out the invoices yourself</option>
+														{issuerOptions.map((c) => (
+															<option key={c.id} value={c.id}>
+																{c.name}
+															</option>
+														))}
+													</select>
+												</Field>
+												{issuerId && (
+													<Field label="Offer description">
+														<input value={offerDescription} onChange={(e) => setOfferDescription(e.target.value)} placeholder="Coffee" />
+													</Field>
+												)}
+											</div>
+											{issuerId && (
+												<div className="field-hint" style={{ marginBottom: 8 }}>
+													The whole book goes to the issuer: a BOLT 12 offer is shown here to share, and the issuer
+													answers each payer with the invoice for the next unused voucher. No invoices are handed out
+													from this card.
+												</div>
+											)}
+										</>
+									)}
+								</>
+							)}
 							<button type="button" className="wnav-toggle" onClick={() => setAdvanced((v) => !v)} style={{ marginBottom: 8 }}>
 								{advanced ? 'Hide fees' : 'Fees'}
 							</button>
+							{advanced && (
+								<div className="field-hint" style={{ marginBottom: 6 }}>
+									With a sibling as the settlement peer, the book carries that wallet's own forwarding fee on this
+									channel (what payers read off the network), never less than its floor; these values only apply to a
+									settlement peer off this box.
+								</div>
+							)}
 							{advanced && (
 								<div className="row">
 									<Field label="Fee to the peer per voucher (msat)">
@@ -230,6 +330,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 						Setting up the voucher book with {epochPeer}: {described.detail} This takes a few seconds while the
 						two sides sign.
 					</div>
+					{setup && setup.running && <SetupProgress setup={setup} />}
 					<Button className="sm" busy={busy} onClick={cancelSetup}>
 						Cancel setup
 					</Button>
@@ -243,6 +344,40 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 							: described.detail}
 						{described.warn ? ' Under a day of margin is left: return now.' : ''}
 					</div>
+					{epoch.witnesses && epoch.witnesses.length > 0 && (
+						<div className="wallet-meta" style={{ marginBottom: 8 }} data-testid="ffor-witnesses">
+							Witnesses:{' '}
+							{epoch.witnesses
+								.map((w) => {
+									const c = (candidates || []).find((x) => x.nodeId === w.witnessNodeId);
+									return `${c ? c.name : `${String(w.witnessNodeId).slice(0, 8)}…`} (${w.acknowledged ? 'acknowledged' : 'not acknowledged yet'})`;
+								})
+								.join(', ')}
+						</div>
+					)}
+					{setup && (setup.running || setup.failed) && rec?.fforSetup?.channelId === epoch.channelId && (
+						<>
+							<SetupProgress setup={setup} />
+							{setup.failed && epoch.state === 'ACTIVE' && !described.enforced && (
+								<Button className="sm" busy={busy} onClick={retryProvision} style={{ marginBottom: 10 }}>
+									Retry provisioning
+								</Button>
+							)}
+						</>
+					)}
+					{issuance && (
+						<div style={{ textAlign: 'center', marginBottom: 12 }} data-testid="ffor-offer">
+							<QR value={issuance.encoded} />
+							<div style={{ marginTop: 12 }}>
+								<CopyText value={issuance.encoded} truncate />
+							</div>
+							<div className="field-hint" style={{ marginTop: 8 }}>
+								Share this offer. A payer who scans it asks {issuance.issuerName} for an invoice and gets the next
+								unused voucher, while this wallet is off. One voucher per request; the vouchers below are the
+								issuer's to hand out.
+							</div>
+						</div>
+					)}
 					<div className="table-wrap">
 						<table>
 							<thead>
@@ -265,7 +400,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 												<Badge tone={slotTone(slot)}>{slotLabel(slot)}</Badge>
 											</td>
 											<td>
-												{slot.state === 'unissued' && epoch.state === 'ACTIVE' && !described.enforced && (
+												{slot.state === 'unissued' && epoch.state === 'ACTIVE' && !described.enforced && !issuance && (
 													<Button className="sm" busy={busy} onClick={() => mint(slot.k)} data-testid={`ffor-mint-${slot.k}`}>
 														Create invoice
 													</Button>
@@ -278,6 +413,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 												{slot.state === 'exposed' && !inv && (
 													<span className="wallet-meta">Created in another session; share it from there, or update the app for an engine that carries it here.</span>
 												)}
+												{slot.state === 'unissued' && issuance && <span className="wallet-meta">Issued on request</span>}
 											</td>
 										</tr>,
 										openSlot === slot.k && inv ? (
@@ -319,5 +455,27 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 				</>
 			)}
 		</Card>
+	);
+}
+
+// The manager's setup, one line per party, while it runs and when it fails.
+function SetupProgress({ setup }) {
+	return (
+		<div className={setup.failed ? 'error-note' : 'info-note'} style={{ marginBottom: 10 }} data-testid="ffor-setup">
+			<div>
+				<strong>{setup.label}</strong>
+				{setup.error ? `: ${setup.error}` : setup.running ? '…' : ''}
+			</div>
+			{setup.witnesses.map((w) => (
+				<div key={w.name} className="wallet-meta">
+					<Badge tone={w.tone}>witness</Badge> {w.text}
+				</div>
+			))}
+			{setup.issuer && (
+				<div className="wallet-meta">
+					<Badge tone={setup.issuer.tone}>issuer</Badge> {setup.issuer.text}
+				</div>
+			)}
+		</div>
 	);
 }

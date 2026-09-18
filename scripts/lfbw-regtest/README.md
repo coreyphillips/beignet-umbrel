@@ -78,14 +78,20 @@ node 05-paired-and-outgrow.mjs '<json with L2>'
 node 06-external-primary.mjs '<json from 01>'
 ```
 
-`08-ffor-plain.mjs` and `09-ffor-lfbw.mjs` (offline receive, FFOR) take no
-argument and need no CLN: the payer is a sibling wallet. Run them against
-the manager above, in either order:
+`08-ffor-plain.mjs`, `09-ffor-lfbw.mjs` and `10-ffor-witness-issuer.mjs`
+(offline receive, FFOR) take no argument and need no CLN: the payer is a
+sibling wallet. Run them against the manager above, in any order:
 
 ```sh
 REGTEST_API=http://<dashboard>/api CLN_CONTAINER= node 08-ffor-plain.mjs
 REGTEST_API=http://<dashboard>/api CLN_CONTAINER= node 09-ffor-lfbw.mjs
+REGTEST_API=http://<dashboard>/api CLN_CONTAINER= node 10-ffor-witness-issuer.mjs
 ```
+
+`10` needs an engine whose dual-funded acceptor announces the channel
+(beignet 0.21.6 or a build carrying that fix): the payer routes to the
+settlement peer through the witness's public channel, which it learns
+from gossip.
 
 Each creates its own wallets, opens the channels it needs, starts a
 two-voucher book on the receiver's channel to the settling sibling, mints

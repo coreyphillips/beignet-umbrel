@@ -50,6 +50,18 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 		10000,
 		[id, tick, settling]
 	);
+	const witnessing = fforOn && !!rec?.ffor?.witness?.enabled;
+	const { data: witnessStatus } = usePoll(
+		() => (witnessing ? api.get('/ffor/witness/status').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, witnessing]
+	);
+	const issuing = witnessing && !!rec?.ffor?.issuer?.enabled;
+	const { data: issuerStatus } = usePoll(
+		() => (issuing ? api.get('/ffor/issuer/status').catch(() => null) : Promise.resolve(null)),
+		10000,
+		[id, tick, issuing]
+	);
 	const { data } = usePoll(
 		async () => {
 			const [balance, nodeUri, liquidity, fees, feeEst, channels] = await Promise.all([
@@ -231,6 +243,8 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 				{swapping && <SwapsCard swaps={swaps} rec={rec} />}
 				{serving && <GuardianCard guardian={guardian} rec={rec} info={info} />}
 				{settling && <SettlementCard settlements={settlements} />}
+				{witnessing && <WitnessCard status={witnessStatus} />}
+				{issuing && <IssuerCard status={issuerStatus} />}
 
 				<Card title="Fees">
 					{feeEst ? (
@@ -731,6 +745,105 @@ function SettlementCard({ settlements }) {
 									</tr>
 								);
 							})}
+						</tbody>
+					</table>
+				</div>
+			)}
+		</Card>
+	);
+}
+
+// The receipt mailboxes this wallet keeps for siblings receiving offline.
+function WitnessCard({ status }) {
+	return (
+		<Card title="Receipts kept for siblings" className="grid-full">
+			<div className="wallet-meta" style={{ marginBottom: 10 }}>
+				Sibling wallets receiving offline can name this wallet as a witness: payments to their vouchers
+				route through it, and it stores an encrypted receipt of each before passing it on. Each mailbox
+				is one book; the receipts are opaque to this wallet and kept until their retention height.
+			</div>
+			{!status ? (
+				<div className="wallet-meta">Reading the witness status…</div>
+			) : !status.enabled ? (
+				<div className="info-note">
+					The daemon is not running the witness role. It takes it on its next start (the Edit dialog
+					restarts the wallet), or the bundled engine predates the status route.
+				</div>
+			) : status.mailboxes.length === 0 ? (
+				<div className="empty">No mailbox is open here right now.</div>
+			) : (
+				<div className="table-wrap">
+					<table>
+						<thead>
+							<tr>
+								<th>Mailbox</th>
+								<th>State</th>
+								<th>Vouchers</th>
+								<th>Receipts</th>
+								<th>Kept until</th>
+							</tr>
+						</thead>
+						<tbody>
+							{status.mailboxes.map((m) => (
+								<tr key={m.mailboxId}>
+									<td className="mono">{String(m.mailboxId).slice(0, 12)}…</td>
+									<td>
+										<Badge tone={m.state === 'PROVISIONED' ? 'green' : 'muted'}>{String(m.state).toLowerCase()}</Badge>
+									</td>
+									<td>{m.slots}</td>
+									<td>{m.records}</td>
+									<td>block {m.retentionUntil}</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			)}
+		</Card>
+	);
+}
+
+// The offers this wallet answers invoices for, on behalf of siblings.
+function IssuerCard({ status }) {
+	return (
+		<Card title="Invoices issued for siblings" className="grid-full">
+			<div className="wallet-meta" style={{ marginBottom: 10 }}>
+				A sibling receiving offline can hand this wallet a BOLT 12 offer; a payer who holds no invoice asks
+				here and gets the invoice for the next unused voucher of the book, one per request.
+			</div>
+			{!status ? (
+				<div className="wallet-meta">Reading the issuer status…</div>
+			) : !status.enabled ? (
+				<div className="info-note">
+					The daemon is not running the issuer role. It takes it on its next start (the Edit dialog
+					restarts the wallet), or the bundled engine predates the status route.
+				</div>
+			) : status.manifests.length === 0 ? (
+				<div className="empty">No offer is delegated here right now.</div>
+			) : (
+				<div className="table-wrap">
+					<table>
+						<thead>
+							<tr>
+								<th>Offer</th>
+								<th>State</th>
+								<th>Issued</th>
+								<th>Issue until</th>
+							</tr>
+						</thead>
+						<tbody>
+							{status.manifests.map((m) => (
+								<tr key={m.mailboxId}>
+									<td className="mono">{String(m.offerId).slice(0, 12)}…</td>
+									<td>
+										<Badge tone={m.state === 'ISSUING' ? 'green' : 'muted'}>{String(m.state).toLowerCase()}</Badge>
+									</td>
+									<td>
+										{(m.issued || []).length} of {m.slots}
+									</td>
+									<td>block {m.issueUntil}</td>
+								</tr>
+							))}
 						</tbody>
 					</table>
 				</div>

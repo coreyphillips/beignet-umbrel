@@ -101,7 +101,13 @@ const EVENT_LABELS = {
 	// and each refusal. The enforce case is the one that needs the owner.
 	'ffor:settled': 'Settled an offline receive for a sibling wallet',
 	'ffor:delegated-failed': 'Could not settle an offline receive for a sibling wallet',
-	'ffor:enforce': 'Your settlement peer contradicted the offline-receive epoch: enforce on-chain'
+	'ffor:enforce': 'Your settlement peer contradicted the offline-receive epoch: enforce on-chain',
+	// On a witness or issuer: a sibling's book landed here, a receipt was
+	// kept, an invoice was issued to a payer.
+	'ffor:witness-provisioned': 'A sibling named this wallet as a witness for an offline receive',
+	'ffor:witness-recorded': 'Kept a receipt for a sibling receiving offline',
+	'ffor:issuer-provisioned': 'A sibling delegated an offer to this wallet',
+	'ffor:issuer-issued': 'Issued an invoice to a payer for a sibling receiving offline'
 };
 // The book's state, said with the state itself; only the committed states
 // arrive, so each one is worth a word.
@@ -600,9 +606,20 @@ function EditWalletModal({
 	const [recoveryMode, setRecoveryMode] = useState(rec.recovery?.mode || 'off');
 	const [recoveryAutoApply, setRecoveryAutoApply] = useState(!!rec.recovery?.autoApply);
 	const [guardianServe, setGuardianServe] = useState(!!rec.guardianServe);
-	// FFOR: settling offline receives for siblings, with its caps.
-	const [fforSettle, setFforSettle] = useState(() => ({ ...((rec.ffor && rec.ffor.settle) || {}) }));
-	const fforWas = !!(rec.ffor && rec.ffor.settle && rec.ffor.settle.enabled);
+	// FFOR: the roles this wallet serves siblings (settle, witness, issuer).
+	const [fforBlock, setFforBlock] = useState(() => ({
+		settle: { ...((rec.ffor && rec.ffor.settle) || {}) },
+		witness: { ...((rec.ffor && rec.ffor.witness) || {}) },
+		issuer: { ...((rec.ffor && rec.ffor.issuer) || {}) }
+	}));
+	const fforRolesOf = (b) => ({
+		settle: !!(b && b.settle && b.settle.enabled),
+		witness: !!(b && b.witness && b.witness.enabled),
+		issuer: !!(b && b.issuer && b.issuer.enabled)
+	});
+	const fforWas = fforRolesOf(rec.ffor);
+	const fforNow = fforRolesOf(fforBlock);
+	const fforChanged = fforWas.settle !== fforNow.settle || fforWas.witness !== fforNow.witness || fforWas.issuer !== fforNow.issuer;
 	const pinnedGuardians = rec.recovery?.guardians || [];
 	const [busy, setBusy] = useState(false);
 	// Whether this wallet has OPEN channels, asked the moment the modal opens.
@@ -651,7 +668,9 @@ function EditWalletModal({
 				}
 			};
 			if (fforAvailable) {
-				body.ffor = { settle: onchainOnly ? { enabled: false } : fforSettle };
+				body.ffor = onchainOnly
+					? { settle: { enabled: false }, witness: { enabled: false }, issuer: { enabled: false } }
+					: fforBlock;
 			}
 			if (lfbwAvailable) {
 				body.lfbw = onchainOnly ? { enabled: false } : lfbwBody(lfbw);
@@ -785,12 +804,15 @@ function EditWalletModal({
 			)}
 			{fforAvailable && !onchainOnly && (
 				<>
-					<FforSettleField value={fforSettle} onChange={setFforSettle} />
-					{!!fforSettle.enabled !== fforWas && (
+					<FforSettleField value={fforBlock} onChange={setFforBlock} />
+					{fforChanged && (
 						<div className="info-note">
 							Changing this restarts the wallet.
-							{!fforSettle.enabled && fforWas
+							{fforWas.settle && !fforNow.settle
 								? ' A sibling with an open voucher book here keeps it: the book was signed and stays claimable, but no new one can be started.'
+								: ''}
+							{fforWas.witness && !fforNow.witness
+								? ' Receipts this wallet holds for siblings stay on disk but are not served until it witnesses again.'
 								: ''}
 						</div>
 					)}

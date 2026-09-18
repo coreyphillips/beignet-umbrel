@@ -12,7 +12,7 @@ await Promise.all([healthy(S.id), healthy(R.id), healthy(X.id)]);
 const Srec = await api(`/wallets/${S.id}`);
 check('S carries the settlement role on its record', Srec.ffor.settle.enabled === true, JSON.stringify(Srec.ffor));
 const cands = await api(`/wallets/${R.id}/ffor/candidates`);
-check('R lists S as its one settlement candidate', cands.length === 1 && cands[0].id === S.id && cands[0].nodeId === Srec.nodeId, JSON.stringify(cands));
+check('R lists S among its settlement candidates', cands.some((c) => c.id === S.id && c.nodeId === Srec.nodeId && c.settles), JSON.stringify(cands.map((c) => [c.name, c.settles])));
 try {
 	await api('/wallets', { method: 'POST', body: { name: 'Parked', network: 'regtest', onchainOnly: true, ffor: { settle: { enabled: true } } } });
 	check('an on-chain only wallet cannot settle', false);

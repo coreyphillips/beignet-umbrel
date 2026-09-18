@@ -281,6 +281,22 @@ async function main() {
 		})
 	);
 
+	// Start an epoch with witnesses and an issuer in one go, or provision
+	// them on an epoch that is already ACTIVE.
+	api.post(
+		'/wallets/:id/ffor/epoch',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: await manager.fforSetupEpoch(req.params.id, req.body || {}) });
+		})
+	);
+
+	api.post(
+		'/wallets/:id/ffor/provision',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: await manager.fforProvision(req.params.id, req.body || {}) });
+		})
+	);
+
 	api.post(
 		'/wallets/:id/ffor/enforce',
 		asyncHandler(async (req, res) => {
