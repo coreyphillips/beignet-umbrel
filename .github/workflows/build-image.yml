@@ -508,7 +508,16 @@ env:
   # toasts. In dist only beignet-node.js, openapi.js and
   # lightning-node.js changed; no env, no new routes, dependency set
   # identical.
-  BEIGNET_VERSION: "0.21.5"
+  #
+  # 0.21.6 (2026-09-18): a dual-funded acceptor reads the opener's
+  # announce flag, and the opener's own record follows the flag it sent
+  # (#879). Before it no beignet-to-beignet dual-funded channel was ever
+  # announced: the opener signed at depth, the acceptor never answered,
+  # and a payer that had to route through such a channel (a witness's
+  # channel to the settlement peer, FFOR phase 2) found no route. In dist
+  # only channel.js and channel-manager.js changed; no env, no routes,
+  # dependency set identical.
+  BEIGNET_VERSION: "0.21.6"
 
 jobs:
   build:
