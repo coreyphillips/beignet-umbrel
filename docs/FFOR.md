@@ -52,10 +52,9 @@ Retries after a lost creation response reuse the same request id. Fixed amounts
 below 354 sats and amountless requests are refused. Unsupported engines or peers
 show an error instead of silently producing an online-only invoice.
 
-**Release dependency:** the daemon `/receive/*` API and funding-policy environment
-variable require the companion Beignet change after 0.21.8. Before releasing this
-app, publish that engine change and update `BEIGNET_VERSION` in the image workflow.
-The current 0.21.8 baseline deliberately fails the capability check.
+**Engine requirement:** the daemon `/receive/*` API and funding-policy environment
+variable require Beignet 0.21.9 or newer. The image workflow pins 0.21.9. Older
+engines fail the capability check and cannot create automatic offline invoices.
 
 The advanced manual workflow below remains available for other Lightning wallets.
 Its startup return does not own automatic reservations.

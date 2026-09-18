@@ -138,7 +138,7 @@ failing is the engine.
 
 `node scripts/lfbw-regtest/11-automatic-receive.mjs` creates three disposable
 regtest wallets on `MANAGER_URL` and stops them on completion. It needs the
-companion daemon `/receive/*` API, Bitcoin funding/mining and Electrum. It uses
+Beignet 0.21.9 or newer with the `/receive/*` API, Bitcoin funding/mining and Electrum. It uses
 a Beignet payer, so CLN is not required. Run against a disposable manager data
 directory, never a production wallet manager.
 

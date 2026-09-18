@@ -27,7 +27,7 @@ into settlement and, when needed, channel funding with cumulative limits.
 Unsupported setup is explicit and does not fall back to an online invoice.
 Lightning-first invoice creation uses `/receive/invoice`. The existing JIT
 provider role remains available for older clients.
-See [automatic receive and its release dependency](FFOR.md#automatic-lightning-first-receiving).
+See [automatic receive and its engine requirements](FFOR.md#automatic-lightning-first-receiving).
 
 ## What the user sees
 
