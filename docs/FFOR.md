@@ -59,7 +59,7 @@ ticked, an unsupported engine or peer shows an error instead of silently
 producing an online-only invoice; unticking it returns to the ordinary invoice.
 
 **Engine requirement:** the daemon `/receive/*` API and funding-policy environment
-variable require Beignet 0.21.9 or newer. The image workflow pins 0.21.10, from which an offline receive is only for a channel that already exists with the primary and has room for the amount, never one the primary opens for it. Older
+variable require Beignet 0.21.9 or newer. The image workflow pins 0.21.11; from 0.21.10 an offline receive is only for a channel that already exists with the primary and has room for the amount, never one the primary opens for it. Older
 engines fail the capability check and cannot create automatic offline invoices.
 
 The advanced manual workflow below remains available for other Lightning wallets.

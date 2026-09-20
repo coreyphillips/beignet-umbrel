@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.23.2"
+version: "0.23.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,21 +30,12 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Keeps one home channel on a lightning-first wallet. A direct funding paid by
-  a stranger whose coin is still unconfirmed used to open a second channel
-  beside the home channel; it is now declined and the payer's on-chain fallback
-  is spliced into the home channel once it confirms. A Lightning invoice
-  created while the home channel is mid-splice no longer invites the primary
-  to open a second channel either, and an invoice is refused with a clear
-  reason while a fresh wallet is still waiting for its first block instead of
-  failing the payer later.
-
-
-  Receiving offline is only for a channel that already exists with the primary
-  and has room for the amount; it never has the primary open one. With no such
-  channel the Receive tab says so and the ordinary invoice, provisioned just in
-  time, is a tick away. Bundles beignet 0.21.10, which also carries the
-  channel-recovery hardening for wallets restored from a phrase.
+  A lightning-first wallet keeps trusting its primary across a restart. The
+  zero-conf trust that lets the primary's just-in-time channel arrive as
+  unconfirmed funding lived only in memory, so after the app restarted a
+  Lightning payment to a fresh wallet failed at the primary instead of opening
+  the channel. The trust is now stored with the wallet and reloaded before any
+  peer reconnects. Bundles beignet 0.21.11.
 
 
 dependencies: []
