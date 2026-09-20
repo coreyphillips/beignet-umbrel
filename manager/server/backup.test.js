@@ -329,7 +329,10 @@ test('a wallet already here under the same id is left exactly as it is', async (
 	const out = await quiet(() => manager().exportBackup({ passphrase: PASSPHRASE }));
 	// Wallet A stays, with an edit the archive predates; B is gone.
 	const kept = manager();
-	const edited = { ...kept.registry.get(a.id), name: 'Renamed since the backup', updatedAt: '2026-09-20T00:00:00.000Z' };
+	// Stamped after the export it is compared with, not on a calendar date the
+	// clock will one day pass.
+	const editedAt = new Date(Date.parse(out.createdAt) + 60_000).toISOString();
+	const edited = { ...kept.registry.get(a.id), name: 'Renamed since the backup', updatedAt: editedAt };
 	writeRegistry([edited]);
 	fs.rmSync(path.join(DATA_DIR, 'wallets', b.id), { recursive: true, force: true });
 
