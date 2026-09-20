@@ -519,7 +519,12 @@ env:
   # dependency set identical.
   # 0.21.9 adds the durable automatic receive daemon API and funding policy.
   # Feature probing keeps unsupported engines from issuing online-only invoices.
-  BEIGNET_VERSION: "0.21.9"
+  # 0.21.10 keeps one home channel: a direct funding never opens a second
+  # channel beside it, a JIT invoice minted mid-splice carries no intercept
+  # hint, and an offline receive never has the primary open a channel (with
+  # no channel that has room it answers a direct-funding request instead).
+  # Also the recovery hardening (#912 to #924).
+  BEIGNET_VERSION: "0.21.10"
 
 jobs:
   build:

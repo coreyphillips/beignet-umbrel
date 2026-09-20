@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.23.1"
+version: "0.23.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,21 +30,21 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Fixes receiving on a freshly created lightning-first wallet. Version 0.23.0
-  sent every lightning-first invoice through the offline-receive path, which
-  needs the primary node to settle offline payments, and picking a wallet as a
-  primary never turns that on, so the Receive tab could not create an invoice.
-  Invoices are created the way they were before: paid over the home channel
-  when it has room, otherwise provisioned through the primary just in time,
-  with the primary's price shown beside the amount.
+  Keeps one home channel on a lightning-first wallet. A direct funding paid by
+  a stranger whose coin is still unconfirmed used to open a second channel
+  beside the home channel; it is now declined and the payer's on-chain fallback
+  is spliced into the home channel once it confirms. A Lightning invoice
+  created while the home channel is mid-splice no longer invites the primary
+  to open a second channel either, and an invoice is refused with a clear
+  reason while a fresh wallet is still waiting for its first block instead of
+  failing the payer later.
 
 
-  "Receive offline" is now a checkbox on the invoice form for every wallet,
-  off by default. Enter at least 354 sats to enable it. On a lightning-first
-  wallet the primary prepares the offline invoice, so the primary has to have
-  "settle offline receives" turned on in its own settings, plus channel
-  funding when a fresh channel is needed; a primary without them says so and
-  the ordinary invoice stays a tick away. Bundles beignet 0.21.9.
+  Receiving offline is only for a channel that already exists with the primary
+  and has room for the amount; it never has the primary open one. With no such
+  channel the Receive tab says so and the ordinary invoice, provisioned just in
+  time, is a tick away. Bundles beignet 0.21.10, which also carries the
+  channel-recovery hardening for wallets restored from a phrase.
 
 
 dependencies: []

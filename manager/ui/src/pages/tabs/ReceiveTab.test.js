@@ -462,6 +462,33 @@ test('a lightning-first wallet offers Receive offline as an opt-in, once an amou
 	}
 });
 
+// beignet 0.21.10 answers the quote with mode 'direct-funding' and no terms
+// when no channel with the primary has room for the amount: an offline receive
+// never has the primary open a channel. The box says so and holds Create; the
+// ordinary invoice is provisioned just in time once the box is unticked.
+test('an offline receive with no channel that has room is held, naming the untick as the way out', async () => {
+	stubManager();
+	const api = stubLfbwApi({
+		channels: [],
+		quote: { mode: 'direct-funding', minAmountSat: 25000, terms: undefined }
+	});
+	const view = await mountLfbw(api, lfbwRec(), { ...QUOTES, offlineReceiveAvailable: true, fforAvailable: true });
+	try {
+		await enterAmount(view, '30000');
+		await settle(400);
+		await click(offlineBox(view));
+		await settle(400);
+		assert.match(view.text(), /No channel with your primary node has room to receive 30,000 sats offline yet, and receiving offline never opens one/);
+		assert.equal(createButton(view).disabled, true, 'Create is held');
+		await click(offlineBox(view));
+		await settle(400);
+		assert.equal(createButton(view).disabled, false, 'unticked, the ordinary invoice is back');
+		assert.equal(api.calls.some(([, p]) => p === '/receive/invoice'), false);
+	} finally {
+		await view.unmount();
+	}
+});
+
 test('a primary that does not offer offline receiving holds the box, and unticking gives the JIT invoice back', async () => {
 	stubManager();
 	const api = stubLfbwApi({ channels: [], quote: new Error('Your node does not provide offline receiving.') });

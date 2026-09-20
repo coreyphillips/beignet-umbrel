@@ -227,12 +227,21 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 		if (receiveQuote.error)
 			return block(
 				isLfbw
-					? `Your primary node cannot prepare an offline receive right now: ${receiveQuote.error}. It has to offer offline settlement (and channel funding, when a new channel is needed) in its own settings, or untick Receive offline for an ordinary invoice.`
+					? `Your primary node cannot prepare an offline receive right now: ${receiveQuote.error}. It has to offer offline settlement in its own settings, or untick Receive offline for an ordinary invoice.`
 					: receiveQuote.error
 			);
 		const q = receiveQuote.quote;
 		if (receiveQuote.pending || !q || q.amountSats !== wantedSats || q.peer !== receivePeer)
 			return { tone: 'info', blocks: true, text: 'Checking receive availability…' };
+		// Since beignet 0.21.10 an offline receive is only for a channel that
+		// already exists with the node and has room for the amount; it never
+		// has the node open one. With no such channel the engine answers the
+		// quote with mode 'direct-funding' (an on-chain request instead of an
+		// invoice) and no terms, which is not what this box promises.
+		if (q.mode === 'direct-funding')
+			return block(
+				`No channel with your ${nodeLabel} has room to receive ${wantedSats.toLocaleString()} sats offline yet, and receiving offline never opens one. Untick Receive offline for an ordinary invoice, which your ${nodeLabel} provisions just in time.`
+			);
 		return {
 			tone: 'info',
 			blocks: false,
