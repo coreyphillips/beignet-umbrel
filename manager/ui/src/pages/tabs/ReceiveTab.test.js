@@ -241,103 +241,284 @@ test("a lightning-first request carries a direct-funding request minted with the
 	}
 });
 
-test('every LFBW invoice is prepared for offline receipt, even with existing inbound capacity', async () => {
-	for (const channels of [[HOME], []]) {
-		sessionStorage.clear();
-		const api = stubLfbwApi({ channels });
-		const view = await mountLfbw(api, lfbwRec());
-		try {
-			assert.equal(view.$('[data-testid="receive-offline"]'), null);
-			await createInvoice(view, '30000');
-			const call = api.calls.find(([m, p]) => m === 'POST' && p === '/receive/invoice');
-			assert.equal(call[2].amountSats, 30000);
-			assert.equal(call[2].quote.amountSats, 30000);
-			assert.match(call[2].requestId, /^[a-f0-9-]{36}$/);
-			assert.equal(
-				api.calls.some(([, p]) => p === '/invoice/create' || p === '/jit/invoice'),
-				false
-			);
-			assert.match(view.text(), /You can close your wallet/);
-			assert.doesNotMatch(view.text(), /Start epoch|Receive while offline|also carries a direct-funding request/);
-		} finally {
-			await view.unmount();
-		}
-	}
-});
-test('unsupported engines refuse LFBW receiving without an online-only fallback', async () => {
-	const api = stubLfbwApi();
-	const view = await mountLfbw(api, lfbwRec(), {});
-	try {
-		await createInvoice(view, '30000');
-		assert.match(view.text(), /Update the app engine/);
-		assert.equal(createButton(view).disabled, true);
-		assert.equal(
-			api.calls.some(([, p]) => p.includes('invoice') && p !== '/invoices'),
-			false
-		);
-	} finally {
-		await view.unmount();
-	}
-});
-test('amountless and below-trim requests never reserve channels', async () => {
+test('an invoice the home channel covers is plain; one it cannot is provisioned through the primary', async () => {
+	stubManager();
 	const api = stubLfbwApi();
 	const view = await mountLfbw(api, lfbwRec());
 	try {
-		assert.equal(createButton(view).disabled, true);
-		await createInvoice(view, '1');
-		assert.match(view.text(), /at least 354/);
-		assert.equal(
-			api.calls.some(([, p]) => p.startsWith('/receive/')),
-			false
-		);
+		await createInvoice(view, '30000');
+		assert.ok(api.calls.some(([m, p]) => m === 'POST' && p === '/invoice/create'), 'covered by the home channel');
+		assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/jit/invoice'), false);
+		assert.doesNotMatch(view.text(), /Payable now/);
+	} finally {
+		await view.unmount();
+	}
+	const api2 = stubLfbwApi({ channels: [] });
+	const view2 = await mountLfbw(api2, lfbwRec());
+	try {
+		await createInvoice(view2, '30000');
+		const jit = api2.calls.find(([m, p]) => m === 'POST' && p === '/jit/invoice');
+		assert.deepEqual(jit[2], { lspPubkey: PK, amountSats: 30000, description: '', targetRemainingInboundSat: 10000, expirySecs: 900 });
+		assert.equal(api2.calls.some(([m, p]) => m === 'POST' && p === '/invoice/create'), false);
+		assert.match(view2.text(), /Payable now: your primary node provides the inbound capacity/);
+		assert.equal(api2.calls.some(([, p]) => p.startsWith('/receive/')), false, 'nothing offline was asked for');
+	} finally {
+		await view2.unmount();
+	}
+	// An amountless invoice with no inbound at all is provisioned too.
+	const api3 = stubLfbwApi({ channels: [] });
+	const view3 = await mountLfbw(api3, lfbwRec());
+	try {
+		await createInvoice(view3);
+		assert.ok(api3.calls.some(([m, p]) => m === 'POST' && p === '/jit/invoice'));
+	} finally {
+		await view3.unmount();
+	}
+});
+
+test('with the primary wallet stopped, an invoice it must provision is refused with directions', async () => {
+	stubManager('stopped');
+	const api = stubLfbwApi({ channels: [] });
+	const view = await mountLfbw(api, lfbwRec());
+	try {
+		await createInvoice(view, '30000');
+		assert.match(view.text(), /Your primary node is not running/);
+		assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/jit/invoice'), false);
 	} finally {
 		await view.unmount();
 	}
 });
-test('setup and primary connection failures block preparation', async () => {
-	for (const setup of ['pending', 'ready']) {
-		const api = stubLfbwApi();
-		const get = api.get;
-		api.get = (p) => (p === '/peers' ? Promise.resolve([]) : get(p));
-		const view = await mountLfbw(api, lfbwRec({ lfbw: { ...lfbwRec().lfbw, setup } }));
-		try {
-			await createInvoice(view, '30000');
-			assert.equal(createButton(view).disabled, true);
-			assert.match(view.text(), /being prepared|not connected/);
-		} finally {
-			await view.unmount();
-		}
+
+test('before setup is ready no request is minted and invoices are refused', async () => {
+	stubManager();
+	const api = stubLfbwApi({ channels: [] });
+	const view = await mountLfbw(api, lfbwRec({ lfbw: { enabled: true, mode: 'internal', primaryWalletId: 'p1', primaryPubkey: PK, setup: 'failed' } }));
+	try {
+		assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/direct-funding/request'), false);
+		await createInvoice(view, '30000');
+		assert.match(view.text(), /not set up yet/);
+	} finally {
+		await view.unmount();
+	}
+	assert.ok(decodeFundingEnvelope);
+});
+
+/* ------------------------------------------------- the price, before the invoice */
+
+test('a receive the primary must fund is priced beside the amount before anything is minted', async () => {
+	stubManager();
+	const api = stubLfbwApi({
+		channels: [],
+		quote: { accepted: true, flatFeeSat: 1000, feePpm: 5000, feeSats: 1150, maxClientFundingSats: 1_000_000, fundingSats: 50_000, withinCeilings: true }
+	});
+	const view = await mountLfbw(api, lfbwRec(), QUOTES);
+	try {
+		assert.equal(quoteCalls(api).length, 1, 'quoted at once: nothing covers an amountless invoice either');
+		assert.equal(quoteCalls(api)[0][1], `/jit/quote?lspPubkey=${PK}&targetRemainingInboundSat=10000`, 'no amount, no amount parameter');
+		assert.match(view.$('[data-testid="jit-quote"]').textContent, /funds what the channel cannot take for 1,000 sats plus 5000 ppm/);
+		await type(view.$$('input[placeholder="any amount"]')[1], '30000');
+		await settle(400);
+		assert.equal(quoteCalls(api).at(-1)[1], `/jit/quote?lspPubkey=${PK}&amountSats=30000&targetRemainingInboundSat=10000`);
+		assert.match(view.$('[data-testid="jit-quote"]').textContent, /will fund this receive for 1,150 sats \(1,000 sats plus 5000 ppm\), taken from the delivery/);
+		assert.equal(createButton(view).disabled, false);
+		assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/jit/invoice'), false, 'a quote registers nothing');
+	} finally {
+		await view.unmount();
 	}
 });
-test('receive terms are reviewed before creation and quote failures block it', async () => {
-	for (const quote of [
-		{ terms: { feeBaseMsat: 1000, feePpm: 100 } },
-		new Error('Your node has no receive capacity available.')
-	]) {
-		const api = stubLfbwApi({ quote });
-		const view = await mountLfbw(api, lfbwRec());
-		try {
-			await type(view.$('input[placeholder="Enter amount"]'), '30000');
-			await settle(400);
-			assert.equal(
-				api.calls.some(([m, p]) => m === 'POST' && p === '/receive/invoice'),
-				false
-			);
-			if (quote instanceof Error) {
-				assert.equal(createButton(view).disabled, true);
-				assert.match(view.text(), /no receive capacity/);
-			} else {
-				assert.match(view.text(), /payer covers.*1000 msat plus 100 ppm/);
-				assert.equal(createButton(view).disabled, false);
-			}
-		} finally {
-			await view.unmount();
-		}
-	}
-});
-test('a lost response retries the same durable request and does not show unsupported coverage', async () => {
-	sessionStorage.clear();
+
+test('an amount the home channel covers is not quoted; one it cannot is', async () => {
+	stubManager();
 	const api = stubLfbwApi();
+	const view = await mountLfbw(api, lfbwRec(), QUOTES);
+	try {
+		await type(view.$$('input[placeholder="any amount"]')[1], '30000');
+		await settle(400);
+		assert.equal(view.$('[data-testid="jit-quote"]'), null);
+		await type(view.$$('input[placeholder="any amount"]')[1], '80000');
+		await settle(400);
+		assert.match(view.$('[data-testid="jit-quote"]').textContent, /at no charge/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a primary that cannot front the amount says so, with the reason, and Create is held', async () => {
+	stubManager();
+	const api = stubLfbwApi({
+		channels: [],
+		quote: { accepted: false, reason: 'the provider holds 120,000 sats on-chain; this funding needs about 152,000', flatFeeSat: 0, feePpm: 0, feeSats: 0, maxClientFundingSats: 1_000_000, fundingSats: 152_000, withinCeilings: true }
+	});
+	const view = await mountLfbw(api, lfbwRec(), QUOTES);
+	try {
+		await type(view.$$('input[placeholder="any amount"]')[1], '140000');
+		await settle(400);
+		const line = view.$('[data-testid="jit-quote"]');
+		assert.match(line.textContent, /Your primary cannot fund this invoice right now: the provider holds 120,000 sats on-chain/);
+		assert.ok(line.classList.contains('error-note'));
+		assert.equal(createButton(view).disabled, true, 'an invoice that would fail at the payer is not minted');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test("a price above this wallet's own ceilings is a refusal with the numbers, and Create is held", async () => {
+	stubManager();
+	const api = stubLfbwApi({
+		channels: [],
+		quote: { accepted: true, reason: null, flatFeeSat: 20000, feePpm: 0, feeSats: 20000, maxClientFundingSats: 1_000_000, fundingSats: 50_000, withinCeilings: false, client: { maxFlatFeeSat: 10000, maxFeePpm: 50000 } }
+	});
+	const view = await mountLfbw(api, lfbwRec(), QUOTES);
+	try {
+		const line = view.$('[data-testid="jit-quote"]');
+		assert.match(line.textContent, /asks 20,000 sats for this, more than this wallet accepts \(up to 10,000 sats plus 50000 ppm\)/);
+		assert.ok(line.classList.contains('error-note'));
+		assert.equal(createButton(view).disabled, true);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a primary that is not connected is said so, and Create is held', async () => {
+	stubManager();
+	const api = stubLfbwApi({ channels: [], quote: Object.assign(new Error('JIT receive needs the LSP connected as a peer'), { code: 'PEER_NOT_CONNECTED' }) });
+	const view = await mountLfbw(api, lfbwRec(), QUOTES);
+	try {
+		assert.match(view.$('[data-testid="jit-quote"]').textContent, /Your primary node is not connected/);
+		assert.equal(createButton(view).disabled, true);
+	} finally {
+		await view.unmount();
+	}
+	// Any other failure to price is said, but does not hold the invoice: the
+	// creation itself is the honest test.
+	const slow = stubLfbwApi({ channels: [], quote: Object.assign(new Error('The LSP did not answer in time'), { code: 'JIT_TIMEOUT' }) });
+	const view2 = await mountLfbw(slow, lfbwRec(), QUOTES);
+	try {
+		assert.match(view2.$('[data-testid="jit-quote"]').textContent, /Could not get a price from your primary node: The LSP did not answer in time/);
+		assert.equal(createButton(view2).disabled, false);
+	} finally {
+		await view2.unmount();
+	}
+});
+
+test('an engine without the quote route is never asked, and the tab reads as before', async () => {
+	stubManager();
+	const api = stubLfbwApi({ channels: [] });
+	const view = await mountLfbw(api, lfbwRec(), { jitQuoteAvailable: false });
+	try {
+		await type(view.$$('input[placeholder="any amount"]')[1], '30000');
+		await settle(400);
+		assert.equal(quoteCalls(api).length, 0);
+		assert.equal(view.$('[data-testid="jit-quote"]'), null);
+		assert.equal(createButton(view).disabled, false);
+	} finally {
+		await view.unmount();
+	}
+	const noConfig = stubLfbwApi({ channels: [] });
+	const view2 = await mountLfbw(noConfig, lfbwRec());
+	try {
+		assert.equal(quoteCalls(noConfig).length, 0, 'no config at all: no quote');
+	} finally {
+		await view2.unmount();
+	}
+});
+
+/* ------------------------------------------- receiving offline, as an opt-in */
+
+const offlineBox = (view) => view.$('[data-testid="receive-offline"]');
+const enterAmount = (view, amount) => type(view.$$('input[placeholder="any amount"]')[1], amount);
+
+test('a lightning-first wallet offers Receive offline as an opt-in, once an amount is typed', async () => {
+	stubManager();
+	sessionStorage.clear();
+	const api = stubLfbwApi({ channels: [], quote: { terms: { feeBaseMsat: 1000, feePpm: 100 } } });
+	const view = await mountLfbw(api, lfbwRec(), { ...QUOTES, offlineReceiveAvailable: true, fforAvailable: true });
+	try {
+		assert.equal(offlineBox(view).checked, false, 'off by default');
+		assert.equal(offlineBox(view).disabled, true, 'and nothing to tick without an amount');
+		assert.match(view.text(), /Enter an amount of at least 354 sats to receive offline/);
+		assert.equal(createButton(view).disabled, false, 'the ordinary invoice is still on offer');
+		await enterAmount(view, '30000');
+		await settle(400);
+		assert.equal(offlineBox(view).disabled, false);
+		assert.match(view.text(), /Your primary node prepares it, so it has to offer offline settlement/);
+		assert.equal(api.calls.some(([, p]) => p.startsWith('/receive/quote')), false, 'unticked, the primary is not asked');
+		await click(offlineBox(view));
+		await settle(400);
+		assert.match(api.calls.find(([m, p]) => m === 'GET' && p.startsWith('/receive/quote'))[1], new RegExp(`peer=${PK}&amountSats=30000`));
+		assert.match(view.$('[data-testid="receive-quote"]').textContent, /payer covers your primary node's fee of 1000 msat plus 100 ppm/);
+		assert.equal(view.$('select'), null, 'the primary is the receiving node; nothing to pick');
+		await click(createButton(view));
+		await settle(100);
+		const body = api.calls.find(([, p]) => p === '/receive/invoice')[2];
+		assert.equal(body.peer, PK);
+		assert.equal(body.amountSats, 30000);
+		assert.equal(body.quote.terms.feePpm, 100);
+		assert.equal(api.calls.some(([, p]) => p === '/jit/invoice' || p === '/invoice/create'), false);
+		assert.match(view.text(), /You can close your wallet/);
+		assert.doesNotMatch(view.text(), /also carries a direct-funding request/, 'an offline invoice is not carried with a funding request');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a primary that does not offer offline receiving holds the box, and unticking gives the JIT invoice back', async () => {
+	stubManager();
+	const api = stubLfbwApi({ channels: [], quote: new Error('Your node does not provide offline receiving.') });
+	const view = await mountLfbw(api, lfbwRec(), { ...QUOTES, offlineReceiveAvailable: true, fforAvailable: true });
+	try {
+		await enterAmount(view, '30000');
+		await settle(400);
+		await click(offlineBox(view));
+		await settle(400);
+		const line = view.$('[data-testid="receive-quote"]');
+		assert.match(line.textContent, /does not provide offline receiving/);
+		assert.match(line.textContent, /offer offline settlement/);
+		assert.match(line.textContent, /untick Receive offline for an ordinary invoice/);
+		assert.equal(createButton(view).disabled, true);
+		await click(offlineBox(view));
+		await settle(400);
+		assert.equal(createButton(view).disabled, false);
+		assert.equal(view.$('[data-testid="receive-quote"]'), null);
+		await click(createButton(view));
+		await settle(100);
+		assert.ok(api.calls.some(([m, p]) => m === 'POST' && p === '/jit/invoice'));
+		assert.equal(api.calls.some(([, p]) => p === '/receive/invoice'), false);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('the box stays off while the primary link is not ready or the primary is not connected', async () => {
+	stubManager();
+	const notReady = stubLfbwApi({ channels: [] });
+	const view = await mountLfbw(notReady, lfbwRec({ lfbw: { ...lfbwRec().lfbw, setup: 'pending' } }));
+	try {
+		await enterAmount(view, '30000');
+		await settle(400);
+		assert.equal(offlineBox(view).disabled, true);
+		assert.match(view.text(), /Available once the link to your primary node is ready/);
+	} finally {
+		await view.unmount();
+	}
+	const api = stubLfbwApi({ channels: [] });
+	const get = api.get;
+	api.get = (p) => (p === '/peers' ? Promise.resolve([]) : get(p));
+	const view2 = await mountLfbw(api, lfbwRec());
+	try {
+		await enterAmount(view2, '30000');
+		await settle(400);
+		assert.equal(offlineBox(view2).disabled, true);
+		assert.match(view2.text(), /Available while your primary node is connected/);
+	} finally {
+		await view2.unmount();
+	}
+});
+
+test('a lost response retries the same durable request and does not show unsupported coverage', async () => {
+	stubManager();
+	sessionStorage.clear();
+	const api = stubLfbwApi({ channels: [] });
 	const post = api.post;
 	let lost = true;
 	api.post = async (p, b) => {
@@ -350,7 +531,12 @@ test('a lost response retries the same durable request and does not show unsuppo
 	};
 	const view = await mountLfbw(api, lfbwRec());
 	try {
-		await createInvoice(view, '30000');
+		await enterAmount(view, '30000');
+		await settle(400);
+		await click(offlineBox(view));
+		await settle(400);
+		await click(createButton(view));
+		await settle(60);
 		assert.doesNotMatch(view.text(), /You can close your wallet/);
 		await settle(450);
 		await click(createButton(view));
@@ -364,6 +550,7 @@ test('a lost response retries the same durable request and does not show unsuppo
 	}
 });
 
+
 function stubReceivingNodes() {
 	globalThis.fetch = async () => ({
 		ok: true,
@@ -376,8 +563,6 @@ function stubReceivingNodes() {
 }
 const regularRec = { id: 'w1', network: 'mainnet' };
 const optionalConfig = { offlineReceiveAvailable: true };
-const offlineBox = (view) => view.$('[data-testid="receive-offline"]');
-const enterAmount = (view, amount) => type(view.$$('input[placeholder="any amount"]')[1], amount);
 
 test('regular wallets default to ordinary receiving, including amountless invoices', async () => {
 	const api = stubLfbwApi();
