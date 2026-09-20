@@ -12,21 +12,23 @@ the direct-funding request is in `bolt-draft-direct-funding.md` (revision 2,
 the envelope the engine implements); the engine work is tracked in
 coreyphillips/beignet#532.
 
-## Automatic receive update
+## Receiving offline is an opt-in
 
-The ordinary Lightning Receive form now always prepares offline payment before
-showing an invoice, including when an existing channel has enough inbound
-capacity. Enter a fixed amount of at least 354 sats, review the primary's sender
-fee and create the invoice. It stays payable for ten minutes while the wallet is
-closed, and reopening credits paid funds automatically. No separate offline
-mode or manual recovery is needed.
+The Lightning Receive form mints invoices the way it always has: plain when
+the home channel covers the amount, otherwise provisioned through the primary
+just in time, with the primary's price said beside the amount first. A
+"Receive offline" checkbox sits under the amount, off by default. It becomes
+selectable once a fixed amount of at least 354 sats is typed and the primary is
+connected; ticked, the wallet asks the primary for its offline terms, shows the
+sender fee, and creates the invoice through `/receive/invoice`. That invoice
+stays payable while the wallet is stopped, and reopening credits it.
 
-Preparation uses an empty inbound channel or requests one from the primary.
-Existing spendable funds remain on an available channel. The primary must opt
-into settlement and, when needed, channel funding with cumulative limits.
-Unsupported setup is explicit and does not fall back to an online invoice.
-Lightning-first invoice creation uses `/receive/invoice`. The existing JIT
-provider role remains available for older clients.
+The primary has to offer that itself: settlement, and channel funding with
+cumulative limits when a fresh inbound channel is needed. Those are its own
+settings (the "settle offline receives" and funding fields on its Edit form);
+picking a wallet as a primary never turns them on. A primary without them
+answers the quote with a refusal, the box says so, and unticking it gives the
+ordinary invoice back. Nothing is ever forced through the offline path.
 See [automatic receive and its engine requirements](FFOR.md#automatic-lightning-first-receiving).
 
 ## What the user sees
@@ -51,9 +53,11 @@ See [automatic receive and its engine requirements](FFOR.md#automatic-lightning-
   direct-funding request (`bgnq`), so a beignet wallet paying it funds the
   channel in one transaction. Any other wallet pays the address and the
   deposit moves into Lightning after one confirmation. The Lightning invoice
-  is prepared for offline payment before it is displayed, and the sender fee
-  the primary quotes is shown on screen. When that invoice is attached to
-  the BIP21 request, the direct-funding attachment is omitted.
+  is provisioned through the primary just in time when the home channel
+  cannot cover the amount, and the fee the primary quotes (zero for your own
+  wallets) is said on screen. "Receive offline" is an opt-in beside the
+  amount; an offline invoice attached to the BIP21 request replaces the
+  direct-funding attachment.
 - **Send**: opens on Lightning. "Bitcoin address" is a splice-out of the home
   channel, priced by the daemon; the slider stops at what the channel can
   release net of fee and reserve. A pasted request from a beignet wallet is

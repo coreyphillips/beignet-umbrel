@@ -31,11 +31,16 @@ automatically and do not show the checkbox. RN and web wallet behavior is unchan
 
 ## Automatic Lightning-first receiving
 
-Lightning-first wallets use their ordinary Receive form to prepare a fixed-amount
-invoice that remains payable while the wallet daemon is stopped. Users do not
-select channels, create voucher books or trigger a return. The primary must
-support the automatic receive protocol and opt into settlement. If another
-channel is needed, it must also opt into funding with explicit cumulative caps.
+Lightning-first wallets receive over Lightning the way they always have
+(a plain invoice when the home channel covers it, a just-in-time one through
+the primary when it does not). Ticking "Receive offline" on the Receive form
+instead prepares a fixed-amount invoice that remains payable while the wallet
+daemon is stopped. Users do not select channels, create voucher books or
+trigger a return. The box is off by default and selectable only with an amount
+of at least 354 sats and the primary connected. The primary must support the
+automatic receive protocol and opt into settlement; if another channel is
+needed, it must also opt into funding with explicit cumulative caps. Both are
+the primary's own settings and are never switched on by a wallet picking it.
 The Edit form exposes total channels, channels per peer, maximum channel size
 and total funding budget. Connected external peers can request funding too.
 
@@ -49,8 +54,9 @@ peer to return; this path never force closes automatically.
 The manager excludes `/receive/status` reservations from channelization and
 legacy startup return. If it cannot read the journal, it postpones those actions.
 Retries after a lost creation response reuse the same request id. Fixed amounts
-below 354 sats and amountless requests are refused. Unsupported engines or peers
-show an error instead of silently producing an online-only invoice.
+below 354 sats and amountless requests cannot be received offline. With the box
+ticked, an unsupported engine or peer shows an error instead of silently
+producing an online-only invoice; unticking it returns to the ordinary invoice.
 
 **Engine requirement:** the daemon `/receive/*` API and funding-policy environment
 variable require Beignet 0.21.9 or newer. The image workflow pins 0.21.9. Older

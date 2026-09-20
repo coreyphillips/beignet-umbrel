@@ -6,23 +6,31 @@ import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
+import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
 import OfflineReceiveCard from '../../components/OfflineReceiveCard.jsx';
 import { manager } from '../../api.js';
 
 // A direct-funding request is re-minted when the amount changes (the
 // receiver signs the amount into it), after the hand has settled.
 const FUNDING_DEBOUNCE_MS = 400;
+// A JIT invoice's lifetime, and with it the intent the primary holds open.
+const JIT_INVOICE_EXPIRY_SECS = 15 * 60;
+// The smallest amount an offline receive slot can hold (the engine's dust limit).
+const OFFLINE_MIN_SATS = 354;
 
 export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, info }) {
 	const onchainOnly = !!rec?.onchainOnly;
 	// A lightning-first wallet's on-chain request also carries a direct-funding
-	// request. Its Lightning invoices are prepared for offline payment before
-	// they are shown to the user.
+	// request, and its invoices are provisioned by the primary node just in
+	// time when the home channel cannot take the amount as it stands.
+	// Receiving offline is an opt-in on top of that, for every wallet kind:
+	// the invoice is then prepared with the primary (or a chosen receiving
+	// node) before it is shown, and stays payable with the wallet stopped.
 	const isLfbw = !!rec?.lfbw?.enabled;
 	const lfbwReady = isLfbw && rec.lfbw.setup === 'ready';
 	const toast = useToast();
 	const [funding, setFunding] = useState(null);
-
+	const [jitInfo, setJitInfo] = useState(null);
 	const [address, setAddress] = useState('');
 	const [onchainAmount, setOnchainAmount] = useState('');
 	const [onchainMessage, setOnchainMessage] = useState('');
@@ -33,43 +41,162 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 	const [busy, setBusy] = useState(false);
 	const [offlineRequested, setOfflineRequested] = useState(false);
 	const [selectedPeer, setSelectedPeer] = useState('');
-	const wantsOffline = isLfbw || offlineRequested;
+	const wantsOffline = offlineRequested;
 	useEffect(() => {
 		setOfflineRequested(false);
 		setSelectedPeer('');
 		setInvoice(null);
+		setJitInfo(null);
 	}, [id]);
 	const { data: invoices, refresh } = usePoll(
 		() => (onchainOnly ? Promise.resolve([]) : api.get('/invoices').catch(() => [])),
 		10000,
 		[id, tick, onchainOnly]
 	);
-	const { data: peers } = usePoll(
-		() => (wantsOffline ? api.get('/peers').catch(() => []) : Promise.resolve([])),
+	// The home channel's inbound decides whether an invoice is plain or
+	// provisioned through the primary, so it is read here and kept fresh.
+	const { data: channels } = usePoll(
+		() => (isLfbw ? api.get('/channels').catch(() => null) : Promise.resolve(null)),
 		15000,
-		[id, tick, wantsOffline]
+		[id, tick, isLfbw]
+	);
+	// Whether the primary is on the other end of a live peer connection: a
+	// primary whose daemon runs but whose connection is down cannot
+	// provision, so the invoice is refused before it is minted (umbrel #89).
+	// A regular wallet receiving offline picks its receiving node from the
+	// same list.
+	const { data: peers } = usePoll(
+		() => (isLfbw || wantsOffline ? api.get('/peers').catch(() => null) : Promise.resolve(null)),
+		15000,
+		[id, tick, isLfbw, wantsOffline]
 	);
 	const { data: candidates } = usePoll(
-		() => (offlineRequested ? manager.fforCandidates(id).catch(() => []) : Promise.resolve([])),
+		() => (wantsOffline && !isLfbw ? manager.fforCandidates(id).catch(() => []) : Promise.resolve([])),
 		15000,
-		[id, tick, offlineRequested]
+		[id, tick, wantsOffline, isLfbw]
+	);
+	const connectedPeers = useMemo(
+		() => (peers || []).filter((p) => p.state === 'connected' || p.state === 'ready' || p.connected === true),
+		[peers]
 	);
 	const receivingNodes = useMemo(
 		() =>
-			(peers || [])
-				.filter((p) => p.state === 'connected' || p.state === 'ready' || p.connected === true)
+			connectedPeers
 				.map((p) => {
 					const known = (candidates || []).find((c) => c.nodeId === p.pubkey);
 					return { pubkey: p.pubkey, name: known?.name || p.alias || shortId(p.pubkey), settles: !!known?.settles };
 				})
 				.sort((a, b) => Number(b.settles) - Number(a.settles) || a.pubkey.localeCompare(b.pubkey)),
-		[peers, candidates]
+		[connectedPeers, candidates]
 	);
+	const primaryConnected = useMemo(
+		() => !isLfbw || !peers || connectedPeers.some((p) => p.pubkey === rec.lfbw.primaryPubkey),
+		[isLfbw, peers, connectedPeers, rec?.lfbw?.primaryPubkey]
+	);
+	// The node an offline receive is prepared with: a lightning-first wallet's
+	// primary, or the receiving node picked (or first offered) on a regular one.
 	const receivePeer = isLfbw ? rec?.lfbw?.primaryPubkey : selectedPeer || receivingNodes[0]?.pubkey;
-	const peerConnected = receivingNodes.some((p) => p.pubkey === receivePeer);
+	const peerConnected = isLfbw ? primaryConnected : receivingNodes.some((p) => p.pubkey === receivePeer);
 	const nodeLabel = isLfbw ? 'primary node' : 'receiving node';
 
-	const wantedSats = Number(amount) || 0;
+	// Which invoice the amount typed would mint, read off the polled channels
+	// so the price can be said before anything exists. The primary's
+	// running state is asked at creation, where it decides the refusal text.
+	const wantedSats = parseInt(amount, 10) || 0;
+	const plan = useMemo(
+		() =>
+			isLfbw && channels
+				? planInvoice({ wantedSats, channels, primaryPubkey: rec.lfbw.primaryPubkey, setup: rec.lfbw.setup, primaryConnected })
+				: null,
+		[isLfbw, channels, wantedSats, rec?.lfbw?.primaryPubkey, rec?.lfbw?.setup, primaryConnected]
+	);
+	// The price of a just-in-time receive, asked of the primary before the
+	// invoice exists (beignet #687): the quote registers nothing with it, so
+	// asking is free, and the answer says whether the primary would front
+	// this at all right now. Engines before the route get no line.
+	const jitQuote = useQuote(
+		api,
+		{
+			lspPubkey: rec?.lfbw?.primaryPubkey,
+			amountSats: wantedSats > 0 ? wantedSats : undefined,
+			targetRemainingInboundSat: INBOUND_HEADROOM_SATS
+		},
+		!wantsOffline && !!config?.jitQuoteAvailable && lfbwReady && plan?.kind === 'jit',
+		'/jit/quote',
+		'GET'
+	);
+	const jitLine = useMemo(() => {
+		if (lfbwReady && plan?.kind === 'refuse' && plan.code === 'PRIMARY_DOWN') {
+			return {
+				tone: 'error',
+				blocks: true,
+				text: 'Your primary node is not connected, and this invoice needs it to provide inbound capacity. Wait for it to reconnect, or ask for an amount the channel already covers.'
+			};
+		}
+		if (!config?.jitQuoteAvailable || !lfbwReady || plan?.kind !== 'jit') return null;
+		const { quote, error, errorCode } = jitQuote;
+		if (errorCode === 'PEER_NOT_CONNECTED') {
+			return { tone: 'error', blocks: true, text: 'Your primary node is not connected, and this invoice needs it to provide inbound capacity.' };
+		}
+		if (error && !quote) {
+			return { tone: 'error', blocks: false, text: `Could not get a price from your primary node: ${error}` };
+		}
+		if (!quote) return null;
+		if (quote.accepted === false) {
+			return {
+				tone: 'error',
+				blocks: true,
+				text: `Your primary cannot fund this invoice right now${quote.reason ? `: ${quote.reason}` : '.'}`
+			};
+		}
+		const flat = quote.flatFeeSat || 0;
+		const ppm = quote.feePpm || 0;
+		// The provider would front it, but at a price this wallet's own
+		// ceilings refuse (the daemon refuses the invoice on the same
+		// numbers), so it is a refusal with its own reason.
+		if (quote.withinCeilings === false) {
+			const c = quote.client || {};
+			return {
+				tone: 'error',
+				blocks: true,
+				text: `Your primary asks ${fmtSats(flat)}${ppm > 0 ? ` plus ${ppm} ppm` : ''} for this, more than this wallet accepts${
+					c.maxFlatFeeSat != null || c.maxFeePpm != null
+						? ` (up to ${fmtSats(c.maxFlatFeeSat || 0)}${c.maxFeePpm > 0 ? ` plus ${c.maxFeePpm} ppm` : ''})`
+						: ''
+				}.`
+			};
+		}
+		const terms = flat > 0 || ppm > 0 ? `${fmtSats(flat)}${ppm > 0 ? ` plus ${ppm} ppm` : ''}` : null;
+		if (wantedSats > 0) {
+			const fee = quote.feeSats ?? flat + Math.floor((wantedSats * ppm) / 1_000_000);
+			return {
+				tone: 'info',
+				blocks: false,
+				text: terms
+					? `Your primary will fund this receive for ${fmtSats(fee)} (${terms}), taken from the delivery.`
+					: 'Your primary will fund this receive at no charge.'
+			};
+		}
+		return {
+			tone: 'info',
+			blocks: false,
+			text: terms
+				? `Your primary funds what the channel cannot take for ${terms}, taken from the delivery.`
+				: 'Your primary funds what the channel cannot take, at no charge.'
+		};
+	}, [config?.jitQuoteAvailable, lfbwReady, plan, jitQuote, wantedSats]);
+
+	// Receiving offline needs a fixed amount the engine's slot can hold and a
+	// node that is connected and prepared to settle it. A lightning-first
+	// wallet knows its primary's connection before the box is ticked, so the
+	// box waits for it; a regular wallet learns its receiving nodes once
+	// ticked, and the quote line says the rest.
+	const offlineEligible =
+		!!config?.offlineReceiveAvailable &&
+		(!isLfbw || lfbwReady) &&
+		peerConnected &&
+		Number.isSafeInteger(wantedSats) &&
+		wantedSats >= OFFLINE_MIN_SATS;
 	const [quoteTick, setQuoteTick] = useState(0);
 	useEffect(() => {
 		if (!wantsOffline) return;
@@ -79,19 +206,14 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 	const receiveQuote = useQuote(
 		api,
 		{ peer: receivePeer, amountSats: wantedSats, refresh: quoteTick },
-		wantsOffline &&
-			!!config?.offlineReceiveAvailable &&
-			(!isLfbw || lfbwReady) &&
-			peerConnected &&
-			Number.isSafeInteger(wantedSats) &&
-			wantedSats >= 354,
+		wantsOffline && offlineEligible,
 		'/receive/quote',
 		'GET'
 	);
-	const quoteLine = useMemo(() => {
+	const offlineLine = useMemo(() => {
 		if (!wantsOffline) return null;
 		const block = (text) => ({ tone: 'error', blocks: true, text });
-		if (!config?.offlineReceiveAvailable) return block('Update the app engine to enable automatic receiving.');
+		if (!config?.offlineReceiveAvailable) return block('Update the app engine to enable offline receiving.');
 		if (isLfbw && !lfbwReady)
 			return block('Your primary node connection is being prepared. Try again when it is ready.');
 		if (!peerConnected)
@@ -100,8 +222,14 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 					? 'Your primary node is not connected. Wait for it to reconnect.'
 					: 'Connect a node that supports offline receiving in Peers.'
 			);
-		if (!Number.isSafeInteger(wantedSats) || wantedSats < 354) return block('Enter an amount of at least 354 sats.');
-		if (receiveQuote.error) return block(receiveQuote.error);
+		if (!Number.isSafeInteger(wantedSats) || wantedSats < OFFLINE_MIN_SATS)
+			return block(`Enter an amount of at least ${OFFLINE_MIN_SATS} sats.`);
+		if (receiveQuote.error)
+			return block(
+				isLfbw
+					? `Your primary node cannot prepare an offline receive right now: ${receiveQuote.error}. It has to offer offline settlement (and channel funding, when a new channel is needed) in its own settings, or untick Receive offline for an ordinary invoice.`
+					: receiveQuote.error
+			);
 		const q = receiveQuote.quote;
 		if (receiveQuote.pending || !q || q.amountSats !== wantedSats || q.peer !== receivePeer)
 			return { tone: 'info', blocks: true, text: 'Checking receive availability…' };
@@ -126,6 +254,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 		receiveQuote.error,
 		receivePeer
 	]);
+	const quoteLine = wantsOffline ? offlineLine : jitLine;
 
 	const newAddress = async () => {
 		try {
@@ -250,6 +379,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			const body = { description };
 			if (amount) body.amountSats = parseInt(amount, 10);
 			let r;
+			let jit = null;
 			if (wantsOffline) {
 				if (quoteLine?.blocks || !receiveQuote.quote) throw new Error(quoteLine?.text || 'Review the amount again.');
 				const peer = receivePeer;
@@ -271,16 +401,67 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 				});
 				if (r.offlineReceive !== true) throw new Error('Your payment request could not be prepared. Try again.');
 				sessionStorage.removeItem(key);
+			} else if (isLfbw) {
+				// Provision inbound first when the home channel cannot take the
+				// amount: the invoice is payable through a channel the primary
+				// funds the moment the payment arrives (a zero-conf open, or a
+				// splice of the home channel), minus the fee it quotes.
+				const lf = rec.lfbw;
+				let primaryRunning = true;
+				if (lf.mode === 'internal' && lf.primaryWalletId) {
+					primaryRunning = await manager
+						.getWallet(lf.primaryWalletId)
+						.then((w) => w.status === 'running')
+						.catch(() => true);
+				}
+				const decided = planInvoice({
+					wantedSats: body.amountSats || 0,
+					channels: channels || (await api.get('/channels').catch(() => [])),
+					primaryPubkey: lf.primaryPubkey,
+					setup: lf.setup,
+					primaryRunning,
+					primaryConnected
+				});
+				if (decided.kind === 'refuse') {
+					throw new Error(
+						decided.code === 'PRIMARY_DOWN'
+							? decided.reason === 'not-connected'
+								? 'Your primary node is not connected, and this invoice needs it to provide inbound capacity. Wait for it to reconnect, or ask for an amount the channel already covers.'
+								: 'Your primary node is not running, and this invoice needs it to provide inbound capacity. Start it, or ask for an amount the channel already covers.'
+							: 'The link to your primary node is not set up yet. Retry setup from the Overview tab.'
+					);
+				}
+				if (decided.kind === 'jit') {
+					r = await api.post('/jit/invoice', {
+						lspPubkey: lf.primaryPubkey,
+						...(body.amountSats ? { amountSats: body.amountSats } : {}),
+						description: body.description,
+						targetRemainingInboundSat: INBOUND_HEADROOM_SATS,
+						// The primary holds an intent open for as long as the invoice
+						// lives and allows a few per wallet, so an unpaid invoice must
+						// not hold its slot for an hour (beignet #674).
+						expirySecs: JIT_INVOICE_EXPIRY_SECS
+					});
+					jit = { flatFeeSat: r.flatFeeSat || 0, feePpm: r.feePpm || 0 };
+				}
 			}
 			if (!r) r = await api.post('/invoice/create', body);
 			setInvoice(r);
-			toast('Invoice created', 'success');
+			setJitInfo(jit);
+			toast(
+				jit
+					? jit.flatFeeSat > 0 || jit.feePpm > 0
+						? `Invoice created. Your primary node provides the capacity when it is paid, for ${fmtSats(jit.flatFeeSat)}${jit.feePpm > 0 ? ` plus ${jit.feePpm} ppm` : ''}.`
+						: 'Invoice created. Your primary node provides the capacity when it is paid.'
+					: 'Invoice created',
+				'success'
+			);
 			// The list below polls every ten seconds, which is a long time to look
 			// at a table that does not yet have the invoice you just made in it.
 			refresh();
 		} catch (e) {
 			toast(e.message, 'error');
-			setQuoteTick((n) => n + 1);
+			if (wantsOffline) setQuoteTick((n) => n + 1);
 		} finally {
 			setBusy(false);
 		}
@@ -368,7 +549,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 								value={amount}
 								disabled={busy}
 								onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
-								placeholder={isLfbw ? 'Enter amount' : 'any amount'}
+								placeholder="any amount"
 							/>
 						</Field>
 					</div>
@@ -380,60 +561,66 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 							placeholder="Coffee"
 						/>
 					</Field>
-					{!isLfbw && (
-						<>
-							<label className="checkbox field">
-								<input
-									type="checkbox"
-									data-testid="receive-offline"
-									checked={offlineRequested}
-									disabled={
-										busy ||
-										(!offlineRequested &&
-											(!config?.offlineReceiveAvailable || !Number.isSafeInteger(wantedSats) || wantedSats < 354))
-									}
-									onChange={(e) => {
-										setOfflineRequested(e.target.checked);
-										setInvoice(null);
-									}}
-								/>
-								Receive offline
-							</label>
-							<div className="field-hint">
-								{!config?.offlineReceiveAvailable
-									? 'Update the app engine to enable offline receiving.'
-									: wantedSats < 354
-									? 'Enter an amount of at least 354 sats to receive offline.'
-									: 'Accept this payment even while this wallet is stopped. Closing the browser alone does not stop the wallet.'}
-							</div>
-							{offlineRequested && receivingNodes.length > 0 && (
-								<Field label="Receiving node">
-									<select
-										value={receivePeer || ''}
-										disabled={busy}
-										onChange={(e) => {
-											setSelectedPeer(e.target.value);
-											setInvoice(null);
-										}}>
-										{selectedPeer && !peerConnected && <option value={selectedPeer}>Disconnected node</option>}
-										{receivingNodes.map((p) => (
-											<option key={p.pubkey} value={p.pubkey}>
-												{p.name}
-											</option>
-										))}
-									</select>
-								</Field>
-							)}
-							<div className="field-hint">
-								Changing this option requires a new invoice. Already shared invoices stay unchanged.
-							</div>
-						</>
+					<label className="checkbox field">
+						<input
+							type="checkbox"
+							data-testid="receive-offline"
+							checked={offlineRequested}
+							disabled={
+								busy ||
+								(!offlineRequested &&
+									(!config?.offlineReceiveAvailable ||
+										!Number.isSafeInteger(wantedSats) ||
+										wantedSats < OFFLINE_MIN_SATS ||
+										(isLfbw && (!lfbwReady || !primaryConnected))))
+							}
+							onChange={(e) => {
+								setOfflineRequested(e.target.checked);
+								setInvoice(null);
+								setJitInfo(null);
+							}}
+						/>
+						Receive offline
+					</label>
+					<div className="field-hint">
+						{!config?.offlineReceiveAvailable
+							? 'Update the app engine to enable offline receiving.'
+							: wantedSats < OFFLINE_MIN_SATS
+							? `Enter an amount of at least ${OFFLINE_MIN_SATS} sats to receive offline.`
+							: isLfbw && !lfbwReady
+							? 'Available once the link to your primary node is ready.'
+							: isLfbw && !primaryConnected
+							? 'Available while your primary node is connected.'
+							: isLfbw
+							? 'Accept this payment even while this wallet is stopped. Your primary node prepares it, so it has to offer offline settlement in its own settings.'
+							: 'Accept this payment even while this wallet is stopped. Closing the browser alone does not stop the wallet.'}
+					</div>
+					{!isLfbw && offlineRequested && receivingNodes.length > 0 && (
+						<Field label="Receiving node">
+							<select
+								value={receivePeer || ''}
+								disabled={busy}
+								onChange={(e) => {
+									setSelectedPeer(e.target.value);
+									setInvoice(null);
+								}}>
+								{selectedPeer && !peerConnected && <option value={selectedPeer}>Disconnected node</option>}
+								{receivingNodes.map((p) => (
+									<option key={p.pubkey} value={p.pubkey}>
+										{p.name}
+									</option>
+								))}
+							</select>
+						</Field>
 					)}
+					<div className="field-hint">
+						Changing this option requires a new invoice. Already shared invoices stay unchanged.
+					</div>
 					{quoteLine && (
 						<div
 							className={quoteLine.tone === 'error' ? 'error-note' : 'info-note'}
 							role="status"
-							data-testid="receive-quote">
+							data-testid={wantsOffline ? 'receive-quote' : 'jit-quote'}>
 							{quoteLine.text}
 						</div>
 					)}
@@ -455,6 +642,14 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 								{invoice.offlineReceive && (
 									<div className="info-note" role="status">
 										You can close your wallet. Payments will appear when you reopen it.
+									</div>
+								)}
+								{jitInfo && (
+									<div className="field-hint" style={{ marginTop: 10 }} role="status">
+										Payable now: your primary node provides the inbound capacity the moment this is paid
+										{jitInfo.flatFeeSat > 0 || jitInfo.feePpm > 0
+											? `, and takes ${fmtSats(jitInfo.flatFeeSat)}${jitInfo.feePpm > 0 ? ` plus ${jitInfo.feePpm} ppm` : ''} from the delivery for it.`
+											: ', at no charge.'}
 									</div>
 								)}
 							</m.div>

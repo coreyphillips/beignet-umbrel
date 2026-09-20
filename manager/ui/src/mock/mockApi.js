@@ -369,8 +369,12 @@ const store = {
 			// fronts their inbound capacity (JIT receive) and relays their
 			// payment requests.
 			liquidityProvider: true,
-			// Settles offline receives for its lightning-first wallets (FFOR).
-			ffor: { settle: { enabled: true, maxBudgetMsat: null, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 0 } },
+			// Settles offline receives for its lightning-first wallets (FFOR),
+			// and funds the receive channel when a fresh one is needed.
+			ffor: {
+				settle: { enabled: true, maxBudgetMsat: null, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 0 },
+				funding: { enabled: true, maxChannels: 20, maxChannelsPerPeer: 5, maxChannelSats: 1000000, maxTotalSats: 5000000 }
+			},
 			createdAt: now - 90 * DAY
 		},
 		{
@@ -2742,7 +2746,14 @@ function walletRequest(id, path, method, body) {
 		case '/receive/status':
 			return { available: true, reservedChannelIds: [], requests: [] };
 		case '/receive/quote': {
+			// The peer answers over the peer connection, and only a peer that
+			// settles offline receives answers at all: a primary without the
+			// role is what a fresh lightning-first wallet meets in the field.
 			const q = new URLSearchParams(query || '');
+			const peerWallet = store.wallets.find((x) => nodeId(x.id) === q.get('peer'));
+			if (peerWallet && !peerWallet.ffor?.settle?.enabled) {
+				throw err('Your node does not provide offline receiving.', 'RECEIVE_UNAVAILABLE');
+			}
 			return {
 				peer: q.get('peer'),
 				amountSats: Number(q.get('amountSats')),
