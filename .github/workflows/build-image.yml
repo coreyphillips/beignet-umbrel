@@ -524,7 +524,9 @@ env:
   # hint, and an offline receive never has the primary open a channel (with
   # no channel that has room it answers a direct-funding request instead).
   # Also the recovery hardening (#912 to #924).
-  BEIGNET_VERSION: "0.21.10"
+  # 0.21.11 persists the zero-conf trusted set, so a wallet that trusts its
+  # primary keeps accepting just-in-time channel opens across a restart.
+  BEIGNET_VERSION: "0.21.11"
 
 jobs:
   build:
