@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.23.0"
+version: "0.23.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,25 +30,21 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Lightning-first wallets now prepare Lightning invoices for offline payment
-  automatically. Create an invoice, stop the wallet, and payments appear in
-  your balance and history when you reopen it. Unpaid invoices stay payable
-  through restarts until they expire, and reopening does not duplicate payments.
+  Fixes receiving on a freshly created lightning-first wallet. Version 0.23.0
+  sent every lightning-first invoice through the offline-receive path, which
+  needs the primary node to settle offline payments, and picking a wallet as a
+  primary never turns that on, so the Receive tab could not create an invoice.
+  Invoices are created the way they were before: paid over the home channel
+  when it has room, otherwise provisioned through the primary just in time,
+  with the primary's price shown beside the amount.
 
 
-  Regular Lightning wallets gain a "Receive offline" checkbox in the invoice
-  form, off by default. Enter at least 354 sats to enable it, choose a connected
-  receiving node, and review its fee before creating the invoice. Leaving it
-  off preserves ordinary receiving, including invoices where the payer chooses
-  the amount. Changing the option requires a new invoice; already shared
-  invoices stay unchanged.
-
-
-  The receiving node must support offline receiving and stay available to
-  settle payments. Providers can explicitly enable channel funding with
-  cumulative limits. Existing spendable balances are kept available, and
-  recovery never force closes a channel automatically. Manual voucher books
-  remain under Advanced offline receive. Bundles beignet 0.21.9.
+  "Receive offline" is now a checkbox on the invoice form for every wallet,
+  off by default. Enter at least 354 sats to enable it. On a lightning-first
+  wallet the primary prepares the offline invoice, so the primary has to have
+  "settle offline receives" turned on in its own settings, plus channel
+  funding when a fresh channel is needed; a primary without them says so and
+  the ordinary invoice stays a tick away. Bundles beignet 0.21.9.
 
 
 dependencies: []
