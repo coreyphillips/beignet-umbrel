@@ -23,12 +23,16 @@ connected; ticked, the wallet asks the primary for its offline terms, shows the
 sender fee, and creates the invoice through `/receive/invoice`. That invoice
 stays payable while the wallet is stopped, and reopening credits it.
 
-The primary has to offer that itself: settlement, and channel funding with
-cumulative limits when a fresh inbound channel is needed. Those are its own
-settings (the "settle offline receives" and funding fields on its Edit form);
-picking a wallet as a primary never turns them on. A primary without them
-answers the quote with a refusal, the box says so, and unticking it gives the
-ordinary invoice back. Nothing is ever forced through the offline path.
+The primary has to offer settlement itself: that is its own setting (the
+"settle offline receives" switch on its Edit form), and picking a wallet as a
+primary never turns it on. A primary without it answers the quote with a
+refusal, the box says so, and unticking it gives the ordinary invoice back.
+Since beignet 0.21.10 an offline receive is only for a channel that already
+exists with the primary and has room for the amount; it never has the primary
+open one. With no such channel the quote answers with a direct-funding request
+instead of terms, the box says no channel has room, and the ordinary
+just-in-time invoice is a tick away. Nothing is ever forced through the
+offline path.
 See [automatic receive and its engine requirements](FFOR.md#automatic-lightning-first-receiving).
 
 ## What the user sees
