@@ -17,8 +17,11 @@ it unchecked preserves ordinary receiving, including amountless invoices.
 When checked, select a connected receiving node and review its sender fee terms.
 Known settlement wallets are listed first. The daemon checks protocol support
 before creation; unsupported peers and failed preparation never fall back to an
-online-only invoice. An external connected node can be used too. The node needs
-the same settlement and funding policy described below.
+online-only invoice. An external connected node can be used too. The node must
+have settlement switched on (its own setting), and a channel with it must
+already have room for the amount: since beignet 0.21.10 receiving offline never
+opens a channel. With no such channel the form says so, and unticking the box
+gives the ordinary invoice.
 
 Changing the checkbox or receiving node clears the displayed invoice and its
 BIP21 attachment. Create a new invoice for the new choice. An invoice already
@@ -26,8 +29,8 @@ shared is not changed or cancelled. The form distinguishes stopping the wallet
 from closing the browser, which leaves the Umbrel daemon running. Manual voucher
 book controls remain under **Advanced offline receive**.
 
-Lightning-first wallets continue to prepare every invoice for offline receiving
-automatically and do not show the checkbox. RN and web wallet behavior is unchanged.
+Lightning-first wallets show the same checkbox, with their primary as the
+receiving node; see below. RN and web wallet behavior is unchanged.
 
 ## Automatic Lightning-first receiving
 
@@ -38,11 +41,13 @@ instead prepares a fixed-amount invoice that remains payable while the wallet
 daemon is stopped. Users do not select channels, create voucher books or
 trigger a return. The box is off by default and selectable only with an amount
 of at least 354 sats and the primary connected. The primary must support the
-automatic receive protocol and opt into settlement; if another channel is
-needed, it must also opt into funding with explicit cumulative caps. Both are
-the primary's own settings and are never switched on by a wallet picking it.
-The Edit form exposes total channels, channels per peer, maximum channel size
-and total funding budget. Connected external peers can request funding too.
+automatic receive protocol and opt into settlement, its own setting, which a
+wallet picking it as primary never switches on. Since beignet 0.21.10 an
+offline receive only uses a channel that already exists with the primary and
+has room for the amount; it never has the primary open one, so the primary's
+separate "Fund channels for automatic receiving" switch is not needed for it.
+With no such channel the box says so, and unticking it gives the ordinary
+just-in-time invoice.
 
 The daemon persists preparation before exposing an invoice and discovers
 receipts while running, including after restart. Paid reservations reconcile

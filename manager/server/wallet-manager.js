@@ -190,7 +190,7 @@ class WalletManager {
 			`engine: beignet ${this.engineVersion || 'unknown version'}` +
 				`${this.recoveryAvailable() ? '' : ' (recovery protocol not available)'}\n`
 		);
-		// Publish the inbound hidden service via Umbrel's system Tor before boot
+		// Publish the inbound hidden service via the app's own Tor before boot
 		// so announce-enabled wallets advertise the onion from the start.
 		if (config.torProxyIp && config.torPassword) {
 			const ports = Array.from(
@@ -1099,7 +1099,7 @@ class WalletManager {
 		}
 		if (process.env.TOR_PROXY_IP) env.TOR_PROXY_IP = process.env.TOR_PROXY_IP;
 		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
-		// Route Lightning peer connections through Umbrel's Tor proxy when enabled.
+		// Route Lightning peer connections through the app's Tor proxy when enabled.
 		if (rec.tor && config.torProxy) env.BEIGNET_TOR_PROXY = config.torProxy;
 		// Advertise the onion address so peers can open inbound channels, but only
 		// when the onion actually forwards this wallet's listen port.

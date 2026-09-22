@@ -427,10 +427,11 @@ export default function WalletPage() {
 					)}
 					{rec?.tor && !rec.onchainOnly && rec.torCircuitOk === false && (
 						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
-							Tor on this Umbrel cannot build circuits right now. Peers reached over Tor,
+							The app&apos;s Tor cannot build circuits right now. Peers reached over Tor,
 							onion addresses and, while Tor is on, public ones, will time out. Peers on
-							your own network still connect directly and are unaffected. Restart Tor on
-							your Umbrel, or edit this wallet to turn Tor off and route every peer directly.
+							your own network still connect directly and are unaffected. Restart the
+							Beignet app to restart its Tor, or edit this wallet to turn Tor off and route
+							every peer directly.
 						</div>
 					)}
 					<nav className="wnav">

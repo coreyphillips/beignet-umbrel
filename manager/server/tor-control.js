@@ -14,7 +14,7 @@ const CONTROL_REPLY_TIMEOUT_MS = 10000;
 const FIRST_ATTEMPT_TIMEOUT_MS = 20000;
 
 // The manager's address on Umbrel's shared app network (10.21.x.x), which the
-// system Tor container (10.21.21.11) can reach for hidden-service forwarding.
+// app's own Tor container reaches for hidden-service forwarding.
 function pickLocalIp() {
 	const addrs = [];
 	for (const list of Object.values(os.networkInterfaces())) {
@@ -26,7 +26,7 @@ function pickLocalIp() {
 }
 
 /**
- * Registers a single v3 hidden service with Umbrel's system Tor via the control
+ * Registers a single v3 hidden service with the app's own Tor via the control
  * port (ADD_ONION), mapping each wallet listen port to an onion virtual port.
  * The connection is kept open so the onion lives with the manager; on drop it
  * reconnects and re-adds using the persisted key, keeping a stable address.
