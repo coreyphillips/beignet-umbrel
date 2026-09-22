@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { manager } from '../api.js';
 import { useToast } from './Toast.jsx';
-import { Button, Field, Modal } from './ui.jsx';
+import { Button, Field, Help, Modal } from './ui.jsx';
 import ElectrumFields from './ElectrumFields.jsx';
+import BackupStatus from './BackupStatus.jsx';
 import { guardianEntryLabel, isNodeUri } from '../lib/recovery.js';
-import { openBackup, timeAgo } from '../lib/backup.js';
+import { openBackup } from '../lib/backup.js';
 
 /** App-level defaults dialog, opened from the header. */
 export default function SettingsModal({ config, origin, onClose, onSaved }) {
@@ -45,6 +46,31 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			alive = false;
 		};
 	}, [hosting]);
+
+	// The backup section says where every wallet stands against the last
+	// archive, so it reads the wallet list itself. A backup written from here
+	// opens over this dialog and announces the new config when it is done;
+	// both are read again then, so the status updates in place.
+	const [wallets, setWallets] = useState(null);
+	const [lastBackupAt, setLastBackupAt] = useState(config.lastBackupAt || null);
+	useEffect(() => {
+		let alive = true;
+		const load = () =>
+			manager
+				.listWallets()
+				.then((list) => alive && setWallets(list || []))
+				.catch(() => alive && setWallets([]));
+		load();
+		const onConfig = (e) => {
+			setLastBackupAt(e.detail?.lastBackupAt || null);
+			load();
+		};
+		window.addEventListener('beignet:config', onConfig);
+		return () => {
+			alive = false;
+			window.removeEventListener('beignet:config', onConfig);
+		};
+	}, []);
 
 	const resolveSlot = async (i, uri) => {
 		setResolving(i);
@@ -100,11 +126,12 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 	};
 
 	return (
-		<Modal title="Settings" onClose={onClose} origin={origin}>
-			<div className="info-note">
-				Defaults for new wallets (each wallet can override). No full node required, point at any
-				Electrum server, or use a preset if you run Electrs/Fulcrum here.
-			</div>
+		<Modal
+			title="Settings"
+			help="Defaults for new wallets (each wallet can override). No full node required, point at any Electrum server, or use a preset if you run Electrs/Fulcrum here."
+			onClose={onClose}
+			origin={origin}
+		>
 			<Field label="Default network">
 				<select value={network} onChange={(e) => setNetwork(e.target.value)}>
 					{config.supportedNetworks.map((n) => (
@@ -122,16 +149,18 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 				<>
 					<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 						Recovery guardians
+						<Help>
+							Three guardians that hold an encrypted journal of channel state for wallets using a
+							guardian backup mode. Fill in as many as you have and come back for the rest; a wallet
+							needs all three before it can use a guardian mode.
+							{hosting
+								? ' Any beignet node that serves as a guardian counts: paste its Lightning address (<node id>@host:port) and it resolves to an entry. Three independent operators is the point, so pair with other Umbrels; a wallet on this box protects against nothing this box can suffer.'
+								: ''}
+						</Help>
 					</div>
-					<div className="info-note">
-						Three guardians that hold an encrypted journal of channel state for wallets
-						using a guardian backup mode. Fill in as many as you have and come back for
-						the rest; a wallet needs all three before it can use a guardian mode. A
-						wallet pins the set it first registers with and cannot move to another set
-						later, so choose guardians you expect to keep.
-						{hosting
-							? ' Any beignet node that serves as a guardian counts: paste its Lightning address (<node id>@host:port) and it resolves to an entry. Three independent operators is the point, so pair with other Umbrels; a wallet on this box protects against nothing this box can suffer.'
-							: ''}
+					<div className="field-note" style={{ marginTop: 0 }}>
+						A wallet pins the set it first registers with and cannot move to another set later, so
+						choose guardians you expect to keep.
 					</div>
 					{guardians.map((g, i) => (
 						<Field key={i} label={`Guardian ${i + 1}`}>
@@ -183,14 +212,12 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			)}
 			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 				Backup
+				<Help>
+					An encrypted archive of every wallet&apos;s recovery phrase, API token and record, with the
+					defaults above. It is what a fresh box needs to become this one.
+				</Help>
 			</div>
-			<div className="info-note">
-				An encrypted archive of every wallet&apos;s recovery phrase, API token and record, with the
-				defaults above. It is what a fresh box needs to become this one;{' '}
-				{config.lastBackupAt
-					? `the last one was written ${timeAgo(config.lastBackupAt)}.`
-					: 'nothing has been backed up yet.'}
-			</div>
+			<BackupStatus wallets={wallets} lastBackupAt={lastBackupAt} />
 			{/* Opened over this dialog rather than in place of it, so settings
 			    typed but not yet saved are still here afterwards. */}
 			<div className="center-actions">

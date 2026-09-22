@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { manager } from '../api.js';
 import { useToast } from './Toast.jsx';
-import { Button, Field } from './ui.jsx';
+import { Button, Field, Help } from './ui.jsx';
 import { guardianEntryLabel, isNodeUri } from '../lib/recovery.js';
 
 /**
@@ -67,13 +67,13 @@ export default function GuardianRotateFields({ walletId, pinned, disabled = fals
 		<>
 			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 				Rotate guardians
-			</div>
-			<div className="info-note">
-				Replace one guardian or all three while the channels keep running. Paste a guardian entry
-				or a beignet node’s Lightning address (<code>node id@host:port</code>). The wallet
-				registers with the new set, copies its journal there, switches, and retires the old set
-				for good. A previous device still running on the old set stops itself the moment it sees
-				the new set.
+				<Help>
+					Replace one guardian or all three while the channels keep running. Paste a guardian entry
+					or a beignet node’s Lightning address (<code>node id@host:port</code>). The wallet
+					registers with the new set, copies its journal there, switches, and retires the old set
+					for good. A previous device still running on the old set stops itself the moment it sees
+					the new set.
+				</Help>
 			</div>
 			{slots.map((g, i) => (
 				<Field key={i} label={`Guardian ${i + 1}`}>

@@ -3,7 +3,7 @@ import { AnimatePresence, m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Button, Card, CopyText, Field, QR, Badge } from '../../components/ui.jsx';
+import { Button, Card, CopyText, Field, Help, QR, Badge } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
 import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
@@ -540,10 +540,13 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 							Carry the Lightning invoice in this request
 						</label>
 						{invoiceConflicts && (
-							<div className="info-note">
+							<div className="field-note">
 								The invoice below asks for {fmtSats(invoice.amountSats)} and this request asks for{' '}
-								{fmtSats(onchainSats)}. A payer's wallet reads the request's amount as binding on both rails, so the two
-								have to agree before they can be handed out as one thing.
+								{fmtSats(onchainSats)}.
+								<Help>
+									A payer's wallet reads the request's amount as binding on both rails, so the two have
+									to agree before they can be handed out as one thing.
+								</Help>
 							</div>
 						)}
 					</>

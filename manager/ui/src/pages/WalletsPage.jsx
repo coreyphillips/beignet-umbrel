@@ -10,6 +10,7 @@ import {
 	Card,
 	Modal,
 	Field,
+	Help,
 	Badge,
 	Segmented,
 	Skeleton,
@@ -24,7 +25,7 @@ import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
-import { backupStamp, backupSummary, openBackup } from '../lib/backup.js';
+import { openBackup } from '../lib/backup.js';
 
 function statusTone(s) {
 	if (s === 'running') return 'green';
@@ -137,7 +138,6 @@ export default function WalletsPage() {
 		navigate(`/w/${w.id}`, { state: { wallet: w, info: infos[w.id] || null } });
 
 	const hasWallets = wallets && wallets.length > 0;
-	const backup = backupSummary(wallets, config.lastBackupAt);
 	const walletsCard = (
 		<Card title="Wallets" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
 			{!wallets ? (
@@ -163,18 +163,6 @@ export default function WalletsPage() {
 					initial={staggered.current ? false : 'hidden'}
 					animate="show"
 				>
-					<div className={backup.stale > 0 ? 'error-note' : 'info-note'} data-testid="backup-summary">
-						{backup.text}{' '}
-						<a
-							href="#backup"
-							onClick={(e) => {
-								e.preventDefault();
-								openBackup('export', { x: e.clientX, y: e.clientY });
-							}}
-						>
-							Back up all wallets
-						</a>
-					</div>
 					{wallets.map((w) => {
 						const info = infos[w.id];
 						return (
@@ -196,8 +184,6 @@ export default function WalletsPage() {
 										{w.lfbwDependents?.length > 0
 											? ` · primary for ${w.lfbwDependents.length}`
 											: ''}
-										{' · '}
-										<span data-testid={`backup-stamp-${w.id}`}>{backupStamp(w)}</span>
 									</div>
 									{w.lfbw?.enabled && w.lfbw.setup === 'failed' && (
 										<div className="wallet-meta">Primary node setup failed: {w.lfbw.setupError}</div>
@@ -452,18 +438,15 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					onChange={(e) => setOnchainOnly(e.target.checked)}
 				/>
 				On-chain only (no Lightning)
-			</label>
-			{onchainOnly && (
-				<div className="info-note">
-					A plain Bitcoin wallet: addresses, transactions and coins, with the Lightning
-					apparatus put away and no Lightning listener running. The same seed backs both
-					modes, so Lightning can be switched on later from the wallet's Edit dialog
-					without touching the seed.
+				<Help>
+					A plain Bitcoin wallet: addresses, transactions and coins, with the Lightning apparatus
+					put away and no Lightning listener running. The same seed backs both modes, so Lightning
+					can be switched on later from the wallet's Edit dialog without touching the seed.
 					{tab === 'import'
 						? " Importing reads the seed's history off the chain itself, reaching back to before this wallet existed, as far as the standard address scan finds use."
 						: ''}
-				</div>
-			)}
+				</Help>
+			</label>
 
 			{config.recoveryAvailable && !onchainOnly && (
 				<RecoveryModeField

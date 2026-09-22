@@ -1,4 +1,4 @@
-import { Field } from './ui.jsx';
+import { Field, Help } from './ui.jsx';
 
 export const EMPTY_LFBW = {
 	enabled: false,
@@ -57,18 +57,20 @@ export default function LfbwFields({ value, onChange, candidates, editing = fals
 			<label className="checkbox field">
 				<input type="checkbox" checked={!!value.enabled} onChange={(e) => patch({ enabled: e.target.checked })} />
 				Make this a lightning-first wallet
+				<Help>
+					One balance, held in a single channel with a primary node. Bitcoin that lands on the deposit
+					address moves into that channel by itself once it confirms, invoices are payable even before
+					the channel exists (the primary provides the capacity when the payment arrives), and sending
+					to a bitcoin address spends from the channel.
+				</Help>
 			</label>
 			{value.enabled && (
 				<>
-					<div className="info-note">
-						One balance, held in a single channel with a primary node. Bitcoin that lands on the
-						deposit address moves into that channel by itself once it confirms, invoices are
-						payable even before the channel exists (the primary provides the capacity when the
-						payment arrives), and sending to a bitcoin address spends from the channel.
-						{editing && currentPrimary
-							? ` Currently paired with ${currentPrimary}; changing the primary starts the setup over.`
-							: ''}
-					</div>
+					{editing && currentPrimary && (
+						<div className="info-note">
+							Currently paired with {currentPrimary}; changing the primary starts the setup over.
+						</div>
+					)}
 					<Field
 						label="Primary node"
 						hint="One of your own wallets on this Umbrel provides inbound capacity to this wallet from its own on-chain balance; keep it funded."
@@ -103,14 +105,12 @@ export default function LfbwFields({ value, onChange, candidates, editing = fals
 							<label className="checkbox field">
 								<input type="checkbox" checked={!!value.trusted} onChange={(e) => patch({ trusted: e.target.checked })} />
 								Zero-conf both ways (channels usable the moment they are created)
+								<Help>
+									Without zero-conf, every channel and splice between the two waits for a
+									confirmation before it can carry payments. Both wallets are yours, so the only risk
+									zero-conf takes is your own.
+								</Help>
 							</label>
-							{!value.trusted && (
-								<div className="info-note">
-									Without zero-conf, every channel and splice between the two waits for a confirmation
-									before it can carry payments. Both wallets are yours, so the only risk zero-conf
-									takes is your own.
-								</div>
-							)}
 							{!editing && (
 								<Field
 									label="Starting channel (sats, optional)"
@@ -130,12 +130,12 @@ export default function LfbwFields({ value, onChange, candidates, editing = fals
 							<label className="checkbox field">
 								<input type="checkbox" checked={!!value.trusted} onChange={(e) => patch({ trusted: e.target.checked })} />
 								Trust this node for zero-conf channels
+								<Help>
+									{value.trusted
+										? 'A channel this node opens to you is usable the moment it is created, which is what lets it provide inbound capacity just in time for a payment. You trust it not to double-spend that funding before it confirms.'
+										: 'Without zero-conf trust the node cannot provide inbound capacity just in time: invoices it would have to provision fail. Deposits and direct funding still work, and confirm first.'}
+								</Help>
 							</label>
-							<div className="info-note">
-								{value.trusted
-									? 'A channel this node opens to you is usable the moment it is created, which is what lets it provide inbound capacity just in time for a payment. You trust it not to double-spend that funding before it confirms.'
-									: 'Without zero-conf trust the node cannot provide inbound capacity just in time: invoices it would have to provision fail. Deposits and direct funding still work, and confirm first.'}
-							</div>
 						</>
 					)}
 				</>
@@ -162,6 +162,11 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 			<label className="checkbox field">
 				<input type="checkbox" checked={!!value} disabled={locked} onChange={(e) => onChange(e.target.checked)} />
 				Provide inbound capacity to lightning-first wallets (JIT receive)
+				<Help>
+					When a wallet asks, this node holds the incoming payment, funds a channel to the wallet from
+					its own on-chain balance (or grows the one it has), then forwards the payment minus the fee
+					below. Any beignet wallet may ask; the caps bound what is committed.
+				</Help>
 			</label>
 			{locked && (
 				<div className="info-note">
@@ -171,11 +176,6 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 			)}
 			{value && (
 				<>
-					<div className="info-note">
-						When a wallet asks, this node holds the incoming payment, funds a channel to the wallet
-						from its own on-chain balance (or grows the one it has), then forwards the payment
-						minus the fee below. Any beignet wallet may ask; the caps bound what is committed.
-					</div>
 					<div className="row">
 						<Field label="Flat fee (sats)">
 							<input value={jit.flatFeeSat ?? ''} onChange={(e) => patchJit('flatFeeSat', e.target.value.replace(/[^0-9]/g, ''))} />
@@ -215,16 +215,16 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 							onChange={(e) => patchSwaps('enabled', e.target.checked)}
 						/>
 						Serve Lightning to on-chain swaps from this wallet's balance
+						<Help>
+							A wallet pays this node over Lightning and this node pays the same amount, minus the
+							fee below, to an address the wallet chose, from its own on-chain balance. The node
+							only settles the Lightning payment once the wallet has claimed the coins, and takes
+							them back after the refund height if it never does. The caps bound what is committed
+							at once.
+						</Help>
 					</label>
 					{swaps.enabled && (
 						<>
-							<div className="info-note">
-								A wallet pays this node over Lightning and this node pays the same amount, minus
-								the fee below, to an address the wallet chose, from its own on-chain balance.
-								The node only settles the Lightning payment once the wallet has claimed the
-								coins, and takes them back after the refund height if it never does. The caps
-								bound what is committed at once.
-							</div>
 							<div className="row">
 								<Field
 									label="Flat fee (sats)"
@@ -265,18 +265,18 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 									onChange={(e) => patchSwaps('submarine', e.target.checked)}
 								/>
 								Also pay Lightning invoices for coins sent to this node (submarine)
+								<Help>
+									The other direction: a wallet locks coins on chain to a contract this node can
+									claim with the payment's preimage, and this node pays the wallet's Lightning
+									invoice, minus the fee above, only after those coins confirmed. The invoice is
+									paid under a deadline set back from the wallet's refund height by the margin
+									below, so the claim lands before the wallet can take the coins back; the routing
+									fee cap comes out of the swap fee. The fees, sizes and caps above apply to both
+									directions.
+								</Help>
 							</label>
 							{swaps.submarine && (
 								<>
-									<div className="info-note">
-										The other direction: a wallet locks coins on chain to a contract this node
-										can claim with the payment's preimage, and this node pays the wallet's
-										Lightning invoice, minus the fee above, only after those coins confirmed.
-										The invoice is paid under a deadline set back from the wallet's refund
-										height by the margin below, so the claim lands before the wallet can take
-										the coins back; the routing fee cap comes out of the swap fee. The fees,
-										sizes and caps above apply to both directions.
-									</div>
 									<div className="row">
 										<Field label="Claim margin before the refund (blocks)">
 											<input

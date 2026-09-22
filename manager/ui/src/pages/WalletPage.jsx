@@ -6,7 +6,7 @@ import { usePoll } from '../hooks/usePoll.js';
 import { useSSE } from '../hooks/useSSE.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
-import { AnimatedNumber, Badge, Button, CopyText, Field, Modal } from '../components/ui.jsx';
+import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
@@ -18,7 +18,6 @@ import FforReturnPanel from '../components/FforReturnPanel.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
 import { currentEpoch, describeEpoch } from '../lib/ffor.js';
 import { shortId } from '../lib/format.js';
-import { backupStamp } from '../lib/backup.js';
 import { isClosedChannel } from '../lib/channels.js';
 import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
@@ -349,12 +348,6 @@ export default function WalletPage() {
 					) : (
 						'Loading…'
 					)}
-					{rec && (
-						<span data-testid="backup-stamp">
-							{' · '}
-							{backupStamp(rec)}
-						</span>
-					)}
 				</div>
 			</m.div>
 
@@ -535,10 +528,12 @@ function ResumeBanner({ recovery }) {
 		<div className="info-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 			Channels resuming: {landed} of {channels.total}
 			{channels.closing > 0 ? ` (${channels.closing} closing safely, funds return on-chain)` : ''}.
-			Each channel reconciles with its peer the moment the peer is reachable
-			{isGuardianMode(recovery.mode)
-				? ', and the guardians must confirm this device owns them before any payment moves.'
-				: '.'}
+			<Help>
+				Each channel reconciles with its peer the moment the peer is reachable
+				{isGuardianMode(recovery.mode)
+					? ', and the guardians must confirm this device owns them before any payment moves.'
+					: '.'}
+			</Help>
 		</div>
 	);
 }
@@ -688,15 +683,15 @@ function EditWalletModal({
 
 	return (
 		<Modal title="Edit wallet" onClose={onClose} origin={origin}>
-			<div className="info-note">
-				Changing the Electrum server restarts this wallet so it reconnects. The network
-				({rec.network}) and seed stay the same.
-			</div>
 			<Field label="Name">
 				<input value={name} onChange={(e) => setName(e.target.value)} />
 			</Field>
 			<div className="field-label" style={{ marginBottom: 8 }}>
 				Electrum server
+				<Help>
+					Changing the Electrum server restarts this wallet so it reconnects. The network
+					({rec.network}) and seed stay the same.
+				</Help>
 			</div>
 			<ElectrumFields presets={presets} value={electrum} onChange={setElectrum} />
 			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>

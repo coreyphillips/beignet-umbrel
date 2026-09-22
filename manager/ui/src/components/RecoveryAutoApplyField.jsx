@@ -1,3 +1,5 @@
+import { Help } from './ui.jsx';
+
 /**
  * The one-time question a peer-storage import asks (beignet #690): is the
  * previous device stopped? With the answer the daemon applies the newest
@@ -21,11 +23,16 @@ export default function RecoveryAutoApplyField({ value, onChange, disabled = fal
 					onChange={(e) => onChange(e.target.checked)}
 				/>
 				The previous device is stopped. Restore my channels from my peers' copies automatically.
+				<Help>
+					{value
+						? 'When this wallet is empty and a peer returns a checkpoint for this seed, the newest one is applied by itself and the channels come back held: no new payments in until each peer confirms them, and closing one means accepting that a peer may hold a newer state.'
+						: 'Leave this off if the previous device may still be running. A checkpoint a peer returns is then offered on the wallet page instead of applied by itself.'}
+				</Help>
 			</label>
-			<div className="info-note">
+			<div className="field-note">
 				{value
-					? 'When this wallet is empty and a peer returns a checkpoint for this seed, the newest one is applied by itself and the channels come back held: no new payments in until each peer confirms them, and closing one means accepting that a peer may hold a newer state. Nothing fences the old device in this mode: if the previous device is still running, both act on the same channels and a peer closes them.'
-					: 'Leave this off if the previous device may still be running. A checkpoint a peer returns is then offered on the wallet page instead of applied by itself. Nothing fences the old device in this mode.'}
+					? 'Nothing fences the old device in this mode: if the previous device is still running, both act on the same channels and a peer closes them.'
+					: 'Nothing fences the old device in this mode.'}
 			</div>
 		</>
 	);

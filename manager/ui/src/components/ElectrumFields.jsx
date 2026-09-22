@@ -24,7 +24,15 @@ export default function ElectrumFields({ presets = [], value, onChange }) {
 				</div>
 			)}
 			<div className="row">
-				<Field label="Host">
+				<Field
+					label="Host"
+					help={
+						<>
+							Use an IP address, not a <span className="mono">.local</span> name (mDNS does not
+							resolve inside the app). Port 50001 is usually plaintext, 50002 is TLS.
+						</>
+					}
+				>
 					<input
 						value={value.host || ''}
 						placeholder="192.168.1.10 or electrum.example.com"
@@ -48,10 +56,6 @@ export default function ElectrumFields({ presets = [], value, onChange }) {
 						Use TLS
 					</label>
 				</Field>
-			</div>
-			<div className="field-hint">
-				Tip: use an IP address, not a <span className="mono">.local</span> name (mDNS does not
-				resolve inside the app). Port 50001 is usually plaintext, 50002 is TLS.
 			</div>
 		</div>
 	);

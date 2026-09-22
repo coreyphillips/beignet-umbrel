@@ -53,7 +53,7 @@ export function timeAgo(iso, now = Date.now()) {
 	return `${Math.round(hours / 24)} days ago`;
 }
 
-/** One wallet's backup state, as the list and the wallet header say it. */
+/** One wallet's backup state, as Settings lists it. */
 export function backupStamp(wallet) {
 	if (!wallet) return null;
 	if (!wallet.lastBackupAt) return 'never backed up';
@@ -62,8 +62,8 @@ export function backupStamp(wallet) {
 }
 
 /**
- * The line above the wallet list: when the box was last backed up, and how
- * many wallets have been created or edited since.
+ * The line in Settings' Backup section: when the box was last backed up, and
+ * how many wallets have been created or edited since.
  */
 export function backupSummary(wallets, lastBackupAt, now = Date.now()) {
 	const list = wallets || [];

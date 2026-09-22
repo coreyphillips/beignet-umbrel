@@ -1,15 +1,21 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { m, useMotionValue, useMotionValueEvent, useReducedMotion, useSpring } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import { copy, fmtSats } from '../lib/format.js';
 import { useToast } from './Toast.jsx';
 
-export function Card({ title, actions, children, className = '' }) {
+export function Card({ title, help, actions, children, className = '' }) {
 	return (
 		<div className={`card ${className}`}>
 			{(title || actions) && (
 				<div className="card-head">
-					{title && <h3>{title}</h3>}
+					{title && (
+						<h3>
+							{title}
+							{help && <Help>{help}</Help>}
+						</h3>
+					)}
 					{actions && <div className="card-actions">{actions}</div>}
 				</div>
 			)}
@@ -62,13 +68,137 @@ export function Button({ children, variant = 'ghost', busy, className = '', ...p
 	);
 }
 
-export function Field({ label, hint, children }) {
+export function Field({ label, hint, help, children }) {
 	return (
 		<label className="field">
-			{label && <span className="field-label">{label}</span>}
+			{label && (
+				<span className="field-label">
+					{label}
+					{help && <Help>{help}</Help>}
+				</span>
+			)}
 			{children}
 			{hint && <span className="field-hint">{hint}</span>}
 		</label>
+	);
+}
+
+const HELP_EDGE = 12; // kept clear between the popover and the viewport edge
+const HELP_GAP = 8; // between the "?" and the popover
+
+/**
+ * A "?" that keeps an explanation out of the way until it is asked for: hover
+ * or focus shows it, a click or tap pins it (phones have no hover), and
+ * Escape, a scroll or a press anywhere else puts it away.
+ *
+ * The trigger is a span with a button role rather than a <button>, because it
+ * sits inside <label>s (checkbox rows, Field) and a <button> there becomes
+ * what the label points at; its click is swallowed so it never ticks the
+ * checkbox or focuses the input beside it. The text is always in the DOM in a
+ * hidden span, which is what aria-describedby reads and what the render tests
+ * see; hidden, it stays out of the label's accessible name. The visible copy
+ * is portalled to <body> while open, since a modal's scrolling box would clip
+ * it in place.
+ */
+export function Help({ children, label = 'More info' }) {
+	const id = useId();
+	const trigger = useRef(null);
+	const pop = useRef(null);
+	const [open, setOpen] = useState(false); // false | 'hover' | 'pinned'
+	const [place, setPlace] = useState(null);
+
+	useLayoutEffect(() => {
+		if (!open) {
+			setPlace(null);
+			return;
+		}
+		const t = trigger.current.getBoundingClientRect();
+		const p = pop.current.getBoundingClientRect();
+		const [vw, vh] = [window.innerWidth, window.innerHeight];
+		const left = Math.max(HELP_EDGE, Math.min(t.left + t.width / 2 - p.width / 2, vw - HELP_EDGE - p.width));
+		const below = t.bottom + HELP_GAP;
+		const above = t.top - HELP_GAP - p.height;
+		setPlace({ left, top: below + p.height > vh - HELP_EDGE && above >= HELP_EDGE ? above : below });
+	}, [open]);
+
+	useEffect(() => {
+		if (!open) return undefined;
+		const close = () => setOpen(false);
+		// Captured on window so it runs before a modal's own Escape handler,
+		// and stopped there: Escape puts the explanation away, not the dialog.
+		const onKey = (e) => {
+			if (e.key !== 'Escape') return;
+			e.stopPropagation();
+			close();
+		};
+		const onPress = (e) => {
+			if (trigger.current?.contains(e.target) || pop.current?.contains(e.target)) return;
+			close();
+		};
+		window.addEventListener('keydown', onKey, true);
+		window.addEventListener('scroll', close, true);
+		window.addEventListener('resize', close);
+		document.addEventListener('pointerdown', onPress, true);
+		return () => {
+			window.removeEventListener('keydown', onKey, true);
+			window.removeEventListener('scroll', close, true);
+			window.removeEventListener('resize', close);
+			document.removeEventListener('pointerdown', onPress, true);
+		};
+	}, [open]);
+
+	const toggle = () => setOpen((o) => (o === 'pinned' ? false : 'pinned'));
+	// Events from the portalled popover still bubble through React to whatever
+	// holds the "?", a clickable wallet row say; they end here.
+	const swallow = (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+	};
+
+	return (
+		<>
+			<span
+				ref={trigger}
+				role="button"
+				tabIndex={0}
+				className="help-btn"
+				aria-label={label}
+				aria-describedby={id}
+				aria-expanded={!!open}
+				onMouseEnter={() => setOpen((o) => o || 'hover')}
+				onMouseLeave={() => setOpen((o) => (o === 'hover' ? false : o))}
+				onFocus={() => setOpen((o) => o || 'hover')}
+				onBlur={() => setOpen(false)}
+				onClick={(e) => {
+					swallow(e);
+					toggle();
+				}}
+				onKeyDown={(e) => {
+					if (e.key !== 'Enter' && e.key !== ' ') return;
+					swallow(e);
+					toggle();
+				}}
+			>
+				?
+			</span>
+			<span id={id} hidden>
+				{children}
+			</span>
+			{open &&
+				createPortal(
+					<div
+						ref={pop}
+						className="help-pop"
+						aria-hidden
+						style={place ? { top: place.top, left: place.left } : { top: 0, left: 0, visibility: 'hidden' }}
+						onClick={(e) => e.stopPropagation()}
+						onMouseDown={(e) => e.stopPropagation()}
+					>
+						{children}
+					</div>,
+					document.body
+				)}
+		</>
 	);
 }
 
@@ -333,7 +463,7 @@ const CLOSE_MS = 160;
  * it, it scales from center. Closing plays a short exit before onClose fires,
  * so call sites can keep conditional rendering.
  */
-export function Modal({ title, onClose, children, wide = false, origin = null }) {
+export function Modal({ title, help, onClose, children, wide = false, origin = null }) {
 	const [closing, setClosing] = useState(false);
 	const closeTimer = useRef(null);
 	const reduced = useReducedMotion();
@@ -383,7 +513,10 @@ export function Modal({ title, onClose, children, wide = false, origin = null })
 				}
 			>
 				<div className="modal-head">
-					<h3>{title}</h3>
+					<h3>
+						{title}
+						{help && <Help>{help}</Help>}
+					</h3>
 					<Button onClick={close}>Close</Button>
 				</div>
 				<div className="modal-body">{children}</div>

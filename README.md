@@ -6,53 +6,60 @@ A [community app store](https://github.com/getumbrel/umbrel-community-app-store)
 
 1. In umbrelOS, open the **App Store**, then **Community App Stores**.
 2. Add this store by URL: `https://github.com/coreyphillips/beignet-umbrel`
-3. Install **Beignet** from the "Beignet App Store".
+3. Install **Beignet** from the store.
 
-**No full node required.** Beignet does not depend on any other app, so it installs on its own. Point it at any Electrum server you like. If you run the **Electrs** or **Fulcrum** app on your Umbrel, use the one-click presets in **Settings** (or the per-wallet Electrum field) to connect to it. You can set an app-wide default Electrum server and network for new wallets, and override them per wallet.
+**No full node required.** Beignet depends on no other app. Point it at any Electrum server, or, if you run the **Electrs** or **Fulcrum** app on your Umbrel, use the one-click presets in **Settings**. Set an app-wide default Electrum server and network for new wallets, and override them per wallet.
 
-## What it does
+## Features
 
-Beignet runs one or many self-custodial wallets on your Umbrel:
+Hover or tap the **?** beside a setting in the dashboard for what it does.
 
-- **Multiple wallets at once**, each an independent node with its own on-chain wallet and Lightning identity.
-- **Create** a new wallet (generates a fresh seed) or **import** your own recovery phrase.
-- **Bring your own Electrum server**: no full node needed. Point at any Electrum server, or connect to your Umbrel's Electrs/Fulcrum with a one-click preset. Set an app-wide default and override it per wallet.
-- A per-wallet **API explorer** (Swagger UI) over the full beignet JSON API.
-- **Channel backup** per wallet, through beignet's Recovery Protocol (see below).
-- **One encrypted backup of the whole box**, and a restore flow on a fresh install (see below).
-- **Closed channels keep their story.** A channel's detail view records what happened to it (funding, ready, close started and by whom, the watchdog reason when this wallet force-closed it, every output swept) in a durable per-wallet log that survives restarts, and for a closing or closed channel adds the close itself: who closed it and why, the closing transaction, whether it has confirmed, what is being swept, and when a force close's balance becomes spendable. A close the network may not have yet can be rebroadcast from there.
-- **Optional offline invoices**: regular Lightning wallets have an unchecked "Receive offline" option in the invoice form. Enter at least 354 sats to enable it, choose a connected receiving node and review its fee. Leaving it off preserves ordinary and amountless receiving. See [the receive options](docs/FFOR.md#optional-receiving-for-regular-wallets).
-- **Automatic Lightning-first receiving**: the ordinary Receive form prepares an invoice that stays payable while the wallet is closed, then credits it automatically on reopening. No voucher-book setup or manual return is needed. Requires beignet 0.21.9 or newer and a primary that opts into settlement and bounded channel funding. The image bundles 0.21.11. See [the engine requirements](docs/FFOR.md#automatic-lightning-first-receiving).
-- **Receive while offline**: a wallet pre-signs a book of fixed-amount vouchers with a sibling that stays online (its primary node, say), hands out one invoice per voucher, and is paid while its daemon is off; the sibling settles each payment at once and the money lands when the wallet is back. The manager reconciles with the sibling after every start. A sibling can also keep encrypted receipts of every payment as a witness, so what was paid is collected even if the settlement peer disappears, and issue invoices to payers who hold none from a BOLT 12 offer. See [docs/FFOR.md](docs/FFOR.md). Needs engine 0.21.4 or newer; the controls stay hidden until the bundled engine carries the routes and honours the role switch.
-- **Lightning-first wallets**: one balance held in a single channel with a primary node (one of your own wallets, or an external beignet node). Deposits move into the channel by themselves once they confirm, invoices are payable before the channel exists (the primary provides the capacity when the payment arrives), a beignet payer's transaction can fund the channel directly, and sending to a bitcoin address spends from the channel. See [docs/LFBW.md](docs/LFBW.md). Needs an engine newer than 0.9.3; the controls stay hidden until the bundled engine carries the routes.
+### Wallets
 
-### Backing up the box
+- **Many wallets at once**, each an independent node with its own on-chain wallet and Lightning identity. The wallet's name is its Lightning alias.
+- **Create** a new wallet (12 or 24 words) or **import** a recovery phrase, on mainnet, testnet or regtest.
+- **On-chain-only wallets**: a plain Bitcoin wallet with Lightning put away. Switch Lightning on or off later from Edit, on the same seed.
+- **Lightning-first wallets**: one balance held in a single channel with a primary node (one of your wallets or an external beignet node). Deposits move into the channel by themselves, and invoices are payable before the channel exists. See [docs/LFBW.md](docs/LFBW.md).
+- **Supervised daemons**: a wallet that crashes restarts with backoff, and one whose chain height stalls is restarted.
 
-A seed phrase recovers coins. It does not recover a wallet: not its name, network or Electrum server, not its Tor settings, not its API token, not its channel backup mode or the three guardians it is pinned to, not the lightning-first link to its primary node. Settings' **Back up all wallets** writes all of that, for every wallet at once, into one file encrypted with a passphrase you type twice (scrypt and AES-256-GCM, no key material anywhere but in that passphrase). The archive names the app and engine version it came from.
+### Sending and receiving
 
-Channel databases are not in it: they are large, and channels are what the Recovery Protocol above restores. Restoring the archive onto a fresh box recreates the records, the seeds, the API tokens and the app defaults, and starts nothing. Each wallet then boots exactly as an imported seed does, syncing from the chain and running whatever channel backup it was configured for.
+- **Send** on-chain (address or BIP21, to another of your wallets, Max, fee presets with the exact fee quoted) or over Lightning (BOLT11 invoices, BOLT12 offers, keysend), with a fee and route preview.
+- **Receive** with a BIP21 QR that can carry the Lightning invoice too, and invoices that flip to a paid receipt.
+- **Receive offline**: an opt-in on the invoice form that prepares an invoice payable while the wallet is stopped, settled by a node that stays online and credited when the wallet is back. Manual voucher books sit under Advanced offline receive. See [docs/FFOR.md](docs/FFOR.md).
+- **Offers**: create, share, pay and delete BOLT12 offers.
+- **Activity**: on-chain and Lightning history, coins, and fee bumping (RBF or CPFP) for unconfirmed transactions.
+- **Notifications** when money arrives, a payment settles or fails, or a channel opens or closes.
 
-**Restoring.** From the empty first-run screen or from Settings, pick the file and type the passphrase. The archive is opened and its contents listed before anything is written: which wallets it holds, which are already on this box, and which of them run a node this box already runs. That last one has to be confirmed, because two records on one seed both believe they own its channels, and that is how channel funds are lost.
+### Channels and peers
 
-The wallet list shows when the box was last backed up and how many wallets have been created or edited since, and each wallet says whether it is in the last archive. Keep the file off this Umbrel, and the passphrase somewhere else again: nothing here can recover it.
+- **Open** a channel to any node or to one of your own wallets (zero-conf between your own), **splice** funds in or out where the peer supports it, **close** cooperatively or by force, and set each channel's routing fees.
+- **Closed channels keep their story**: who closed it and why, the closing transaction, what is being swept and when a force close's balance becomes spendable, with a rebroadcast button for a close the network may not have.
+- **Peers**: connect and disconnect peers, and copy this node's address to hand out (local network, clearnet or Tor).
+- **Tor**: the app runs its own Tor. Each wallet chooses outbound (connect to peers over Tor) and inbound (publish a Tor address so peers can open channels to you).
 
-### Channel backup
+### Serving other nodes
 
-A seed alone recovers on-chain funds; channels restored from a seed close and their funds come back on-chain over time. Each Lightning wallet chooses how much more it keeps, in its create form or Edit dialog:
+Every role is off until you switch it on for a wallet, except that a wallet picked as a lightning-first primary becomes a liquidity provider by itself. See [docs/SERVING.md](docs/SERVING.md).
 
-- **Seed only**: the default. Nothing beyond the seed.
-- **Checkpoints via peer storage**: an encrypted channel checkpoint rides with the peers that offer storage, no setup. Import the seed with peer storage, reconnect to those peers, and the wallet offers the newest checkpoint they return: resume the channels (they come back held until each peer confirms them) or recover the funds on-chain. Answer the import form's one question (the previous device is stopped) and the engine applies the checkpoint by itself. Nothing fences the old device in this mode.
-- **Guardians (async)** and **Guardians (strict quorum)**: three guardian servers, set once in Settings, hold an encrypted journal of channel state. Importing the seed elsewhere with the same guardians restores the channels and resumes them instead of closing. Strict quorum makes every channel step wait for two of the three guardians, so a restore is exact and the old device is fenced off; async never makes a payment wait, and a step mid-flight at the moment of loss closes safely instead.
+- **Liquidity provider**: fund channels just in time for lightning-first wallets, with your own fees and caps.
+- **Swaps**: serve reverse swaps (Lightning to on-chain) and submarine swaps (on-chain to Lightning) for other beignet wallets from this wallet's balance.
+- **Guardian**: hold encrypted channel-state journals for other beignet nodes.
+- **Offline receive**: settle, witness and issue invoices for wallets receiving while offline.
 
-A guardian is either a small always-on service speaking the guardian protocol (`<64-hex x-only pubkey>@<http(s) URL>`) or, since beignet 0.12, any beignet node that serves as one: paste that node's Lightning address (`<node id>@host:port`) into a guardian slot and it resolves to an entry of the form `<64-hex pubkey>@bolt8://<node id>@host:port`, reached over a dedicated Lightning-transport session at the node's own address, over Tor when that address is an onion. Settings keeps however many you have entered so far, so a set can be collected one node at a time; a wallet needs all three before it can turn a guardian mode on. Three independent operators is the point: a wallet on this same Umbrel protects against nothing this Umbrel can suffer, so pair with other Umbrels.
+### Backups
 
-Two rules are enforced before a daemon is started, because the engine enforces them by refusing to start: a wallet keeps the guardian set it registered with until it rotates that set (below), and a wallet that has used strict quorum cannot move to a weaker setting. The Overview tab's Node status card states the tier plainly; the wallet header only speaks up when something is wrong (guardians unreachable, another device took over, restore required).
+- **Channel backup** per wallet: seed only, checkpoints via peer storage, or three guardians (async or strict quorum), with guardian rotation and restore. See [docs/CHANNEL-BACKUP.md](docs/CHANNEL-BACKUP.md).
+- **One encrypted backup of the whole box** (every wallet's seed, API token, settings and roles), with a restore flow on a fresh install. Settings shows when it was last written and which wallets changed since. See [docs/BACKUP.md](docs/BACKUP.md).
 
-**Rotating guardians.** Since beignet 0.13, a running wallet in a guardian mode can replace one guardian or all three without stopping: the Edit dialog gains three slots prefilled with the current set, taking a guardian entry or a beignet node's Lightning address, and a "Rotate guardians and retire the old set" button. The daemon registers with the new set under its current lease, copies the journal across while the channels keep running, switches over, and retires the old set for good. A previous device still running on the old set stops itself the moment it sees the new one, and a seed restore that is handed the old set follows the rotation to the live one on its own. A rotation the daemon cannot finish (a new guardian unreachable, a journal moving faster than the copy) is refused before anything changes.
+### Tools
 
-**Serving as a guardian.** Any Lightning wallet here can tick "Serve as a guardian for other beignet nodes" (create form or Edit). Its daemon then hosts the reference guardian at its Lightning address: other beignet wallets pin it as one of their three, and store an encrypted journal of their channel state that this node cannot read. The Overview tab gains a card with the sets held, the bytes stored, the open sessions and the address to hand out (the Tor address, so nobody needs to forward a port). Quotas bound what a stranger can store and refuse new writes rather than delete, because pruning a namespace would wedge that stranger's node for good. A serving wallet keeps answering guardian traffic even while its own channel backup is waiting for its guardians to confirm it, so a group of Umbrels guarding each other can all restart at once. Serving is open to any beignet node, by design; there is no token in this app yet.
+- A per-wallet **API explorer** (Swagger UI) over the full beignet JSON API, and a **Console** for calling it directly.
+- **Logs** per wallet, filterable and downloadable, with the recent node errors.
+- **Sign and verify** messages with the node key (lncli-compatible).
+- Light and dark themes.
 
-**Restoring from guardians.** Set the same three guardians in Settings, then import the seed with a guardian mode. If the guardians hold channel state for that seed, the daemon boots holding for a restore and the wallet page offers it: restoring takes the channels over (the previous device, if still running, is fenced off), downloads and verifies the journal, rebuilds the state and starts the node. The page then follows each channel as it reconciles with its peer, and never calls the restore complete while one is still doing so. A channel the peer proves stale, or whose state cannot be proven current, closes safely and its funds return on-chain; the page says so rather than reporting an error. A plain import (no guardians, or none holding the seed) works as it always has.
+Controls for a feature stay hidden until the bundled engine has the routes behind it, so an older image never shows a button that cannot work.
 
 ## Architecture
 
@@ -65,23 +72,27 @@ Umbrel app_proxy (SSO)
    - management API                   127.0.0.1:3102  wallet B
    - reverse-proxies /wallets/:id/api 127.0.0.1:3103  wallet C
                                               |
-                                              v
-                                   electrs (Umbrel) or a custom Electrum
+                                +-------------+-------------+
+                                v                           v
+                     electrs (Umbrel) or           the app's Tor container
+                     any Electrum server           (Tor peers, one onion)
 ```
 
-A single **manager** service (Node) supervises one `beignet` daemon process per wallet, each with its own isolated `HOME`, data directory, mnemonic, internal port, and Electrum configuration. The manager reverse-proxies API calls to the right wallet daemon and injects that wallet's bearer token server-side, so tokens never reach the browser. Umbrel's `app_proxy` provides single sign-on in front of everything.
+A single **manager** service (Node) supervises one `beignet` daemon process per wallet, each with its own isolated `HOME`, data directory, mnemonic, internal port, and Electrum configuration. The manager reverse-proxies API calls to the right wallet daemon and injects that wallet's bearer token server-side, so tokens never reach the browser. All wallets share one onion address, each on its own port.
 
 Repository layout:
 
-- `umbrel-app-store.yml` — community store manifest.
-- `beignet-wallet/` — the Umbrel app (manifest + compose + icon/gallery).
-- `manager/` — the manager service and dashboard UI source.
-- `docker/` — Dockerfile + entrypoint for the app image.
-- `.github/workflows/` — multi-arch image build to GHCR.
+- `umbrel-app-store.yml`: the community store manifest.
+- `beignet-wallet/`: the Umbrel app (manifest, compose, Tor config, icon and gallery).
+- `manager/`: the manager service (`server/`) and the dashboard UI source (`ui/`).
+- `docker/`: Dockerfile and entrypoint for the app image.
+- `docs/`: feature documentation.
+- `scripts/lfbw-regtest/`: end-to-end scenarios against real daemons on regtest.
+- `.github/workflows/`: `build-image.yml` (multi-arch image to GHCR), `tests.yml`, and `check-release.yml` (see Releasing).
 
 ## Development
 
-Run the manager against a local beignet daemon and a regtest Electrum server.
+Run the manager against a local beignet daemon and a regtest Electrum server. The manager needs Node 22 or newer.
 
 ```sh
 # 1. Build beignet locally
@@ -112,6 +123,13 @@ The manager serves the dashboard build in `manager/public`, so run
 `cd manager/ui && npm run build` first if the UI source changed, or
 `npm run dev` there for a Vite server on :5199 that proxies to the manager.
 
+**Demo mode.** With `npm run dev` running, open `http://localhost:5199/?demo`
+to drive the whole dashboard against an in-memory mock, with no manager or
+daemon at all.
+
+**Tests.** `npm test` in `manager/` runs the server tests, and `npm test` in
+`manager/ui/` runs the dashboard's unit and render tests (no browser needed).
+
 For the lightning-first scenarios against real daemons, see
 [scripts/lfbw-regtest/README.md](scripts/lfbw-regtest/README.md).
 
@@ -124,7 +142,7 @@ docker buildx build \
   -f docker/Dockerfile -t ghcr.io/coreyphillips/beignet-app:<tag> .
 ```
 
-CI builds and pushes multi-arch images to GHCR on any `v*` tag.
+CI builds and pushes multi-arch images to GHCR on any `v*` tag. The engine version it bundles is pinned as `BEIGNET_VERSION` in `.github/workflows/build-image.yml`.
 
 ## Releasing
 
@@ -134,7 +152,7 @@ Release in three steps, so `main` never advertises an image that is not there:
 
 1. **Merge the code.** Leave `version` in `umbrel-app.yml` and the image in `docker-compose.yml` alone. Nothing about what Umbrel installs has changed yet.
 2. **Tag it** (`git tag v0.7.0 && git push origin v0.7.0`) and let the build publish the image.
-3. **Bump, in one commit:** `version` in `umbrel-app.yml`, and the image tag *and digest* in `docker-compose.yml`. Take the digest from the published image:
+3. **Bump, in one commit:** `version` and `releaseNotes` in `umbrel-app.yml`, and the image tag *and digest* in `docker-compose.yml`. Take the digest from the published image:
 
    ```sh
    docker buildx imagetools inspect ghcr.io/coreyphillips/beignet-app:0.7.0 | grep Digest
@@ -142,14 +160,13 @@ Release in three steps, so `main` never advertises an image that is not there:
 
 That last commit is the only one that changes what Umbrel is told to install, and by then the image is real.
 
-The `check-release` workflow enforces this: it requires the compose image to be pinned to a digest, requires the tag to match the app version, and requires the digest to actually resolve in the registry. A digest cannot be known before the build, so a digest that resolves is proof the image exists. It blocks the merge, rather than reporting the breakage after users have already hit it.
+The `check-release` workflow enforces this: it requires the compose image to be pinned to a digest, requires the tag to match the app version, requires the digest to actually resolve in the registry, and requires the release notes to name the bundled beignet version. A digest cannot be known before the build, so a digest that resolves is proof the image exists. It blocks the merge, rather than reporting the breakage after users have already hit it.
 
 ## Security notes
 
 - Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase; it is shown once at creation.
-- The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered. Writing one is behind the same sign-on as everything else here. The rest of the API falls back to allowing every source while `app_proxy` cannot be resolved; the backup routes do not, and answer loopback only until it resolves.
-- The manager and all wallet dashboards sit behind Umbrel's single sign-on.
-- The manager's API is restricted to Umbrel's `app_proxy` (which enforces that sign-on) and loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
+- The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered.
+- The manager's API is restricted to Umbrel's `app_proxy`, which enforces Umbrel's single sign-on, and to loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. While `app_proxy` cannot be resolved the rest of the API allows every source, but the backup routes never do: they answer loopback only until it resolves. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
 - The wallet daemons bind only to `127.0.0.1` inside the container and are never exposed to your network.
 
 ## License

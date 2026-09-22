@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { AmountField, Button, Card, Field, FeeField, Badge, Segmented } from '../../components/ui.jsx';
+import { AmountField, Button, Card, Field, FeeField, Badge, Help, Segmented } from '../../components/ui.jsx';
 import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
 import { formatInvoiceWarning } from '../../lib/hints.js';
@@ -816,9 +816,7 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 				<>
 					<div className="info-note" role="status">
 						This request comes from a beignet wallet
-						{funding.nodeId ? ` (node ${shortId(funding.nodeId)})` : ''}. Paid as direct funding, your
-						transaction becomes their Lightning channel funding in one step, with no deposit to move
-						afterwards; the recipient's node signs a receipt for it.
+						{funding.nodeId ? ` (node ${shortId(funding.nodeId)})` : ''}.
 						{maxMode ? ' A direct funding takes a fixed amount, so it is off while Max is on.' : ''}
 					</div>
 					<label className="checkbox field">
@@ -829,6 +827,10 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 							onChange={(e) => setDirectFunding(e.target.checked)}
 						/>
 						Pay as direct funding
+						<Help>
+							Paid as direct funding, your transaction becomes their Lightning channel funding in one
+							step, with no deposit to move afterwards; the recipient's node signs a receipt for it.
+						</Help>
 					</label>
 				</>
 			)}
@@ -1296,9 +1298,27 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 							{/* An offer names who is asking rather than who is being paid, and
 							    it may say so in words as well as by node id. The words are the
 							    issuer's own and unverified, so they are shown as the issuer's
-							    claim rather than dressed up as an identity. */}
+							    claim rather than dressed up as an identity.
+							    The "?" beside it is the whole of why this card behaves
+							    differently for an offer: there is no fee estimate, and the
+							    button takes longer to come back. Both follow from the exchange,
+							    and neither is a fault. */}
 							<tr>
-								<td className="wallet-meta">{offer ? 'Issuer' : 'Payee'}</td>
+								<td className="wallet-meta">
+									{offer ? (
+										<>
+											Issuer
+											<Help>
+												An offer is a reusable code rather than a one-off request, so paying it asks
+												the issuer for a fresh invoice first and then pays that. It takes a few
+												seconds longer than paying an invoice, and the fee is not known until the
+												invoice comes back.
+											</Help>
+										</>
+									) : (
+										'Payee'
+									)}
+								</td>
 								{offer && decoded.issuer ? (
 									<td>{decoded.issuer}</td>
 								) : (
@@ -1331,18 +1351,6 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 					{decoded.warnings?.length > 0 && (
 						<div className="info-note" style={{ marginTop: 12 }}>
 							{decoded.warnings.map(formatInvoiceWarning).join(' ')}
-						</div>
-					)}
-					{/* Said once, here, because it is the whole of why this card behaves
-					    differently for an offer: there is no fee estimate above, and the
-					    button takes longer to come back. Both follow from the exchange,
-					    and neither is a fault. */}
-					{offer && (
-						<div className="info-note" style={{ marginTop: 12 }}>
-							An offer is a reusable code rather than a one-off request, so paying it
-							asks the issuer for a fresh invoice first and then pays that. It takes a
-							few seconds longer than paying an invoice, and the fee is not known
-							until the invoice comes back.
 						</div>
 					)}
 					{needsAmount && (

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
-import { Badge, Button, Card, CopyText, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
+import { Badge, Button, Card, CopyText, Help, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
@@ -354,13 +354,16 @@ function ProviderCard({ jit, rec }) {
 	const lsp = jit?.lsp || null;
 	const dependents = rec?.lfbwDependents || [];
 	return (
-		<Card title="Liquidity provider" className="grid-full">
-			<div className="wallet-meta" style={{ marginBottom: 10 }}>
-				This wallet funds channels for lightning-first wallets from its own on-chain balance
-				when a payment to them arrives
-				{dependents.length > 0 ? `: primary node of ${dependents.map((d) => `"${d.name}"`).join(', ')}` : ''}
-				. Any beignet wallet may ask; the caps bound what is committed.
-			</div>
+		<Card
+			title="Liquidity provider"
+			help="This wallet funds channels for lightning-first wallets from its own on-chain balance when a payment to them arrives. Any beignet wallet may ask; the caps bound what is committed."
+			className="grid-full"
+		>
+			{dependents.length > 0 && (
+				<div className="wallet-meta" style={{ marginBottom: 10 }}>
+					Serving as the primary node of {dependents.map((d) => `"${d.name}"`).join(', ')}.
+				</div>
+			)}
 			{!jit ? (
 				<div className="wallet-meta">Reading the provider status…</div>
 			) : !lsp ? (
@@ -429,16 +432,21 @@ function SwapsCard({ swaps, rec }) {
 		oneBudget(swaps.limits, swaps.submarine.limits)
 	);
 	return (
-		<Card title="Swaps" className="grid-full">
-			<div className="wallet-meta" style={{ marginBottom: 10 }}>
-				This wallet serves swaps for other wallets: Lightning to on-chain, where it funds a
-				contract from its own balance and settles the payment once the coins are claimed
-				{wantsSubmarine
-					? ', and on-chain to Lightning, where it pays an invoice for coins locked to it and claims them with the preimage'
-					: ''}
-				. The caps bound what is committed at once
-				{sharing ? ', across both directions together' : ''}.
-			</div>
+		<Card
+			title="Swaps"
+			help={
+				<>
+					This wallet serves swaps for other wallets: Lightning to on-chain, where it funds a contract
+					from its own balance and settles the payment once the coins are claimed
+					{wantsSubmarine
+						? ', and on-chain to Lightning, where it pays an invoice for coins locked to it and claims them with the preimage'
+						: ''}
+					. The caps bound what is committed at once
+					{sharing ? ', across both directions together' : ''}.
+				</>
+			}
+			className="grid-full"
+		>
 			{!swaps ? (
 				<div className="wallet-meta">Reading the swap status…</div>
 			) : !swaps.enabled ? (
@@ -610,12 +618,11 @@ function GuardianCard({ guardian, rec, info }) {
 	const onionUri = info?.nodeId && rec?.onionAddress ? `${info.nodeId}@${rec.onionAddress}` : null;
 	const localUri = info?.nodeId && rec?.listenPort ? `${info.nodeId}@127.0.0.1:${rec.listenPort}` : null;
 	return (
-		<Card title="Guardian for other nodes" className="grid-full">
-			<div className="wallet-meta" style={{ marginBottom: 10 }}>
-				This wallet holds an encrypted journal of channel state for beignet nodes that pinned it
-				as one of their three guardians. The journal is opaque to it; a full quota refuses new
-				writes rather than deleting anything.
-			</div>
+		<Card
+			title="Guardian for other nodes"
+			help="This wallet holds an encrypted journal of channel state for beignet nodes that pinned it as one of their three guardians. The journal is opaque to it; a full quota refuses new writes rather than deleting anything."
+			className="grid-full"
+		>
 			{!guardian ? (
 				<div className="wallet-meta">Reading the guardian status…</div>
 			) : guardian.serving === false ? (
@@ -667,9 +674,12 @@ function BackupRow({ recovery, rec }) {
 			v={
 				<>
 					<Badge tone={d.tone}>{d.tier}</Badge>
-					<div className="wallet-meta" style={{ marginTop: 4 }}>
-						{d.detail}
-					</div>
+					{d.about && <Help>{d.about}</Help>}
+					{d.detail && (
+						<div className="wallet-meta" style={{ marginTop: 4 }}>
+							{d.detail}
+						</div>
+					)}
 				</>
 			}
 		/>
@@ -705,12 +715,11 @@ function EpochRow({ epochs, tip }) {
  */
 function SettlementCard({ settlements }) {
 	return (
-		<Card title="Offline receives settled for siblings" className="grid-full">
-			<div className="wallet-meta" style={{ marginBottom: 10 }}>
-				Sibling wallets pre-sign voucher books on their channels with this one and go offline; this
-				wallet settles payments to those vouchers at once from its side of the channel, and each book
-				locks its amount here until the sibling is back and closes it.
-			</div>
+		<Card
+			title="Offline receives settled for siblings"
+			help="Sibling wallets pre-sign voucher books on their channels with this one and go offline; this wallet settles payments to those vouchers at once from its side of the channel, and each book locks its amount here until the sibling is back and closes it."
+			className="grid-full"
+		>
 			{!settlements ? (
 				<div className="wallet-meta">Reading the settlement status…</div>
 			) : settlements.length === 0 ? (
@@ -756,12 +765,11 @@ function SettlementCard({ settlements }) {
 // The receipt mailboxes this wallet keeps for siblings receiving offline.
 function WitnessCard({ status }) {
 	return (
-		<Card title="Receipts kept for siblings" className="grid-full">
-			<div className="wallet-meta" style={{ marginBottom: 10 }}>
-				Sibling wallets receiving offline can name this wallet as a witness: payments to their vouchers
-				route through it, and it stores an encrypted receipt of each before passing it on. Each mailbox
-				is one book; the receipts are opaque to this wallet and kept until their retention height.
-			</div>
+		<Card
+			title="Receipts kept for siblings"
+			help="Sibling wallets receiving offline can name this wallet as a witness: payments to their vouchers route through it, and it stores an encrypted receipt of each before passing it on. Each mailbox is one book; the receipts are opaque to this wallet and kept until their retention height."
+			className="grid-full"
+		>
 			{!status ? (
 				<div className="wallet-meta">Reading the witness status…</div>
 			) : !status.enabled ? (
@@ -806,11 +814,11 @@ function WitnessCard({ status }) {
 // The offers this wallet answers invoices for, on behalf of siblings.
 function IssuerCard({ status }) {
 	return (
-		<Card title="Invoices issued for siblings" className="grid-full">
-			<div className="wallet-meta" style={{ marginBottom: 10 }}>
-				A sibling receiving offline can hand this wallet a BOLT 12 offer; a payer who holds no invoice asks
-				here and gets the invoice for the next unused voucher of the book, one per request.
-			</div>
+		<Card
+			title="Invoices issued for siblings"
+			help="A sibling receiving offline can hand this wallet a BOLT 12 offer; a payer who holds no invoice asks here and gets the invoice for the next unused voucher of the book, one per request."
+			className="grid-full"
+		>
 			{!status ? (
 				<div className="wallet-meta">Reading the issuer status…</div>
 			) : !status.enabled ? (
