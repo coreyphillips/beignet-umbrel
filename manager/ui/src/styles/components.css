@@ -332,6 +332,14 @@
 	font-size: 12px;
 }
 
+/* The one line a checkbox keeps in sight when its explanation has gone behind
+   a "?": a warning, or why it is disabled. Tucked up under the row it is about. */
+.field-note {
+	color: var(--faint);
+	font-size: 12px;
+	margin: -6px 0 12px;
+}
+
 /* A value the form is showing back rather than asking for. Aligned with the
    inputs around it so it reads as part of the same form, and visibly not one of
    them: no border to invite a click, no focus ring to promise an edit. */
@@ -946,6 +954,107 @@ tbody tr:hover {
 	padding: 10px 14px;
 	font-size: 13px;
 	margin-bottom: 12px;
+}
+
+/* ---------- Backup status (Settings) ---------- */
+/* One row per wallet: its name, and whether the last archive has it as it is. */
+.backup-list {
+	list-style: none;
+	margin: 0 0 14px;
+	padding: 0;
+	font-size: 12.5px;
+}
+
+.backup-list li {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 6px 2px;
+	border-bottom: 1px solid var(--hairline);
+}
+
+.backup-list li:last-child {
+	border-bottom: none;
+}
+
+.backup-name {
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.backup-when {
+	flex: none;
+	color: var(--muted);
+}
+
+.backup-list li.stale .backup-when {
+	color: var(--yellow);
+}
+
+/* ---------- Help: a "?" that holds an explanation until asked ---------- */
+/* Sits inline after a card title, a field label or a checkbox's text. It
+   resets the case and tracking a card title applies, so it reads the same
+   wherever it lands. */
+.help-btn {
+	display: inline-grid;
+	place-items: center;
+	flex: none;
+	width: 16px;
+	height: 16px;
+	margin-left: 6px;
+	vertical-align: -3px;
+	border-radius: var(--r-full);
+	border: 1px solid var(--glass-border-bright);
+	color: var(--muted);
+	font-size: 10.5px;
+	font-weight: 650;
+	line-height: 1;
+	letter-spacing: 0;
+	text-transform: none;
+	cursor: help;
+	user-select: none;
+	transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease,
+		background var(--dur-fast) ease;
+}
+
+.checkbox .help-btn {
+	margin-left: -2px;
+}
+
+.help-btn:hover,
+.help-btn:focus-visible,
+.help-btn[aria-expanded='true'] {
+	color: var(--text);
+	border-color: var(--accent);
+	background: var(--accent-dim);
+	outline: none;
+}
+
+/* Portalled to <body> and placed from the trigger's rect, so no scrolling box
+   clips it. Above modals (40) and toasts (50). */
+.help-pop {
+	position: fixed;
+	z-index: 60;
+	max-width: min(320px, calc(100vw - 24px));
+	padding: 10px 12px;
+	font-size: 12.5px;
+	font-weight: 400;
+	line-height: 1.5;
+	letter-spacing: normal;
+	text-transform: none;
+	color: var(--text);
+	background: var(--glass-bg-heavy);
+	backdrop-filter: blur(var(--blur-soft));
+	-webkit-backdrop-filter: blur(var(--blur-soft));
+	border: 1px solid var(--glass-border-bright);
+	border-radius: var(--r-sm);
+	box-shadow: var(--glass-shadow);
+}
+
+.help-pop code {
+	word-break: break-all;
 }
 
 /* A wallet's pinned guardian set, shown under the channel backup choice. */

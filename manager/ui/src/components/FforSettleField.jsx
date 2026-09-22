@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Field } from './ui.jsx';
+import { Field, Help } from './ui.jsx';
 
 /**
  * The per-wallet FFOR roles (beignet #729): settle offline receives for
@@ -49,12 +49,12 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 					onChange={(e) => patchSettle('enabled', e.target.checked)}
 				/>
 				Settle offline receives for sibling wallets
+				<Help>
+					{settle.enabled
+						? 'A sibling wallet with a channel to this one can pre-sign a book of fixed-amount vouchers here before it goes offline. While it is away, this wallet settles payments to those vouchers at once from its own side of the channel, and the sibling collects them when it returns. Each book locks its whole amount on this side of the channel until the sibling closes it; the caps below bound what one book may ask for.'
+						: 'Off: this wallet settles no offline receives for anyone. Turn it on for a wallet that stays online, such as the primary node of your lightning-first wallets; the sibling picks it from its Receive tab.'}
+				</Help>
 			</label>
-			<div className="info-note">
-				{settle.enabled
-					? 'A sibling wallet with a channel to this one can pre-sign a book of fixed-amount vouchers here before it goes offline. While it is away, this wallet settles payments to those vouchers at once from its own side of the channel, and the sibling collects them when it returns. Each book locks its whole amount on this side of the channel until the sibling closes it; the caps below bound what one book may ask for.'
-					: 'Off: this wallet settles no offline receives for anyone. Turn it on for a wallet that stays online, such as the primary node of your lightning-first wallets; the sibling picks it from its Receive tab.'}
-			</div>
 			{settle.enabled && (
 				<>
 					<label className="checkbox field">
@@ -66,11 +66,11 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 							onChange={(e) => patchFunding('enabled', e.target.checked)}
 						/>
 						Fund channels for automatic receiving
+						<Help>
+							Allow connected wallets, including external clients, to request channels funded by this
+							node. Limits are cumulative across restarts and include failed allocations.
+						</Help>
 					</label>
-					<div className="info-note">
-						Allow connected wallets, including external clients, to request channels funded by this node. Limits are
-						cumulative across restarts and include failed allocations.
-					</div>
 					{funding.enabled && (
 						<div className="row">
 							{[
@@ -102,12 +102,12 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 					onChange={(e) => patchWitness('enabled', e.target.checked)}
 				/>
 				Keep receipts for sibling wallets receiving offline (witness)
+				<Help>
+					{witness.enabled
+						? 'A sibling going offline can name this wallet as a receipt witness: payments to its vouchers route through this wallet, which stores an encrypted receipt of each one before passing it on, so the sibling can collect what it was paid even if its settlement peer disappears. The receipts are opaque to this wallet, and it needs a channel toward the settlement peer to sit on the path.'
+						: 'Off: this wallet keeps no receipts for anyone. Turn it on for a wallet that stays online and has a channel to the settlement peer.'}
+				</Help>
 			</label>
-			<div className="info-note">
-				{witness.enabled
-					? 'A sibling going offline can name this wallet as a receipt witness: payments to its vouchers route through this wallet, which stores an encrypted receipt of each one before passing it on, so the sibling can collect what it was paid even if its settlement peer disappears. The receipts are opaque to this wallet, and it needs a channel toward the settlement peer to sit on the path.'
-					: 'Off: this wallet keeps no receipts for anyone. Turn it on for a wallet that stays online and has a channel to the settlement peer.'}
-			</div>
 			<label className="checkbox field">
 				<input
 					type="checkbox"
@@ -117,14 +117,15 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 					onChange={(e) => patchIssuer(e.target.checked)}
 				/>
 				Issue invoices for sibling wallets receiving offline (issuer)
+				<Help>
+					{issuer.enabled
+						? 'A sibling going offline can hand this wallet a BOLT 12 offer: a payer who holds no invoice asks this wallet for one, and it answers with the invoice for the next unused voucher of the book, one per request, until the book runs out.'
+						: 'Off: payers need an invoice the sibling handed out before leaving. Turn it on to answer BOLT 12 requests from payers who hold none.'}
+				</Help>
 			</label>
-			<div className="info-note">
-				{!witness.enabled
-					? 'The issuer runs on a receipt witness: turn the witness on first.'
-					: issuer.enabled
-					? 'A sibling going offline can hand this wallet a BOLT 12 offer: a payer who holds no invoice asks this wallet for one, and it answers with the invoice for the next unused voucher of the book, one per request, until the book runs out.'
-					: 'Off: payers need an invoice the sibling handed out before leaving. Turn it on to answer BOLT 12 requests from payers who hold none.'}
-			</div>
+			{!witness.enabled && (
+				<div className="field-note">The issuer runs on a receipt witness: turn the witness on first.</div>
+			)}
 			{(settle.enabled || witness.enabled) && (
 				<>
 					<button

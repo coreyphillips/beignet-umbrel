@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { usePoll } from '../hooks/usePoll.js';
 import { useToast } from './Toast.jsx';
-import { Badge, Button, Card, CopyText, Field, QR } from './ui.jsx';
+import { Badge, Button, Card, CopyText, Field, Help, QR } from './ui.jsx';
 import { fmtSats } from '../lib/format.js';
 import { manager } from '../api.js';
 import {
@@ -184,12 +184,11 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 	const epochPeer = epoch ? peerName(eligible.find((c) => c.channelId === epoch.channelId)) : null;
 
 	return (
-		<Card title="Receive while offline" className="grid-full">
-			<div className="wallet-meta" style={{ marginBottom: 10 }}>
-				Pre-sign a book of fixed-amount vouchers with a sibling wallet that stays online, hand out one
-				invoice per voucher, and get paid while this wallet is off. The sibling settles each payment at
-				once; the money lands in your channel balance when this wallet is back and closes the book.
-			</div>
+		<Card
+			title="Receive while offline"
+			help="Pre-sign a book of fixed-amount vouchers with a sibling wallet that stays online, hand out one invoice per voucher, and get paid while this wallet is off. The sibling settles each payment at once; the money lands in your channel balance when this wallet is back and closes the book."
+			className="grid-full"
+		>
 			{unsupported ? (
 				<div className="info-note">The bundled engine predates offline receive; update the app first.</div>
 			) : !epochs ? (
@@ -237,6 +236,12 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 								<>
 									<div className="field-label" style={{ marginTop: 4, marginBottom: 6 }}>
 										Witnesses (optional)
+										<Help>
+											A witness sits on the payment path before the settlement peer and keeps an encrypted
+											receipt of every payment, so what was paid can be collected even if the peer
+											disappears. Payments must then route through a witness: it needs a public channel to
+											the settlement peer, and payers need a route to it.
+										</Help>
 									</div>
 									{witnessOptions.map((c) => (
 										<label key={c.id} className="checkbox field">
@@ -250,12 +255,6 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 											{c.issues ? ' (can issue invoices)' : ''}
 										</label>
 									))}
-									<div className="field-hint" style={{ marginBottom: 8 }}>
-										A witness sits on the payment path before the settlement peer and keeps an encrypted receipt of
-										every payment, so what was paid can be collected even if the peer disappears. Payments must then
-										route through a witness: it needs a public channel to the settlement peer, and payers need a route
-										to it.
-									</div>
 									{issuerOptions.length > 0 && (
 										<>
 											<div className="row">

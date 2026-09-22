@@ -1,7 +1,7 @@
 /**
  * Run with: npm test (from manager/ui).
  *
- * How the wallet list says when this box was last taken off it. The reminder
+ * How Settings says when this box was last taken off it. The reminder
  * is the point: a wallet created or edited since the last archive is one whose
  * settings, API token and guardians exist in exactly one place.
  */

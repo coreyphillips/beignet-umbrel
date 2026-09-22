@@ -69,16 +69,19 @@ const SEED_ONLY_DETAIL =
  * `status` is the /recovery/status result, or null / `{ state:
  * 'unsupported' }` when the daemon answered 404 (an engine that predates
  * the feature). `rec` is the wallet record.
- * Returns { tier, detail, tone, degraded }: `tier` is the short label,
- * `detail` the sentence under it, `tone` a Badge tone, and `degraded` true
- * only for the states the header should wave about.
+ * Returns { tier, detail, about, tone, degraded }: `tier` is the short
+ * label, `detail` what is happening now (empty when a steady state has
+ * nothing to add), `about` what the steady tier means, which the Backup row
+ * keeps behind a "?", `tone` a Badge tone, and `degraded` true only for the
+ * states the header should wave about.
  */
 export function describeRecovery(status, rec = {}) {
 	const lightning = !rec.onchainOnly;
 	if (!status || status.state === 'unsupported') {
 		return {
 			tier: 'Seed only',
-			detail: 'This engine has no channel backup. ' + SEED_ONLY_DETAIL,
+			detail: 'This engine has no channel backup.',
+			about: SEED_ONLY_DETAIL,
 			tone: lightning ? 'yellow' : 'muted',
 			degraded: false
 		};
@@ -143,7 +146,8 @@ export function describeRecovery(status, rec = {}) {
 	if (status.state === 'disabled' || status.mode === 'off') {
 		return {
 			tier: 'Seed only (channels close on restore)',
-			detail: SEED_ONLY_DETAIL,
+			detail: '',
+			about: SEED_ONLY_DETAIL,
 			tone: lightning ? 'yellow' : 'muted',
 			degraded: false
 		};
@@ -160,7 +164,8 @@ export function describeRecovery(status, rec = {}) {
 		}
 		return {
 			tier: 'Checkpoints via peer storage',
-			detail:
+			detail: '',
+			about:
 				'Encrypted channel checkpoints ride with the peers that offer storage. Importing the seed elsewhere with peer storage and reconnecting to those peers offers a recovery from the newest checkpoint: the funds return on-chain, or the channels come back held until each peer confirms them. There is no fencing between devices in this mode.',
 			tone: 'blue',
 			degraded: false
@@ -179,24 +184,23 @@ export function describeRecovery(status, rec = {}) {
 	const waiting = node?.awaitingDurabilityCount || 0;
 	const waitingNote =
 		waiting > 0
-			? ` ${waiting} channel${waiting === 1 ? '' : 's'} waiting on guardian receipts right now.`
+			? `${waiting} channel${waiting === 1 ? '' : 's'} waiting on guardian receipts right now.`
 			: '';
 	if (status.mode === 'quorum') {
 		return {
 			tier: `Continuity: quorum, durable to seq ${seq}`,
-			detail:
-				'Every channel step waits until two of the three guardians have stored it. Importing the seed with the same guardians restores the channels exactly and fences this device.' +
-				waitingNote +
-				barrierLatencyNote(node?.barrierLatency),
+			detail: (waitingNote + barrierLatencyNote(node?.barrierLatency)).trim(),
+			about:
+				'Every channel step waits until two of the three guardians have stored it. Importing the seed with the same guardians restores the channels exactly and fences this device.',
 			tone: 'green',
 			degraded: false
 		};
 	}
 	return {
 		tier: `Guardians (async), durable to seq ${seq}`,
-		detail:
-			'Channel state is copied to the three guardians in the background. Importing the seed with the same guardians restores and resumes the channels; a step mid-flight at the moment of loss closes safely instead.' +
-			waitingNote,
+		detail: waitingNote,
+		about:
+			'Channel state is copied to the three guardians in the background. Importing the seed with the same guardians restores and resumes the channels; a step mid-flight at the moment of loss closes safely instead.',
 		tone: 'green',
 		degraded: false
 	};

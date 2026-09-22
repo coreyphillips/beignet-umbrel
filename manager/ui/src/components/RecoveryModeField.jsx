@@ -5,20 +5,25 @@ import { MODE_LABELS, RECOVERY_MODES, isGuardianMode } from '../lib/recovery.js'
  * The per-wallet channel backup choice (the beignet Recovery Protocol), shared
  * by the create form and the edit dialog so both read the same.
  *
- * Four modes, one note for the one selected. The guardian modes need a set
- * of three guardians in Settings; without one they stay listed but disabled,
- * with the hint saying where to go. The peer storage note is honest about the
- * engine it ships with: the checkpoints go out, but nothing restores from
- * them yet.
+ * Four modes, one note for the one selected, kept behind the label's "?".
+ * What a mode costs for good (strict quorum is a one-way door, peer storage
+ * fences nothing) stays in sight under the select. The guardian modes need a
+ * set of three guardians in Settings; without one they stay listed but
+ * disabled, with the hint saying where to go.
  */
 const NOTES = {
 	off: 'Nothing is kept beyond the seed. If this Umbrel is lost, importing the seed elsewhere recovers the on-chain funds. Open channels are closed by their peers and the funds return on-chain over time. Fine for a wallet without channels.',
 	'peer-storage':
-		'The wallet keeps an encrypted checkpoint of its channels with the peers it has channels with. Nothing to set up and no extra servers. If this Umbrel is lost, import the seed with peer storage, reconnect to those peers, and the wallet offers to recover from the newest checkpoint they return: with this engine that closes the channels safely and returns the funds on-chain (resuming them where they were waits on the engine). Nothing fences the old device in this mode.',
+		'The wallet keeps an encrypted checkpoint of its channels with the peers it has channels with. Nothing to set up and no extra servers. If this Umbrel is lost, import the seed with peer storage, reconnect to those peers, and the wallet offers to recover from the newest checkpoint they return: with this engine that closes the channels safely and returns the funds on-chain (resuming them where they were waits on the engine).',
 	'async-remote':
 		'Channel state is copied in the background to the three guardian servers set in Settings. Payments never wait on them. If this Umbrel is lost, importing the seed with the same guardians restores the channels and resumes them. A payment mid-flight at the exact moment of loss may not be covered; that channel closes safely instead.',
 	quorum:
-		'Every payment step waits until two of the three guardians have stored it, so a restore resumes every channel exactly and the old device is fenced off. Payments take a guardian round trip longer and pause while fewer than two guardians are reachable. Once this wallet has used strict quorum it cannot go back to a weaker setting.'
+		'Every payment step waits until two of the three guardians have stored it, so a restore resumes every channel exactly and the old device is fenced off. Payments take a guardian round trip longer and pause while fewer than two guardians are reachable.'
+};
+
+const WARNINGS = {
+	'peer-storage': 'Nothing fences the old device in this mode.',
+	quorum: 'Once this wallet has used strict quorum it cannot go back to a weaker setting.'
 };
 
 export const OPTION_LABELS = {
@@ -57,7 +62,18 @@ export default function RecoveryModeField({
 				.join();
 	return (
 		<>
-			<Field label="Channel backup">
+			<Field
+				label="Channel backup"
+				help={
+					<>
+						{NOTES[value] || NOTES.off}
+						{importing && guardiansUsable
+							? ' To restore channels from guardians, enter the same three guardians this wallet used before in Settings, then import with the same guardian setting. If the guardians hold this wallet, the next page offers the restore.'
+							: ''}
+					</>
+				}
+				hint={WARNINGS[value]}
+			>
 				<select
 					value={value}
 					disabled={disabled}
@@ -86,19 +102,11 @@ export default function RecoveryModeField({
 					})}
 				</select>
 			</Field>
-			<div className="info-note">{NOTES[value] || NOTES.off}</div>
 			{!guardiansUsable && !disabled && (
 				<div className="info-note">
 					{settingsGuardians.length > 0
 						? `Settings has ${settingsGuardians.length} of 3 guardians. Add the rest to use the guardian modes.`
 						: 'Set three guardians in Settings to use the guardian modes.'}
-				</div>
-			)}
-			{importing && guardiansUsable && (
-				<div className="info-note">
-					To restore channels from guardians, enter the same three guardians this wallet used
-					before in Settings, then import with the same guardian setting. If the guardians hold
-					this wallet, the next page offers the restore.
 				</div>
 			)}
 			{pinned && (

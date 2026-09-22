@@ -42,7 +42,8 @@ test('peer storage says what it does and what it cannot do yet', () => {
 		{}
 	);
 	assert.equal(d.tier, 'Checkpoints via peer storage');
-	assert.match(d.detail, /recovery from the newest checkpoint/);
+	assert.match(d.about, /recovery from the newest checkpoint/);
+	assert.equal(d.detail, '', 'a steady tier says nothing under its badge');
 	assert.equal(d.degraded, false);
 });
 

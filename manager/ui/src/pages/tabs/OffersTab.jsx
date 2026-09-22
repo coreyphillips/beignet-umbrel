@@ -107,9 +107,11 @@ export default function OffersTab({ id, api, tick, bump }) {
 
 	return (
 		<div>
-			<div className="info-note">BOLT12 offers are reusable payment codes. Share one to receive repeat payments.</div>
 			<div className="grid cols-2">
-				<Card title="Create an offer">
+				<Card
+					title="Create an offer"
+					help="BOLT12 offers are reusable payment codes. Share one to receive repeat payments."
+				>
 					<Field label="Description">
 						<input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Donations" />
 					</Field>

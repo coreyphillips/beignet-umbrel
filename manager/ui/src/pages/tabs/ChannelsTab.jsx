@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { AmountField, Badge, BalanceBar, Button, Card, CopyText, DetailRow, Field, FeeField, Modal, Segmented } from '../../components/ui.jsx';
+import { AmountField, Badge, BalanceBar, Button, Card, CopyText, DetailRow, Field, FeeField, Help, Modal, Segmented } from '../../components/ui.jsx';
 import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
@@ -583,16 +583,14 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 							onChange={(e) => setTrusted(e.target.checked)}
 						/>
 						Trusted channel: zero-conf
+						<Help>
+							Usable the moment it is funded, no confirmation wait, and the channel stays
+							private permanently: its negotiated type is never announced to the network, so it
+							will not be available for general public routing. Safe because the peer is your
+							own node. Hand-editing the peer fields turns this off.
+						</Help>
 					</label>
-					{trusted && (
-						<div className="wallet-meta" style={{ marginBottom: 12 }}>
-							Usable the moment it is funded, no confirmation wait, and the
-							channel stays private permanently: its negotiated type is never
-							announced to the network, so it will not be available for
-							general public routing. Safe because the peer is your own node.
-							Hand-editing the peer fields turns this off.
-						</div>
-					)}
+					{trusted && <div className="field-note">The channel stays private permanently.</div>}
 				</>
 			)}
 			<Field
@@ -811,12 +809,16 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 	};
 
 	return (
-		<Modal title={isIn ? 'Splice in (add funds)' : 'Splice out (remove funds)'} onClose={onClose} origin={origin}>
-			<div className="info-note">
-				{isIn
+		<Modal
+			title={isIn ? 'Splice in (add funds)' : 'Splice out (remove funds)'}
+			help={
+				isIn
 					? 'Add on-chain funds into this channel, increasing its capacity and your outbound balance, without closing it.'
-					: 'Move funds out of this channel back on-chain without closing it.'}
-			</div>
+					: 'Move funds out of this channel back on-chain without closing it.'
+			}
+			onClose={onClose}
+			origin={origin}
+		>
 			<div className="wallet-meta" style={{ marginBottom: 12 }}>
 				Channel <span className="mono">{shortId(channel.channelId)}</span> · capacity{' '}
 				{fmtSats(channel.capacitySats)} · local {fmtSats(channel.localBalanceSats)}
@@ -1025,7 +1027,7 @@ function PolicyRow({ api, channelId, policy, onSaved }) {
 					</Field>
 					<Field
 						label="CLTV delta (blocks)"
-						hint="Blocks of headroom this channel demands between an incoming payment and the outgoing one it funds. Below 18 leaves too little room to react to a force close, so the default is a safe floor rather than a number to race to zero."
+						help="Blocks of headroom this channel demands between an incoming payment and the outgoing one it funds. Below 18 leaves too little room to react to a force close, so the default is a safe floor rather than a number to race to zero."
 					>
 						<input
 							inputMode="numeric"
