@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.23.4"
+version: "0.23.5"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,16 +30,12 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A calmer dashboard. The explanations that sat in blue boxes under every
-  option in the create form, the Edit dialog, Settings and the Overview's
-  cards now wait behind a small "?" beside the option or card title: hover or
-  tap it to read them. Warnings you need before a one-way step, and anything
-  about what is happening right now, stay in sight.
-
-
-  The backup reminder no longer sits above the wallet list. Settings' Backup
-  section shows when the box was last backed up and where each wallet stands
-  against that archive. Bundles beignet 0.21.11, unchanged.
+  Wording fixes. When Tor cannot build circuits, the wallet page now says to
+  restart the Beignet app, which runs its own Tor, instead of pointing at Tor on
+  your Umbrel. Settings no longer says a wallet can never change its guardians:
+  a set can be rotated from the wallet's Edit dialog. The peer storage note now
+  says a checkpoint can resume your channels, not only close them. Bundles
+  beignet 0.21.11, unchanged.
 
 
 dependencies: []
