@@ -1,4 +1,4 @@
-// A wallet with Tor enabled routes every peer dial through Umbrel's Tor
+// A wallet with Tor enabled routes every peer dial through the app's own Tor
 // SOCKS proxy; when that proxy cannot build circuits, connections fail with no
 // clue why. A dead proxy surfaces as more than just a timeout (SOCKS/refused/
 // unreachable wording too), so match the common connection-failure shapes and
@@ -27,8 +27,8 @@ export function withTorHint(rec, message) {
 	if (!rec?.tor || !CONN_FAILURE.test(String(message || ''))) return message;
 	return (
 		`${message}. This wallet routes peer connections through Tor. ` +
-		'If Tor on your Umbrel is unhealthy, connections fail. ' +
-		'Edit the wallet to turn Tor off, or restart Tor and retry.'
+		"If the app's Tor is unhealthy, connections fail. " +
+		'Restart the Beignet app to restart its Tor and retry, or edit the wallet to turn Tor off.'
 	);
 }
 

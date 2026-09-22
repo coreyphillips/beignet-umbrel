@@ -158,9 +158,12 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 								: ''}
 						</Help>
 					</div>
+					{/* Since beignet 0.13 a running wallet can rotate its set from the
+					    Edit dialog; an older engine keeps the set for good. */}
 					<div className="field-note" style={{ marginTop: 0 }}>
-						A wallet pins the set it first registers with and cannot move to another set later, so
-						choose guardians you expect to keep.
+						{config.guardianRotationAvailable
+							? 'A wallet keeps the set it registers with until you rotate it from its Edit dialog, so choose guardians you expect to keep.'
+							: 'A wallet pins the set it first registers with and cannot move to another set later, so choose guardians you expect to keep.'}
 					</div>
 					{guardians.map((g, i) => (
 						<Field key={i} label={`Guardian ${i + 1}`}>

@@ -5,7 +5,7 @@ const net = require('net');
 /**
  * Minimal SOCKS5 CONNECT probe (no auth). Resolves true when the proxy
  * completes a CONNECT to host:port, false on any failure or timeout. Used to
- * verify Umbrel's Tor can actually build circuits: its SOCKS port accepting
+ * verify the app's Tor can actually build circuits: its SOCKS port accepting
  * TCP says nothing about circuit health, and a circuit-dead Tor makes every
  * peer connection of a Tor-enabled wallet time out.
  */
