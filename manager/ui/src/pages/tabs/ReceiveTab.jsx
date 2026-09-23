@@ -224,12 +224,16 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			);
 		if (!Number.isSafeInteger(wantedSats) || wantedSats < OFFLINE_MIN_SATS)
 			return block(`Enter an amount of at least ${OFFLINE_MIN_SATS} sats.`);
-		if (receiveQuote.error)
+		if (receiveQuote.error) {
+			// The engine hands the primary's own sentence through (beignet #920),
+			// full stop included: drop it before adding ours.
+			const reason = String(receiveQuote.error).replace(/[.\s]+$/, '');
 			return block(
 				isLfbw
-					? `Your primary node cannot prepare an offline receive right now: ${receiveQuote.error}. It has to offer offline settlement in its own settings, or untick Receive offline for an ordinary invoice.`
+					? `Your primary node cannot prepare an offline receive right now: ${reason}. It has to offer offline settlement in its own settings, or untick Receive offline for an ordinary invoice.`
 					: receiveQuote.error
 			);
+		}
 		const q = receiveQuote.quote;
 		if (receiveQuote.pending || !q || q.amountSats !== wantedSats || q.peer !== receivePeer)
 			return { tone: 'info', blocks: true, text: 'Checking receive availability…' };

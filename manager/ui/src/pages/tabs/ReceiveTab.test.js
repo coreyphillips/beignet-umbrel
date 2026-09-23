@@ -500,6 +500,9 @@ test('a primary that does not offer offline receiving holds the box, and unticki
 		await settle(400);
 		const line = view.$('[data-testid="receive-quote"]');
 		assert.match(line.textContent, /does not provide offline receiving/);
+		// beignet 0.21.12 hands the primary's own sentence through (#920), full
+		// stop included; the copy around it must not double it.
+		assert.doesNotMatch(line.textContent, /\.\./);
 		assert.match(line.textContent, /offer offline settlement/);
 		assert.match(line.textContent, /untick Receive offline for an ordinary invoice/);
 		assert.equal(createButton(view).disabled, true);
