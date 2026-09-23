@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.23.5"
+version: "0.23.6"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,12 +30,16 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Wording fixes. When Tor cannot build circuits, the wallet page now says to
-  restart the Beignet app, which runs its own Tor, instead of pointing at Tor on
-  your Umbrel. Settings no longer says a wallet can never change its guardians:
-  a set can be rotated from the wallet's Edit dialog. The peer storage note now
-  says a checkpoint can resume your channels, not only close them. Bundles
-  beignet 0.21.11, unchanged.
+  Clearer answers and steadier on-chain history. When your node cannot prepare
+  an offline receive, the Receive tab now shows the node's own reason instead
+  of "Internal server error". After a block reorganisation the wallet's
+  history no longer keeps a transaction confirmed at a block that is gone:
+  a repair whose write failed is retried, and a node without a transaction
+  index now clears a transaction it no longer has, including one that was
+  replaced or dropped from the mempool. The replace-by-fee flag is read per
+  transaction, a server answering one lookup with an error no longer stops the
+  wallet, and writes queued as a wallet shuts down get their chance to land.
+  Bundles beignet 0.21.12.
 
 
 dependencies: []

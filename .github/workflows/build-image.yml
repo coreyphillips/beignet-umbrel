@@ -526,7 +526,13 @@ env:
   # Also the recovery hardening (#912 to #924).
   # 0.21.11 persists the zero-conf trusted set, so a wallet that trusts its
   # primary keeps accepting just-in-time channel opens across a restart.
-  BEIGNET_VERSION: "0.21.11"
+  # 0.21.12 answers a settlement peer's receive refusal as a 409 carrying the
+  # peer's message instead of a 500, keeps on-chain history right after a
+  # reorg (a failed repair write is retried, and a node without txindex
+  # clears a transaction it no longer has), logs a refused UTXO write, and no
+  # longer lets a lookup error entry or a write queued at shutdown crash or
+  # reject.
+  BEIGNET_VERSION: "0.21.12"
 
 jobs:
   build:
