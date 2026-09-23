@@ -48,7 +48,17 @@ Use Playwright (chromium) headless. Install into the scratchpad, not the repo.
   ACTIVE over about five seconds; `/ffor/recover` and the manager's
   `ffor/return` close the book, marking every shared invoice paid.
   `demo-witness` (mainnet, keeps receipts and issues invoices for
-  siblings, one channel to `demo-main`): its Overview carries the
+  siblings, a public channel to `demo-main` and a private one to
+  `demo-savings`, so its invoices hint through demo-savings: a 150,000 sat
+  invoice minted on its Receive tab and pasted into `demo-lfbw`'s Send tab
+  shows the no-route reading, `[data-testid="no-route"]`, naming
+  demo-savings and the 120,000 sats held with it, with Pay enabled, and
+  Pay then fails with the same reading kept on screen; an amount above
+  `demo-lfbw`'s Can send meets that wallet's own lightning-first notes
+  instead. The too-little-to-send reading with Pay held shows on
+  `demo-main`'s Lightning rail with an invoice for more than it can send,
+  for example 9,000,000 sats minted on `demo-witness`): its
+  Overview carries the
   "Receipts kept for siblings" and "Invoices issued for siblings" cards,
   and the seeded epoch on `demo-lfbw` names it as an acknowledged witness.
   Starting a new book on `demo-lfbw` with the witness ticked and the

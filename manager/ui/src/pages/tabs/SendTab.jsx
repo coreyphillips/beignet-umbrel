@@ -15,6 +15,7 @@ import {
 	persistFallback,
 	sendDirectFunding
 } from '../../lib/direct-funding.js';
+import { BLOCKS_PAY, explainNoRoute, isNoRouteFailure, noRouteLookups } from '../../lib/no-route.js';
 import { LiveFundingSteps } from '../../components/FundingSteps.jsx';
 import { useQuote } from '../../hooks/useQuote.js';
 import AddressSend from './lfbw/AddressSend.jsx';
@@ -1015,6 +1016,9 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 	);
 	const [decoded, setDecoded] = useState(null);
 	const [estimate, setEstimate] = useState(null);
+	// Why the estimate found no route, read from the wallet's own figures once
+	// the daemon has said only that it did not.
+	const [noRoute, setNoRoute] = useState(null);
 	const [error, setError] = useState(null);
 	const [decoding, setDecoding] = useState(false);
 	const [amount, setAmount] = useState('');
@@ -1077,6 +1081,7 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 			latest.current += 1;
 			setDecoded(null);
 			setEstimate(null);
+			setNoRoute(null);
 			setAmount('');
 			setError(null);
 			setDecoding(false);
@@ -1096,6 +1101,7 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 		// sends a figure chosen for someone else.
 		setDecoded(null);
 		setEstimate(null);
+		setNoRoute(null);
 		setAmount(handover?.invoice === payable ? String(handover.amountSats) : '');
 		setDecoding(true);
 		setError(null);
@@ -1180,6 +1186,7 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 			// what made the omission here look accidental.
 			latestEstimate.current += 1;
 			setEstimate(null);
+			setNoRoute(null);
 			return () => {};
 		}
 		const id = ++latestEstimate.current;
@@ -1187,14 +1194,53 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 			api
 				.post('/payment/estimate', needsAmount ? { bolt11: invoice, amountSats } : { bolt11: invoice })
 				.then((e) => {
-					if (id === latestEstimate.current) setEstimate(e);
+					if (id !== latestEstimate.current) return;
+					setEstimate(e);
+					setNoRoute(null);
 				})
-				.catch(() => {
-					if (id === latestEstimate.current) setEstimate(null);
+				// The daemon's NO_ROUTE is the one refusal that says nothing about
+				// its cause, and the payer is left with an invoice that reads fine
+				// and a button that fails. The cause is read from the wallet's own
+				// figures below. Any other failure keeps the old silence: the row
+				// is a courtesy, and a missing courtesy is not an error.
+				.catch((e) => {
+					if (id !== latestEstimate.current) return;
+					setEstimate(null);
+					if (e?.code === 'NO_ROUTE') explain(id, amountSats);
 				});
 		}, DECODE_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
+		// explain reads the same decoded invoice and channel list this effect
+		// closes over, so its identity adds nothing to the dependencies.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [api, invoice, decoded, expired, needsAmount, amountSats]);
+
+	// A NO_ROUTE from the daemon covers four different situations (no channel,
+	// a channel not taking payments yet, too little to send at all, a map that
+	// reaches the recipient from none of the channels that could carry the
+	// amount), and the facts it decided from are all readable from its own
+	// API. They are asked for only once an estimate has failed, in parallel and
+	// each on its own, so a route an older daemon lacks or a lookup that fails
+	// never stands in the way of the note. A NOT_FOUND from /graph/node is an
+	// answer (the map does not know the node) and is kept as null; any other
+	// failure drops the key, so the reading claims nothing about that node.
+	async function explain(seq, sats) {
+		const lookups = noRouteLookups(decoded, channels);
+		const [liquidity, peers, graphInfo, ...nodes] = await Promise.all([
+			api.get('/liquidity').catch(() => null),
+			api.get('/peers').catch(() => null),
+			api.get('/graph/info').catch(() => null),
+			...lookups.map((pk) =>
+				api
+					.get(`/graph/node?pubkey=${pk}`)
+					.then((node) => [pk, node])
+					.catch((e) => [pk, e?.code === 'NOT_FOUND' ? null : undefined])
+			)
+		]);
+		if (seq !== latestEstimate.current) return;
+		const graph = Object.fromEntries(nodes.filter(([, node]) => node !== undefined));
+		setNoRoute(explainNoRoute({ amountSats: sats, decoded, channels, liquidity, peers, graph, graphInfo, lightningFirst: isLfbw }));
+	}
 
 	// The most that can leave over Lightning, for the amount slider a zero-amount
 	// invoice needs. Routing fees and each channel's reserve come out of it, so
@@ -1224,6 +1270,10 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 			if (needsAmount) body.amountSats = typedAmount;
 			const r = await api.post(offer ? '/offer/pay' : '/invoice/pay-safe', body);
 			setResult(r);
+			// The safe route answers a failure as a value, so a payment that found
+			// no route after an estimate that did gets the same reading as a
+			// failed estimate would have.
+			if (r?.status === 'FAILED' && isNoRouteFailure(r.failureDescription) && !noRoute) explain(latestEstimate.current, amountSats);
 			toast(r.status === 'COMPLETED' ? 'Payment sent' : `Payment ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
 			bump();
 		} catch (e) {
@@ -1384,6 +1434,14 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 							This asks for {fmtSats(askedSats)}, more than this wallet holds in total ({fmtSats(lfbwState.total)}).
 						</div>
 					)}
+					{/* A lightning-first wallet's own notes above carry better figures
+					    for a shortfall (what is arriving, and when), so they win. */}
+					{!expired && !arriving && !overTotal && noRoute && (
+						<div className="error-note" role="alert" data-testid="no-route" style={{ marginTop: 12 }}>
+							{noRoute.message}
+							{noRoute.remedy && <Help>{noRoute.remedy}</Help>}
+						</div>
+					)}
 					</>
 				)}
 			</div>
@@ -1392,7 +1450,15 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 					variant="primary"
 					busy={busy}
 					onClick={pay}
-					disabled={!decoded || decoding || expired || (needsAmount && typedAmount <= 0) || overTotal || overCanSend}
+					disabled={
+						!decoded ||
+						decoding ||
+						expired ||
+						(needsAmount && typedAmount <= 0) ||
+						overTotal ||
+						overCanSend ||
+						(noRoute != null && BLOCKS_PAY.has(noRoute.code))
+					}
 				>
 					{decoded?.amountSats ? `Pay ${fmtSats(decoded.amountSats)}` : 'Pay'}
 				</Button>
