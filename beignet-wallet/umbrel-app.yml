@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.23.6"
+version: "0.23.7"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,16 +30,16 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Clearer answers and steadier on-chain history. When your node cannot prepare
-  an offline receive, the Receive tab now shows the node's own reason instead
-  of "Internal server error". After a block reorganisation the wallet's
-  history no longer keeps a transaction confirmed at a block that is gone:
-  a repair whose write failed is retried, and a node without a transaction
-  index now clears a transaction it no longer has, including one that was
-  replaced or dropped from the mempool. The replace-by-fee flag is read per
-  transaction, a server answering one lookup with an error no longer stops the
-  wallet, and writes queued as a wallet shuts down get their chance to land.
-  Bundles beignet 0.21.12.
+  When a Lightning payment has no route, the Send tab now says why in your
+  wallet's own figures: the node the invoice has to pass through, how much
+  sits on your channel with it against the amount, and where the rest of
+  your funds are when the network map has no path from them. It also says
+  when there is no channel to send from, when a channel is not taking
+  payments yet, and when the wallet cannot send that much at all. Pay stays
+  available for a routing shortfall, since the wallet may still split the
+  payment across channels, and is held in the other cases. A payment that
+  fails with no route after a priced estimate gets the same explanation.
+  Bundles beignet 0.21.12, unchanged.
 
 
 dependencies: []
