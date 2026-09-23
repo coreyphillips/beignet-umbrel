@@ -227,7 +227,14 @@ above Can send but within Total is not refused blindly; the card says what
 is arriving (a deposit confirming, a confirmed one moving or waiting on the
 fee, a channel confirming, a splice locking) and roughly when, keeps the
 invoice in the box for a retry, and holds the Pay button until then. An
-amount above Total stays a plain refusal. The Receive tab also refuses to
+amount above Total stays a plain refusal. When the daemon cannot price a
+payment at all (its NO_ROUTE), every wallet's Lightning card, lightning-first
+or not, says why from the wallet's own figures: the node the invoice has to
+pass through, how much sits on the channel with it against the amount, and
+why the other channels cannot reach it (`lib/no-route.js`). Pay stays
+available for a routing shortfall, since the daemon may still split the
+payment across channels, and is held only when there is no usable channel
+or not enough to send at all. The Receive tab also refuses to
 mint a just-in-time invoice while the primary's peer connection is down,
 which `/peers` reports, since the intent could not reach it.
 

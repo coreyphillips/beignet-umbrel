@@ -633,7 +633,7 @@ function stubLfbwApi({ amountSats, utxos = [], balance, liquidity } = {}) {
 			if (path === '/invoice/decode') {
 				return { amountSats, payeeNodeKey: '02' + 'ab'.repeat(32), description: 'Rent', timestamp: Math.floor(Date.now() / 1000), expiry: 3600, warnings: [] };
 			}
-			if (path === '/invoice/estimate-fee') return { estimatedFeeSats: 3, successProbabilityPct: 90, hopCount: 2 };
+			if (path === '/payment/estimate') return { estimatedFeeSats: 3, successProbabilityPct: 90, hopCount: 2 };
 			if (path === '/invoice/pay-safe') return { status: 'COMPLETED', feeSats: 3 };
 			return null;
 		}
@@ -731,3 +731,202 @@ for (const failure of ['offline', 'memory-only']) {
 		}
 	});
 }
+
+// ── A payment the daemon cannot price ────────────────────────────────────
+//
+// The field case: a wallet with 96,713 sats over two channels could not pay
+// 50,000, because the invoice was reachable only through the peer it held
+// 10,033 with, and the other channel led to a node with no way onward. The
+// daemon said NO_ROUTE and the card said nothing.
+
+const HUB = '025501f56b72e7b999443b836ae1bff4c6fff514943d3f6677302a9189949bd99c';
+const DEAD_END = '031c4ec487a36eed013f62d6cf7c43fbedc1615c39b7351853994afb36c529b394';
+const PHONE = '030c3d68347ea93d924b68a1cc207e02fd10d1def79c3e12b515cf37d1d2118b57';
+// "Please send $3 for a cup of coffee to the same peer, within one minute":
+// the second BOLT11 spec vector, a different invoice for the same box.
+const COFFEE_INVOICE =
+	'lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpu9qrsgquk0rl77nj30yxdy8j9vdx85fkpmdla2087ne0xh8nhedh8w27kyke0lp53ut353s06fv3qfegext0eh0ymjpf39tuven09sam30g4vgpfna3rh';
+
+const FIELD_CHANNELS = [
+	{ ...OPEN_CHANNEL, channelId: 'a'.repeat(64), peerPubkey: HUB, localBalanceSats: 10_033, remoteBalanceSats: 105_000, capacitySats: 115_033, isPrivate: true },
+	{ ...OPEN_CHANNEL, channelId: 'b'.repeat(64), peerPubkey: DEAD_END, localBalanceSats: 86_680, remoteBalanceSats: 5_000, capacitySats: 91_680, isPrivate: false }
+];
+const FIELD_GRAPH = { [HUB]: { alias: 'Powdered Sugar', channelCount: 1 }, [DEAD_END]: { channelCount: 1 }, [PHONE]: null };
+const NO_ROUTE = () => refused('Unable to estimate payment (no route or invalid invoice)', 'NO_ROUTE');
+const GOOD_ESTIMATE = { estimatedFeeSats: 3, successProbabilityPct: 90, hopCount: 2 };
+
+/** What the daemon decodes the field invoice to: 50,000 sats, hinted through the hub. */
+const fieldDecoded = (amountSats = 50_000) => ({
+	amountSats,
+	payeeNodeKey: PHONE,
+	description: '',
+	timestamp: Math.floor(Date.now() / 1000),
+	expiry: 3600,
+	routingHints: [[{ pubkey: HUB, shortChannelId: 'f1e3ec71b6c0e830', feeBaseMsat: 1000, feeProportionalMillionths: 1, cltvExpiryDelta: 40 }]]
+});
+
+/**
+ * A daemon that prices, or refuses to price, a payment. `estimate` and
+ * `decoded` may be functions of the invoice, for a test that changes it.
+ */
+function stubRouteApi({ estimate = NO_ROUTE(), decoded = fieldDecoded(), channels = FIELD_CHANNELS, liquidity, peers, graph = FIELD_GRAPH, graphInfo, paySafe } = {}) {
+	const calls = [];
+	const answer = (value, bolt11) => (typeof value === 'function' ? value(bolt11) : value);
+	return {
+		calls,
+		get: async (path) => {
+			calls.push(['GET', path]);
+			if (path === '/channels') return channels;
+			if (path === '/liquidity') return liquidity ?? { sendableSats: 94_191, reserveSats: 2_522, totalLocalBalanceSats: 96_713 };
+			if (path === '/peers') return peers ?? [{ pubkey: HUB, state: 'ready' }, { pubkey: DEAD_END, state: 'ready' }];
+			if (path === '/graph/info') return graphInfo ?? { nodeCount: 10_388, channelCount: 35_399 };
+			if (path.startsWith('/graph/node?pubkey=')) {
+				const node = graph[path.slice('/graph/node?pubkey='.length)];
+				if (node == null) throw refused('Node not found in graph', 'NOT_FOUND');
+				return node;
+			}
+			if (path === '/fees/estimates') return { fast: 18, normal: 7, slow: 2 };
+			if (path === '/utxos') return [];
+			return null;
+		},
+		post: async (path, body) => {
+			calls.push(['POST', path, body]);
+			if (path === '/invoice/decode') return answer(decoded, body.bolt11);
+			if (path === '/payment/estimate') {
+				const e = answer(estimate, body.bolt11);
+				if (e instanceof Error) throw e;
+				return e;
+			}
+			if (path === '/invoice/pay-safe') return paySafe ?? { status: 'COMPLETED', feeSats: 1 };
+			return null;
+		}
+	};
+}
+
+/** A plain wallet with two channels, opened on its Lightning rail. */
+async function mountRouteSend(api) {
+	const view = await render(ToastProvider, {
+		children: createElement(SendTab, {
+			id: 'w1',
+			api,
+			info: { onchainBalanceSats: 0, channelCount: 2 },
+			rec: { id: 'w1', network: 'mainnet' },
+			tick: 0,
+			bump: () => {}
+		})
+	});
+	await settle(50);
+	await click(view.$$('.pill').find((b) => b.textContent.trim() === 'Lightning'));
+	await settle(50);
+	return view;
+}
+
+const payButton = (view) => view.$$('button').find((b) => /^Pay/.test(b.textContent.trim()));
+// The decode and the estimate each debounce 300 ms, and a state update lands
+// only when its act() ends, so one long settle leaves the estimate's timer
+// unstarted. Two settles let the decode commit first.
+const priced = async () => {
+	await settle(350);
+	await settle(450);
+};
+const gets = (api, path) => api.calls.filter(([method, p]) => method === 'GET' && p === path).length;
+
+test('a NO_ROUTE estimate says which node the invoice needs and what sits on the channel with it', async () => {
+	const api = stubRouteApi();
+	const view = await mountRouteSend(api);
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await priced();
+		const note = view.$('[data-testid="no-route"]');
+		assert.ok(note, 'the reason is on screen');
+		assert.match(note.textContent, /No route found for 50,000 sats/);
+		assert.match(note.textContent, /through Powdered Sugar \(025501…9bd99c\), and this wallet holds 10,033 sats on its channel with that node/);
+		assert.match(note.textContent, /The other 86,680 sats sit on a channel with 031c4e…29b394/);
+		assert.match(note.textContent, /whose only public channel in the map is this one/);
+		assert.ok(note.querySelector('.help-btn'), 'the remedy sits behind the "?"');
+		assert.equal(payButton(view).disabled, false, 'Pay stays available: the daemon may still split the payment');
+		assert.equal(gets(api, '/liquidity'), 1);
+		assert.equal(gets(api, '/peers'), 1);
+		assert.equal(gets(api, '/graph/info'), 1);
+		assert.equal(gets(api, `/graph/node?pubkey=${HUB}`), 1);
+		assert.equal(gets(api, `/graph/node?pubkey=${DEAD_END}`), 1);
+		assert.doesNotMatch(view.text(), /Estimate/, 'no estimate row for a payment that has none');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('too little to send at all holds Pay', async () => {
+	const api = stubRouteApi({ liquidity: { sendableSats: 40_000, reserveSats: 2_522, totalLocalBalanceSats: 42_522 } });
+	const view = await mountRouteSend(api);
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await priced();
+		const note = view.$('[data-testid="no-route"]');
+		assert.ok(note);
+		assert.match(note.textContent, /can send up to 40,000 sats over Lightning right now/);
+		assert.equal(note.querySelector('.help-btn'), null, 'nothing to move onto one channel here');
+		assert.equal(payButton(view).disabled, true);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a priced payment shows its estimate and asks the wallet nothing more', async () => {
+	const api = stubRouteApi({ estimate: GOOD_ESTIMATE });
+	const view = await mountRouteSend(api);
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await priced();
+		assert.match(view.text(), /Estimate/);
+		assert.equal(view.$('[data-testid="no-route"]'), null);
+		assert.equal(gets(api, '/liquidity'), 0, 'the facts are read only once an estimate has failed');
+		assert.equal(payButton(view).disabled, false);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('the reason leaves with the invoice it was about', async () => {
+	const api = stubRouteApi({
+		estimate: (bolt11) => (bolt11 === SPEC_INVOICE ? NO_ROUTE() : GOOD_ESTIMATE),
+		decoded: (bolt11) => (bolt11 === SPEC_INVOICE ? fieldDecoded() : fieldDecoded(250_000))
+	});
+	const view = await mountRouteSend(api);
+	try {
+		const box = view.$('textarea[placeholder^="lnbc"]');
+		await type(box, SPEC_INVOICE);
+		await priced();
+		assert.ok(view.$('[data-testid="no-route"]'), 'the reason is on screen for the first invoice');
+		await type(box, COFFEE_INVOICE);
+		await settle(50);
+		assert.equal(view.$('[data-testid="no-route"]'), null, 'gone the moment the invoice changed');
+		await priced();
+		assert.equal(view.$('[data-testid="no-route"]'), null, 'and not back for an invoice that prices');
+		assert.match(view.text(), /Estimate/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a payment that finds no route after an estimate that did gets the same reading', async () => {
+	const api = stubRouteApi({
+		estimate: GOOD_ESTIMATE,
+		paySafe: { paymentHash: 'e'.repeat(64), status: 'FAILED', failureDescription: '[NO_ROUTE] No route found to destination' }
+	});
+	const view = await mountRouteSend(api);
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await priced();
+		assert.equal(view.$('[data-testid="no-route"]'), null);
+		await click(payButton(view));
+		await settle(100);
+		assert.match(view.text(), /Payment FAILED/);
+		assert.match(view.text(), /\[NO_ROUTE\] No route found to destination/, "the daemon's own line stays as the record");
+		const note = view.$('[data-testid="no-route"]');
+		assert.ok(note, 'and the reason appears above the button');
+		assert.match(note.textContent, /Powdered Sugar/);
+	} finally {
+		await view.unmount();
+	}
+});

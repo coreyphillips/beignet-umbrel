@@ -103,6 +103,41 @@ function mintedInvoice(bolt11) {
 }
 
 /**
+ * The routing hints an invoice minted from this wallet state carries: one per
+ * private channel that can route, as the daemon builds them (see
+ * willGenerateRoutingHint in the diagnostics below). The hop's node is what a
+ * payer's route has to pass, so the estimate and the payment read it too.
+ */
+function routingHintsOf(state) {
+	return state.channels
+		.filter((c) => c.isPrivate && htlcUsable(c))
+		.map((c) => [
+			{
+				pubkey: c.peerPubkey,
+				shortChannelId: derivedHex(c.channelId, 16),
+				feeBaseMsat: 1000,
+				feeProportionalMillionths: 100,
+				cltvExpiryDelta: 80
+			}
+		]);
+}
+
+/**
+ * The channels a payment from `st` may leave over. An invoice hinted through
+ * one of this wallet's own peers is reached over that channel and no other,
+ * the way the daemon's router treats a hint: the demo has no map to route
+ * around it. Hinted through a stranger, any channel will do, as before.
+ */
+function routeCandidates(st, bolt11) {
+	const usable = st.channels.filter(htlcUsable);
+	const minted = bolt11 ? mintedInvoice(bolt11) : null;
+	if (!minted) return usable;
+	const hinted = routingHintsOf(store.state[minted.walletId]).map((route) => route[0].pubkey);
+	const via = usable.filter((c) => hinted.includes(c.peerPubkey));
+	return via.length > 0 ? via : usable;
+}
+
+/**
  * The offer equivalent of mintedInvoice: an offer one demo wallet published has
  * to decode in another, since paying across the demo wallets is the point of
  * there being more than one.
@@ -1110,8 +1145,15 @@ store.wallets.find((w) => w.id === 'demo-lfbw').fforReturn = {
 store.state['demo-witness'] = walletState({
 	blockHeight: 908214,
 	channels: (() => {
-		const chans = makeChannels([[2000000, 50, 'NORMAL', false]]);
+		// The second, private, is what its invoices hint through: a payer that
+		// holds too little with demo-savings (demo-lfbw, 120,000 sats) meets the
+		// Send tab's no-route reading on an invoice for more than that.
+		const chans = makeChannels([
+			[2000000, 50, 'NORMAL', false],
+			[400000, 50, 'NORMAL', true]
+		]);
 		chans[0].peerPubkey = nodeId('demo-main');
+		chans[1].peerPubkey = nodeId('demo-savings');
 		return chans;
 	})(),
 	txs: makeTxs(2, 908214),
@@ -1119,7 +1161,10 @@ store.state['demo-witness'] = walletState({
 	utxos: [],
 	invoices: [],
 	offers: [],
-	peers: [{ pubkey: nodeId('demo-main'), host: '127.0.0.1', port: 9101, state: 'connected' }]
+	peers: [
+		{ pubkey: nodeId('demo-main'), host: '127.0.0.1', port: 9101, state: 'connected' },
+		{ pubkey: nodeId('demo-savings'), host: '127.0.0.1', port: 9102, state: 'connected' }
+	]
 });
 store.state['demo-lfbw-setup'] = walletState({
 	blockHeight: 908214,
@@ -2376,12 +2421,12 @@ function payOverLightning(st, id, { amountSats, bolt11, noAmount }) {
 	if (!amountSats) return failed(noAmount);
 
 	const feeSats = between(0, 25);
-	const channel = st.channels.find(
-		(c) => htlcUsable(c) && c.localBalanceSats >= amountSats + feeSats
-	);
+	const channel = routeCandidates(st, bolt11).find((c) => c.localBalanceSats >= amountSats + feeSats);
 	if (!channel) {
+		// Prefixed the way the daemon's safe route reports it, so the Send tab's
+		// reading of a failed payment is exercised in demo as in the field.
 		return failed(
-			'No route to the destination with enough liquidity. Try a smaller amount, or open a channel with more outbound.'
+			'[NO_ROUTE] No route to the destination with enough liquidity. Try a smaller amount, or open a channel with more outbound.'
 		);
 	}
 	channel.localBalanceSats -= amountSats + feeSats;
@@ -3063,18 +3108,8 @@ function walletRequest(id, path, method, body) {
 			// below), and an invoice with none is one a stranger cannot pay.
 			if (minted) {
 				const mintedState = store.state[minted.walletId];
-				const hints = mintedState.channels.filter((c) => c.isPrivate && htlcUsable(c));
-				if (hints.length > 0) {
-					decoded.routingHints = hints.map((c) => [
-						{
-							pubkey: c.peerPubkey,
-							shortChannelId: derivedHex(c.channelId, 16),
-							feeBaseMsat: 1000,
-							feeProportionalMillionths: 100,
-							cltvExpiryDelta: 80
-						}
-					]);
-				}
+				const hints = routingHintsOf(mintedState);
+				if (hints.length > 0) decoded.routingHints = hints;
 				// Word for word what beignet emits, so the dashboard's translation of
 				// these strings is exercised rather than assumed.
 				const warnings = [];
@@ -3096,13 +3131,21 @@ function walletRequest(id, path, method, body) {
 			const amountSats = invoiceAmount(body.bolt11, body.amountSats);
 			// Nothing can be routed until there is an amount to route.
 			if (!amountSats) throw err('Unable to estimate payment (no route or invalid invoice)', 'NO_ROUTE');
+			// The daemon's router finds nothing when no channel that can reach
+			// the payee holds the amount and a fee, and says NO_ROUTE and no more.
+			// The field case that taught the Send tab to explain it: an invoice
+			// hinted through one peer, and the funds on a channel with another.
+			const estimatedFeeSats = between(1, 30);
+			if (!routeCandidates(st, body.bolt11).some((c) => c.localBalanceSats >= amountSats + estimatedFeeSats)) {
+				throw err('Unable to estimate payment (no route or invalid invoice)', 'NO_ROUTE');
+			}
 			const hopCount = between(1, 4);
 			const successProbabilityPct = between(88, 99);
 			// The whole of PaymentEstimate, graded the way the daemon grades it. The
 			// three missing fields were not read by anything today, which is what
 			// made them a trap for whatever reads them next.
 			return {
-				estimatedFeeSats: between(1, 30),
+				estimatedFeeSats,
 				successProbabilityPct,
 				hopCount,
 				estimatedTimeMs: hopCount * 2000,
@@ -3514,11 +3557,21 @@ function walletRequest(id, path, method, body) {
 			const host = new URLSearchParams(query || '').get('host') || '127.0.0.1';
 			return { uri: `${nodeId(id)}@${host}:9735` };
 		}
+		case '/graph/info':
+			return { nodeCount: 15234, channelCount: 61120, lastSyncAt: Date.now() - 5 * 60 * 1000 };
 		case '/graph/node': {
+			const pk = new URLSearchParams(query || '').get('pubkey');
+			// A sibling demo wallet is on the map under its own name, with the
+			// public channels it holds: that count is what the Send tab reads to
+			// say whether a path can lead on from it.
+			const sibling = store.wallets.find((w) => nodeId(w.id) === pk);
+			if (sibling) {
+				const open = (store.state[sibling.id]?.channels || []).filter((c) => !c.isPrivate && !/CLOS/.test(c.state));
+				return { pubkey: pk, alias: sibling.name || sibling.id, color: '3399ff', channelCount: open.length };
+			}
 			// The daemon resolves the alias from the gossip graph and 404s when
 			// the node never announced one. Here the peer carries its own alias,
 			// so a miss (or an alias-less peer) is the same not-found path.
-			const pk = new URLSearchParams(query || '').get('pubkey');
 			const peer = st.peers.find((p) => p.pubkey === pk);
 			const chan = st.channels.find((c) => c.peerPubkey === pk);
 			const alias = peer?.alias || chan?.alias;
