@@ -5,7 +5,9 @@ import { Badge, Button, Card, CopyText, Help, Stat, staggerContainer, staggerIte
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
+
 import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
+import { nodeUris } from '../../lib/node-uris.js';
 
 export default function OverviewTab({ id, api, info, health, recovery, rec, tick, config }) {
 	// A liquidity provider fronts its own coins for lightning-first wallets;
@@ -64,15 +66,16 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 	);
 	const { data } = usePoll(
 		async () => {
-			const [balance, nodeUri, liquidity, fees, feeEst, channels] = await Promise.all([
+
+			const [balance, liquidity, fees, feeEst, channels] = await Promise.all([
 				api.get('/balance').catch(() => null),
-				api.get('/node/uri?host=127.0.0.1').then((r) => r.uri).catch(() => null),
 				api.get('/liquidity').catch(() => null),
 				api.get('/fees').catch(() => null),
 				api.get('/fees/estimates').catch(() => null),
 				api.get('/channels').catch(() => null)
 			]);
-			return { balance, nodeUri, liquidity, fees, feeEst, channels };
+
+			return { balance, liquidity, fees, feeEst, channels };
 		},
 		10000,
 		[id, tick]
@@ -263,80 +266,51 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 					)}
 				</Card>
 
-				{!onchainOnly && <ConnectCard id={id} info={info} rec={rec} nodeUri={data?.nodeUri} />}
+
+				{!onchainOnly && <ConnectCard info={info} rec={rec} />}
 			</div>
 		</div>
 	);
 }
 
+
 /**
- * The three ways a peer can reach this node, one at a time so the card stays a
- * single line of address instead of a wall of them.
- *
- * The listen port comes from the daemon's own URI rather than a hardcoded 9735,
- * because wallets here are assigned ports out of a range. The clearnet host is
- * typed by the user and remembered: only they know their public address, and
- * looking it up would mean calling an outside service from their node.
+ * The ways a peer can reach this node, by the wallet's network mode (umbrel
+ * #193), one at a time so the card stays a single line of address instead of
+ * a wall of them: the public address the record holds (Clearnet and Hybrid),
+ * the Tor address (Tor and Hybrid), and the address on the home network,
+ * which every wallet has because the app publishes the wallet ports on this
+ * Umbrel. The ports are the record's, so they are the host ports peers dial.
+ * The first way that has an address is shown until the reader picks another.
  */
-function ConnectCard({ id, info, rec, nodeUri }) {
-	const [mode, setMode] = useState('local');
-	const storeKey = `beignet.clearnetHost.${id}`;
-	const [clearnetHost, setClearnetHost] = useState(() => localStorage.getItem(storeKey) || '');
-
-	const port = nodeUri?.split(':').pop() || '';
-	const lanHost = window.location.hostname;
-	const clearnet = clearnetHost.trim();
-
-	const options = [
-		{ key: 'local', label: 'Local network' },
-		{ key: 'clearnet', label: 'Clearnet' },
-		{ key: 'tor', label: 'Tor' }
-	];
-
-	let uri = null;
-	let hint = null;
-	if (mode === 'local') {
-		uri = info?.nodeId && port ? `${info.nodeId}@${lanHost}:${port}` : null;
-		hint = `Reachable from other machines on your home network, at the address you use to open this dashboard.`;
-	} else if (mode === 'clearnet') {
-		uri = info?.nodeId && port && clearnet ? `${info.nodeId}@${clearnet}:${port}` : null;
-		hint = `Your public IP or domain. Port ${port || '(unknown)'} must be forwarded to your Umbrel for peers to reach you.`;
-	} else {
-		uri = info?.nodeId && rec?.onionAddress ? `${info.nodeId}@${rec.onionAddress}` : null;
-		hint = rec?.onionAddress
-			? 'Reachable over Tor with no port forwarding. Share this to receive inbound channels.'
-			: 'Tor announcing is off for this wallet. Turn it on with Edit above.';
-	}
+function ConnectCard({ info, rec }) {
+	const [picked, setPicked] = useState(null);
+	const ways = nodeUris({ nodeId: info?.nodeId, rec, lanHost: window.location.hostname });
+	const first = (ways.find((w) => w.uri) || ways[0]).key;
+	const key = picked && ways.some((w) => w.key === picked) ? picked : first;
+	const way = ways.find((w) => w.key === key);
 
 	return (
-		<Card title="Connect to this node">
-			<div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-				{options.map((o) => (
+		<Card
+			title="Connect to this node"
+			help="Each way in follows this wallet's network mode, set with Edit above: its public address in Clearnet and Hybrid, its Tor address in Tor and Hybrid, and its address on your home network in every mode, since the app publishes the wallet ports on this Umbrel. The public and home-network ports are the ones on this Umbrel; a peer on the internet reaches the public one once your router forwards it."
+		>
+			<div style={{ display: 'flex', gap: 6, marginBottom: 12 }} data-testid="connect-ways">
+				{ways.map((w) => (
 					<Button
-						key={o.key}
+						key={w.key}
 						className="sm"
 						style={{ flex: 1 }}
-						variant={o.key === mode ? 'primary' : 'ghost'}
-						onClick={() => setMode(o.key)}
+						variant={w.key === key ? 'primary' : 'ghost'}
+						onClick={() => setPicked(w.key)}
 					>
-						{o.label}
+						{w.label}
 					</Button>
 				))}
 			</div>
-			{mode === 'clearnet' && (
-				<input
-					value={clearnetHost}
-					placeholder="node.example.com or 203.0.113.4"
-					style={{ marginBottom: 10 }}
-					onChange={(e) => {
-						setClearnetHost(e.target.value);
-						localStorage.setItem(storeKey, e.target.value);
-					}}
-				/>
-			)}
-			{uri ? <CopyText value={uri} /> : <div className="empty">Not available yet.</div>}
-			<span className="field-hint" style={{ display: 'block', marginTop: 8 }}>
-				{hint}
+			{way.uri ? <CopyText value={way.uri} /> : <div className="empty">Not available yet.</div>}
+			<span className="field-hint" style={{ display: 'block', marginTop: 8 }} data-testid="connect-hint">
+				{way.hint}
 			</span>
 		</Card>
 	);
@@ -615,7 +589,9 @@ function GuardianCard({ guardian, rec, info }) {
 	const sets = guardian?.sets || [];
 	const namespaces = sets.reduce((n, s) => n + (s.namespaces || 0), 0);
 	const bytes = sets.reduce((n, s) => n + (s.bytes || 0), 0);
+
 	const onionUri = info?.nodeId && rec?.onionAddress ? `${info.nodeId}@${rec.onionAddress}` : null;
+	const publicUri = info?.nodeId && rec?.publicAddress ? `${info.nodeId}@${rec.publicAddress}` : null;
 	const localUri = info?.nodeId && rec?.listenPort ? `${info.nodeId}@127.0.0.1:${rec.listenPort}` : null;
 	return (
 		<Card
@@ -645,6 +621,7 @@ function GuardianCard({ guardian, rec, info }) {
 					<div className="field-label" style={{ marginTop: 10, marginBottom: 6 }}>
 						Address to share
 					</div>
+
 					{onionUri ? (
 						<>
 							<CopyText value={onionUri} />
@@ -653,9 +630,17 @@ function GuardianCard({ guardian, rec, info }) {
 								guardian entry over Tor, no port forwarding needed.
 							</div>
 						</>
+					) : publicUri ? (
+						<>
+							<CopyText value={publicUri} />
+							<div className="wallet-meta" style={{ marginTop: 4 }}>
+								Another beignet wallet pastes this into its Settings guardians; it resolves to a
+								guardian entry at your public address, once the port is forwarded on your router.
+							</div>
+						</>
 					) : (
 						<div className="info-note">
-							Turn on the Tor address in Edit so nodes outside this Umbrel can reach this guardian.
+							Turn on announcing in Edit so nodes outside this Umbrel can reach this guardian.
 							{localUri ? ` Wallets on this Umbrel can use ${localUri}.` : ''}
 						</div>
 					)}

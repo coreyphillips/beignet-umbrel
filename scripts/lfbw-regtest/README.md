@@ -66,6 +66,10 @@ DEFAULT_ELECTRUM_TLS=false CHILD_PORT_BASE=3901 CHILD_PORT_MAX=3950 BEIGNET_TRUS
 node server/index.js
 ```
 
+`PUBLIC_PORT_BASE` stays unset here: outside Docker a wallet's listen port is
+reachable as itself, so its public port is its listen port and a wallet in
+Clearnet or Hybrid mode announces its public host at that port.
+
 ## Order
 
 ```sh

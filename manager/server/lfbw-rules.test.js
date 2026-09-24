@@ -242,9 +242,20 @@ test('the direct-funding policy names the primary as liquidity peer and relay, s
 	);
 });
 
-test('a payer reaches the wallet on its onion, else on an operator-exposed host, else not directly at all', () => {
+
+test('a payer reaches the wallet at its public address, else its onion, else not directly at all', () => {
 	assert.deepEqual(lfbw.walletReach({ onionAddress: 'abcd.onion:9101', listenPort: 9101 }), { host: 'abcd.onion', port: 9101 });
 	assert.deepEqual(lfbw.walletReach({ listenPort: 9101, publicHost: '192.168.50.20' }), { host: '192.168.50.20', port: 9101 });
+	assert.deepEqual(
+		lfbw.walletReach({ onionAddress: 'abcd.onion:9101', listenPort: 9101, publicHost: '203.0.113.4', publicPort: 19101 }),
+		{ host: '203.0.113.4', port: 19101 },
+		'the public address wins: faster, and a phone payer rarely has Tor'
+	);
+	assert.deepEqual(
+		lfbw.walletReach({ listenPort: 9101, publicHost: '203.0.113.4', publicPort: 19101 }),
+		{ host: '203.0.113.4', port: 19101 },
+		'at the published host port, not the container port'
+	);
 	assert.equal(lfbw.walletReach({ listenPort: 9101 }), null);
 	assert.equal(lfbw.walletReach({ listenPort: 9101, publicHost: '  ' }), null);
 });

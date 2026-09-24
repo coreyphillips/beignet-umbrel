@@ -10,11 +10,11 @@ import { createElement, useState } from 'react';
 import { click, render } from '../../test/render.mjs';
 import GuardianServeField from './GuardianServeField.jsx';
 
-function Harness({ initial, log, announce }) {
+function Harness({ initial, log, announced }) {
 	const [value, setValue] = useState(initial);
 	return createElement(GuardianServeField, {
 		value,
-		announce,
+		announced,
 		onChange: (v) => {
 			log.push(v);
 			setValue(v);
@@ -24,7 +24,7 @@ function Harness({ initial, log, announce }) {
 
 test('off explains the choice; on explains the obligation and where the address is', async () => {
 	const log = [];
-	const r = await render(Harness, { initial: false, log, announce: false });
+	const r = await render(Harness, { initial: false, log, announced: false });
 	try {
 		const box = r.$('[data-testid="guardian-serve"]');
 		assert.equal(box.checked, false);
@@ -35,18 +35,18 @@ test('off explains the choice; on explains the obligation and where the address 
 		assert.equal(r.$('[data-testid="guardian-serve"]').checked, true);
 		assert.match(r.text(), /pin this node as one of their three guardians/);
 		assert.match(r.text(), /refuses new writes rather than deleting/);
-		// Without a Tor address nobody off this Umbrel can reach it: say so.
-		assert.match(r.text(), /Turn on the Tor address below/);
+		// Without an announced address nobody off this Umbrel can reach it: say so.
+		assert.match(r.text(), /Turn on announcing below/);
 	} finally {
 		await r.unmount();
 	}
 });
 
-test('with the Tor address on, it points at the Overview tab for the address to share', async () => {
-	const r = await render(Harness, { initial: true, log: [], announce: true });
+test('with an address announced, it points at the Overview tab for the address to share', async () => {
+	const r = await render(Harness, { initial: true, log: [], announced: true });
 	try {
 		assert.match(r.text(), /The address to share is on the Overview tab/);
-		assert.doesNotMatch(r.text(), /Turn on the Tor address below/);
+		assert.doesNotMatch(r.text(), /Turn on announcing below/);
 	} finally {
 		await r.unmount();
 	}

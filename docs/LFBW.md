@@ -123,15 +123,18 @@ See [automatic receive and its engine requirements](FFOR.md#automatic-lightning-
 
 ## Reachability
 
-Umbrel publishes no Lightning ports on the host. Inside the app container
-every wallet reaches every sibling on `127.0.0.1`, which is how an internal
-primary is connected to and named as relay. Off the box, a wallet is
-reachable only on its onion (when it announces one) or on a host the operator
-has exposed themselves (`PUBLIC_HOST` on the manager, for a LAN setup). A
-payment request carries a direct address only in those cases; otherwise a
-payer reaches the wallet through the primary's relay or the onion-message
-lane, and a payer that already holds a connection to the wallet (the primary
-paying its own dependent) uses it directly.
+The app publishes the wallets' Lightning ports on the Umbrel host (19101 and
+up, umbrel #193). Inside the app container every wallet reaches every sibling
+on `127.0.0.1`, which is how an internal primary is connected to and named as
+relay. Off the box, a wallet is reachable at its public address (Clearnet or
+Hybrid mode, with the address entered and announcing on), on its onion (Tor
+or Hybrid mode, announcing on), or on a host the operator has exposed
+themselves (`PUBLIC_HOST` on the manager, for the regtest harness and LAN
+setups). A payment request carries the public address first, else the onion,
+else the operator's host; otherwise a payer reaches the wallet through the
+primary's relay or the onion-message lane, and a payer that already holds a
+connection to the wallet (the primary paying its own dependent) uses it
+directly.
 
 ## Engine requirements
 

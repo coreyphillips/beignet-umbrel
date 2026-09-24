@@ -166,3 +166,19 @@ test('automatic receive capability needs all daemon routes and funding configura
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test('the onion-only Tor proxy scope is read off the config module that parses it (beignet #963)', () => {
+	const { torProxyScopeAvailable } = require('./engine');
+	const { root, bin } = fakeInstall('0.22.0');
+	const dir = path.dirname(bin);
+	try {
+		assert.equal(torProxyScopeAvailable(bin), false, 'no config module at all');
+		fs.writeFileSync(path.join(dir, 'config.js'), 'torProxy: process.env.BEIGNET_TOR_PROXY');
+		assert.equal(torProxyScopeAvailable(bin), false, '0.21.x parses the proxy but not the scope');
+		fs.writeFileSync(path.join(dir, 'config.js'), "process.env.BEIGNET_TOR_PROXY_ONION_ONLY === 'true'");
+		assert.equal(torProxyScopeAvailable(bin), true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	assert.equal(torProxyScopeAvailable(undefined), false);
+});

@@ -9,7 +9,8 @@ import { Help } from './ui.jsx';
  * Shared by the create form and the edit dialog so both read the same, and
  * only offered for a Lightning wallet on an engine that has the surface.
  */
-export default function GuardianServeField({ value, onChange, disabled = false, announce = false }) {
+
+export default function GuardianServeField({ value, onChange, disabled = false, announced = false }) {
 	return (
 		<>
 			<label className="checkbox field">
@@ -24,12 +25,14 @@ export default function GuardianServeField({ value, onChange, disabled = false, 
 				<Help>
 					{value
 						? 'Other beignet wallets can pin this node as one of their three guardians and store an encrypted journal of their channel state here, over a dedicated session at this node’s Lightning address. The journal is opaque to this node. Quotas bound how much is kept, and a full quota refuses new writes rather than deleting anything a stranger’s node still depends on.' +
-						  (announce ? ' The address to share is on the Overview tab once the wallet is running.' : '')
+
+						  (announced ? ' The address to share is on the Overview tab once the wallet is running.' : '')
 						: 'Off: this node holds no channel state for anyone else. Turn it on to take part in a guardian pool; a node you guard depends on this wallet staying online, so pick a wallet that is.'}
 				</Help>
 			</label>
-			{value && !announce && (
-				<div className="field-note">Turn on the Tor address below so nodes outside this Umbrel can reach it.</div>
+
+			{value && !announced && (
+				<div className="field-note">Turn on announcing below so nodes outside this Umbrel can reach it.</div>
 			)}
 		</>
 	);

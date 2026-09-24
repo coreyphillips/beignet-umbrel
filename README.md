@@ -36,7 +36,7 @@ Hover or tap the **?** beside a setting in the dashboard for what it does.
 - **Open** a channel to any node or to one of your own wallets (zero-conf between your own), **splice** funds in or out where the peer supports it, **close** cooperatively or by force, and set each channel's routing fees.
 - **Closed channels keep their story**: who closed it and why, the closing transaction, what is being swept and when a force close's balance becomes spendable, with a rebroadcast button for a close the network may not have.
 - **Peers**: connect and disconnect peers, and copy this node's address to hand out (local network, clearnet or Tor).
-- **Tor**: the app runs its own Tor. Each wallet chooses outbound (connect to peers over Tor) and inbound (publish a Tor address so peers can open channels to you).
+- **Network mode**: the app runs its own Tor, and each wallet chooses Tor (every peer over Tor, only the Tor address announced), Clearnet (clearnet peers dialed directly, Tor peers over Tor, a public address you enter announced) or Hybrid (both addresses announced), plus a switch for whether it announces at all. The wallets' Lightning ports are published on the Umbrel (19101 and up), so peers on your home network dial them directly and, with a router forward, so can anyone.
 
 ### Serving other nodes
 
@@ -78,7 +78,7 @@ Umbrel app_proxy (SSO)
                      any Electrum server           (Tor peers, one onion)
 ```
 
-A single **manager** service (Node) supervises one `beignet` daemon process per wallet, each with its own isolated `HOME`, data directory, mnemonic, internal port, and Electrum configuration. The manager reverse-proxies API calls to the right wallet daemon and injects that wallet's bearer token server-side, so tokens never reach the browser. All wallets share one onion address, each on its own port.
+A single **manager** service (Node) supervises one `beignet` daemon process per wallet, each with its own isolated `HOME`, data directory, mnemonic, internal port, and Electrum configuration. The manager reverse-proxies API calls to the right wallet daemon and injects that wallet's bearer token server-side, so tokens never reach the browser. All wallets share one onion address, each on its own port. Each wallet's Lightning listen port (9101 and up inside the container) is also published on the host at 19101 and up, thirty in all, the same window the onion maps, so a wallet in Clearnet or Hybrid mode can be dialed directly.
 
 Repository layout:
 
@@ -167,7 +167,7 @@ The `check-release` workflow enforces this: it requires the compose image to be 
 - Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase; it is shown once at creation.
 - The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered.
 - The manager's API is restricted to Umbrel's `app_proxy`, which enforces Umbrel's single sign-on, and to loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. While `app_proxy` cannot be resolved the rest of the API allows every source, but the backup routes never do: they answer loopback only until it resolves. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
-- The wallet daemons bind only to `127.0.0.1` inside the container and are never exposed to your network.
+- The wallet daemons' HTTP APIs bind only to `127.0.0.1` inside the container and are never exposed to your network. Their Lightning listen ports are published on the host (19101 to 19130) so peers can dial them; that transport is authenticated and encrypted end to end (BOLT 8), and a port answers nothing to anyone without the node's public key. Nothing reaches them from the internet unless you forward a port on your router.
 
 ## License
 

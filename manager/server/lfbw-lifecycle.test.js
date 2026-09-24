@@ -160,3 +160,73 @@ test('an on-chain only wallet advertises no Lightning at all', () => {
 	assert.equal(p.reach, null);
 	assert.equal(p.liquidityProvider, false);
 });
+
+// The network mode (umbrel #193) on the record model: what the public record
+// says, what an edit refuses, and what it writes.
+test('the public record carries the mode, the public address and the port peers dial', () => {
+	const { m, store } = managerWith({ p1: primary() });
+	const p = m.publicRecord('p1');
+	assert.equal(p.networkMode, 'hybrid', 'a record without the field is hybrid');
+	assert.equal(p.publicHost, '');
+	assert.equal(p.publicPort, 3901 + 6000, 'no published window: the listen port itself');
+	assert.equal(p.publicAddress, null);
+	assert.equal('tor' in p, false, 'the old flag is gone from the record');
+	store.p1.networkMode = 'clearnet';
+	store.p1.publicHost = '203.0.113.4';
+	assert.equal(m.publicRecord('p1').publicAddress, null, 'not announced, not advertised');
+	store.p1.announce = true;
+	const announced = m.publicRecord('p1');
+	assert.equal(announced.publicAddress, '203.0.113.4:9901');
+	assert.deepEqual(announced.reach, { host: '203.0.113.4', port: 9901 }, 'and it is where payers are sent');
+	store.p1.publicHost = '2001:db8::7';
+	assert.equal(m.publicRecord('p1').publicAddress, '[2001:db8::7]:9901');
+	store.p1.networkMode = 'tor';
+	assert.equal(m.publicRecord('p1').publicAddress, null, 'a tor wallet announces no public address');
+});
+
+test('the public address beats the onion in reach when both are announced', () => {
+	const { m, store } = managerWith({ p1: primary() });
+	store.p1.networkMode = 'hybrid';
+	store.p1.publicHost = '203.0.113.4';
+	store.p1.announce = true;
+	m.onionAddress = () => 'abcd.onion:9901';
+	assert.deepEqual(m.publicRecord('p1').reach, { host: '203.0.113.4', port: 9901 });
+	store.p1.publicHost = '';
+	assert.deepEqual(m.publicRecord('p1').reach, { host: 'abcd.onion', port: 9901 }, 'hybrid with no address yet reaches on the onion');
+});
+
+test('an edit refuses a bad public address, and clearnet without one, leaving the record as it was', async () => {
+	const { m, store } = managerWith({ p1: primary() });
+	let restarts = 0;
+	m._restartWallet = async () => {
+		restarts++;
+	};
+	m.runtimeState('p1').proc = { pid: 1 };
+	await assert.rejects(m.updateWallet('p1', { networkMode: 'hybrid', publicHost: 'bad host!' }), (err) => err.code === 'BAD_PUBLIC_HOST');
+	await assert.rejects(m.updateWallet('p1', { networkMode: 'clearnet', publicHost: '' }), (err) => err.code === 'PUBLIC_HOST_REQUIRED');
+	await assert.rejects(m.updateWallet('p1', { networkMode: 'onion' }), (err) => err.code === 'BAD_NETWORK_MODE');
+	assert.equal(store.p1.networkMode, undefined, 'nothing written');
+	assert.equal(store.p1.publicHost, undefined);
+	assert.equal(restarts, 0, 'nothing restarted');
+	await m.updateWallet('p1', { networkMode: 'clearnet', publicHost: ' Node.Example.com ' });
+	assert.equal(store.p1.networkMode, 'clearnet');
+	assert.equal(store.p1.publicHost, 'node.example.com', 'trimmed and lowercased');
+	assert.equal(restarts, 1, 'the daemon comes up with the new announcement');
+	await m.updateWallet('p1', { name: 'Still primary' });
+	assert.equal(store.p1.networkMode, 'clearnet', 'an edit that says nothing about the network keeps it');
+	assert.equal(store.p1.publicHost, 'node.example.com');
+	await m.updateWallet('p1', { networkMode: 'clearnet', publicHost: '', onchainOnly: true });
+	assert.equal(store.p1.publicHost, '', 'clearnet without an address is fine for a wallet that runs no Lightning');
+});
+
+test('an edit maps the legacy flag and drops it from the record', async () => {
+	const { m, store } = managerWith({ p1: { ...primary(), tor: true } });
+	assert.equal(m.publicRecord('p1').networkMode, 'tor');
+	await m.updateWallet('p1', { name: 'Renamed' });
+	assert.equal(store.p1.networkMode, 'tor', 'the mode the flag meant, now written');
+	assert.equal('tor' in store.p1, false, 'the flag is gone');
+	await m.updateWallet('p1', { tor: false });
+	assert.equal(store.p1.networkMode, 'hybrid', 'a caller still sending the flag gets its meaning');
+	await m.updateWallet('p1', { tor: true, networkMode: 'clearnet', publicHost: '203.0.113.4' });
+	assert.equal(store.p1.networkMode, 'clearnet', 'the field wins over the flag');
+});

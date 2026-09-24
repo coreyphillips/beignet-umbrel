@@ -464,21 +464,25 @@ function directFundingConfig(lf, primary, { allowSpliceSupported = true } = {}) 
 	return cfg;
 }
 
+
 /**
- * Where a payer can reach this wallet, signed into its payment requests.
- * Umbrel publishes no Lightning ports on the host, so off-box the only
- * address that works is the onion (when the wallet announces one), unless
- * the operator names a host they have exposed themselves (PUBLIC_HOST, for
- * a LAN setup). Null means the request carries no direct address and payers
- * reach the wallet through the primary's relay or the onion-message lane.
+ * Where a payer can reach this wallet, signed into its payment requests: the
+ * public address first, at the host port the app publishes (umbrel #193),
+ * because it is the faster path and a phone payer rarely has Tor; else the
+ * onion when the wallet announces one. The public host is the wallet's own
+ * when it announces one, else a host the operator exposed themselves
+ * (PUBLIC_HOST on the manager, for the regtest harness and LAN setups),
+ * paired with the listen port when no published port is known. Null means
+ * the request carries no direct address and payers reach the wallet through
+ * the primary's relay or the onion-message lane.
  */
-function walletReach({ onionAddress, listenPort, publicHost } = {}) {
+function walletReach({ onionAddress, listenPort, publicHost, publicPort } = {}) {
+	const host = publicHost && String(publicHost).trim();
+	const port = publicPort || listenPort;
+	if (host && port) return { host, port };
 	if (onionAddress) {
 		const at = onionAddress.lastIndexOf(':');
 		return { host: onionAddress.slice(0, at), port: parseInt(onionAddress.slice(at + 1), 10) };
-	}
-	if (publicHost && String(publicHost).trim() && listenPort) {
-		return { host: String(publicHost).trim(), port: listenPort };
 	}
 	return null;
 }

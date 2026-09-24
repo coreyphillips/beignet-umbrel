@@ -10,7 +10,9 @@ import {
 	convertBits,
 	parseBolt11Hrp
 } from '../lib/payment-uri.js';
+
 import { decodeFundingEnvelope, encodeFundingEnvelope } from '../lib/funding-envelope.js';
+import { MODES, hostForUri, usesOnion, usesPublic } from '../lib/node-uris.js';
 
 const HEX = '0123456789abcdef';
 let seedCounter = 7;
@@ -392,9 +394,13 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: true,
+
+			// Hybrid: clearnet peers direct, Tor peers over Tor, both addresses
+			// announced (umbrel #193).
+			networkMode: 'hybrid',
+			publicHost: 'node.example.com',
 			announce: true,
-			onionAddress: hex(28) + 'onionexample.onion:9735',
+			onionAddress: hex(28) + 'onionexample.onion:9101',
 			// Strict quorum: every channel step waits for two guardians, and
 			// a restore elsewhere resumes the channels and fences this device.
 			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
@@ -420,8 +426,10 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
-			announce: false,
+			// Tor only: every peer over Tor, only the onion announced.
+			networkMode: 'tor',
+			announce: true,
+			onionAddress: hex(28) + 'onionwitness.onion:9102',
 			recovery: { mode: 'off', guardians: [] },
 			ffor: { witness: { enabled: true, maxMailboxes: null, maxBytes: null }, issuer: { enabled: true } },
 			createdAt: now - 20 * DAY
@@ -434,7 +442,7 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			lfbw: {
 				enabled: true,
@@ -459,7 +467,7 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			lfbw: {
 				enabled: true,
@@ -482,7 +490,7 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			// The on-chain only demo: imported two days ago, and its history
 			// reaches back years anyway, because recovery reads the chain.
@@ -495,7 +503,7 @@ const store = {
 			network: 'testnet',
 			status: 'running',
 			electrum: { host: 'testnet.aranguren.org', port: 51001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			// Checkpoints via peer storage: no guardians, no setup.
 			recovery: { mode: 'peer-storage', guardians: [] },
@@ -507,7 +515,7 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			createdAt: now - 2 * 3600000
 		},
@@ -520,7 +528,7 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
 			createdAt: now - 200 * DAY
@@ -535,7 +543,7 @@ const store = {
 			network: 'mainnet',
 			status: 'restore-required',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			recovery: { mode: 'quorum', guardians: DEMO_GUARDIANS.slice() },
 			createdAt: now - 60000
@@ -549,7 +557,7 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			recovery: { mode: 'peer-storage', guardians: [] },
 			createdAt: now - 120000
@@ -563,7 +571,7 @@ const store = {
 			network: 'mainnet',
 			status: 'running',
 			electrum: { host: 'umbrel.local', port: 50001, tls: false },
-			tor: false,
+			networkMode: 'hybrid',
 			announce: false,
 			recovery: { mode: 'peer-storage', guardians: [], autoApply: true },
 			createdAt: now - 30000
@@ -1352,13 +1360,48 @@ function err(message, code = 'DEMO') {
 	return e;
 }
 
+
+// The network mode rules the manager holds (umbrel #193), enough of them for
+// the demo to refuse what the manager refuses and to write what it writes.
+function normalizeNetwork(body, existing) {
+	const networkMode =
+		body.networkMode !== undefined
+			? body.networkMode
+			: body.tor !== undefined
+			? body.tor
+				? 'tor'
+				: 'hybrid'
+			: existing
+			? existing.networkMode || (existing.tor ? 'tor' : 'hybrid')
+			: 'hybrid';
+	if (!MODES.includes(networkMode)) throw err(`Unknown network mode "${networkMode}". Choose Tor, Clearnet or Hybrid.`, 'BAD_NETWORK_MODE');
+	const raw = body.publicHost !== undefined ? String(body.publicHost).trim() : existing ? existing.publicHost || '' : '';
+	if (/\s/.test(raw)) throw err('A public address cannot contain spaces.', 'BAD_PUBLIC_HOST');
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) throw err('Enter a host, not a URL: leave off the scheme.', 'BAD_PUBLIC_HOST');
+	if (raw.includes('/') || raw.includes('@')) throw err('Enter a host only.', 'BAD_PUBLIC_HOST');
+	if (/^[^:[]+:\d+$/.test(raw) || /^\[.*\]:\d+$/.test(raw)) throw err('Enter the host only: the port is fixed by the app.', 'BAD_PUBLIC_HOST');
+	if (/\.onion$/i.test(raw)) throw err('The Tor address is published by the app itself; enter your public IP or domain name here.', 'BAD_PUBLIC_HOST');
+	const publicHost = raw.replace(/^\[|\]$/g, '').toLowerCase();
+	const onchainOnly = body.onchainOnly !== undefined ? !!body.onchainOnly : !!(existing && existing.onchainOnly);
+	if (networkMode === 'clearnet' && !publicHost && !onchainOnly) {
+		throw err(
+			'Clearnet needs a public address, your public IP or domain name, so peers have somewhere to reach this wallet. Choose Hybrid to keep the Tor address without one.',
+			'PUBLIC_HOST_REQUIRED'
+		);
+	}
+	return { networkMode, publicHost };
+}
+
 function publicRecord(w) {
 	// The manager never returns seeds; mirror its record shape. It also only
-	// reports an onion while announce is on (onionAddress() returns null
-	// otherwise), so gate it the same way here: turning announce off drops the
-	// advertised Tor address, and anything keyed on it disappears with it.
-	const { ...rec } = w;
-	rec.onionAddress = w.announce ? w.onionAddress ?? null : null;
+	// reports an onion while announce is on and the mode uses it (onionAddress()
+	// returns null otherwise), so gate it the same way here: turning announce
+	// off drops the advertised addresses, and anything keyed on them disappears
+	// with them.
+	const { tor: legacyTor, ...rec } = w;
+	rec.networkMode = MODES.includes(w.networkMode) ? w.networkMode : legacyTor ? 'tor' : 'hybrid';
+	rec.publicHost = w.publicHost || '';
+	rec.onionAddress = w.announce && !w.onchainOnly && usesOnion(rec.networkMode) ? w.onionAddress ?? null : null;
 	rec.recovery = {
 		mode: w.recovery?.mode || 'off',
 		guardians: (w.recovery?.guardians || []).slice(),
@@ -1373,8 +1416,20 @@ function publicRecord(w) {
 	rec.backupStale = !backedUp;
 	// Lightning-first fields, in the manager's shape.
 	rec.nodeId = w.onchainOnly ? null : nodeId(w.id);
+
 	rec.listenPort = w.onchainOnly ? null : 9101 + store.wallets.indexOf(w);
-	rec.reach = !w.onchainOnly && rec.onionAddress ? { host: rec.onionAddress.split(':')[0], port: rec.listenPort } : null;
+	// The compose file publishes the wallet ports on the host ten thousand
+	// above the container's (19101 for 9101), so that is the port peers dial.
+	rec.publicPort = w.onchainOnly ? null : rec.listenPort + 10000;
+	rec.publicAddress =
+		!w.onchainOnly && w.announce && usesPublic(rec.networkMode) && rec.publicHost
+			? `${hostForUri(rec.publicHost)}:${rec.publicPort}`
+			: null;
+	rec.reach = rec.publicAddress
+		? { host: rec.publicHost, port: rec.publicPort }
+		: !w.onchainOnly && rec.onionAddress
+		? { host: rec.onionAddress.split(':')[0], port: rec.listenPort }
+		: null;
 	rec.lfbw = w.lfbw ? { ...w.lfbw, lastChannelize: w.lfbwLast || null } : null;
 	rec.liquidityProvider = !!w.liquidityProvider && !w.onchainOnly;
 	rec.jit = { ...JIT_DEFAULTS, ...(w.jit || {}) };
@@ -1533,8 +1588,10 @@ function managerRequest(path, method, body) {
 			hasDefaultElectrum: !!store.settings.defaultElectrum,
 			supportedNetworks: ['mainnet', 'testnet', 'regtest'],
 			electrumPresets: ELECTRUM_PRESETS,
+
 			torAvailable: true,
 			onionAvailable: true,
+			torProxyScopeAvailable: true,
 			engineVersion: '0.12.0',
 			recoveryAvailable: true,
 			recoveryGuardians: store.settings.recoveryGuardians.slice(),
@@ -1590,7 +1647,9 @@ function managerRequest(path, method, body) {
 					network: w.network,
 					nodeId: rec.nodeId,
 					running: w.status === 'running',
+
 					onionUri: rec.onionAddress ? `${rec.nodeId}@${rec.onionAddress}` : null,
+					publicUri: rec.publicAddress ? `${rec.nodeId}@${rec.publicAddress}` : null,
 					localUri: `${rec.nodeId}@127.0.0.1:${rec.listenPort}`
 				};
 			});
@@ -1615,7 +1674,8 @@ function managerRequest(path, method, body) {
 			network: body.network || store.settings.defaultNetwork,
 			status: 'running',
 			electrum: body.electrum || store.settings.defaultElectrum || { host: '', port: 50001, tls: false },
-			tor: !!body.tor,
+
+			...normalizeNetwork(body, null),
 			announce: !!body.announce && !body.onchainOnly,
 			onchainOnly: !!body.onchainOnly,
 			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null, body.recoveryAutoApply),
@@ -1647,7 +1707,8 @@ function managerRequest(path, method, body) {
 			network: body.network || store.settings.defaultNetwork,
 			status: 'running',
 			electrum: body.electrum || store.settings.defaultElectrum || { host: '', port: 50001, tls: false },
-			tor: !!body.tor,
+
+			...normalizeNetwork(body, null),
 			announce: !!body.announce && !body.onchainOnly,
 			onchainOnly: !!body.onchainOnly,
 			recovery: normalizeRecovery(body.onchainOnly ? 'off' : body.recoveryMode, null, body.recoveryAutoApply),
@@ -1700,10 +1761,13 @@ function managerRequest(path, method, body) {
 				e.details = { dependents };
 				throw e;
 			}
+
 			const nextLfbw = body.lfbw !== undefined ? normalizeLfbw(body.lfbw, w) : undefined;
+			const network = normalizeNetwork(body, w);
 			if (body.name) w.name = body.name;
 			if (body.electrum) w.electrum = body.electrum;
-			if (body.tor !== undefined) w.tor = !!body.tor;
+			Object.assign(w, network);
+			delete w.tor;
 			if (body.announce !== undefined) w.announce = !!body.announce;
 			if (body.onchainOnly !== undefined) {
 				w.onchainOnly = !!body.onchainOnly;
@@ -2686,7 +2750,8 @@ function walletRequest(id, path, method, body) {
 					{ name: 'electrum', status: 'PASS', message: 'Electrum server reachable' },
 					{ name: 'channels', status: st.channels.length ? 'PASS' : 'FAIL', message: st.channels.length ? `${st.channels.length} channels open` : 'No channels open' },
 					{ name: 'inbound', status: 'WARN', message: 'Limited inbound liquidity' },
-					{ name: 'tor', status: w.tor ? 'PASS' : 'WARN', message: w.tor ? 'Lightning over Tor' : 'Tor not enabled' },
+
+					{ name: 'tor', status: 'PASS', message: publicRecord(w).networkMode === 'tor' ? 'Every peer over Tor' : 'Onion peers over Tor, clearnet peers direct' },
 					{ name: 'peers', status: st.peers.length > 1 ? 'PASS' : 'WARN', message: `${st.peers.length} peers connected` }
 				]
 			};
@@ -3553,9 +3618,11 @@ function walletRequest(id, path, method, body) {
 			st.peers = st.peers.filter((p) => p.pubkey !== body.pubkey);
 			emit(id, 'peer:disconnect', {});
 			return { ok: true };
+
 		case '/node/uri': {
 			const host = new URLSearchParams(query || '').get('host') || '127.0.0.1';
-			return { uri: `${nodeId(id)}@${host}:9735` };
+			const wallet = store.wallets.find((x) => x.id === id);
+			return { uri: `${nodeId(id)}@${host}:${wallet ? publicRecord(wallet).listenPort : 9735}` };
 		}
 		case '/graph/info':
 			return { nodeCount: 15234, channelCount: 61120, lastSyncAt: Date.now() - 5 * 60 * 1000 };

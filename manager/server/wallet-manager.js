@@ -52,11 +52,14 @@ const {
 	recoveryAutoApplyAvailable,
 	guardianHostingAvailable,
 	guardianRotationAvailable,
+
 	fforAvailable,
-	offlineReceiveAvailable
+	offlineReceiveAvailable,
+	torProxyScopeAvailable
 } = require('./engine');
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
+const netmode = require('./network-mode');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -177,8 +180,13 @@ class WalletManager {
 		this.guardianRotationSupported = guardianRotationAvailable();
 		// FFOR offline receive (beignet #729, #865): the routes and, from
 		// 0.21.4, the role switches the daemon honours; probed on the bundle.
+
 		this.fforSupported = fforAvailable();
 		this.offlineReceiveSupported = offlineReceiveAvailable();
+		// The Tor proxy scoped to .onion peers (beignet #963, engine 0.22.0):
+		// what lets a Clearnet or Hybrid wallet dial clearnet peers directly and
+		// still reach onion peers through the app's Tor.
+		this.torProxyScopeSupported = torProxyScopeAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 	}
@@ -186,10 +194,17 @@ class WalletManager {
 	async init() {
 		this.settings.load();
 		this.registry.load();
+
 		process.stdout.write(
 			`engine: beignet ${this.engineVersion || 'unknown version'}` +
 				`${this.recoveryAvailable() ? '' : ' (recovery protocol not available)'}\n`
 		);
+		if (config.torProxy && !this.torProxyScopeSupported) {
+			process.stdout.write(
+				'engine: no onion-only Tor proxy scope (beignet 0.22.0 or later); Clearnet and Hybrid wallets ' +
+					'dial without the proxy, so their .onion peers stay out of reach\n'
+			);
+		}
 		// Publish the inbound hidden service via the app's own Tor before boot
 		// so announce-enabled wallets advertise the onion from the start.
 		if (config.torProxyIp && config.torPassword) {
@@ -225,18 +240,20 @@ class WalletManager {
 		}
 	}
 
+
 	// Connect back to our own onion through the Tor SOCKS proxy. Success
 	// requires working circuits, HSDir lookups, and a rendezvous, which is
-	// the same machinery Tor-enabled wallets need for outbound peers.
+	// the same machinery every wallet needs for its .onion peers and its own
+	// onion address, and a Tor-mode wallet for every peer.
 	async _checkTorCircuit() {
 		if (!config.torProxy || !this.onion || this.torProbeRunning) return;
 		// Only a wallet whose listen port is actually onion-mapped can be probed;
 		// otherwise the self-connect would fail on the mapping, not on Tor.
 		const target = this.registry
 			.list()
+
 			.find(
 				(rec) =>
-					rec.tor &&
 					// An on-chain only wallet runs no Lightning listener, so it can
 					// never answer the probe; selecting it would fail the local
 					// precheck below on every cycle and starve the probe for the
@@ -273,7 +290,8 @@ class WalletManager {
 				process.stdout.write(
 					ok
 						? 'tor circuit check: ok\n'
-						: 'tor circuit check: failing (Tor-enabled wallets cannot reach peers; they will report connection timeouts)\n'
+
+						: 'tor circuit check: failing (peers over Tor will time out: every peer of a Tor-mode wallet, .onion peers of the rest)\n'
 				);
 			}
 			this.torCircuitOk = ok;
@@ -290,18 +308,57 @@ class WalletManager {
 		return listenPort >= base && listenPort < base + ANNOUNCE_PORT_COUNT;
 	}
 
+
 	listenPort(rec) {
 		return rec.port + LISTEN_PORT_OFFSET;
 	}
 
-	// Called when the hidden service is (re)published; restart running
-	// announce-enabled wallets so they advertise the (possibly new) onion.
+	/**
+	 * The host port peers off the box dial (umbrel #193). The compose file
+	 * publishes the onion's thirty-port window at PUBLIC_PORT_BASE: the
+	 * container's 9101 to 9130 answer on the host's 19101 to 19130, because
+	 * 9117 and 9120 are other Umbrel apps' web ports. A wallet's public port
+	 * is its listen port shifted into that window, and null past it, the same
+	 * limit the onion has. With no base set (a native run) the listen port is
+	 * reachable as itself.
+	 */
+	publicPort(rec) {
+		if (rec.onchainOnly) return null;
+		return netmode.publicPort({
+			listenPort: this.listenPort(rec),
+			windowStart: config.childPortBase + LISTEN_PORT_OFFSET,
+			windowCount: ANNOUNCE_PORT_COUNT,
+			publishedBase: config.publicPortBase
+		});
+	}
+
+	/**
+	 * The clearnet twin of onionAddress: the public host the wallet announces
+	 * at its published port, or null while the mode does not use one, no host
+	 * is set, the wallet does not announce, or its port is past the window.
+	 */
+	publicAddress(rec) {
+		if (!rec.announce || rec.onchainOnly || !rec.publicHost) return null;
+		if (!netmode.usesPublic(netmode.networkMode(rec))) return null;
+		const port = this.publicPort(rec);
+		return port ? { host: rec.publicHost, port } : null;
+	}
+
+	// Called when the hidden service is (re)published; restart the running
+	// wallets that announce the onion so they advertise the (possibly new) one.
+	// A Clearnet wallet announces no onion, so it is left alone.
 	_onOnion(onion) {
 		const changed = this.onion !== onion;
 		this.onion = onion;
 		if (!changed) return;
 		for (const rec of this.registry.list()) {
-			if (rec.announce && rec.running && this.runtimeState(rec.id).proc) {
+			if (
+				rec.announce &&
+				rec.running &&
+				!rec.onchainOnly &&
+				netmode.usesOnion(netmode.networkMode(rec)) &&
+				this.runtimeState(rec.id).proc
+			) {
 				this.updateWallet(rec.id, {}).catch(() => {});
 			}
 		}
@@ -311,8 +368,11 @@ class WalletManager {
 		return !!this.onion;
 	}
 
+
 	onionAddress(rec) {
-		if (!this.onion || !rec.announce) return null;
+		if (!this.onion || !rec.announce || rec.onchainOnly) return null;
+		// A Clearnet wallet keeps its onion for dialing out, not for being found.
+		if (!netmode.usesOnion(netmode.networkMode(rec))) return null;
 		const listenPort = this.listenPort(rec);
 		// Do not advertise an address the onion does not actually forward.
 		return this._onionMapsPort(listenPort) ? `${this.onion}:${listenPort}` : null;
@@ -577,8 +637,13 @@ class WalletManager {
 		return this.guardianRotationSupported === true;
 	}
 
+
 	offlineReceiveAvailable() {
 		return this.offlineReceiveSupported === true;
+	}
+
+	torProxyScopeAvailable() {
+		return this.torProxyScopeSupported === true;
 	}
 
 	fforAvailable() {
@@ -780,6 +845,8 @@ class WalletManager {
 		electrum,
 		wordCount,
 		tor,
+		networkMode,
+		publicHost,
 		announce,
 		onchainOnly,
 		recoveryMode,
@@ -796,6 +863,8 @@ class WalletManager {
 			electrum,
 			mnemonic,
 			tor,
+			networkMode,
+			publicHost,
 			announce,
 			onchainOnly,
 			recoveryMode,
@@ -812,6 +881,8 @@ class WalletManager {
 		electrum,
 		mnemonic,
 		tor,
+		networkMode,
+		publicHost,
 		announce,
 		onchainOnly,
 		recoveryMode,
@@ -833,6 +904,8 @@ class WalletManager {
 			electrum,
 			mnemonic: normalized,
 			tor,
+			networkMode,
+			publicHost,
 			announce,
 			onchainOnly,
 			recoveryMode,
@@ -849,6 +922,8 @@ class WalletManager {
 		electrum,
 		mnemonic,
 		tor,
+		networkMode,
+		publicHost,
 		announce,
 		onchainOnly,
 		recoveryMode,
@@ -866,13 +941,21 @@ class WalletManager {
 		// Lightning-first is Lightning too: an on-chain only wallet has no
 		// home channel to keep, so the flag wins over the block.
 		const lfbwBlock = onchainOnly ? null : this._normalizeLfbw(lfbwInput, { network: net, selfId: id });
+
+		// The network mode (umbrel #193) and the public address it may announce,
+		// refused before a port is taken. The legacy outbound-over-Tor flag still
+		// names a mode for a caller that sends it.
+		const mode = netmode.requestedMode({ networkMode, tor }, netmode.DEFAULT_MODE);
+		const host = netmode.normalizePublicHost(publicHost);
+		netmode.validateNetworkChoice({ mode, publicHost: host, onchainOnly: !!onchainOnly });
 		const port = this._allocatePort();
 		const rec = {
 			id,
 			name: (name && String(name).trim()) || `Wallet ${id.slice(0, 4)}`,
 			network: net,
 			electrum: resolvedElectrum,
-			tor: !!tor,
+			networkMode: mode,
+			publicHost: host,
 			// Announcing is inbound Lightning, which an on-chain only wallet
 			// has sworn off, so the flag wins over the checkbox.
 			announce: !!announce && !onchainOnly,
@@ -948,6 +1031,8 @@ class WalletManager {
 			name,
 			electrum,
 			tor,
+			networkMode,
+			publicHost,
 			announce,
 			onchainOnly,
 			recoveryMode,
@@ -994,11 +1079,22 @@ class WalletManager {
 		if (nextLfbw && (onchainOnly === true || (onchainOnly === undefined && rec.onchainOnly))) {
 			throw httpError(400, 'BAD_LFBW_PEER', 'An on-chain only wallet cannot be lightning-first');
 		}
+
 		const nextOnchainOnly = onchainOnly === undefined ? !!rec.onchainOnly : !!onchainOnly;
 		const nextFfor = fforInput !== undefined ? this._normalizeFfor(fforInput, rec.ffor, nextOnchainOnly) : undefined;
+		// The network mode and public address are held to the same rules as on
+		// create, against the posture the wallet is about to have.
+		const nextMode = netmode.requestedMode({ networkMode, tor }, netmode.networkMode(rec));
+		const nextHost = publicHost !== undefined ? netmode.normalizePublicHost(publicHost) : rec.publicHost || '';
+		netmode.validateNetworkChoice({ mode: nextMode, publicHost: nextHost, onchainOnly: nextOnchainOnly });
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
-		if (tor !== undefined) rec.tor = !!tor;
+
+		rec.networkMode = nextMode;
+		rec.publicHost = nextHost;
+		// The mode replaced the outbound-over-Tor flag; a record written by an
+		// earlier release loses the flag here so there is one truth.
+		delete rec.tor;
 		if (announce !== undefined) rec.announce = !!announce;
 		// The same seed backs both modes, so this is freely reversible: the
 		// Lightning identity derives from the mnemonic whether or not it has
@@ -1043,7 +1139,9 @@ class WalletManager {
 		// capture, none of which change anything an archive holds.
 		rec.updatedAt = nowIso();
 		this.registry.upsert(rec);
-		// Restart a running daemon so it reconnects with the new Electrum config.
+
+		// Restart a running daemon so it comes up with the record as it is now:
+		// Electrum server, network mode, announced addresses, roles.
 		if (rt.proc) await this._restartWallet(id);
 		return this.publicRecord(id);
 	}
@@ -1097,15 +1195,35 @@ class WalletManager {
 		} else {
 			env.BEIGNET_AUTO_RECONNECT = 'false';
 		}
+
 		if (process.env.TOR_PROXY_IP) env.TOR_PROXY_IP = process.env.TOR_PROXY_IP;
 		if (process.env.TOR_PROXY_PORT) env.TOR_PROXY_PORT = process.env.TOR_PROXY_PORT;
-		// Route Lightning peer connections through the app's Tor proxy when enabled.
-		if (rec.tor && config.torProxy) env.BEIGNET_TOR_PROXY = config.torProxy;
-		// Advertise the onion address so peers can open inbound channels, but only
-		// when the onion actually forwards this wallet's listen port.
-		if (rec.announce && this.onion && this._onionMapsPort(this.listenPort(rec))) {
-			env.BEIGNET_ANNOUNCE_ADDRESSES = `${this.onion}:${this.listenPort(rec)}`;
-		}
+		// The network mode (umbrel #193). Tor mode sends every peer through the
+		// app's Tor. Clearnet and Hybrid dial clearnet peers directly and keep
+		// the proxy for .onion peers, which is the engine's onion-only scope
+		// (beignet #963); an engine without it gets no proxy for those two modes,
+		// the direct dials they always made, never a surprise trip through Tor.
+		// The proxy rides along for an on-chain only wallet too: its guardians
+		// may be onions, and the engine refuses an onion guardian without one.
+		const mode = netmode.networkMode(rec);
+		Object.assign(
+			env,
+			netmode.proxyEnv({ mode, torProxy: config.torProxy, scopeSupported: this.torProxyScopeSupported === true })
+		);
+		// The addresses in the node_announcement: the onion while it forwards
+		// this wallet's listen port, the public address at its published port,
+		// or both by mode, and nothing while the wallet does not announce.
+		const announced = netmode.announceList({
+			mode,
+			announce: rec.announce,
+			onchainOnly: rec.onchainOnly,
+			onion: this.onion,
+			listenPort: this.listenPort(rec),
+			onionMapped: this._onionMapsPort(this.listenPort(rec)),
+			publicHost: rec.publicHost,
+			publicPort: this.publicPort(rec)
+		});
+		if (announced.length) env.BEIGNET_ANNOUNCE_ADDRESSES = announced.join(',');
 		// Channel backup (the Recovery Protocol). Off contributes nothing, so
 		// an engine that predates the feature sees the env it always saw. It
 		// rides along even for an on-chain only wallet: the parked node still
@@ -2253,10 +2371,12 @@ class WalletManager {
 		}
 	}
 
+
 	/**
 	 * The wallets on this Umbrel that serve as guardians, with the addresses
-	 * another node reaches them at: the onion (when announcing) for anyone,
-	 * and the loopback address for sibling wallets in this same container.
+	 * another node reaches them at: the onion and the public address (each
+	 * when announced) for anyone, and the loopback address for sibling wallets
+	 * in this same container.
 	 */
 	guardianCandidates() {
 		return this.registry
@@ -2264,6 +2384,7 @@ class WalletManager {
 			.filter((rec) => rec.guardianServe && !rec.onchainOnly && rec.nodeId)
 			.map((rec) => {
 				const onion = this.onionAddress(rec);
+				const pub = this.publicAddress(rec);
 				return {
 					id: rec.id,
 					name: rec.name,
@@ -2271,6 +2392,7 @@ class WalletManager {
 					nodeId: rec.nodeId,
 					running: !!rec.running && !!this.runtimeState(rec.id).healthy,
 					onionUri: onion ? `${rec.nodeId}@${onion}` : null,
+					publicUri: pub ? `${rec.nodeId}@${netmode.hostForUri(pub.host)}:${pub.port}` : null,
 					localUri: `${rec.nodeId}@127.0.0.1:${this.listenPort(rec)}`
 				};
 			});
@@ -2358,11 +2480,12 @@ class WalletManager {
 		}
 	}
 
+
 	/**
 	 * The primary as something to connect to and to sign into requests. An
-	 * internal primary is reached on loopback inside this container (Umbrel
-	 * publishes no Lightning ports), and payers off-box reach it through its
-	 * onion when it announces one; an external primary is its URI.
+	 * internal primary is reached on loopback inside this container, and
+	 * payers off-box reach it at its public address or its onion, whichever it
+	 * announces (walletReach picks); an external primary is its URI.
 	 */
 	async _primaryEndpoint(lf) {
 		if (lf.mode === 'internal') {
@@ -2375,12 +2498,15 @@ class WalletManager {
 			await this._waitDaemonHealthy(primaryRec);
 			await this._captureNodeId(primaryRec.id);
 			if (!primaryRec.nodeId) throw new Error('primary node did not report a node id');
+
 			const listen = this.listenPort(primaryRec);
 			const onion = this.onionAddress(primaryRec);
+			const pub = this.publicAddress(primaryRec);
 			const relay = lfbw.walletReach({
 				onionAddress: onion,
 				listenPort: listen,
-				publicHost: process.env.PUBLIC_HOST
+				publicHost: pub ? pub.host : process.env.PUBLIC_HOST,
+				publicPort: pub ? pub.port : this.publicPort(primaryRec)
 			});
 			return {
 				pubkey: primaryRec.nodeId,
@@ -3288,22 +3414,31 @@ class WalletManager {
 		return outcome;
 	}
 
+
 	publicRecord(id) {
 		const rec = this.registry.get(id);
 		if (!rec) return null;
 		const rt = this.runtimeState(id);
+		const pub = this.publicAddress(rec);
 		return {
 			id: rec.id,
 			name: rec.name,
 			network: rec.network,
 			electrum: rec.electrum,
-			tor: !!rec.tor,
+			// The network mode (umbrel #193): tor, clearnet or hybrid, the public
+			// host the record holds, the host port peers dial it at, and the two
+			// addresses the wallet announces, each null while it does not.
+			networkMode: netmode.networkMode(rec),
+			publicHost: rec.publicHost || '',
+			publicPort: this.publicPort(rec),
+			publicAddress: pub ? `${netmode.hostForUri(pub.host)}:${pub.port}` : null,
 			announce: !!rec.announce,
 			onchainOnly: !!rec.onchainOnly,
 			onionAddress: this.onionAddress(rec),
-			// Only meaningful for Tor-enabled wallets: false means the last
-			// probe could not build a circuit, so peer connects will time out.
-			torCircuitOk: rec.tor ? this.torCircuitOk : null,
+			// Tor matters to every Lightning wallet (its .onion peers and its own
+			// onion; in Tor mode every peer): false means the last probe could not
+			// build a circuit, so those connections will time out.
+			torCircuitOk: rec.onchainOnly ? null : this.torCircuitOk,
 			recovery: {
 				mode: (rec.recovery && rec.recovery.mode) || 'off',
 				guardians: (rec.recovery && rec.recovery.guardians) || [],
@@ -3356,11 +3491,14 @@ class WalletManager {
 		};
 	}
 
+
 	_reach(rec) {
+		const pub = this.publicAddress(rec);
 		return lfbw.walletReach({
 			onionAddress: this.onionAddress(rec),
 			listenPort: this.listenPort(rec),
-			publicHost: process.env.PUBLIC_HOST
+			publicHost: pub ? pub.host : process.env.PUBLIC_HOST,
+			publicPort: pub ? pub.port : this.publicPort(rec)
 		});
 	}
 

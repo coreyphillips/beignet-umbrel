@@ -68,8 +68,8 @@ nodes" (create form or Edit). Its daemon then hosts the reference guardian at
 its Lightning address: other beignet wallets pin it as one of their three, and
 store an encrypted journal of their channel state that this node cannot read.
 The Overview tab gains a card with the sets held, the bytes stored, the open
-sessions and the address to hand out (the Tor address, so nobody needs to
-forward a port).
+sessions and the address to hand out (the Tor address when the wallet
+announces one, so nobody needs to forward a port, else its public address).
 
 Quotas bound what a stranger can store and refuse new writes rather than
 delete, because pruning a namespace would wedge that stranger's node for good.

@@ -30,16 +30,22 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  When a Lightning payment has no route, the Send tab now says why in your
-  wallet's own figures: the node the invoice has to pass through, how much
-  sits on your channel with it against the amount, and where the rest of
-  your funds are when the network map has no path from them. It also says
-  when there is no channel to send from, when a channel is not taking
-  payments yet, and when the wallet cannot send that much at all. Pay stays
-  available for a routing shortfall, since the wallet may still split the
-  payment across channels, and is held in the other cases. A payment that
-  fails with no route after a priced estimate gets the same explanation.
-  Bundles beignet 0.21.12, unchanged.
+  Each wallet now has a network mode, like the Tor and Clearnet choice of
+  Umbrel's Lightning Node app: Tor (every peer over Tor, only the Tor
+  address announced), Clearnet (clearnet peers dialed directly, Tor peers
+  over Tor, your public address announced) or Hybrid (both addresses
+  announced). Clearnet and Hybrid take a public IP or domain name that you
+  enter. The wallets' Lightning ports are now published on your Umbrel
+  (19101 and up), so peers on your home network can dial a wallet directly
+  and, once your router forwards the port, so can peers anywhere. The
+  Overview tab's connect card hands out each address the wallet announces.
+  Wallets that had Tor off become Hybrid with no public address and keep
+  their direct connections; their Tor peers, which the old setting could
+  not reach, now connect through the app's Tor. Bundles beignet 0.22.0,
+  which adds the onion-only proxy scope these modes use and hardens the
+  payment queue: one queue per process, a payment stays pending while it
+  can still settle, a retry only once the failed attempt is irrevocably
+  gone, and no second payment of an invoice that already completed.
 
 
 dependencies: []

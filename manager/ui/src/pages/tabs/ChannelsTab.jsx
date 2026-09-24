@@ -550,7 +550,8 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 			setError(outcome.reason);
 		} catch (e) {
 			if (abort.current?.signal.aborted) return;
-			setError(withPeerHint(rec, e.message, { port }));
+
+			setError(withPeerHint(rec, e.message, { port, host }));
 		} finally {
 			setBusy(false);
 			setStatus(null);
