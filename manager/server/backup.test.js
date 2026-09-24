@@ -68,7 +68,7 @@ function seedWallet({ id, name, port, mnemonic, nodeId = null, extra = {} }) {
 		name,
 		network: 'regtest',
 		electrum: { host: '10.21.21.10', port: 50001, tls: false },
-		tor: false,
+		networkMode: 'hybrid',
 		announce: false,
 		onchainOnly: false,
 		recovery: { mode: 'off', guardians: [] },

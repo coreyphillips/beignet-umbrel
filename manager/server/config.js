@@ -41,8 +41,14 @@ const config = {
 		port: parseInt(process.env.DEFAULT_ELECTRUM_PORT || '50001', 10),
 		tls: toBool(process.env.DEFAULT_ELECTRUM_TLS, false)
 	},
+
 	childPortBase: parseInt(process.env.CHILD_PORT_BASE || '3101', 10),
-	childPortMax: parseInt(process.env.CHILD_PORT_MAX || '3999', 10)
+	childPortMax: parseInt(process.env.CHILD_PORT_MAX || '3999', 10),
+	// The host port the compose file publishes the first wallet's Lightning
+	// listen port at (umbrel #193): the container's 9101 to 9130 answer on the
+	// host at this base and the twenty-nine ports after it. Unset outside
+	// Docker, where a listen port is reachable as itself.
+	publicPortBase: process.env.PUBLIC_PORT_BASE ? parseInt(process.env.PUBLIC_PORT_BASE, 10) || null : null
 };
 
 // One-click Electrum presets. The Umbrel Electrs/Fulcrum apps use fixed

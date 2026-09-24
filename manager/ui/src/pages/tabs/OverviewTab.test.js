@@ -407,3 +407,65 @@ test('a wallet that is not a provider has no such card', async () => {
 		await r.unmount();
 	}
 });
+
+// The "Connect to this node" card follows the wallet's network mode (umbrel
+// #193): the ways in it offers, the one it opens on, and the port peers dial.
+const NODE = '02' + 'b'.repeat(64);
+const ONION = `${'o'.repeat(56)}.onion:9102`;
+
+function connectProps(rec) {
+	const p = props([ch('NORMAL')]);
+	return { ...p, info: { ...p.info, nodeId: NODE }, rec };
+}
+
+const ways = (r) => Array.from(r.$('[data-testid="connect-ways"]').querySelectorAll('button')).map((b) => b.textContent.trim());
+const shown = (r) => r.$('[data-testid="connect-ways"]').parentElement.querySelector('.copy, .mono, input, code')?.value || r.$('[data-testid="connect-ways"]').parentElement.textContent;
+
+test('a hybrid wallet that announces both offers three ways in and opens on its public address', async () => {
+	const r = await render(
+		wrapped,
+		connectProps({
+			networkMode: 'hybrid',
+			announce: true,
+			publicHost: 'node.example.com',
+			publicAddress: 'node.example.com:19102',
+			publicPort: 19102,
+			listenPort: 9102,
+			onionAddress: ONION
+		})
+	);
+	try {
+		await settle(50);
+		assert.deepEqual(ways(r), ['Clearnet', 'Tor', 'Local network']);
+		assert.match(shown(r), new RegExp(`${NODE}@node\\.example\\.com:19102`));
+		assert.match(r.$('[data-testid="connect-hint"]').textContent, /forwarded on your router/);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a tor wallet offers Tor and the home network; a wallet that does not announce opens on the home network and says why', async () => {
+	const tor = await render(wrapped, connectProps({ networkMode: 'tor', announce: true, onionAddress: ONION, publicPort: 19102, listenPort: 9102 }));
+	try {
+		await settle(50);
+		assert.deepEqual(ways(tor), ['Tor', 'Local network']);
+		assert.match(shown(tor), new RegExp(`${NODE}@${ONION}`));
+	} finally {
+		await tor.unmount();
+	}
+	const quiet = await render(wrapped, connectProps({ networkMode: 'hybrid', announce: false, publicHost: '203.0.113.4', publicPort: 19102, listenPort: 9102 }));
+	try {
+		await settle(50);
+		assert.deepEqual(ways(quiet), ['Clearnet', 'Tor', 'Local network']);
+		// Nothing announced: the first way with an address is the home network,
+		// at the host port the app publishes, not the container's listen port.
+		assert.match(shown(quiet), new RegExp(`${NODE}@localhost:19102`));
+		assert.doesNotMatch(shown(quiet), /@localhost:9102\b/);
+		const clearnet = Array.from(quiet.$('[data-testid="connect-ways"]').querySelectorAll('button')).find((b) => b.textContent.trim() === 'Clearnet');
+		const { click } = await import('../../../test/render.mjs');
+		await click(clearnet);
+		assert.match(quiet.$('[data-testid="connect-hint"]').textContent, /Announcing is off/);
+	} finally {
+		await quiet.unmount();
+	}
+});

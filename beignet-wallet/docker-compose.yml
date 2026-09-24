@@ -28,6 +28,19 @@ services:
     stop_grace_period: 1m
     volumes:
       - ${APP_DATA_DIR}/data:/data
+    # The wallets' Lightning listen ports, published on the host so peers on
+    # the home network and, with a router forward, on the internet can dial a
+    # wallet directly (umbrel #193). The window is the thirty ports the onion
+    # maps (CHILD_PORT_BASE + 6000 and the twenty-nine after it), so a wallet
+    # past the thirtieth is reachable only over loopback and Tor. The host side
+    # is shifted by ten thousand because 9117 and 9120 are the web ports of
+    # other Umbrel apps (Jackett, Komodo) and would collide. Docker publishes
+    # on every interface, so a Tor-mode wallet's port answers on the LAN too,
+    # and on a host with a public IPv6 address it is reachable from the
+    # internet with no router forward at all (the LND app's port is the same).
+    # The transport is BOLT 8: nothing answers without the node's public key.
+    ports:
+      - "19101-19130:9101-9130"
     environment:
       PORT: "3000"
       DATA_DIR: /data
@@ -44,6 +57,10 @@ services:
       # Internal port range for the per-wallet beignet daemons:
       CHILD_PORT_BASE: "3101"
       CHILD_PORT_MAX: "3999"
+      # Where the published window above starts on the host (19101 answers the
+      # first wallet's 9101). The manager derives each wallet's public port
+      # from it, so it must match the ports: mapping.
+      PUBLIC_PORT_BASE: "19101"
       # The app's own bundled Tor (service "tor" below). The SOCKS proxy is
       # for per-wallet outbound Lightning over Tor; the control port (29051)
       # is used to publish an inbound hidden service via ADD_ONION. Bundled

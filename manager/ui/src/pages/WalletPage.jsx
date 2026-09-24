@@ -10,7 +10,9 @@ import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal } from '../
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
+
 import GuardianServeField from '../components/GuardianServeField.jsx';
+import NetworkModeField from '../components/NetworkModeField.jsx';
 import GuardianRotateFields from '../components/GuardianRotateFields.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
 import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
@@ -18,7 +20,9 @@ import FforReturnPanel from '../components/FforReturnPanel.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
 import { currentEpoch, describeEpoch } from '../lib/ffor.js';
 import { shortId } from '../lib/format.js';
+
 import { isClosedChannel } from '../lib/channels.js';
+import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
 import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import OverviewTab from './tabs/OverviewTab.jsx';
@@ -425,13 +429,18 @@ export default function WalletPage() {
 							/>
 						</div>
 					)}
-					{rec?.tor && !rec.onchainOnly && rec.torCircuitOk === false && (
+
+					{rec && !rec.onchainOnly && rec.torCircuitOk === false && (
 						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
-							The app&apos;s Tor cannot build circuits right now. Peers reached over Tor,
-							onion addresses and, while Tor is on, public ones, will time out. Peers on
-							your own network still connect directly and are unaffected. Restart the
-							Beignet app to restart its Tor, or edit this wallet to turn Tor off and route
-							every peer directly.
+							The app&apos;s Tor cannot build circuits right now.{' '}
+							{modeOf(rec) === 'tor'
+								? 'Every peer of this wallet is reached over Tor, so connections will time out.'
+								: "Onion peers and this wallet's own Tor address will time out; clearnet peers are unaffected."}{' '}
+							Peers on your own network still connect directly. Restart the Beignet app to restart
+							its Tor
+							{modeOf(rec) === 'tor'
+								? ', or switch this wallet to Clearnet or Hybrid so clearnet peers are dialed directly.'
+								: '.'}
 						</div>
 					)}
 					<nav className="wnav">
@@ -488,8 +497,9 @@ export default function WalletPage() {
 					rec={rec}
 					origin={editing}
 					presets={config?.electrumPresets || []}
+
 					torAvailable={!!config?.torAvailable}
-					onionAvailable={!!config?.onionAvailable}
+					torProxyScopeAvailable={config?.torProxyScopeAvailable !== false}
 					recoveryAvailable={!!config?.recoveryAvailable}
 					recoveryAutoApplyAvailable={!!config?.recoveryAutoApplyAvailable}
 					guardianHostingAvailable={!!config?.guardianHostingAvailable}
@@ -543,8 +553,9 @@ function EditWalletModal({
 	rec,
 	origin,
 	presets,
+
 	torAvailable,
-	onionAvailable,
+	torProxyScopeAvailable = true,
 	recoveryAvailable = false,
 	recoveryAutoApplyAvailable = false,
 	guardianHostingAvailable = false,
@@ -596,8 +607,14 @@ function EditWalletModal({
 			? wallets.find((w) => w.id === rec.lfbw.primaryWalletId)?.name || null
 			: rec.lfbw?.primaryUri || null;
 	const [electrum, setElectrum] = useState({ ...rec.electrum });
-	const [tor, setTor] = useState(!!rec.tor);
+
+	// The network mode (umbrel #193) and the public address it may announce.
+	const [networkMode, setNetworkMode] = useState(modeOf(rec));
+	const [publicHost, setPublicHost] = useState(rec.publicHost || '');
 	const [announce, setAnnounce] = useState(!!rec.announce);
+	const announced = announce && (usesOnion(networkMode) || (usesPublic(networkMode) && !!publicHost.trim()));
+	const networkChanged =
+		networkMode !== modeOf(rec) || publicHost.trim() !== (rec.publicHost || '') || announce !== !!rec.announce;
 	const [onchainOnly, setOnchainOnly] = useState(!!rec.onchainOnly);
 	const [recoveryMode, setRecoveryMode] = useState(rec.recovery?.mode || 'off');
 	const [recoveryAutoApply, setRecoveryAutoApply] = useState(!!rec.recovery?.autoApply);
@@ -640,9 +657,11 @@ function EditWalletModal({
 	const save = async () => {
 		setBusy(true);
 		try {
+
 			const body = {
 				name,
-				tor,
+				networkMode,
+				publicHost,
 				announce: onchainOnly ? false : announce,
 				onchainOnly,
 				// Channel backup survives parking: a quorum journal refuses to
@@ -787,7 +806,8 @@ function EditWalletModal({
 			)}
 			{guardianHostingAvailable && !onchainOnly && (
 				<>
-					<GuardianServeField value={guardianServe} onChange={setGuardianServe} announce={announce} />
+
+					<GuardianServeField value={guardianServe} onChange={setGuardianServe} announced={announced} />
 					{guardianServe !== !!rec.guardianServe && (
 						<div className="info-note">
 							Changing this restarts the wallet.
@@ -843,28 +863,38 @@ function EditWalletModal({
 					)}
 				</>
 			)}
-			{(torAvailable || onionAvailable) && (
-				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
-					Tor
-				</div>
-			)}
-			{torAvailable && (
-				<label className="checkbox field">
-					<input type="checkbox" checked={tor} onChange={(e) => setTor(e.target.checked)} />
-					Outbound: connect to peers over Tor
-				</label>
-			)}
-			{onionAvailable && !onchainOnly && (
-				<label className="checkbox field">
-					<input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
-					Inbound: publish a Tor address so peers can open channels to you
-				</label>
+
+			{!onchainOnly && (
+				<>
+					<NetworkModeField
+						mode={networkMode}
+						onMode={setNetworkMode}
+						publicHost={publicHost}
+						onPublicHost={setPublicHost}
+						announce={announce}
+						onAnnounce={setAnnounce}
+						publicPort={rec.publicPort || null}
+						torAvailable={torAvailable}
+						torProxyScopeAvailable={torProxyScopeAvailable}
+					/>
+					{networkChanged && <div className="info-note">Changing this restarts the wallet.</div>}
+				</>
 			)}
 			<div className="center-actions">
 				{/* The consequence rides the button: saving while parking channels
 				    is a deliberate act, named at the moment of the click rather
 				    than behind a second dialog. */}
-				<Button variant="primary" busy={busy} onClick={save} disabled={!electrum.host || !lfbwComplete(lfbw)}>
+
+				<Button
+					variant="primary"
+					busy={busy}
+					onClick={save}
+					disabled={
+						!electrum.host ||
+						!lfbwComplete(lfbw) ||
+						(!onchainOnly && networkMode === 'clearnet' && !publicHost.trim())
+					}
+				>
 					{parkingChannels && openChannels > 0
 						? `Save and park ${openChannels} channel${openChannels === 1 ? '' : 's'}`
 						: 'Save changes'}

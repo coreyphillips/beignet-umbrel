@@ -3,7 +3,9 @@ import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
 import { shortId } from '../../lib/format.js';
+
 import { withPeerHint } from '../../lib/hints.js';
+import { nodeUris } from '../../lib/node-uris.js';
 
 export default function PeersTab({ id, api, info, rec, tick, bump }) {
 	const toast = useToast();
@@ -54,7 +56,8 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 			refresh();
 			bump();
 		} catch (e) {
-			toast(withPeerHint(rec, e.message, { port }), 'error');
+
+			toast(withPeerHint(rec, e.message, { port, host }), 'error');
 		} finally {
 			setBusy(false);
 		}
@@ -89,15 +92,16 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 						in this same Beignet app (e.g. two regtest nodes here).
 					</span>
 				</div>
-				{rec?.onionAddress && info?.nodeId && (
-					<div className="field">
-						<span className="field-label">Tor connection URI (share for inbound channels)</span>
-						<CopyText value={`${info.nodeId}@${rec.onionAddress}`} />
-						<span className="field-hint">
-							Reachable over Tor. Give this to a peer so they can open a channel to you.
-						</span>
+
+			{nodeUris({ nodeId: info?.nodeId, rec, lanHost: window.location.hostname })
+				.filter((way) => way.key !== 'local' && way.uri)
+				.map((way) => (
+					<div className="field" key={way.key}>
+						<span className="field-label">{way.label} connection URI (share for inbound channels)</span>
+						<CopyText value={way.uri} />
+						<span className="field-hint">{way.hint}</span>
 					</div>
-				)}
+				))}
 			</Card>
 
 			<Card title="Connected peers" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>

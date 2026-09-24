@@ -19,12 +19,16 @@ import {
 } from '../components/ui.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
+
 import GuardianServeField from '../components/GuardianServeField.jsx';
+import NetworkModeField from '../components/NetworkModeField.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
+
 import { isClosedChannel } from '../lib/channels.js';
+import { usesOnion, usesPublic } from '../lib/node-uris.js';
 import { openBackup } from '../lib/backup.js';
 
 function statusTone(s) {
@@ -290,8 +294,14 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	const [mnemonic, setMnemonic] = useState('');
 	const [custom, setCustom] = useState(!config.defaultElectrum);
 	const [electrum, setElectrum] = useState(emptyElectrum(config));
-	const [tor, setTor] = useState(false);
+
+	// The network mode (umbrel #193): hybrid is the posture a new wallet always
+	// had, direct dials with the onion announced when announcing is on, plus a
+	// public address once one is entered.
+	const [networkMode, setNetworkMode] = useState('hybrid');
+	const [publicHost, setPublicHost] = useState('');
 	const [announce, setAnnounce] = useState(false);
+	const announced = announce && (usesOnion(networkMode) || (usesPublic(networkMode) && !!publicHost.trim()));
 	const [onchainOnly, setOnchainOnly] = useState(false);
 	// Channel backup defaults to seed only until peer-storage restore is
 	// reachable end to end; the choice is there for anyone opting in now.
@@ -327,7 +337,8 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					network,
 					wordCount,
 					electrum: elec,
-					tor,
+					networkMode,
+					publicHost,
 					announce,
 					onchainOnly,
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
@@ -342,7 +353,8 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					network,
 					mnemonic,
 					electrum: elec,
-					tor,
+					networkMode,
+					publicHost,
 					announce,
 					onchainOnly,
 					recoveryMode: onchainOnly ? 'off' : recoveryMode,
@@ -458,32 +470,34 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 				/>
 			)}
 			{asksAutoApply && <RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} />}
-			{asksGuardianServe && <GuardianServeField value={guardianServe} onChange={setGuardianServe} announce={announce} />}
+
+			{asksGuardianServe && <GuardianServeField value={guardianServe} onChange={setGuardianServe} announced={announced} />}
 			{asksFfor && <FforSettleField value={fforBlock} onChange={setFforBlock} />}
 
 			{config.lfbwAvailable && !onchainOnly && (
 				<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />
 			)}
 
-			{(config.torAvailable || config.onionAvailable) && !onchainOnly && (
-				<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
-					Tor
-				</div>
-			)}
-			{config.torAvailable && !onchainOnly && (
-				<label className="checkbox field">
-					<input type="checkbox" checked={tor} onChange={(e) => setTor(e.target.checked)} />
-					Outbound: connect to peers over Tor
-				</label>
-			)}
-			{config.onionAvailable && !onchainOnly && (
-				<label className="checkbox field">
-					<input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
-					Inbound: publish a Tor address so peers can open channels to you
-				</label>
+
+			{!onchainOnly && (
+				<NetworkModeField
+					mode={networkMode}
+					onMode={setNetworkMode}
+					publicHost={publicHost}
+					onPublicHost={setPublicHost}
+					announce={announce}
+					onAnnounce={setAnnounce}
+					torAvailable={!!config.torAvailable}
+					torProxyScopeAvailable={config.torProxyScopeAvailable !== false}
+				/>
 			)}
 
-			<Button variant="primary" busy={busy} onClick={submit} disabled={!onchainOnly && !lfbwComplete(lfbw)}>
+			<Button
+				variant="primary"
+				busy={busy}
+				onClick={submit}
+				disabled={!onchainOnly && (!lfbwComplete(lfbw) || (networkMode === 'clearnet' && !publicHost.trim()))}
+			>
 				{tab === 'create' ? 'Create wallet' : 'Import wallet'}
 			</Button>
 		</Card>

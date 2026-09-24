@@ -84,7 +84,8 @@ function ExportPanel() {
 		<>
 			<div className="info-note">
 				One encrypted file holding every wallet on this box: its recovery phrase, its API token,
-				its record (network, Electrum server, Tor, channel backup mode and guardians, the
+
+				its record (network, Electrum server, network mode and public address, channel backup mode and guardians, the
 				lightning-first link) and the app defaults. Channel databases are not in it; channels come
 				back through the seed and each wallet&apos;s own channel backup.
 			</div>

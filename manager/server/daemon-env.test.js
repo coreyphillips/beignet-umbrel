@@ -26,7 +26,7 @@ const rec = (extra = {}) => ({
 	name: 'Test wallet',
 	network: 'mainnet',
 	electrum: { host: 'umbrel.local', port: 50001, tls: false },
-	tor: false,
+	networkMode: 'hybrid',
 	announce: false,
 	port: 3001,
 	...extra
@@ -286,4 +286,106 @@ test('witnessing and issuing ride the Lightning listener too, the issuer never w
 	const parked = m._daemonEnv(rec({ ffor: { witness: { enabled: true }, issuer: { enabled: true } }, onchainOnly: true }), PATHS, 's', 't');
 	assert.equal(parked.BEIGNET_FFOR_WITNESS, undefined);
 	assert.equal(parked.BEIGNET_FFOR_ISSUER, undefined);
+});
+
+// The network mode (umbrel #193). Tor mode proxies every peer. Clearnet and
+// Hybrid dial clearnet peers directly and keep the proxy for .onion peers,
+// which is the engine's onion-only scope; an engine without it gets no proxy
+// for those two modes, the direct dials they always made.
+const { config } = require('./config');
+
+function withTor(fn, { scope = true, proxy = 'beignet-wallet_tor_1:9050', publicPortBase = null } = {}) {
+	const prev = { torProxy: config.torProxy, publicPortBase: config.publicPortBase };
+	config.torProxy = proxy;
+	config.publicPortBase = publicPortBase;
+	const m = bareManager();
+	m.torProxyScopeSupported = scope;
+	try {
+		return fn(m);
+	} finally {
+		Object.assign(config, prev);
+	}
+}
+
+test('tor mode sends every peer through the app proxy and nothing else', () => {
+	withTor((m) => {
+		const env = m._daemonEnv(rec({ networkMode: 'tor' }), PATHS, 's', 't');
+		assert.equal(env.BEIGNET_TOR_PROXY, 'beignet-wallet_tor_1:9050');
+		assert.equal(env.BEIGNET_TOR_PROXY_ONION_ONLY, undefined, 'the scope is for the direct modes');
+	});
+});
+
+test('clearnet and hybrid keep the proxy for onion peers only, when the engine can', () => {
+	withTor((m) => {
+		for (const networkMode of ['clearnet', 'hybrid']) {
+			const env = m._daemonEnv(rec({ networkMode, publicHost: '203.0.113.4' }), PATHS, 's', 't');
+			assert.equal(env.BEIGNET_TOR_PROXY, 'beignet-wallet_tor_1:9050', networkMode);
+			assert.equal(env.BEIGNET_TOR_PROXY_ONION_ONLY, 'true', networkMode);
+		}
+	});
+	withTor(
+		(m) => {
+			for (const networkMode of ['clearnet', 'hybrid']) {
+				const env = m._daemonEnv(rec({ networkMode, publicHost: '203.0.113.4' }), PATHS, 's', 't');
+				assert.equal(env.BEIGNET_TOR_PROXY, undefined, `${networkMode}: no scope, no proxy, the direct dials it always made`);
+				assert.equal(env.BEIGNET_TOR_PROXY_ONION_ONLY, undefined, 'never the scope alone: the engine refuses to boot on it');
+			}
+			const tor = m._daemonEnv(rec({ networkMode: 'tor' }), PATHS, 's', 't');
+			assert.equal(tor.BEIGNET_TOR_PROXY, 'beignet-wallet_tor_1:9050', 'tor mode never needed the scope');
+		},
+		{ scope: false }
+	);
+});
+
+test('a record from before the mode existed reads by its old flag', () => {
+	withTor((m) => {
+		const on = m._daemonEnv(rec({ networkMode: undefined, tor: true }), PATHS, 's', 't');
+		assert.equal(on.BEIGNET_TOR_PROXY, 'beignet-wallet_tor_1:9050');
+		assert.equal(on.BEIGNET_TOR_PROXY_ONION_ONLY, undefined, 'Tor on was every peer over Tor, and still is');
+		const off = m._daemonEnv(rec({ networkMode: undefined, tor: false }), PATHS, 's', 't');
+		assert.equal(off.BEIGNET_TOR_PROXY, 'beignet-wallet_tor_1:9050', 'Tor off becomes hybrid: direct dials, with the proxy its onion peers never had');
+		assert.equal(off.BEIGNET_TOR_PROXY_ONION_ONLY, 'true');
+	});
+});
+
+test('an on-chain only wallet keeps the proxy for its onion guardians and announces nothing', () => {
+	withTor((m) => {
+		const env = m._daemonEnv(
+			rec({ networkMode: 'hybrid', publicHost: '203.0.113.4', announce: true, onchainOnly: true }),
+			PATHS,
+			's',
+			't'
+		);
+		assert.equal(env.BEIGNET_TOR_PROXY, 'beignet-wallet_tor_1:9050');
+		assert.equal(env.BEIGNET_LISTEN_PORT, undefined);
+		assert.equal(env.BEIGNET_ANNOUNCE_ADDRESSES, undefined);
+	});
+});
+
+test('the announcement follows the mode: the onion, the public address at its published port, or both', () => {
+	const onion = `${'o'.repeat(56)}.onion`;
+	withTor(
+		(m) => {
+			m.onion = onion;
+			const at = (extra) =>
+				m._daemonEnv(rec({ port: 3102, announce: true, publicHost: '203.0.113.4', ...extra }), PATHS, 's', 't')
+					.BEIGNET_ANNOUNCE_ADDRESSES;
+			assert.equal(at({ networkMode: 'tor' }), `${onion}:9102`);
+			assert.equal(at({ networkMode: 'clearnet' }), '203.0.113.4:19102', 'the host port, not the container port');
+			assert.equal(at({ networkMode: 'hybrid' }), `${onion}:9102,203.0.113.4:19102`);
+			assert.equal(at({ networkMode: 'hybrid', publicHost: '' }), `${onion}:9102`, 'hybrid with no address yet is the onion alone');
+			assert.equal(at({ networkMode: 'hybrid', publicHost: '2001:db8::7' }), `${onion}:9102,[2001:db8::7]:19102`);
+			assert.equal(at({ networkMode: 'hybrid', announce: false }), undefined, 'announcing off announces nothing');
+			assert.equal(at({ networkMode: 'clearnet', port: 3131 }), undefined, 'the thirty-first wallet has no published port');
+			assert.equal(at({ networkMode: 'hybrid', port: 3131 }), undefined, 'and the onion does not forward it either');
+		},
+		{ publicPortBase: 19101 }
+	);
+});
+
+test('with no published window the listen port is the public port, as on a native run', () => {
+	withTor((m) => {
+		const env = m._daemonEnv(rec({ networkMode: 'clearnet', publicHost: '127.0.0.1', announce: true }), PATHS, 's', 't');
+		assert.equal(env.BEIGNET_ANNOUNCE_ADDRESSES, '127.0.0.1:9001');
+	});
 });

@@ -1,8 +1,10 @@
-// A wallet with Tor enabled routes every peer dial through the app's own Tor
-// SOCKS proxy; when that proxy cannot build circuits, connections fail with no
-// clue why. A dead proxy surfaces as more than just a timeout (SOCKS/refused/
-// unreachable wording too), so match the common connection-failure shapes and
-// make the failure self-explanatory.
+
+// A wallet in Tor mode routes every peer dial through the app's own Tor SOCKS
+// proxy, and every wallet routes its .onion peers through it (umbrel #193);
+// when that proxy cannot build circuits, connections fail with no clue why. A
+// dead proxy surfaces as more than just a timeout (SOCKS/refused/unreachable
+// wording too), so match the common connection-failure shapes and make the
+// failure self-explanatory.
 const CONN_FAILURE =
 	/timed? ?out|timeout|socks|proxy|refused|unreachable|no route|network is unreachable|econn|etimedout|ehostunreach|failed to connect|connection (failed|closed|reset|refused)/i;
 
@@ -23,13 +25,26 @@ const UMBREL_APP_PORT_MAX = 2999;
 // the port is not worth raising as a suspect.
 const LIGHTNING_PORTS = new Set([9735, 9736, 9737, 9738, 9739, 9740]);
 
-export function withTorHint(rec, message) {
-	if (!rec?.tor || !CONN_FAILURE.test(String(message || ''))) return message;
-	return (
-		`${message}. This wallet routes peer connections through Tor. ` +
-		"If the app's Tor is unhealthy, connections fail. " +
-		'Restart the Beignet app to restart its Tor and retry, or edit the wallet to turn Tor off.'
-	);
+
+export function withTorHint(rec, message, { host } = {}) {
+	if (!CONN_FAILURE.test(String(message || ''))) return message;
+	const torMode = rec?.networkMode === 'tor';
+	const onion = /\.onion$/i.test(String(host || '').trim());
+	if (torMode) {
+		return (
+			`${message}. This wallet routes every peer connection through Tor. ` +
+			"If the app's Tor is unhealthy, connections fail. " +
+			'Restart the Beignet app to restart its Tor and retry, or switch the wallet to Clearnet or Hybrid so clearnet peers are dialed directly.'
+		);
+	}
+	if (onion) {
+		return (
+			`${message}. Onion peers are reached through the app's Tor. ` +
+			"If the app's Tor is unhealthy, connections to them fail. " +
+			'Restart the Beignet app to restart its Tor and retry.'
+		);
+	}
+	return message;
 }
 
 /**
@@ -42,9 +57,10 @@ export function withTorHint(rec, message) {
  * check first, and lead with the wrong-port case when the port looks like an
  * Umbrel app's web page rather than a Lightning listener.
  */
-export function withPeerHint(rec, message, { port } = {}) {
+
+export function withPeerHint(rec, message, { port, host } = {}) {
 	const text = String(message || '');
-	if (!HANDSHAKE_CLOSED.test(text)) return withTorHint(rec, message);
+	if (!HANDSHAKE_CLOSED.test(text)) return withTorHint(rec, message, { host });
 
 	const p = parseInt(port, 10);
 	const looksLikeAppPort =

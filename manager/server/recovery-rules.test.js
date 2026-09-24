@@ -107,7 +107,7 @@ test('guardian candidates are the serving wallets with the addresses to reach th
 	const node = '02' + K('c');
 	const m = managerWith({
 		records: {
-			a: { id: 'a', name: 'Main', network: 'mainnet', port: 3101, running: true, guardianServe: true, nodeId: node, announce: true },
+			a: { id: 'a', name: 'Main', network: 'mainnet', port: 3101, running: true, guardianServe: true, nodeId: node, announce: true, networkMode: 'hybrid', publicHost: '203.0.113.4' },
 			b: { id: 'b', name: 'Quiet', network: 'mainnet', port: 3102, running: true, guardianServe: false, nodeId: node },
 			c: { id: 'c', name: 'Parked', network: 'mainnet', port: 3103, running: true, guardianServe: true, onchainOnly: true, nodeId: node },
 			d: { id: 'd', name: 'Fresh', network: 'mainnet', port: 3104, running: true, guardianServe: true }
@@ -123,6 +123,7 @@ test('guardian candidates are the serving wallets with the addresses to reach th
 		'not serving, on-chain only, and no node id yet are all left out'
 	);
 	assert.equal(candidates[0].onionUri, `${node}@${'x'.repeat(56)}.onion:9101`);
+	assert.equal(candidates[0].publicUri, `${node}@203.0.113.4:9101`, 'the announced public address, at the port peers dial');
 	assert.equal(candidates[0].localUri, `${node}@127.0.0.1:9101`);
 	assert.equal(candidates[0].running, true);
 });

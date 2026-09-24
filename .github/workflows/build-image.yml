@@ -532,7 +532,16 @@ env:
   # clears a transaction it no longer has), logs a refused UTXO write, and no
   # longer lets a lookup error entry or a write queued at shutdown crash or
   # reject.
-  BEIGNET_VERSION: "0.21.12"
+  # 0.22.0 adds BEIGNET_TOR_PROXY_ONION_ONLY (beignet #963): with it the Tor
+  # proxy serves .onion peers only and public clearnet peers are dialed
+  # directly, which is what the Clearnet and Hybrid network modes set (umbrel
+  # #193). The one new env var; no route changes. The rest is payment-queue
+  # hardening (#974 to #996: one queue per process, a payment stays pending
+  # while its HTLC can still settle, a retry only once the failed HTLC's
+  # removal is irrevocable, an MPP part refused once the parts out reach the
+  # total, the daily spend ledger kept across a restart, no second payment of
+  # a completed hash) and wallet refresh fixes (#959 to #973).
+  BEIGNET_VERSION: "0.22.0"
 
 jobs:
   build:

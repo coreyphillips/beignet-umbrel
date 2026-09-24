@@ -85,8 +85,14 @@ const GUARDIAN_ROTATION_MARKERS = ["'/recovery/rotate-guardians'"];
 // and its siblings) were parsed and dropped until 0.21.4, so a settlement
 // peer on 0.15.0 to 0.21.3 would come up with the role silently off. The
 // daemon-options module is where 0.21.4 forwards them, so it is probed too.
+
 const FFOR_ROUTE_MARKERS = ["'/ffor/epoch/start'", "'/ffor/recover'"];
 const FFOR_ROLE_MARKERS = ['fforSettle'];
+// The Tor proxy scoped to .onion peers (beignet #963, engine 0.22.0): a
+// Clearnet or Hybrid wallet dials clearnet peers directly and keeps the
+// app's Tor for onion peers. The env name is a literal in the config module
+// that parses it.
+const TOR_PROXY_SCOPE_MARKERS = ['BEIGNET_TOR_PROXY_ONION_ONLY'];
 
 /** The text of a module beside the daemon binary, or null when absent. */
 function siblingModule(bin, file) {
@@ -135,6 +141,12 @@ function fforAvailable(bin = process.env.BEIGNET_BIN) {
 	return probe(bin, 'openapi.js', FFOR_ROUTE_MARKERS) && probe(bin, 'daemon-options.js', FFOR_ROLE_MARKERS);
 }
 
+
+/** True when the engine behind `bin` can keep the Tor proxy for onion peers only. */
+function torProxyScopeAvailable(bin = process.env.BEIGNET_BIN) {
+	return probe(bin, 'config.js', TOR_PROXY_SCOPE_MARKERS);
+}
+
 function offlineReceiveAvailable(bin = process.env.BEIGNET_BIN) {
 	return (
 		probe(bin, 'openapi.js', ["'/receive/status'", "'/receive/quote'", "'/receive/invoice'"]) &&
@@ -142,7 +154,9 @@ function offlineReceiveAvailable(bin = process.env.BEIGNET_BIN) {
 	);
 }
 module.exports = {
+
 	offlineReceiveAvailable,
+	torProxyScopeAvailable,
 	engineVersion,
 	fforAvailable,
 	recoveryAvailable,
@@ -158,5 +172,7 @@ module.exports = {
 	GUARDIAN_HOSTING_MARKERS,
 	GUARDIAN_ROTATION_MARKERS,
 	FFOR_ROUTE_MARKERS,
-	FFOR_ROLE_MARKERS
+
+	FFOR_ROLE_MARKERS,
+	TOR_PROXY_SCOPE_MARKERS
 };

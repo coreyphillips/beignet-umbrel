@@ -93,7 +93,8 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			return;
 		}
 		try {
-			await resolveSlot(slot, c.onionUri || c.localUri);
+
+			await resolveSlot(slot, c.onionUri || c.publicUri || c.localUri);
 		} catch (e) {
 			toast(e.message, 'error');
 		}
@@ -204,7 +205,8 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 								{candidates.map((c) => (
 									<option key={c.id} value={c.id} disabled={!c.running}>
 										{c.name}
-										{c.onionUri ? '' : ' (no Tor address: reachable from this box only)'}
+
+									{c.onionUri || c.publicUri ? '' : ' (no announced address: reachable from this box only)'}
 										{c.running ? '' : ' (not running)'}
 									</option>
 								))}
