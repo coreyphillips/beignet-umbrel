@@ -52,9 +52,10 @@ test('each missing way in says why', () => {
 	assert.match(hint(noHost, 'clearnet'), /No public address set/);
 	assert.match(hint(noHost, 'tor'), /not published its Tor address yet/);
 	const past = nodeUris({ nodeId: NODE, rec: { networkMode: 'hybrid', announce: true, publicHost: '203.0.113.4', publicPort: null, listenPort: 9131 }, lanHost: 'umbrel.local' });
-	assert.match(hint(past, 'clearnet'), /past the published port window/);
+	assert.match(hint(past, 'clearnet'), /no public port and no Tor address/, 'past the window there is no onion either');
+	assert.doesNotMatch(hint(past, 'clearnet'), /over Tor/);
 	assert.equal(uri(past, 'local'), null);
-	assert.match(hint(past, 'local'), /past the published port window/);
+	assert.match(hint(past, 'local'), /only wallets in this app reach it/);
 	const loading = nodeUris({ nodeId: null, rec: {}, lanHost: 'umbrel.local' });
 	assert.deepEqual(keys(loading), ['clearnet', 'tor', 'local']);
 	assert.equal(uri(loading, 'local'), null);

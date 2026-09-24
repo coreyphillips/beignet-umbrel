@@ -40,7 +40,8 @@ export function nodeUris({ nodeId, rec, lanHost }) {
 		} else if (!rec?.announce) {
 			hint = ANNOUNCE_OFF;
 		} else if (rec?.listenPort && !rec?.publicPort) {
-			hint = 'This wallet is past the published port window, so it has no public port. Peers reach it over Tor.';
+			hint =
+				'This wallet is past the thirty ports the app publishes and the onion maps, so it has no public port and no Tor address; only wallets in this app reach it.';
 		} else {
 			hint = 'Not available yet.';
 		}
@@ -73,7 +74,7 @@ export function nodeUris({ nodeId, rec, lanHost }) {
 		uri: nodeId && lanHost && rec?.publicPort ? `${nodeId}@${lanHost}:${rec.publicPort}` : null,
 		hint:
 			rec?.listenPort && !rec?.publicPort
-				? 'This wallet is past the published port window, so it answers only over Tor and to wallets in this app.'
+				? 'This wallet is past the thirty ports the app publishes and the onion maps, so only wallets in this app reach it.'
 				: rec?.publicPort
 				? 'Reachable from other machines on your home network, at the address you use to open this dashboard.'
 				: 'Not available yet.'

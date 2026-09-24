@@ -43,8 +43,10 @@ export default function NetworkModeField({
 					announced. Hybrid: the same dials, with both addresses announced. Clearnet and Hybrid put
 					your public address in the public Lightning gossip and show it to every peer you connect
 					to. Whatever the mode, the wallet&apos;s port also answers on your home network, because
-					the app publishes the wallet ports on this Umbrel; nothing reaches it from the internet
-					unless you forward the port on your router.
+					the app publishes the wallet ports on this Umbrel. Behind a home router nothing reaches
+					it from the internet unless you forward the port; an Umbrel with a public IPv6 address
+					is reachable on it directly. Either way a peer gets nowhere without this node&apos;s
+					public key: the Lightning transport is authenticated and encrypted end to end.
 				</Help>
 			</div>
 			<Segmented

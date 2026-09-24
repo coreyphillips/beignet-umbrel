@@ -74,6 +74,24 @@ test('a public host is an IPv4, an IPv6 or a domain name, and nothing else', () 
 	rejects(() => nm.normalizePublicHost('a:b:c'), 'BAD_PUBLIC_HOST', /IP address or a domain name/);
 });
 
+test('IPv6 is held to the engine rule, narrower than Node: no zone id, no embedded IPv4, eight groups', () => {
+	// What Node's net.isIPv6 accepts and the engine's expandIpv6 refuses would
+	// fail the daemon's boot, so it is refused here first.
+	for (const host of ['fe80::1%eth0', '::ffff:192.0.2.1', '2001:db8::192.0.2.1', '[fe80::1%eth0]', '[::ffff:192.0.2.1]']) {
+		rejects(() => nm.normalizePublicHost(host), 'BAD_PUBLIC_HOST', /zone id or embedded IPv4/);
+	}
+	assert.equal(nm.normalizePublicHost('1:2:3:4:5:6:7:8'), '1:2:3:4:5:6:7:8');
+	assert.equal(nm.normalizePublicHost('2001:0DB8:0000:0000:0000:0000:0000:0001'), '2001:0db8:0000:0000:0000:0000:0000:0001');
+	assert.equal(nm.normalizePublicHost('::1'), '::1');
+	assert.equal(nm.isEngineIpv6('2001:db8::1'), true);
+	assert.equal(nm.isEngineIpv6('2001:db8:::1'), false, 'a triple colon is two double colons');
+	assert.equal(nm.isEngineIpv6('1:2:3:4:5:6:7'), false, 'seven groups');
+	assert.equal(nm.isEngineIpv6('1:2:3:4:5:6:7:8:9'), false, 'nine groups');
+	assert.equal(nm.isEngineIpv6('2001:db8::12345'), false, 'a five-digit group');
+	assert.equal(nm.isEngineIpv6('1:2:3:4::5:6:7:8'), false, 'a :: that expands to nothing');
+	assert.equal(nm.isEngineIpv6('node.example.com'), false);
+});
+
 test('a host meets a port in brackets when it is IPv6', () => {
 	assert.equal(nm.hostForUri('203.0.113.4'), '203.0.113.4');
 	assert.equal(nm.hostForUri('node.example.com'), 'node.example.com');

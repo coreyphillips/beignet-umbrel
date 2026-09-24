@@ -35,8 +35,10 @@ services:
     # past the thirtieth is reachable only over loopback and Tor. The host side
     # is shifted by ten thousand because 9117 and 9120 are the web ports of
     # other Umbrel apps (Jackett, Komodo) and would collide. Docker publishes
-    # on every interface, so a Tor-mode wallet's port answers on the LAN too;
-    # nothing reaches it from the internet without a forward.
+    # on every interface, so a Tor-mode wallet's port answers on the LAN too,
+    # and on a host with a public IPv6 address it is reachable from the
+    # internet with no router forward at all (the LND app's port is the same).
+    # The transport is BOLT 8: nothing answers without the node's public key.
     ports:
       - "19101-19130:9101-9130"
     environment:

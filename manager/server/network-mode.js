@@ -59,6 +59,30 @@ const DNS_NAME_RE = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const DOTTED_QUAD_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 /**
+ * IPv6 as the engine's expandIpv6 (beignet's gossip messages) accepts it:
+ * hex groups of one to four digits, eight of them once a single "::" is
+ * expanded. Node's net.isIPv6 is wider (zone ids like fe80::1%eth0, embedded
+ * IPv4 like ::ffff:192.0.2.1), and a host the engine refuses fails the
+ * daemon's boot, so the narrower rule is the one that counts.
+ */
+function isEngineIpv6(host) {
+	if (!host || !host.includes(':')) return false;
+	let groups;
+	const doubleColon = host.indexOf('::');
+	if (doubleColon !== -1) {
+		if (host.indexOf('::', doubleColon + 1) !== -1) return false;
+		const head = host.slice(0, doubleColon).split(':').filter((g) => g.length > 0);
+		const tail = host.slice(doubleColon + 2).split(':').filter((g) => g.length > 0);
+		const missing = 8 - head.length - tail.length;
+		if (missing < 1) return false;
+		groups = [...head, ...new Array(missing).fill('0'), ...tail];
+	} else {
+		groups = host.split(':');
+	}
+	return groups.length === 8 && groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g));
+}
+
+/**
  * The public host a wallet announces, held to what the engine accepts,
  * because a bad entry in BEIGNET_ANNOUNCE_ADDRESSES fails the daemon's boot
  * and a wallet that cannot start is worse than a refused edit. Blank means
@@ -79,12 +103,13 @@ function normalizePublicHost(input) {
 		if (end === -1) throw bad('An IPv6 address in brackets needs its closing bracket.');
 		if (end !== raw.length - 1) throw bad('Enter the host only: the port is fixed by the app.');
 		host = raw.slice(1, end);
-		if (!net.isIPv6(host)) throw bad(`"${host}" is not an IPv6 address.`);
+		if (!isEngineIpv6(host)) throw bad(`"${host}" is not an IPv6 address the node can announce (plain hex groups, no zone id or embedded IPv4).`);
 		return host.toLowerCase();
 	}
-	if (net.isIPv6(host)) return host.toLowerCase();
+	if (isEngineIpv6(host)) return host.toLowerCase();
 	if (host.includes(':')) {
 		if (/^[^:]+:\d+$/.test(host)) throw bad('Enter the host only: the port is fixed by the app.');
+		if (net.isIPv6(host)) throw bad(`"${host}" is not an IPv6 address the node can announce (plain hex groups, no zone id or embedded IPv4).`);
 		throw bad('Enter an IP address or a domain name.');
 	}
 	if (DOTTED_QUAD_RE.test(host)) {
@@ -163,6 +188,7 @@ function validateNetworkChoice({ mode, publicHost, onchainOnly } = {}) {
 module.exports = {
 	MODES,
 	DEFAULT_MODE,
+	isEngineIpv6,
 	networkMode,
 	requestedMode,
 	usesOnion,
