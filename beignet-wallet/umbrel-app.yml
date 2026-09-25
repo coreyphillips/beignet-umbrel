@@ -30,22 +30,19 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Each wallet now has a network mode, like the Tor and Clearnet choice of
-  Umbrel's Lightning Node app: Tor (every peer over Tor, only the Tor
-  address announced), Clearnet (clearnet peers dialed directly, Tor peers
-  over Tor, your public address announced) or Hybrid (both addresses
-  announced). Clearnet and Hybrid take a public IP or domain name that you
-  enter. The wallets' Lightning ports are now published on your Umbrel
-  (19101 and up), so peers on your home network can dial a wallet directly
-  and, once your router forwards the port, so can peers anywhere. The
-  Overview tab's connect card hands out each address the wallet announces.
-  Wallets that had Tor off become Hybrid with no public address and keep
-  their direct connections; their Tor peers, which the old setting could
-  not reach, now connect through the app's Tor. Bundles beignet 0.22.0,
-  which adds the onion-only proxy scope these modes use and hardens the
-  payment queue: one queue per process, a payment stays pending while it
-  can still settle, a retry only once the failed attempt is irrevocably
-  gone, and no second payment of an invoice that already completed.
+  Bundles beignet 0.23.0, a security release. Every Lightning payment is now
+  held to a routing-fee cap even when the caller gives none (1% of the
+  amount, at least 50 sats), and the fee counts inside the per-payment and
+  daily spending limits; the Send tab passes the fee it just quoted as the
+  cap, so a route the estimate row showed still pays. A payee's blinded-path
+  fee is reported and capped instead of paid invisibly. As the funder of a
+  channel the wallet no longer lets a peer stack payments until the
+  commitment fee consumes its balance, and a payment it is asked to forward
+  with an expiry too close to the current block is refused rather than
+  relayed. A malformed request can no longer stop the daemon, its config,
+  database, backups and exports are created readable by the owner only, and
+  a daemon started without a token refuses cross-site browser requests (the
+  Umbrel app always runs with a token).
 
 
 dependencies: []
