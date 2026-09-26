@@ -30,19 +30,20 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.23.0, a security release. Every Lightning payment is now
-  held to a routing-fee cap even when the caller gives none (1% of the
-  amount, at least 50 sats), and the fee counts inside the per-payment and
-  daily spending limits; the Send tab passes the fee it just quoted as the
-  cap, so a route the estimate row showed still pays. A payee's blinded-path
-  fee is reported and capped instead of paid invisibly. As the funder of a
-  channel the wallet no longer lets a peer stack payments until the
-  commitment fee consumes its balance, and a payment it is asked to forward
-  with an expiry too close to the current block is refused rather than
-  relayed. A malformed request can no longer stop the daemon, its config,
-  database, backups and exports are created readable by the owner only, and
-  a daemon started without a token refuses cross-site browser requests (the
-  Umbrel app always runs with a token).
+  Bundles beignet 0.23.1, a fix release. Completed payments older than a day
+  no longer drop out of the history a minute after the node starts, and their
+  requests stay marked paid. A force-closed channel's swept balance is no
+  longer counted twice while the channel is still winding down, and a
+  channel close or sweep is paid to an address the wallet never handed out,
+  so a saved receive request is no longer shown as partly paid by a close.
+  Receiving over a just-in-time channel works when the wallet also has a
+  channel with another peer. A payment whose route hop raised its fee is
+  retried at the new fee instead of losing the hop, and a wallet with one
+  usable channel keeps it on the retry. Channels report the transaction of a
+  splice in progress and the fundings a splice replaced, so the wallet's own
+  deposits into its channel read as transfers rather than sends, and a
+  broadcast that the network refuses now says which transaction and whether
+  the wallet keeps retrying it.
 
 
 dependencies: []
