@@ -541,7 +541,7 @@ env:
   # removal is irrevocable, an MPP part refused once the parts out reach the
   # total, the daily spend ledger kept across a restart, no second payment of
   # a completed hash) and wallet refresh fixes (#959 to #973).
-  BEIGNET_VERSION: "0.22.0"
+  BEIGNET_VERSION: "0.23.0"
 
 jobs:
   build:

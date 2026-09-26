@@ -23,6 +23,10 @@ import { arrivingFundsNote, lfbwStatus } from '../../lib/lfbw.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 import { manager, walletApi } from '../../api.js';
 
+// Headroom over the quoted routing fee when a payment is held to its estimate,
+// the same figure the shared wallet client uses.
+const LIGHTNING_FEE_HEADROOM_SATS = 10;
+
 // beignet 0.6.0 pays during splices: the daemon marks each channel with
 // htlcUsable, true for NORMAL and for a channel mid-splice that carries
 // payments through its confirmation window. Older daemons lack the flag, so
@@ -1268,6 +1272,15 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 			// one button rather than a fetch step and a pay step.
 			const body = offer ? { offer } : { bolt11: invoice };
 			if (needsAmount) body.amountSats = typedAmount;
+			// The payment is held to the fee the panel just quoted, plus a little
+			// headroom for rounding and a retry, the way the phone and web wallets
+			// do. Without a cap of its own the daemon (beignet 0.23.0 and later)
+			// applies a default of 1% with a 50 sat floor, which can refuse a route
+			// the estimate row has already shown. An offer has no estimate, so it
+			// pays under that default.
+			if (!offer && estimate && !expired && Number.isInteger(estimate.estimatedFeeSats)) {
+				body.maxFeeSats = estimate.estimatedFeeSats + LIGHTNING_FEE_HEADROOM_SATS;
+			}
 			const r = await api.post(offer ? '/offer/pay' : '/invoice/pay-safe', body);
 			setResult(r);
 			// The safe route answers a failure as a value, so a payment that found
