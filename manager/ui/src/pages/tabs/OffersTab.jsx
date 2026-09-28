@@ -5,6 +5,7 @@ import { useToast } from '../../components/Toast.jsx';
 import { Button, Card, CopyText, Field, Modal, QR } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { parsePayment } from '../../lib/payment-uri.js';
+import { beginOwnPayment, endOwnPayment } from '../../lib/own-payments.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 
 export default function OffersTab({ id, api, tick, bump }) {
@@ -74,7 +75,13 @@ export default function OffersTab({ id, api, tick, bump }) {
 			// the capitals folded back down, rather than the raw box.
 			const body = { offer };
 			if (payAmount) body.amountSats = parseInt(payAmount, 10);
-			const r = await api.post('/offer/pay', body);
+			const own = beginOwnPayment();
+			let r;
+			try {
+				r = await api.post('/offer/pay', body);
+			} finally {
+				endOwnPayment(own, r?.paymentHash);
+			}
 			toast(r.status === 'COMPLETED' ? 'Offer paid' : `Payment ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
 			bump();
 		} catch (e) {

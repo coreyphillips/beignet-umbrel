@@ -2511,7 +2511,7 @@ function payOverLightning(st, id, { amountSats, bolt11, noAmount }) {
 		completedAt: at
 	};
 	st.payments.unshift(payment);
-	setTimeout(() => emit(id, 'payment:sent', { amountSats }), 400);
+	setTimeout(() => emit(id, 'payment:sent', { paymentHash, amountSats }), 400);
 	return payment;
 }
 
@@ -3707,10 +3707,13 @@ function walletRequest(id, path, method, body) {
 			if (minted) decoded.issuerId = nodeId(minted.walletId);
 			return decoded;
 		}
-		case '/offer/pay':
+		case '/offer/pay': {
 			if (!/^lno/i.test(body.offer || '')) throw err('Not a BOLT12 offer');
-			setTimeout(() => emit(id, 'payment:sent', {}), 400);
-			return { status: 'COMPLETED' };
+			// The daemon's event carries the payment's hash, as its answer does.
+			const paymentHash = hex(64);
+			setTimeout(() => emit(id, 'payment:sent', { paymentHash }), 400);
+			return { paymentHash, status: 'COMPLETED' };
+		}
 		default:
 			throw err(`Unknown demo endpoint ${route}`, 'NOT_FOUND');
 	}

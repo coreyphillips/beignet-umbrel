@@ -6,6 +6,7 @@ import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
 import { formatInvoiceWarning } from '../../lib/hints.js';
 import { parsePayment } from '../../lib/payment-uri.js';
+import { beginOwnPayment, endOwnPayment } from '../../lib/own-payments.js';
 import {
 	describeFallback,
 	describeFunding,
@@ -1281,7 +1282,13 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 			if (!offer && estimate && !expired && Number.isInteger(estimate.estimatedFeeSats)) {
 				body.maxFeeSats = estimate.estimatedFeeSats + LIGHTNING_FEE_HEADROOM_SATS;
 			}
-			const r = await api.post(offer ? '/offer/pay' : '/invoice/pay-safe', body);
+			const own = beginOwnPayment();
+			let r;
+			try {
+				r = await api.post(offer ? '/offer/pay' : '/invoice/pay-safe', body);
+			} finally {
+				endOwnPayment(own, r?.paymentHash);
+			}
 			setResult(r);
 			// The safe route answers a failure as a value, so a payment that found
 			// no route after an estimate that did gets the same reading as a
@@ -1509,10 +1516,16 @@ function Keysend({ api, channels, bump }) {
 	const send = async () => {
 		setBusy(true);
 		try {
-			const r = await api.post('/keysend/safe', {
-				pubkey: pubkey.trim(),
-				amountSats: parseInt(amount, 10)
-			});
+			const own = beginOwnPayment();
+			let r;
+			try {
+				r = await api.post('/keysend/safe', {
+					pubkey: pubkey.trim(),
+					amountSats: parseInt(amount, 10)
+				});
+			} finally {
+				endOwnPayment(own, r?.paymentHash);
+			}
 			toast(r.status === 'COMPLETED' ? 'Keysend sent' : `Keysend ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
 			bump();
 		} catch (e) {
