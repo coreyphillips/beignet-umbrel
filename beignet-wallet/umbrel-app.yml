@@ -30,20 +30,17 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.23.1, a fix release. Completed payments older than a day
-  no longer drop out of the history a minute after the node starts, and their
-  requests stay marked paid. A force-closed channel's swept balance is no
-  longer counted twice while the channel is still winding down, and a
-  channel close or sweep is paid to an address the wallet never handed out,
-  so a saved receive request is no longer shown as partly paid by a close.
-  Receiving over a just-in-time channel works when the wallet also has a
-  channel with another peer. A payment whose route hop raised its fee is
-  retried at the new fee instead of losing the hop, and a wallet with one
-  usable channel keeps it on the retry. Channels report the transaction of a
-  splice in progress and the fundings a splice replaced, so the wallet's own
-  deposits into its channel read as transfers rather than sends, and a
-  broadcast that the network refuses now says which transaction and whether
-  the wallet keeps retrying it.
+  A smoother Send tab, still on beignet 0.23.1. The Lightning form gains a
+  Send to menu like the on-chain one: pick another wallet on this Umbrel and
+  it hands over an invoice for you to pay, choosing the amount as you go. A
+  unified payment request (a bitcoin: link carrying a Lightning invoice)
+  pasted into the Lightning form now pays the invoice it carries, with the
+  request's amount filled in, instead of moving you to the on-chain form.
+  The on-chain form opens on the recipient alone, and the amount, fee rate
+  and Send appear once an address or request has been read. A Lightning
+  payment now shows one "Payment sent" notification instead of two, and the
+  same goes for failed payments, keysends and offers paid from the Offers
+  tab.
 
 
 dependencies: []
