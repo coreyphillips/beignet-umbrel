@@ -210,6 +210,7 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 			)}
 			{mode === 'lightning' && (
 				<Lightning
+					id={id}
 					api={api}
 					rec={rec}
 					info={info}
@@ -219,6 +220,7 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 					onChange={setLnInput}
 					arrival={arrival?.rail === 'lightning' ? arrival : null}
 					onOnchain={toOnchain}
+					onLightning={toLightning}
 				/>
 			)}
 			{mode === 'keysend' && <Keysend api={api} channels={channels} bump={bump} />}
@@ -281,6 +283,17 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	// than on paste alone, so typing and pasting behave identically.
 	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
 	const mayRefuse = useSettledRefusal(value, focused);
+
+	// The amount, the fee and the Send button mean nothing until there is a
+	// destination, so the card opens on the destination alone and grows the rest
+	// once an address or a request has been read. It stays open while that
+	// address is being edited, when the box is briefly unreadable, so the fields
+	// do not blink out under the payer mid-keystroke; only an empty box closes it.
+	const [expanded, setExpanded] = useState(parsed.kind === 'onchain');
+	useEffect(() => {
+		if (parsed.kind === 'onchain') setExpanded(true);
+		else if (parsed.kind === 'empty') setExpanded(false);
+	}, [parsed.kind]);
 
 	// The two ways a payee's amount stops binding this form, which are not the
 	// same thing and must not be treated as one.
@@ -854,102 +867,106 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					</span>
 				</div>
 			)}
-			<AmountField
-				label="Amount (sats)"
-				value={shownAmount}
-				onChange={setAmountManually}
-				max={sliderMax}
-				isMax={maxMode}
-				onMax={() => {
-					// Pressing Max is choosing an amount, the same as typing one, so
-					// the payee's figure stops binding here too. Otherwise the form
-					// would sweep the wallet while still claiming to pay their sum.
-					releaseAmount();
-					// A plain value, not an updater: this setter patches the lifted
-					// form state rather than calling React's, so an updater function
-					// handed to it is stored as the value itself. A function is
-					// truthy, so the form entered max mode with no way back out.
-					setMaxMode(!maxMode);
-				}}
-				hint={
-					maxMode
-						? 'Sweeps the whole balance. The wallet works out the exact amount when it broadcasts, so this follows the fee rate you pick.'
-						: 'The slider stops at the most you can send at this fee rate, so it leaves room for the fee.'
-				}
-			/>
-			{requestTooLarge && parsed.kind === 'onchain' && (
-				<div className="error-note" role="alert">
-					This request asks for {fmtSats(requestedAmount)}, which is more than this wallet can send.{' '}
-					{feeSats != null
-						? `The most it can send at this fee rate is ${fmtSats(ordinaryMax)}, with the fee coming out of the rest. Ask for a smaller amount${
-								feeCouldClose ? ', or lower the fee rate' : ''
-						  }.`
-						: `It holds ${fmtSats(balance)}. Ask for a smaller amount.`}
-				</div>
+			{expanded && (
+				<>
+					<AmountField
+						label="Amount (sats)"
+						value={shownAmount}
+						onChange={setAmountManually}
+						max={sliderMax}
+						isMax={maxMode}
+						onMax={() => {
+							// Pressing Max is choosing an amount, the same as typing one, so
+							// the payee's figure stops binding here too. Otherwise the form
+							// would sweep the wallet while still claiming to pay their sum.
+							releaseAmount();
+							// A plain value, not an updater: this setter patches the lifted
+							// form state rather than calling React's, so an updater function
+							// handed to it is stored as the value itself. A function is
+							// truthy, so the form entered max mode with no way back out.
+							setMaxMode(!maxMode);
+						}}
+						hint={
+							maxMode
+								? 'Sweeps the whole balance. The wallet works out the exact amount when it broadcasts, so this follows the fee rate you pick.'
+								: 'The slider stops at the most you can send at this fee rate, so it leaves room for the fee.'
+						}
+					/>
+					{requestTooLarge && parsed.kind === 'onchain' && (
+						<div className="error-note" role="alert">
+							This request asks for {fmtSats(requestedAmount)}, which is more than this wallet can send.{' '}
+							{feeSats != null
+								? `The most it can send at this fee rate is ${fmtSats(ordinaryMax)}, with the fee coming out of the rest. Ask for a smaller amount${
+										feeCouldClose ? ', or lower the fee rate' : ''
+								  }.`
+								: `It holds ${fmtSats(balance)}. Ask for a smaller amount.`}
+						</div>
+					)}
+					<FeeField
+						label="Fee rate (sat/vB)"
+						value={feeRate}
+						onChange={setFeeRateManually}
+						rate={effRate}
+						max={feeMax}
+						hint={
+							maxMode
+								? 'With Max on, raising the fee takes sats off the amount above, so the total never exceeds your balance.'
+								: 'Stops where the fee would eat into the amount above. Lower the amount to raise it further, or leave empty to let the wallet pick.'
+						}
+					/>
+					{fees && (
+						<div className="preset-row" style={{ marginBottom: 14 }}>
+							{[
+								['Fast', fees.fast],
+								['Normal', fees.normal],
+								['Slow', fees.slow]
+							].map(([label, rate]) => (
+								<button
+									key={label}
+									type="button"
+									className="btn sm"
+									// A preset above the headroom would break the same rule the
+									// slider is held to, so it is offered but not selectable.
+									disabled={rate > feeMax}
+									title={rate > feeMax ? 'Lower the amount to afford this fee rate' : undefined}
+									onClick={() => setFeeRateManually(String(rate))}
+								>
+									{label} · {rate} sat/vB
+								</button>
+							))}
+						</div>
+					)}
+					{feeSats != null && (
+						<div className="wallet-meta" style={{ marginBottom: 12 }}>
+							Fee: {fmtSats(feeSats)} at {effRate} sat/vB over {vsize} vB. This is what the
+							transaction pays, not an estimate of it.
+						</div>
+					)}
+					{nearMax && (
+						<div className="info-note" style={{ marginBottom: 12 }}>
+							This is close to your full balance. Use Max to sweep everything without leaving dust behind.
+						</div>
+					)}
+					<Button
+						variant="primary"
+						busy={busy}
+						onClick={send}
+						// Nothing but a destination the parser could read goes to the daemon.
+						// It refuses the rest anyway, but it refuses them from inside
+						// transaction building, with a message about fees rather than about
+						// the address, long after the note above said what was wrong.
+						disabled={
+							parsed.kind !== 'onchain' ||
+							amountNum <= 0 ||
+							balance === 0 ||
+							fetchingAddr ||
+							requestTooLarge
+						}
+					>
+						{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
+					</Button>
+				</>
 			)}
-			<FeeField
-				label="Fee rate (sat/vB)"
-				value={feeRate}
-				onChange={setFeeRateManually}
-				rate={effRate}
-				max={feeMax}
-				hint={
-					maxMode
-						? 'With Max on, raising the fee takes sats off the amount above, so the total never exceeds your balance.'
-						: 'Stops where the fee would eat into the amount above. Lower the amount to raise it further, or leave empty to let the wallet pick.'
-				}
-			/>
-			{fees && (
-				<div className="preset-row" style={{ marginBottom: 14 }}>
-					{[
-						['Fast', fees.fast],
-						['Normal', fees.normal],
-						['Slow', fees.slow]
-					].map(([label, rate]) => (
-						<button
-							key={label}
-							type="button"
-							className="btn sm"
-							// A preset above the headroom would break the same rule the
-							// slider is held to, so it is offered but not selectable.
-							disabled={rate > feeMax}
-							title={rate > feeMax ? 'Lower the amount to afford this fee rate' : undefined}
-							onClick={() => setFeeRateManually(String(rate))}
-						>
-							{label} · {rate} sat/vB
-						</button>
-					))}
-				</div>
-			)}
-			{feeSats != null && (
-				<div className="wallet-meta" style={{ marginBottom: 12 }}>
-					Fee: {fmtSats(feeSats)} at {effRate} sat/vB over {vsize} vB. This is what the
-					transaction pays, not an estimate of it.
-				</div>
-			)}
-			{nearMax && (
-				<div className="info-note" style={{ marginBottom: 12 }}>
-					This is close to your full balance. Use Max to sweep everything without leaving dust behind.
-				</div>
-			)}
-			<Button
-				variant="primary"
-				busy={busy}
-				onClick={send}
-				// Nothing but a destination the parser could read goes to the daemon.
-				// It refuses the rest anyway, but it refuses them from inside
-				// transaction building, with a message about fees rather than about
-				// the address, long after the note above said what was wrong.
-				disabled={
-					parsed.kind !== 'onchain' ||
-					amountNum <= 0 ||
-					balance === 0 ||
-					fetchingAddr ||
-					requestTooLarge
-				}
-			>
-				{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
-			</Button>
 			{fundingUnknown && (
 				<div className={fundingUnknown.waiting ? 'info-note' : 'error-note'} style={{ marginTop: 12 }} role="status">
 					{describeUnknown(fundingUnknown)}
@@ -994,8 +1011,18 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 // enough that a pasted one answers before the eye leaves the field.
 const DECODE_DEBOUNCE_MS = 300;
 
-function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arrival, bump }) {
+function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, onLightning, arrival, bump }) {
 	const toast = useToast();
+	// The other wallets on this Umbrel, offered as destinations the way the
+	// on-chain card offers them: picking one asks it for an invoice, so paying a
+	// sibling is not a trip to its Receive tab and back. An on-chain only wallet
+	// has nothing to take a Lightning payment with, so it is left out.
+	const [dest, setDest] = useState('custom');
+	const [fetchingInvoice, setFetchingInvoice] = useState(false);
+	const { data: wallets } = usePoll(() => manager.listWallets().catch(() => []), 15000, []);
+	const others = (wallets || []).filter(
+		(w) => w.id !== id && w.status === 'running' && w.network === rec?.network && !w.onchainOnly
+	);
 	// A lightning-first wallet often holds more than it can send: a deposit
 	// confirming, a confirmed one waiting to move, a channel funding or a
 	// splice not yet locked. The Overview tells them apart; this card reads
@@ -1055,11 +1082,34 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 	const payable = invoice ?? offer;
 	const mayRefuse = useSettledRefusal(value, focused);
 
-	// An on-chain address in the invoice box belongs on the other rail.
+	// An on-chain address in the invoice box belongs on the other rail. A unified
+	// request is the exception: it carries an invoice or an offer of its own, and
+	// having been pasted into the Lightning box, that is the half the payer meant.
+	// It is handed over the way "Pay over Lightning instead" hands it from the
+	// on-chain card, with the request's own figure when the invoice names none.
 	useEffect(() => {
-		if (parsed.kind === 'onchain') {
-			onOnchain(value, { note: 'That is an on-chain address, so it was moved here from the Lightning form.' });
+		if (parsed.kind !== 'onchain') return;
+		const carried = parsed.lightning;
+		if (carried?.kind === 'bolt11' || carried?.kind === 'bolt12') {
+			const isOffer = carried.kind === 'bolt12';
+			const amountSats = carried.amountSats == null ? parsed.amountSats : null;
+			const what = isOffer ? 'BOLT12 offer' : 'Lightning invoice';
+			onLightning(isOffer ? carried.offer : carried.invoice, {
+				amountSats,
+				note:
+					amountSats != null
+						? `Read the ${what} out of that payment request. It names no amount, so the ${fmtSats(
+								amountSats
+						  )} the request asked for has been filled in below.`
+						: `Read the ${what} out of that payment request.`
+			});
+			return;
 		}
+		onOnchain(value, {
+			note: parsed.isRequest
+				? 'That is an on-chain payment request, so it was moved here from the Lightning form.'
+				: 'That is an on-chain address, so it was moved here from the Lightning form.'
+		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [parsed]);
 
@@ -1295,6 +1345,7 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 			// failed estimate would have.
 			if (r?.status === 'FAILED' && isNoRouteFailure(r.failureDescription) && !noRoute) explain(latestEstimate.current, amountSats);
 			toast(r.status === 'COMPLETED' ? 'Payment sent' : `Payment ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
+			if (r.status === 'COMPLETED' && dest !== 'custom') setDest('custom');
 			bump();
 		} catch (e) {
 			toast(e.message, 'error');
@@ -1307,10 +1358,47 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 		onChange('');
 		setAmount('');
 		setResult(null);
+		setDest('custom');
+	};
+
+	// The invoice names no amount, so the payer chooses it below exactly as for
+	// any amountless invoice, and the estimate and the route reading apply as
+	// they would to one pasted in.
+	const onDest = async (val) => {
+		setDest(val);
+		setArrived(null);
+		if (val === 'custom') {
+			onChange('');
+			return;
+		}
+		setFetchingInvoice(true);
+		try {
+			const r = await walletApi(val).post('/invoice/create', {
+				description: rec?.name ? `From ${rec.name}` : 'Transfer between wallets'
+			});
+			onChange(r.bolt11);
+		} catch (e) {
+			toast(`Could not get an invoice: ${e.message}`, 'error');
+			setDest('custom');
+		} finally {
+			setFetchingInvoice(false);
+		}
 	};
 
 	return (
 		<Card title="Pay a Lightning invoice or offer">
+			{others.length > 0 && (
+				<Field label="Send to">
+					<select value={dest} onChange={(e) => onDest(e.target.value)}>
+						<option value="custom">Invoice or offer</option>
+						{others.map((w) => (
+							<option key={w.id} value={w.id}>
+								{w.name} ({w.network})
+							</option>
+						))}
+					</select>
+				</Field>
+			)}
 			<Field label="BOLT11 invoice or BOLT12 offer">
 				<textarea
 					ref={inputRef}
@@ -1319,10 +1407,11 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 					onChange={(e) => {
 						onChange(e.target.value);
 						setArrived(null);
+						if (dest !== 'custom') setDest('custom');
 					}}
 					onFocus={() => setFocused(true)}
 					onBlur={() => setFocused(false)}
-					placeholder="lnbc… or lno…"
+					placeholder={fetchingInvoice ? 'Fetching invoice…' : 'lnbc… or lno…'}
 				/>
 			</Field>
 			{arrived && (
@@ -1473,6 +1562,7 @@ function Lightning({ api, rec, info, channels, value, onChange, onOnchain, arriv
 					disabled={
 						!decoded ||
 						decoding ||
+						fetchingInvoice ||
 						expired ||
 						(needsAmount && typedAmount <= 0) ||
 						overTotal ||

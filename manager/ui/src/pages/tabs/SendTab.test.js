@@ -16,7 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
-import { blur, click, focus, render, settle, type } from '../../../test/render.mjs';
+import { blur, click, focus, render, select, settle, type } from '../../../test/render.mjs';
 import { ToastProvider } from '../../components/Toast.jsx';
 import SendTab from './SendTab.jsx';
 
@@ -926,6 +926,149 @@ test('a payment that finds no route after an estimate that did gets the same rea
 		const note = view.$('[data-testid="no-route"]');
 		assert.ok(note, 'and the reason appears above the button');
 		assert.match(note.textContent, /Powdered Sugar/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+// The send flow, smoothed: the on-chain card opens on its destination alone,
+// the Lightning card offers the other wallets here as destinations, and a
+// unified request pasted into the Lightning box is paid over Lightning.
+
+const amountlessDecoded = () => ({ ...fieldDecoded(), amountSats: null });
+
+/** The manager, answering with sibling wallets and a sibling's invoice. */
+function withSiblings({ invoiceError } = {}) {
+	globalThis.fetch = async (url, init = {}) => {
+		const path = String(url);
+		const method = init.method || 'GET';
+		managerCalls.push({ url: path, method, body: init.body ? JSON.parse(init.body) : null });
+		const ok = (result) => ({ ok: true, status: 200, json: async () => ({ ok: true, result }) });
+		if (path === '/api/wallets') {
+			return ok([
+				{ id: 'w1', name: 'Spending', network: 'mainnet', status: 'running' },
+				{ id: 'w2', name: 'Savings', network: 'mainnet', status: 'running' },
+				{ id: 'w3', name: 'Cold', network: 'mainnet', status: 'running', onchainOnly: true },
+				{ id: 'w4', name: 'Test', network: 'testnet', status: 'running' }
+			]);
+		}
+		if (path === '/wallets/w2/api/invoice/create') {
+			if (invoiceError) return { ok: false, status: 500, json: async () => ({ ok: false, error: { message: invoiceError } }) };
+			return ok({ bolt11: SPEC_INVOICE, paymentHash: 'e'.repeat(64) });
+		}
+		return ok(method === 'POST' ? { persisted: true } : []);
+	};
+}
+
+test('the on-chain card opens on the destination alone, and grows the rest once one is read', async () => {
+	const view = await mountSend(stubApi());
+	try {
+		const box = view.$('input[placeholder^="bc1"]');
+		const sendBtn = () => view.$$('button').find((b) => b.textContent.trim() === 'Send');
+		assert.equal(view.$('.amount-input'), null, 'no amount before a destination');
+		assert.doesNotMatch(view.text(), /Fee rate/);
+		assert.equal(sendBtn(), undefined, 'no Send before a destination');
+
+		await type(box, ADDR);
+		await settle(50);
+		assert.ok(view.$('.amount-input'), 'the amount appears once an address is read');
+		assert.match(view.text(), /Fee rate/);
+		assert.ok(sendBtn(), 'and Send with it');
+
+		// A stray keystroke mid-edit leaves the box unreadable for a moment.
+		await type(box, `${ADDR}x`);
+		await settle(50);
+		assert.ok(view.$('.amount-input'), 'the fields stay while the address is edited');
+
+		await type(box, '');
+		await settle(50);
+		assert.equal(view.$('.amount-input'), null, 'an empty box puts them away');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('the Lightning card offers the other wallets here, and picking one fills in its invoice', async () => {
+	withSiblings();
+	const api = stubRouteApi({ decoded: amountlessDecoded(), estimate: GOOD_ESTIMATE });
+	const view = await mountRouteSend(api);
+	try {
+		const dest = view.$('select');
+		assert.ok(dest, 'the Lightning card has a Send to');
+		const options = [...dest.options].map((o) => o.textContent.trim());
+		assert.deepEqual(options, ['Invoice or offer', 'Savings (mainnet)'], 'itself, on-chain only and other-network wallets are left out');
+
+		await select(dest, 'w2');
+		await settle(50);
+		const asked = managerCalls.find((c) => c.method === 'POST' && c.url === '/wallets/w2/api/invoice/create');
+		assert.ok(asked, 'the sibling was asked for an invoice');
+		assert.equal(asked.body.amountSats, undefined, 'naming no amount, so the payer chooses it here');
+		assert.equal(view.$('textarea[placeholder^="lnbc"]').value, SPEC_INVOICE);
+
+		await priced();
+		await type(view.$('.amount-input'), '1500');
+		await settle(400);
+		await click(payButton(view));
+		await settle(50);
+		const paid = api.calls.find(([m, p]) => m === 'POST' && p === '/invoice/pay-safe');
+		assert.equal(paid[2].bolt11, SPEC_INVOICE);
+		assert.equal(paid[2].amountSats, 1500);
+
+		// Typing over it goes back to a custom invoice.
+		await type(view.$('textarea[placeholder^="lnbc"]'), '');
+		await settle(50);
+		assert.equal(view.$('select').value, 'custom');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a sibling that cannot make an invoice says so, and the choice goes back to custom', async () => {
+	withSiblings({ invoiceError: 'Wallet is not responding' });
+	const view = await mountRouteSend(stubRouteApi());
+	try {
+		await select(view.$('select'), 'w2');
+		await settle(50);
+		assert.match(view.text(), /Could not get an invoice: Wallet is not responding/);
+		assert.equal(view.$('select').value, 'custom');
+		assert.equal(view.$('textarea[placeholder^="lnbc"]').value, '');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a unified request pasted into the Lightning box is paid over Lightning, at its own amount', async () => {
+	const api = stubRouteApi({ decoded: amountlessDecoded(), estimate: GOOD_ESTIMATE });
+	const view = await mountRouteSend(api);
+	try {
+		const unified = buildBip21({ address: ADDR, amountSats: 21_000, lightning: SPEC_INVOICE });
+		await type(view.$('textarea[placeholder^="lnbc"]'), unified);
+		await settle(50);
+		const pill = view.$$('.pill').find((b) => b.textContent.trim() === 'Lightning');
+		assert.ok(pill.className.includes('active'), 'still on Lightning');
+		assert.equal(view.$('textarea[placeholder^="lnbc"]').value, SPEC_INVOICE, 'holding the invoice out of the request');
+		assert.match(view.text(), /Read the Lightning invoice out of that payment request/);
+
+		await priced();
+		assert.equal(view.$('.amount-input').value, '21000', "the request's amount, since the invoice names none");
+		await click(payButton(view));
+		await settle(50);
+		const paid = api.calls.find(([m, p]) => m === 'POST' && p === '/invoice/pay-safe');
+		assert.equal(paid[2].amountSats, 21_000);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a request with no Lightning half pasted into the Lightning box moves to the on-chain card', async () => {
+	const view = await mountRouteSend(stubRouteApi());
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), buildBip21({ address: ADDR, amountSats: 21_000 }));
+		await settle(50);
+		assert.equal(view.$('textarea[placeholder^="lnbc"]'), null, 'the Lightning card is gone');
+		assert.equal(view.$('input[placeholder^="bc1"]').value, ADDR);
+		assert.match(view.text(), /That is an on-chain payment request, so it was moved here/);
+		assert.equal(view.$('.amount-input').value, '21000');
 	} finally {
 		await view.unmount();
 	}

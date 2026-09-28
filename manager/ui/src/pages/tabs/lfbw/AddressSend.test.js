@@ -142,7 +142,37 @@ test('with no home channel there is nothing to send from, and the form says so',
 	const view = await mount(stubApi(), []);
 	try {
 		assert.match(view.text(), /Nothing to send from yet/);
+		await type(view.$('input[placeholder^="bc1"]'), ADDR);
+		await settle(50);
 		assert.equal(sendButton(view).disabled, true);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('the amount, the fee and Send wait for an address, and stay while it is edited', async () => {
+	const view = await mount(stubApi());
+	try {
+		const box = view.$('input[placeholder^="bc1"]');
+		assert.equal(view.$('.amount-input'), null, 'no amount before a destination');
+		assert.doesNotMatch(view.text(), /Fee rate/);
+		assert.equal(sendButton(view), undefined, 'no Send before a destination');
+
+		await type(box, ADDR);
+		await settle(50);
+		assert.ok(view.$('.amount-input'), 'the amount appears once an address is read');
+		assert.match(view.text(), /Fee rate/);
+		assert.ok(sendButton(view), 'and Send with it');
+
+		// A stray keystroke mid-edit leaves the box unreadable for a moment.
+		await type(box, `${ADDR}x`);
+		await settle(50);
+		assert.ok(view.$('.amount-input'), 'the fields stay while the address is edited');
+
+		await type(box, '');
+		await settle(50);
+		assert.equal(view.$('.amount-input'), null, 'an empty box puts them away');
+		assert.equal(sendButton(view), undefined);
 	} finally {
 		await view.unmount();
 	}
