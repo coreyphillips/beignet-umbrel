@@ -30,17 +30,34 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A smoother Send tab, still on beignet 0.23.1. The Lightning form gains a
-  Send to menu like the on-chain one: pick another wallet on this Umbrel and
-  it hands over an invoice for you to pay, choosing the amount as you go. A
-  unified payment request (a bitcoin: link carrying a Lightning invoice)
-  pasted into the Lightning form now pays the invoice it carries, with the
-  request's amount filled in, instead of moving you to the on-chain form.
-  The on-chain form opens on the recipient alone, and the amount, fee rate
-  and Send appear once an address or request has been read. A Lightning
-  payment now shows one "Payment sent" notification instead of two, and the
-  same goes for failed payments, keysends and offers paid from the Offers
-  tab.
+  Bundles beignet 0.24.0, a hardening release, together with a smoother Send
+  tab. An invoice for another network, or one asking for zero sats, is now
+  refused before anything is sent, and an any-amount invoice records what it
+  was actually paid. On-chain sends from a wallet run one at a time instead of
+  sharing a transaction, a max send prices its fee for the recipient's real
+  address type, and a fee bump refuses a transaction that has already
+  confirmed or has no output of ours to spend. A cooperative close trims dust
+  the same way LND does, watchtower backups no longer skip revoked states
+  around a restart or a splice, and a wallet that another device has taken
+  over refuses a force close that would broadcast an old state. Direct
+  funding proofs are now bound to the request they answer, so a direct
+  funding payment needs beignet 0.24.0 on both sides. The node also holds up
+  better against misbehaving peers and oversized requests. The dashboard now
+  closes a wallet's live event stream when you leave its page; with the new
+  limit on open streams, the old leak stopped live updates after about
+  fifteen page visits.
+
+
+  The Send tab's Lightning form gains a Send to menu like the on-chain one:
+  pick another wallet on this Umbrel and it hands over an invoice for you to
+  pay, choosing the amount as you go. A unified payment request (a bitcoin:
+  link carrying a Lightning invoice) pasted into the Lightning form now pays
+  the invoice it carries, with the request's amount filled in, instead of
+  moving you to the on-chain form. The on-chain form opens on the recipient
+  alone, and the amount, fee rate and Send appear once an address or request
+  has been read. A Lightning payment now shows one "Payment sent"
+  notification instead of two, and the same goes for failed payments,
+  keysends and offers paid from the Offers tab.
 
 
 dependencies: []

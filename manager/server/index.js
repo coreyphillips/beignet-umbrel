@@ -6,6 +6,7 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS } = require('./config');
 const { WalletManager } = require('./wallet-manager');
 const { createAccessGuard } = require('./access-control');
+const { releaseUpstreamOnClose } = require('./proxy-release');
 
 // Cap on how much of a failed daemon response is buffered before logging it.
 // Error bodies are small; this only stops a large one from being held in memory.
@@ -48,12 +49,15 @@ async function main() {
 		// routes (e.g. /info, /balance, /events). Anchored at the start, so
 		// query strings and already-stripped paths are left intact.
 		pathRewrite: { '^/wallets/[^/]+/api': '' },
-		onProxyReq: (proxyReq, req) => {
+		onProxyReq: (proxyReq, req, res) => {
 			try {
 				proxyReq.setHeader('Authorization', `Bearer ${manager.token(req.params.id)}`);
 			} catch (_) {
 				/* token missing; daemon will reject */
 			}
+			// Without this a closed wallet page leaves its /events stream open at
+			// the daemon, which caps them (see proxy-release.js).
+			releaseUpstreamOnClose(proxyReq, req, res);
 		},
 		// Record failed daemon calls in the wallet's log. The daemon answers a
 		// rejected action (a peer that will not complete the handshake, a channel
