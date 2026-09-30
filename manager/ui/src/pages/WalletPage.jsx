@@ -20,6 +20,7 @@ import FforReturnPanel from '../components/FforReturnPanel.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
 import { currentEpoch, describeEpoch } from '../lib/ffor.js';
 import { shortId } from '../lib/format.js';
+import { isOwnPayment } from '../lib/own-payments.js';
 
 import { isClosedChannel } from '../lib/channels.js';
 import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
@@ -230,7 +231,11 @@ export default function WalletPage() {
 	useSSE(running || restoreHold ? api.eventsUrl() : null, (name, data) => {
 		bump();
 		receiveEvent(name, data);
-		if (EVENT_LABELS[name]) toast(EVENT_LABELS[name], ERROR_EVENTS.has(name) ? 'error' : 'success');
+		// A payment this page made has already been announced by the card that
+		// made it, from the daemon's answer; its event is announced only when it
+		// came from somewhere else (the Console tab, the CLI).
+		const ownPayment = (name === 'payment:sent' || name === 'payment:failed') && isOwnPayment(data);
+		if (EVENT_LABELS[name] && !ownPayment) toast(EVENT_LABELS[name], ERROR_EVENTS.has(name) ? 'error' : 'success');
 		if (name === 'ffor:state' && data && FFOR_STATE_LABELS[data.state]) {
 			toast(FFOR_STATE_LABELS[data.state], data.state === 'ABORTED' ? 'error' : 'success');
 		}

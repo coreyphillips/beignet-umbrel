@@ -65,6 +65,14 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	);
 	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
 	const mayRefuse = useSettledRefusal(value, focused);
+	// The amount, the fee and Send wait for a destination, as on the on-chain
+	// card: shown once an address has been read, kept while it is edited, and
+	// put away when the box is emptied.
+	const [expanded, setExpanded] = useState(parsed.kind === 'onchain');
+	useEffect(() => {
+		if (parsed.kind === 'onchain') setExpanded(true);
+		else if (parsed.kind === 'empty') setExpanded(false);
+	}, [parsed.kind]);
 	const effRate = parseInt(feeRate, 10) || fees?.normal || null;
 	const feeratePerkw = effRate ? perkwFromSatVb(effRate) : null;
 
@@ -354,58 +362,62 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 					<div className="static-value">{request.message}</div>
 				</div>
 			)}
-			<AmountField
-				label="Amount (sats)"
-				value={shownAmount}
-				onChange={setAmountManually}
-				max={ceiling}
-				isMax={maxMode}
-				onMax={() => setMaxMode(!maxMode)}
-				hint={
-					maxMode
-						? 'Sends the most the channel can release at this fee rate.'
-						: 'The slider stops at the most your channel can release at this fee rate, net of the fee and the channel reserve.'
-				}
-			/>
-			{overCeiling && (
-				<div className="error-note" role="alert">
-					That is more than the channel can release right now ({fmtSats(ceiling)} at this fee rate).
-				</div>
+			{expanded && (
+				<>
+					<AmountField
+						label="Amount (sats)"
+						value={shownAmount}
+						onChange={setAmountManually}
+						max={ceiling}
+						isMax={maxMode}
+						onMax={() => setMaxMode(!maxMode)}
+						hint={
+							maxMode
+								? 'Sends the most the channel can release at this fee rate.'
+								: 'The slider stops at the most your channel can release at this fee rate, net of the fee and the channel reserve.'
+						}
+					/>
+					{overCeiling && (
+						<div className="error-note" role="alert">
+							That is more than the channel can release right now ({fmtSats(ceiling)} at this fee rate).
+						</div>
+					)}
+					<FeeField
+						label="Fee rate (sat/vB)"
+						value={feeRate}
+						onChange={setFeeRate}
+						rate={effRate}
+						max={feeMax}
+						hint="The splice transaction pays this. Leave empty to let the wallet pick."
+					/>
+					{fees && (
+						<div className="preset-row" style={{ marginBottom: 14 }}>
+							{[
+								['Fast', fees.fast],
+								['Normal', fees.normal],
+								['Slow', fees.slow]
+							].map(([label, rate]) => (
+								<button key={label} type="button" className="btn sm" onClick={() => setFeeRate(String(rate))}>
+									{label} · {rate} sat/vB
+								</button>
+							))}
+						</div>
+					)}
+					{feeSats != null && !payDirect && (
+						<div className="wallet-meta" style={{ marginBottom: 12 }}>
+							Fee: {fmtSats(feeSats)} at {effRate} sat/vB ({feeratePerkw} sat/kw), priced by the wallet.
+						</div>
+					)}
+					<Button
+						variant="primary"
+						busy={busy}
+						onClick={send}
+						disabled={parsed.kind !== 'onchain' || amountNum <= 0 || fetchingAddr || (!payDirect && (!home || !quote || overCeiling))}
+					>
+						{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
+					</Button>
+				</>
 			)}
-			<FeeField
-				label="Fee rate (sat/vB)"
-				value={feeRate}
-				onChange={setFeeRate}
-				rate={effRate}
-				max={feeMax}
-				hint="The splice transaction pays this. Leave empty to let the wallet pick."
-			/>
-			{fees && (
-				<div className="preset-row" style={{ marginBottom: 14 }}>
-					{[
-						['Fast', fees.fast],
-						['Normal', fees.normal],
-						['Slow', fees.slow]
-					].map(([label, rate]) => (
-						<button key={label} type="button" className="btn sm" onClick={() => setFeeRate(String(rate))}>
-							{label} · {rate} sat/vB
-						</button>
-					))}
-				</div>
-			)}
-			{feeSats != null && !payDirect && (
-				<div className="wallet-meta" style={{ marginBottom: 12 }}>
-					Fee: {fmtSats(feeSats)} at {effRate} sat/vB ({feeratePerkw} sat/kw), priced by the wallet.
-				</div>
-			)}
-			<Button
-				variant="primary"
-				busy={busy}
-				onClick={send}
-				disabled={parsed.kind !== 'onchain' || amountNum <= 0 || fetchingAddr || (!payDirect && (!home || !quote || overCeiling))}
-			>
-				{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
-			</Button>
 			{result?.kind === 'unknown' && (
 				<div className={result.waiting ? 'info-note' : 'error-note'} style={{ marginTop: 12 }} role="status">
 					{describeUnknown(result)}
