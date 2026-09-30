@@ -30,34 +30,20 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.24.0, a hardening release, together with a smoother Send
-  tab. An invoice for another network, or one asking for zero sats, is now
-  refused before anything is sent, and an any-amount invoice records what it
-  was actually paid. On-chain sends from a wallet run one at a time instead of
-  sharing a transaction, a max send prices its fee for the recipient's real
-  address type, and a fee bump refuses a transaction that has already
-  confirmed or has no output of ours to spend. A cooperative close trims dust
-  the same way LND does, watchtower backups no longer skip revoked states
-  around a restart or a splice, and a wallet that another device has taken
-  over refuses a force close that would broadcast an old state. Direct
-  funding proofs are now bound to the request they answer, so a direct
-  funding payment needs beignet 0.24.0 on both sides. The node also holds up
-  better against misbehaving peers and oversized requests. The dashboard now
-  closes a wallet's live event stream when you leave its page; with the new
-  limit on open streams, the old leak stopped live updates after about
-  fifteen page visits.
-
-
-  The Send tab's Lightning form gains a Send to menu like the on-chain one:
-  pick another wallet on this Umbrel and it hands over an invoice for you to
-  pay, choosing the amount as you go. A unified payment request (a bitcoin:
-  link carrying a Lightning invoice) pasted into the Lightning form now pays
-  the invoice it carries, with the request's amount filled in, instead of
-  moving you to the on-chain form. The on-chain form opens on the recipient
-  alone, and the amount, fee rate and Send appear once an address or request
-  has been read. A Lightning payment now shows one "Payment sent"
-  notification instead of two, and the same goes for failed payments,
-  keysends and offers paid from the Offers tab.
+  Bundles beignet 0.24.1, a hardening release for Lightning payments. An
+  incoming payment is now accepted only once it is irrevocably committed on
+  both sides of the channel, so it can no longer be counted on an update the
+  peer could still take back. After a restart, a reconnect or an interrupted
+  splice, the node finishes settling any incoming payment it had already
+  completed. Outgoing retries are more careful: a payment that failed for
+  good is reported as failed, a retry no longer undoes one already in hand,
+  and a timed-out part of a multi-part payment is failed back once the
+  channel allows it. BOLT 12 offers and invoices that ask for unsupported
+  features are refused before anything is sent, and peers asking for an
+  excessive delay on a new channel are refused. Database backups written by
+  the node now carry a checksum keyed from the wallet seed, which a restore
+  verifies. Guardian hosting, coin freezes during a funding pledge and
+  automatic rebalances also get fixes.
 
 
 dependencies: []
