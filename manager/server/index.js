@@ -179,6 +179,7 @@ async function main() {
 				// FFOR offline receive (beignet #729, #865): a wallet paid while
 				// it is offline through a settlement peer, probed on the bundle.
 				fforAvailable: manager.fforAvailable(),
+				concurrentOfflineReceiveAvailable: manager.concurrentOfflineReceiveAvailable(),
 				offlineReceiveAvailable: manager.offlineReceiveAvailable()
 			}
 		});

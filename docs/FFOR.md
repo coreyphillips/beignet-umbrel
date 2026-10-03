@@ -1,3 +1,19 @@
+# Concurrent receive in Beignet 0.25.0
+
+The packaged daemon is pinned to published Beignet 0.25.0, release commit `db15cf581bf3f59a26280bdd955f1f08f2dbc182`. Capability detection checks implemented daemon routes, engine methods and configuration parsing. A documentation marker alone does not enable concurrent controls.
+
+A negotiated version 2 book can use a funded home channel. Ordinary online payments keep the engine's remaining capacity. Reconnect synchronizes receipts without retiring concurrent books. Refresh receipts requests signed live sync; Close the book now calls `/ffor/epoch/close` explicitly. Closing stops new admissions and invoice exposure. Unknown version 2 slots remain reserved in DRAINING until safely resolved, even after expiry or a close acknowledgement.
+
+Concurrent advertisement and acceptance of new books default on. Settlement remains an explicit opt-in. Disabling new-book acceptance preserves service for existing books. Version 2 issuer provisioning remains unavailable. Reserved homes wait for channelization instead of opening a replacement or attempting a splice.
+
+Closing the browser leaves the daemon online. Stopping the daemon does not. Ordinary HTLC deadlines still apply and are distinct from offline voucher expiry. Proof custody and a successful sync request are not confirmation of wallet credit.
+
+The manager passed the full concurrent regtest sequence against the npm-installed `beignet@0.25.0` daemon on Node 22.13.1. A single 500,000-sat home channel started with 100,000 sats owned by the receiver. A live 20,000-sat offline invoice allowed ordinary payments of 5,000 sats out and 6,000 sats in. The receiver daemon was stopped before external payment. Both cold starts automatically reconciled to 121,000 sats total and 116,000 sats available, with exactly one completed payment in the ledger used by Activity. A manual two-voucher book redeemed 12,000 sats while its 13,000-sat voucher remained payable. Early closure of another book retained one unknown 17,000-sat reservation in DRAINING. Further ordinary payments completed, leaving 147,000 sats total and 142,000 sats available.
+
+Server tests: 251 passed. Dashboard tests: 324 passed. The dashboard production build passed. The regtest drives the manager and daemon endpoints used by the dashboard; it does not automate browser rendering. `scripts/lfbw-regtest/concurrent-adapter.cjs` runs with the portable engine's shared `scripts/regtest-ffor.cjs` acceptance driver through `FFOR_RUNTIME_ADAPTER`. Set `MANAGER_URL` to a disposable manager, `BEIGNET_SOURCE_DIR` to the published package directory, and `BEIGNET_WALLET_CORE_DIR` and `BEIGNET_RELAY_DIR` to local dependencies. `BEIGNET_EVIDENCE_FILE` records balances and restart times.
+
+Historical validation below covers earlier behavior and does not establish version 2 qualification.
+
 # Receive while offline (FFOR)
 
 FFOR (Fast-Forward Offline Receive, spec at github.com/coreyphillips/ffor,
@@ -51,9 +67,9 @@ just-in-time invoice.
 
 The daemon persists preparation before exposing an invoice and discovers
 receipts while running, including after restart. Paid reservations reconcile
-into the normal invoice history and balance. Unpaid invoices remain active for
-their ten-minute lifetime plus a two-minute settlement grace period. Receipt
-query failures retain the reservation. Recovery still requires the settlement
+into the normal invoice history and balance. Unpaid invoices remain payable for their invoice lifetime. Concurrent version 2
+slots without conclusive payment or cancellation evidence remain reserved, even
+after the settlement grace period. Receipt query failures retain the reservation. Recovery still requires the settlement
 peer to return; this path never force closes automatically.
 
 The manager excludes `/receive/status` reservations from channelization and
@@ -64,7 +80,7 @@ ticked, an unsupported engine or peer shows an error instead of silently
 producing an online-only invoice; unticking it returns to the ordinary invoice.
 
 **Engine requirement:** the daemon `/receive/*` API and funding-policy environment
-variable require Beignet 0.21.9 or newer. The image workflow pins 0.21.12; from 0.21.10 an offline receive is only for a channel that already exists with the primary and has room for the amount, never one the primary opens for it. Older
+variable require Beignet 0.21.9 or newer. The image workflow pins 0.25.0; from 0.21.10 an offline receive is only for a channel that already exists with the primary and has room for the amount, never one the primary opens for it. Older
 engines fail the capability check and cannot create automatic offline invoices.
 
 The advanced manual workflow below remains available for other Lightning wallets.
@@ -77,8 +93,9 @@ of fixed-amount vouchers with a **settlement peer** (S) on one of its
 channels: an **epoch**. Each voucher is one slot with one payment hash that
 S generated. The wallet hands out one BOLT 11 invoice per slot, then can go
 offline. A payer's HTLC for one of those invoices reaches S, which settles it
-at once against the pre-signed voucher and sends the wallet nothing. When
-the wallet is back, it **returns**: it closes the epoch cooperatively, S
+at once against the pre-signed voucher and sends the wallet nothing. With a
+concurrent book, live signed sync credits redeemed vouchers while keeping other
+invoices payable. With a baseline book, the wallet **returns**: it closes the epoch cooperatively, S
 answers with the settled bitmap and the preimages, and the paid vouchers
 land in the wallet's channel balance. If S is gone or contradicts the
 epoch, the wallet can **enforce** on-chain: a force close that claims every
@@ -146,14 +163,16 @@ The legacy manual workflow leaves these responsibilities to the host:
   by itself and the card shows it. While ACTIVE the card lists every slot
   with its state, offers Create invoice for a slot that has none (the
   invoice shows as a QR with a copy row), and says the return-by height in
-  blocks and days at ten minutes a block. Close the book now runs the same
-  return the manager runs on start. A closed book shows what was paid and
+  blocks and days at ten minutes a block. Refresh receipts synchronizes a concurrent book without retiring it. Close the
+  book now explicitly calls `/ffor/epoch/close`; unknown version 2 reservations
+  remain held in DRAINING. A closed book shows what was paid and
   offers Start another; an aborted setup shows the engine's reason and the
   form again.
 - **The header** carries a green `receiving offline` badge while an epoch
   is ACTIVE and a red `enforce on-chain` badge when the peer contradicted
   it.
-- **Witnesses and the issuer on the card.** When a sibling keeps receipts,
+- **Witnesses and legacy issuers on the card.** Version 2 books can use
+  witnesses, but issuer provisioning is unavailable. For baseline books, when a sibling keeps receipts,
   the start form offers it as a witness (never the settlement peer itself:
   a witness sits on the path before it), and among the chosen witnesses
   one that issues can be named as the issuer with an offer description.
@@ -177,9 +196,10 @@ The legacy manual workflow leaves these responsibilities to the host:
 - **The return with witnesses**: the manager connects every sibling
   witness over loopback before asking the daemon to recover, and the panel
   lists what each witness answered (receipts, credited, or did not
-  answer). With the settlement peer away, the receipts alone credit the
-  paid vouchers on the record; the book still closes once the peer is
-  back, or is enforced on-chain.
+  answer). Witness receipts establish proof custody, not spendable wallet credit
+  for a concurrent book. Credit is shown only after authoritative redemption.
+  Concurrent reconnect synchronizes without retiring the book; baseline recovery
+  follows its existing retirement path.
 - **Channel history** records every `ffor:state` and `ffor:enforce` on the
   epoch's channel; the Logs tab carries every `ffor:*` event and the
   return line.

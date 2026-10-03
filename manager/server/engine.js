@@ -142,6 +142,15 @@ function fforAvailable(bin = process.env.BEIGNET_BIN) {
 }
 
 
+/** Inspect implemented routes and engine methods, not documentation alone. */
+function concurrentOfflineReceiveAvailable(bin = process.env.BEIGNET_BIN) {
+	return fforAvailable(bin)
+		&& probe(bin, 'daemon.js', ["'POST /ffor/sync'", "'POST /ffor/epoch/close'"])
+		&& probe(bin, 'beignet-node.js', ['fforConcurrentNegotiated(', 'fforSync(', 'reservedInboundSats', 'concurrentVersion'])
+		&& probe(bin, 'config.js', ['BEIGNET_FFOR_CONCURRENT', 'BEIGNET_FFOR_SETTLE_CONCURRENT']);
+}
+
+
 /** True when the engine behind `bin` can keep the Tor proxy for onion peers only. */
 function torProxyScopeAvailable(bin = process.env.BEIGNET_BIN) {
 	return probe(bin, 'config.js', TOR_PROXY_SCOPE_MARKERS);
@@ -154,6 +163,7 @@ function offlineReceiveAvailable(bin = process.env.BEIGNET_BIN) {
 	);
 }
 module.exports = {
+	concurrentOfflineReceiveAvailable,
 
 	offlineReceiveAvailable,
 	torProxyScopeAvailable,

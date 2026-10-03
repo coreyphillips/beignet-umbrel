@@ -23,13 +23,14 @@ const settler = (extra = {}) => ({
 
 test('normalizeFfor fills defaults, validates the caps and clears an optional one on null', () => {
 	assert.deepEqual(ffor.normalizeFfor(undefined), {
+		concurrent: { enabled: true },
 		funding: { enabled: false, maxChannels: 20, maxChannelsPerPeer: 5, maxChannelSats: 1000000, maxTotalSats: 5000000 },
 		settle: { ...ffor.SETTLE_DEFAULTS },
 		witness: { ...ffor.WITNESS_DEFAULTS },
 		issuer: { ...ffor.ISSUER_DEFAULTS }
 	});
 	const on = ffor.normalizeFfor({ settle: { enabled: 1, maxBudgetMsat: '5000000', feePpm: 250 } });
-	assert.deepEqual(on.settle, { enabled: true, maxBudgetMsat: 5000000, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 250 });
+	assert.deepEqual(on.settle, { enabled: true, acceptConcurrent: true, maxBudgetMsat: 5000000, maxEpochBlocks: null, feeBaseMsat: 0, feePpm: 250 });
 	const kept = ffor.normalizeFfor({ settle: { maxBudgetMsat: null } }, on);
 	assert.equal(kept.settle.enabled, true, 'an edit keeps what it does not name');
 	assert.equal(kept.settle.maxBudgetMsat, null, 'null clears an optional cap');
@@ -194,4 +195,25 @@ test('automatic channel funding is explicit, bounded, and carried to the daemon'
 		assert.throws(() =>
 			ffor.normalizeFfor({ settle: { enabled: true }, funding: { enabled: true, maxTotalSats: bad } })
 		);
+});
+
+
+test('concurrent advertisement and settlement acceptance default on without enabling the settlement role', () => {
+  const defaults = ffor.normalizeFfor();
+  assert.equal(defaults.concurrent.enabled, true);
+  assert.equal(defaults.settle.acceptConcurrent, true);
+  assert.equal(defaults.settle.enabled, false);
+  assert.deepEqual(ffor.fforEnv({ ffor: { concurrent: { enabled: false } } }), { BEIGNET_FFOR_CONCURRENT: 'false' });
+  const declined = ffor.fforEnv({ ffor: { settle: { enabled: true, acceptConcurrent: false } } });
+  assert.equal(declined.BEIGNET_FFOR_SETTLE_CONCURRENT, 'false');
+  assert.throws(() => ffor.normalizeFfor({ settle: { acceptConcurrent: 'false' } }), { code: 'BAD_FFOR' });
+});
+
+test('concurrent receipt custody does not count as credit or release an unknown slot', () => {
+  const result = { action: 'synced', preimagesKnown: [1, 2], epoch: { concurrent: true, concurrentVersion: 2, state: 'DRAINING', slots: [{ state: 'redeemed' }, { state: 'settled' }, { state: 'exposed' }] } };
+  const view = ffor.describeReturn(result);
+  assert.equal(view.credited, 1);
+  assert.equal(view.unsettled, 2);
+  assert.equal(view.complete, false);
+  assert.throws(() => ffor.planSetup({ concurrent: true, concurrentVersion: 2, issuer: { walletId: 'issuer' } }, [], 'peer'), /issuer/i);
 });

@@ -18,6 +18,7 @@
 // means no cap), the fees are the floor a receiver's book must meet.
 const SETTLE_DEFAULTS = Object.freeze({
 	enabled: false,
+	acceptConcurrent: true,
 	maxBudgetMsat: null,
 	maxEpochBlocks: null,
 	feeBaseMsat: 0,
@@ -78,6 +79,7 @@ const RETURN_STATES = Object.freeze(['ACTIVE', 'DRAINING']);
 // Every event the daemon relays for the feature (beignet #729).
 const FFOR_EVENTS = Object.freeze([
 	'ffor:state',
+	'ffor:slot-resolved',
 	'ffor:settled',
 	'ffor:delegated-failed',
 	'ffor:enforce',
@@ -131,6 +133,10 @@ function normalizeRole(name, input, base, bounds) {
 		throw httpError(400, 'BAD_FFOR', `ffor.${name} must be an object`);
 	}
 	if ('enabled' in input) out.enabled = !!input.enabled;
+	if (name === 'settle' && 'acceptConcurrent' in input) {
+		if (typeof input.acceptConcurrent !== 'boolean') throw httpError(400, 'BAD_FFOR', 'acceptConcurrent must be a boolean');
+		 out.acceptConcurrent = input.acceptConcurrent;
+	}
 	for (const key of Object.keys(bounds)) {
 		if (!(key in input)) continue;
 		const raw = input[key];
@@ -158,6 +164,7 @@ function normalizeRole(name, input, base, bounds) {
 function normalizeFfor(input, existing) {
 	const ex = existing || {};
 	const base = {
+		concurrent: { enabled: true, ...(ex.concurrent || {}) },
 		settle: { ...SETTLE_DEFAULTS, ...(ex.settle || {}) },
 		funding: { ...FUNDING_DEFAULTS, ...(ex.funding || {}) },
 		witness: { ...WITNESS_DEFAULTS, ...(ex.witness || {}) },
@@ -166,6 +173,7 @@ function normalizeFfor(input, existing) {
 	if (input === undefined || input === null) return base;
 	if (typeof input !== 'object') throw httpError(400, 'BAD_FFOR', 'ffor must be an object');
 	const out = {
+		concurrent: normalizeRole('concurrent', input.concurrent, base.concurrent, {}),
 		settle: normalizeRole('settle', input.settle, base.settle, SETTLE_BOUNDS),
 		funding: normalizeRole('funding', input.funding, base.funding, FUNDING_BOUNDS),
 		witness: normalizeRole('witness', input.witness, base.witness, WITNESS_BOUNDS),
@@ -209,11 +217,13 @@ function hasFforRole(rec) {
  * daemon reads exactly the string 'true'; the caps ride only when set.
  */
 function fforEnv(rec) {
-	if (!hasFforRole(rec)) return {};
-	const { settle, witness, issuer, funding } = normalizeFfor(undefined, rec.ffor);
+	if (rec?.onchainOnly) return {};
+	const { settle, witness, issuer, funding, concurrent } = normalizeFfor(undefined, rec?.ffor);
 	const env = {};
+	if (!concurrent.enabled) env.BEIGNET_FFOR_CONCURRENT = 'false';
 	if (settle.enabled) {
 		env.BEIGNET_FFOR_SETTLE = 'true';
+		if (!settle.acceptConcurrent) env.BEIGNET_FFOR_SETTLE_CONCURRENT = 'false';
 		if (funding.enabled) env.BEIGNET_FFOR_RECEIVE_FUNDING = JSON.stringify(funding);
 		env.BEIGNET_FFOR_FEE_BASE_MSAT = String(settle.feeBaseMsat);
 		env.BEIGNET_FFOR_FEE_PPM = String(settle.feePpm);
@@ -312,7 +322,9 @@ function settlerTerms(policy, settler) {
  * witness sits upstream of S), the issuer one of the witnesses and an
  * issuer. Returns the resolved parties or throws a 400.
  */
-function planSetup({ witnessWalletIds = [], issuer = null }, candidates, settlerNodeId) {
+function planSetup({ witnessWalletIds = [], issuer = null, concurrent = false, concurrentVersion }, candidates, settlerNodeId) {
+	if (concurrent && concurrentVersion !== 2) throw httpError(400, 'BAD_FFOR_SETUP', 'Concurrent setup requires version 2');
+	if (concurrent && issuer) throw httpError(400, 'BAD_FFOR_SETUP', 'Concurrent version 2 issuer provisioning is not available');
 	const byId = new Map((candidates || []).map((c) => [c.id, c]));
 	const witnesses = [];
 	for (const walletId of witnessWalletIds) {
@@ -341,7 +353,7 @@ function planSetup({ witnessWalletIds = [], issuer = null }, candidates, settler
 		if (!description) throw httpError(400, 'BAD_FFOR_SETUP', 'The offer needs a description');
 		issuerParty = { ...c, description };
 	}
-	return { witnesses, issuer: issuerParty };
+	return { witnesses, issuer: issuerParty, ...(concurrent ? { concurrent: true, concurrentVersion: 2 } : {}) };
 }
 
 /**
@@ -350,7 +362,7 @@ function planSetup({ witnessWalletIds = [], issuer = null }, candidates, settler
  * epoch on a force-closed channel is being claimed on-chain; asking the
  * daemon to recover it would only report the peer as unreachable.
  */
-function returnJobs(epochs, channels) {
+function returnJobs(epochs, channels, withProfile = false) {
 	const closed = new Set(
 		(Array.isArray(channels) ? channels : [])
 			.filter((c) => c && CLOSED_CHANNEL_STATES.includes(c.state))
@@ -360,7 +372,7 @@ function returnJobs(epochs, channels) {
 		.filter(
 			(e) => e && e.role === 'R' && RETURN_STATES.includes(e.state) && e.channelId && !closed.has(String(e.channelId))
 		)
-		.map((e) => String(e.channelId));
+		.map((e) => withProfile ? { channelId: String(e.channelId), concurrentVersion: e.concurrentVersion } : String(e.channelId));
 }
 
 /**
@@ -384,6 +396,7 @@ function returnOutcome({ action, epoch, channelState, error }) {
 	if (action === 'force-closed') return 'force-closed';
 	if (state === 'DRAINING') return 'draining';
 	if (channelState && CLOSED_CHANNEL_STATES.includes(channelState)) return 'enforced';
+	if (action === 'synced' && state === 'ACTIVE') return 'synced';
 	return 'unreachable';
 }
 
@@ -397,12 +410,13 @@ function describeReturn(result) {
 	if (!result || typeof result !== 'object') return null;
 	const epoch = result.epoch || null;
 	const slots = (epoch && Array.isArray(epoch.slots) ? epoch.slots : []).map((s) => s.state);
-	const settled = slots.filter((s) => s === 'settled').length;
-	const unsettled = slots.filter((s) => s === 'unsettled').length;
+	const concurrent = epoch?.concurrent === true;
+	const settled = slots.filter((s) => s === (concurrent ? 'redeemed' : 'settled')).length;
+	const unsettled = concurrent ? slots.filter((s) => !['redeemed', 'cancelled'].includes(s)).length : slots.filter((s) => s === 'unsettled').length;
 	// preimagesKnown is what the witnesses returned before the close; a
 	// cooperative close credits through the settled bitmap, so the larger of
 	// the two is what the wallet can claim.
-	const credited = Math.max(Array.isArray(result.preimagesKnown) ? result.preimagesKnown.length : 0, settled);
+	const credited = concurrent ? settled : Math.max(Array.isArray(result.preimagesKnown) ? result.preimagesKnown.length : 0, settled);
 	const action = result.action || 'nothing';
 	const outcome =
 		result.outcome || returnOutcome({ action, epoch, channelState: result.channelState, error: result.error });
