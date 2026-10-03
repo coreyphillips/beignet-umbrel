@@ -301,6 +301,8 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	const [networkMode, setNetworkMode] = useState('hybrid');
 	const [publicHost, setPublicHost] = useState('');
 	const [announce, setAnnounce] = useState(false);
+	const [iroh, setIroh] = useState(false);
+	const [irohRelays, setIrohRelays] = useState('');
 	const announced = announce && (usesOnion(networkMode) || (usesPublic(networkMode) && !!publicHost.trim()));
 	const [onchainOnly, setOnchainOnly] = useState(false);
 	// Channel backup defaults to seed only until peer-storage restore is
@@ -338,6 +340,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					wordCount,
 					electrum: elec,
 					networkMode,
+					...(config.irohAvailable ? { iroh: { enabled: iroh && !onchainOnly, ...(irohRelays.trim() ? { relays: irohRelays.split(',').map((s) => s.trim()).filter(Boolean) } : {}) } } : {}),
 					publicHost,
 					announce,
 					onchainOnly,
@@ -354,6 +357,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					mnemonic,
 					electrum: elec,
 					networkMode,
+					...(config.irohAvailable ? { iroh: { enabled: iroh && !onchainOnly, ...(irohRelays.trim() ? { relays: irohRelays.split(',').map((s) => s.trim()).filter(Boolean) } : {}) } } : {}),
 					publicHost,
 					announce,
 					onchainOnly,
@@ -489,6 +493,11 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					onAnnounce={setAnnounce}
 					torAvailable={!!config.torAvailable}
 					torProxyScopeAvailable={config.torProxyScopeAvailable !== false}
+					irohAvailable={!!config.irohAvailable}
+					iroh={iroh}
+						onIroh={setIroh}
+						irohRelays={irohRelays}
+						onIrohRelays={setIrohRelays}
 				/>
 			)}
 

@@ -505,6 +505,7 @@ export default function WalletPage() {
 
 					torAvailable={!!config?.torAvailable}
 					torProxyScopeAvailable={config?.torProxyScopeAvailable !== false}
+					irohAvailable={!!config?.irohAvailable}
 					recoveryAvailable={!!config?.recoveryAvailable}
 					recoveryAutoApplyAvailable={!!config?.recoveryAutoApplyAvailable}
 					guardianHostingAvailable={!!config?.guardianHostingAvailable}
@@ -561,6 +562,7 @@ function EditWalletModal({
 
 	torAvailable,
 	torProxyScopeAvailable = true,
+	irohAvailable = false,
 	recoveryAvailable = false,
 	recoveryAutoApplyAvailable = false,
 	guardianHostingAvailable = false,
@@ -617,9 +619,11 @@ function EditWalletModal({
 	const [networkMode, setNetworkMode] = useState(modeOf(rec));
 	const [publicHost, setPublicHost] = useState(rec.publicHost || '');
 	const [announce, setAnnounce] = useState(!!rec.announce);
+	const [iroh, setIroh] = useState(!!rec.iroh?.enabled);
+	const [irohRelays, setIrohRelays] = useState((rec.iroh?.relays || []).join(', '));
 	const announced = announce && (usesOnion(networkMode) || (usesPublic(networkMode) && !!publicHost.trim()));
 	const networkChanged =
-		networkMode !== modeOf(rec) || publicHost.trim() !== (rec.publicHost || '') || announce !== !!rec.announce;
+		networkMode !== modeOf(rec) || publicHost.trim() !== (rec.publicHost || '') || announce !== !!rec.announce || iroh !== !!rec.iroh?.enabled || irohRelays !== (rec.iroh?.relays || []).join(', ');
 	const [onchainOnly, setOnchainOnly] = useState(!!rec.onchainOnly);
 	const [recoveryMode, setRecoveryMode] = useState(rec.recovery?.mode || 'off');
 	const [recoveryAutoApply, setRecoveryAutoApply] = useState(!!rec.recovery?.autoApply);
@@ -666,6 +670,7 @@ function EditWalletModal({
 			const body = {
 				name,
 				networkMode,
+				...(irohAvailable ? { iroh: { enabled: iroh && !onchainOnly, relays: irohRelays.trim() ? irohRelays.split(',').map((s) => s.trim()).filter(Boolean) : null } } : {}),
 				publicHost,
 				announce: onchainOnly ? false : announce,
 				onchainOnly,
@@ -881,6 +886,11 @@ function EditWalletModal({
 						publicPort={rec.publicPort || null}
 						torAvailable={torAvailable}
 						torProxyScopeAvailable={torProxyScopeAvailable}
+						irohAvailable={irohAvailable}
+						iroh={iroh}
+						onIroh={setIroh}
+						irohRelays={irohRelays}
+						onIrohRelays={setIrohRelays}
 					/>
 					{networkChanged && <div className="info-note">Changing this restarts the wallet.</div>}
 				</>

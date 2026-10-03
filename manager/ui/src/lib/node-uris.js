@@ -28,9 +28,17 @@ const ANNOUNCE_OFF = 'Announcing is off for this wallet. Turn it on with Edit ab
  * app publishes the wallet ports on the Umbrel. `uri` is null with a `hint`
  * saying why when a way is not there yet.
  */
-export function nodeUris({ nodeId, rec, lanHost }) {
+export function nodeUris({ nodeId, rec, lanHost, info }) {
 	const mode = modeOf(rec);
 	const out = [];
+	if (rec?.iroh?.enabled && !rec?.onchainOnly && info?.irohAvailable) {
+		out.push({
+			key: 'iroh', label: 'Iroh phone link', uri: info.irohUri || null,
+			hint: info.irohListenError?.message || (info.irohUri
+				? "Scan with Chicory to pair your phone. Your phone and the relay can see this Umbrel's IP address."
+				: 'Starting the Iroh listener. Its address will appear when ready.')
+		});
+	}
 	if (usesPublic(mode)) {
 		let hint;
 		if (rec?.publicAddress) {

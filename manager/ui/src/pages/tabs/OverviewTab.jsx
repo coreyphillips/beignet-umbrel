@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
-import { Badge, Button, Card, CopyText, Help, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
+import { Badge, Button, Card, CopyText, Help, QR, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
@@ -285,7 +285,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
  */
 function ConnectCard({ info, rec }) {
 	const [picked, setPicked] = useState(null);
-	const ways = nodeUris({ nodeId: info?.nodeId, rec, lanHost: window.location.hostname });
+	const ways = nodeUris({ nodeId: info?.nodeId, rec, info, lanHost: window.location.hostname });
 	const first = (ways.find((w) => w.uri) || ways[0]).key;
 	const key = picked && ways.some((w) => w.key === picked) ? picked : first;
 	const way = ways.find((w) => w.key === key);
@@ -293,7 +293,7 @@ function ConnectCard({ info, rec }) {
 	return (
 		<Card
 			title="Connect to this node"
-			help="Each way in follows this wallet's network mode, set with Edit above: its public address in Clearnet and Hybrid, its Tor address in Tor and Hybrid, and its address on your home network in every mode, since the app publishes the wallet ports on this Umbrel. The public and home-network ports are the ones on this Umbrel; a peer on the internet reaches the public one once your router forwards it."
+			help="The optional Iroh phone link needs no port forwarding, but your phone and the relay can see this Umbrel's IP address, including in Tor mode. Pair only with a node you control. Each other way in follows this wallet's network mode, set with Edit above: its public address in Clearnet and Hybrid, its Tor address in Tor and Hybrid, and its address on your home network in every mode, since the app publishes the wallet ports on this Umbrel. The public and home-network ports are the ones on this Umbrel; a peer on the internet reaches the public one once your router forwards it."
 		>
 			<div style={{ display: 'flex', gap: 6, marginBottom: 12 }} data-testid="connect-ways">
 				{ways.map((w) => (
@@ -308,7 +308,7 @@ function ConnectCard({ info, rec }) {
 					</Button>
 				))}
 			</div>
-			{way.uri ? <CopyText value={way.uri} /> : <div className="empty">Not available yet.</div>}
+			{way.uri ? <><CopyText value={way.uri} />{way.key === 'iroh' && <QR value={way.uri} />}</> : <div className="empty">Not available yet.</div>}
 			<span className="field-hint" style={{ display: 'block', marginTop: 8 }} data-testid="connect-hint">
 				{way.hint}
 			</span>

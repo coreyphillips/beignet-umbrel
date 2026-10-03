@@ -85,3 +85,17 @@ test('the announce switch reaches the form; Tor is disabled without a proxy; an 
 		await r.unmount();
 	}
 });
+
+test('the Iroh switch is hidden on old engines and exposes privacy and relay settings when enabled', async () => {
+	const old = await render(Harness, { log: [] });
+	try { assert.equal(old.$('[data-testid="iroh-enabled"]'), null); } finally { await old.unmount(); }
+	const changes = [];
+	const r = await render(Harness, { log: [], irohAvailable: true, iroh: true, onIroh: (v) => changes.push(v), onIrohRelays: (v) => changes.push(v) });
+	try {
+		assert.ok(r.$('[data-testid="iroh-enabled"]').checked);
+		assert.match(r.text(), /Phone link over Iroh/);
+		assert.match(r.text(), /public defaults/);
+		await type(r.$('[data-testid="iroh-relays"]'), 'https://relay.example/');
+		assert.equal(changes.at(-1), 'https://relay.example/');
+	} finally { await r.unmount(); }
+});

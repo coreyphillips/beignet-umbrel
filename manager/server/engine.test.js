@@ -182,3 +182,16 @@ test('the onion-only Tor proxy scope is read off the config module that parses i
 	}
 	assert.equal(torProxyScopeAvailable(undefined), false);
 });
+
+test('Iroh requires implemented listener and configuration support', () => {
+	const { irohAvailable } = require('./engine');
+	const { root, bin } = fakeInstall('0.26.0');
+	try {
+		assert.equal(irohAvailable(bin), false);
+		fs.writeFileSync(path.join(path.dirname(bin), 'config.js'), 'BEIGNET_IROH');
+		fs.writeFileSync(path.join(path.dirname(bin), 'iroh-config.js'), 'BEIGNET_IROH_RELAYS');
+		assert.equal(irohAvailable(bin), false);
+		fs.writeFileSync(path.join(path.dirname(bin), 'beignet-node.js'), 'listenIroh( irohUri');
+		assert.equal(irohAvailable(bin), true);
+	} finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
