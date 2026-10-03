@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.26.1"
+version: "0.27.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,20 +30,19 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.24.1, a hardening release for Lightning payments. An
-  incoming payment is now accepted only once it is irrevocably committed on
-  both sides of the channel, so it can no longer be counted on an update the
-  peer could still take back. After a restart, a reconnect or an interrupted
-  splice, the node finishes settling any incoming payment it had already
-  completed. Outgoing retries are more careful: a payment that failed for
-  good is reported as failed, a retry no longer undoes one already in hand,
-  and a timed-out part of a multi-part payment is failed back once the
-  channel allows it. BOLT 12 offers and invoices that ask for unsupported
-  features are refused before anything is sent, and peers asking for an
-  excessive delay on a new channel are refused. Database backups written by
-  the node now carry a checksum keyed from the wallet seed, which a restore
-  verifies. Guardian hosting, coin freezes during a funding pledge and
-  automatic rebalances also get fixes.
+  Bundles beignet 0.26.0 and adds an experimental Iroh phone link for pairing
+  Chicory with your own node without forwarding a port. Enable the phone link
+  in a wallet's Network settings, then scan or copy its Iroh pairing address
+  into Chicory's primary node settings. The link is off by default and can be
+  used alongside Clearnet, Tor or Hybrid. Direct peers and relays can see your
+  IP address. Defaults use n0 public relays and endpoint discovery; choosing
+  custom relays disables n0 discovery. Existing network modes stay available.
+
+
+  Also includes concurrent offline receive books from beignet 0.25.0, with
+  negotiated receive capacity, durable requests and signed receipt tracking.
+  This release includes validation and pairing fixes, including a copyable
+  address when a custom relay URL is too long for a QR code.
 
 
 dependencies: []
