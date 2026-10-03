@@ -1,6 +1,6 @@
 # Concurrent receive in Beignet 0.25.0
 
-The packaged daemon is pinned to published Beignet 0.25.0, release commit `db15cf581bf3f59a26280bdd955f1f08f2dbc182`. Capability detection checks implemented daemon routes, engine methods and configuration parsing. A documentation marker alone does not enable concurrent controls.
+The next image bundles published Beignet 0.26.0, release commit `026d202b96ada2d88f7cf0a206f36697fcf6b3fe`. Capability detection checks implemented daemon routes, engine methods and configuration parsing. A documentation marker alone does not enable concurrent controls.
 
 A negotiated version 2 book can use a funded home channel. Ordinary online payments keep the engine's remaining capacity. Reconnect synchronizes receipts without retiring concurrent books. Refresh receipts requests signed live sync; Close the book now calls `/ffor/epoch/close` explicitly. Closing stops new admissions and invoice exposure. Unknown version 2 slots remain reserved in DRAINING until safely resolved, even after expiry or a close acknowledgement.
 
@@ -80,7 +80,7 @@ ticked, an unsupported engine or peer shows an error instead of silently
 producing an online-only invoice; unticking it returns to the ordinary invoice.
 
 **Engine requirement:** the daemon `/receive/*` API and funding-policy environment
-variable require Beignet 0.21.9 or newer. The image workflow pins 0.25.0; from 0.21.10 an offline receive is only for a channel that already exists with the primary and has room for the amount, never one the primary opens for it. Older
+variable require Beignet 0.21.9 or newer. The image workflow pins 0.26.0; from 0.21.10 an offline receive is only for a channel that already exists with the primary and has room for the amount, never one the primary opens for it. Older
 engines fail the capability check and cannot create automatic offline invoices.
 
 The advanced manual workflow below remains available for other Lightning wallets.

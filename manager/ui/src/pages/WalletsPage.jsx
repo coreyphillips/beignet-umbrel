@@ -1,3 +1,4 @@
+import { irohBody } from '../lib/iroh.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { m } from 'motion/react';
@@ -340,7 +341,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					wordCount,
 					electrum: elec,
 					networkMode,
-					...(config.irohAvailable ? { iroh: { enabled: iroh && !onchainOnly, ...(irohRelays.trim() ? { relays: irohRelays.split(',').map((s) => s.trim()).filter(Boolean) } : {}) } } : {}),
+					...(config.irohAvailable ? { iroh: irohBody(iroh && !onchainOnly, irohRelays) } : {}),
 					publicHost,
 					announce,
 					onchainOnly,
@@ -357,7 +358,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					mnemonic,
 					electrum: elec,
 					networkMode,
-					...(config.irohAvailable ? { iroh: { enabled: iroh && !onchainOnly, ...(irohRelays.trim() ? { relays: irohRelays.split(',').map((s) => s.trim()).filter(Boolean) } : {}) } } : {}),
+					...(config.irohAvailable ? { iroh: irohBody(iroh && !onchainOnly, irohRelays) } : {}),
 					publicHost,
 					announce,
 					onchainOnly,
@@ -495,9 +496,9 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					torProxyScopeAvailable={config.torProxyScopeAvailable !== false}
 					irohAvailable={!!config.irohAvailable}
 					iroh={iroh}
-						onIroh={setIroh}
-						irohRelays={irohRelays}
-						onIrohRelays={setIrohRelays}
+					onIroh={setIroh}
+					irohRelays={irohRelays}
+					onIrohRelays={setIrohRelays}
 				/>
 			)}
 

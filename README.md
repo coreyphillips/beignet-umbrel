@@ -38,7 +38,7 @@ Hover or tap the **?** beside a setting in the dashboard for what it does.
 - **Peers**: connect and disconnect peers, and copy this node's address to hand out (local network, clearnet or Tor).
 - **Network mode**: the app runs its own Tor, and each wallet chooses Tor (every peer over Tor, only the Tor address announced), Clearnet (clearnet peers dialed directly, Tor peers over Tor, a public address you enter announced) or Hybrid (both addresses announced), plus a switch for whether it announces at all. The wallets' Lightning ports are published on the Umbrel (19101 and up), so peers on your home network dial them directly and, with a router forward, so can anyone.
 
-The optional [Iroh phone link](docs/IROH.md) pairs Chicory without port forwarding. It is experimental and opt-in per wallet; the phone and relay can see your IP address.
+The optional [Iroh phone link](docs/IROH.md) pairs Chicory without port forwarding. It is experimental and opt-in per wallet; the phone and relay can see your IP address. Defaults also use n0 discovery; custom relay settings disable that discovery service.
 
 ### Serving other nodes
 

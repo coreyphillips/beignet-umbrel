@@ -483,3 +483,16 @@ test('the Iroh phone link shows its pairing URI, QR and IP visibility help', asy
 		assert.match(r.$('[data-testid="connect-hint"]').textContent, /relay can see this Umbrel's IP/);
 	} finally { await r.unmount(); }
 });
+
+
+test('an oversized Iroh QR preserves the page and its copyable pairing address', async () => {
+	const value = `${NODE}@iroh:${'b'.repeat(64)}?relay=${encodeURIComponent('https://relay.example/' + '/'.repeat(1800))}`;
+	const p = connectProps({ networkMode: 'tor', announce: false, iroh: { enabled: true } });
+	p.info = { ...p.info, irohAvailable: true, irohUri: value };
+	const r = await render(wrapped, p);
+	try {
+		assert.ok(shown(r).includes(value));
+		assert.match(r.text(), /too long for a QR code/);
+		assert.ok(r.$('[data-testid="connect-ways"]'));
+	} finally { await r.unmount(); }
+});

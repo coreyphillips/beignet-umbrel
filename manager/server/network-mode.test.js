@@ -159,3 +159,30 @@ test('Iroh defaults off, validates relay choices and retains settings on unrelat
 	}
 	assert.throws(() => nm.normalizeIroh({ enabled: 'true' }), { code: 'BAD_IROH' });
 });
+
+
+test('empty relay lists use defaults and hidden relay input cannot prevent disabling', () => {
+	assert.deepEqual(
+		nm.normalizeIroh({ enabled: true, relays: [] }, { available: true }),
+		{ enabled: true }
+	);
+	const existing = { enabled: true, relays: ['https://relay.example/'] };
+	for (const onchainOnly of [false, true]) {
+		assert.deepEqual(
+			nm.normalizeIroh(
+				{ enabled: onchainOnly, relays: ['invalid'] },
+				{ onchainOnly, existing, available: true }
+			),
+			{ ...existing, enabled: false }
+		);
+	}
+	assert.deepEqual(nm.irohEnv({ iroh: { enabled: true, relays: [] } }, true), {
+		BEIGNET_IROH: 'true',
+		BEIGNET_IROH_DISCOVERY: 'true'
+	});
+	assert.deepEqual(nm.irohEnv({ iroh: existing }, true), {
+		BEIGNET_IROH: 'true',
+		BEIGNET_IROH_DISCOVERY: 'false',
+		BEIGNET_IROH_RELAYS: 'https://relay.example/'
+	});
+});

@@ -1,3 +1,4 @@
+import { irohBody } from '../lib/iroh.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AnimatePresence, m } from 'motion/react';
@@ -670,7 +671,7 @@ function EditWalletModal({
 			const body = {
 				name,
 				networkMode,
-				...(irohAvailable ? { iroh: { enabled: iroh && !onchainOnly, relays: irohRelays.trim() ? irohRelays.split(',').map((s) => s.trim()).filter(Boolean) : null } } : {}),
+				...(irohAvailable ? { iroh: irohBody(iroh && !onchainOnly, irohRelays) } : {}),
 				publicHost,
 				announce: onchainOnly ? false : announce,
 				onchainOnly,

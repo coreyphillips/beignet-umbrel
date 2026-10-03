@@ -97,7 +97,7 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 				.filter((way) => way.key !== 'local' && way.uri)
 				.map((way) => (
 					<div className="field" key={way.key}>
-						<span className="field-label">{way.label} connection URI (share for inbound channels)</span>
+						<span className="field-label">{way.key === 'iroh' ? 'Iroh phone link (pair only with your own phone)' : `${way.label} connection URI (share for inbound channels)`}</span>
 						<CopyText value={way.uri} />
 						<span className="field-hint">{way.hint}</span>
 					</div>

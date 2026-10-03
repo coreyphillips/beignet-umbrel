@@ -1592,6 +1592,7 @@ function managerRequest(path, method, body) {
 			torAvailable: true,
 			onionAvailable: true,
 			torProxyScopeAvailable: true,
+			irohAvailable: true,
 			engineVersion: '0.12.0',
 			recoveryAvailable: true,
 			recoveryGuardians: store.settings.recoveryGuardians.slice(),

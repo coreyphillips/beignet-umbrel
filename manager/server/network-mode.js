@@ -195,7 +195,7 @@ function normalizeIroh(input, { existing, available = false, onchainOnly = false
 	if (enabled && !available && input !== undefined) {
 		throw httpError(400, 'IROH_UNSUPPORTED', 'The bundled engine does not support Iroh.');
 	}
-	const relays = value.relays === undefined ? existing?.relays : value.relays === null ? undefined : value.relays;
+	const relays = !enabled || value.relays === undefined ? existing?.relays : value.relays === null ? undefined : value.relays;
 	if (relays !== undefined && (!Array.isArray(relays) || relays.length > 16)) throw bad('Provide at most 16 relay URLs.');
 	const normalized = relays?.map((relay) => {
 		if (typeof relay !== 'string' || relay.length > 2048 || /[\s,]/.test(relay)) throw bad('Relay URLs cannot contain spaces or commas.');
@@ -206,14 +206,15 @@ function normalizeIroh(input, { existing, available = false, onchainOnly = false
 		}
 		return url.href;
 	});
-	return { enabled, ...(normalized ? { relays: [...new Set(normalized)] } : {}) };
+	return { enabled, ...(normalized?.length ? { relays: [...new Set(normalized)] } : {}) };
 }
 
 function irohEnv(rec, available) {
 	if (!available || rec.onchainOnly || rec.iroh?.enabled !== true) return {};
 	return {
 		BEIGNET_IROH: 'true',
-		...(rec.iroh.relays ? { BEIGNET_IROH_RELAYS: rec.iroh.relays.join(',') } : {})
+		BEIGNET_IROH_DISCOVERY: rec.iroh.relays?.length ? 'false' : 'true',
+		...(rec.iroh.relays?.length ? { BEIGNET_IROH_RELAYS: rec.iroh.relays.join(',') } : {})
 	};
 }
 

@@ -6,7 +6,7 @@ Open Overview, choose **Iroh phone link**, and scan the QR in Chicory's primary-
 
 The phone and relay can see the Umbrel's IP address, even in Tor mode. Use this for a node you control. Other Lightning peers continue to follow the selected network mode. Iroh uses outbound UDP for direct connections and a relay when a direct path is unavailable, with no router port forwarding required for pairing.
 
-Advanced settings accept comma-separated HTTP or HTTPS relay URLs. Blank uses n0's public relays. Custom URLs replace those defaults. The app does not run a relay container. Hosting a relay yourself needs a reachable server and its own network configuration.
+Advanced settings accept comma-separated HTTP or HTTPS relay URLs. Blank uses n0's public relays. The defaults also contact n0 discovery, which sees the Umbrel's IP and publishes its signed endpoint record. Custom URLs replace the default relays and disable n0 discovery; share the URI containing the relay hint with your phone. The app does not run a relay container. Hosting a relay yourself needs a reachable server and its own network configuration.
 
 Peers shows the selected direct or relay path and RTT when the engine can report them. If the connection string is unavailable, the pairing card shows the listener error or asks you to wait for startup.
 
@@ -14,4 +14,4 @@ The endpoint ID derives from the wallet seed and survives restarts and restores.
 
 Release procedure is unchanged: build and publish an app image before updating the Umbrel manifest and compose digest. This integration pins the next image build to Beignet 0.26.0.
 
-Before release, verify on real hardware: container outbound UDP, relay-only pairing, payments after network outages, and identity stability across app restarts and updates.
+Hardware qualification to perform with this experimental release: container outbound UDP, relay-only pairing, payments after network outages, and identity stability across app restarts and updates.
