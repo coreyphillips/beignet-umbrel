@@ -198,6 +198,16 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 		Number.isSafeInteger(wantedSats) &&
 		wantedSats >= OFFLINE_MIN_SATS;
 	const [quoteTick, setQuoteTick] = useState(0);
+	const [requestRevision, setRequestRevision] = useState(0);
+	const offlineRequestId = useMemo(() => {
+		if (!wantsOffline || !receivePeer || !(wantedSats > 0)) return undefined;
+		const key = `receive-request:${id}`;
+		const fingerprint = JSON.stringify({ peer: receivePeer, description, amountSats: wantedSats });
+		let saved;
+		try { saved = JSON.parse(sessionStorage.getItem(key)); } catch { /* No saved request. */ }
+		if (!saved || saved.fingerprint !== fingerprint) saved = { fingerprint, requestId: crypto.randomUUID() };
+		return saved.requestId;
+	}, [id, wantsOffline, receivePeer, wantedSats, description, requestRevision]);
 	useEffect(() => {
 		if (!wantsOffline) return;
 		const timer = setInterval(() => setQuoteTick((n) => n + 1), 45000);
@@ -205,7 +215,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 	}, [wantsOffline]);
 	const receiveQuote = useQuote(
 		api,
-		{ peer: receivePeer, amountSats: wantedSats, refresh: quoteTick },
+		{ peer: receivePeer, amountSats: wantedSats, requestId: offlineRequestId, refresh: quoteTick },
 		wantsOffline && offlineEligible,
 		'/receive/quote',
 		'GET'
@@ -397,23 +407,16 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 				if (quoteLine?.blocks || !receiveQuote.quote) throw new Error(quoteLine?.text || 'Review the amount again.');
 				const peer = receivePeer;
 				const key = `receive-request:${id}`;
-				const fingerprint = JSON.stringify({ peer, ...body });
-				let saved;
-				try {
-					saved = JSON.parse(sessionStorage.getItem(key));
-				} catch {
-					/* No pending request. */
-				}
-				if (!saved || saved.fingerprint !== fingerprint) saved = { fingerprint, requestId: crypto.randomUUID() };
-				sessionStorage.setItem(key, JSON.stringify(saved));
+				sessionStorage.setItem(key, JSON.stringify({ requestId: offlineRequestId, fingerprint: JSON.stringify({ peer: receivePeer, description, amountSats: wantedSats }) }));
 				r = await api.post('/receive/invoice', {
 					...body,
 					peer,
-					requestId: saved.requestId,
+					requestId: offlineRequestId,
 					quote: receiveQuote.quote
 				});
 				if (r.offlineReceive !== true) throw new Error('Your payment request could not be prepared. Try again.');
 				sessionStorage.removeItem(key);
+				setRequestRevision(n => n + 1);
 			} else if (isLfbw) {
 				// Provision inbound first when the home channel cannot take the
 				// amount: the invoice is payable through a channel the primary
@@ -701,7 +704,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			{!onchainOnly && !isLfbw && config?.fforAvailable && (
 				<details className="grid-full">
 					<summary>Advanced offline receive</summary>
-					<OfflineReceiveCard id={id} api={api} rec={rec} tick={tick} info={info} />
+					<OfflineReceiveCard config={config} id={id} api={api} rec={rec} tick={tick} info={info} />
 				</details>
 			)}
 

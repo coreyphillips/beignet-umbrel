@@ -22,7 +22,7 @@ const RETRY_MAX_MS = 15000;
  *
  * Returns a handle with stop(). Reconnects until stopped.
  */
-function subscribeToEvents({ port, token, onEvent, log }) {
+function subscribeToEvents({ port, token, onEvent, onConnect, log }) {
 	let stopped = false;
 	let req = null;
 	let retryTimer = null;
@@ -76,6 +76,7 @@ function subscribeToEvents({ port, token, onEvent, log }) {
 				}
 				// Connected: reset the backoff so the next drop retries promptly.
 				retryMs = RETRY_MIN_MS;
+				if (onConnect) Promise.resolve().then(onConnect).catch(err => log(`Event refresh failed: ${err.message}`));
 				res.setEncoding('utf8');
 				let buf = '';
 				res.on('data', (chunk) => {

@@ -17,6 +17,7 @@ import { Field, Help } from './ui.jsx';
 export default function FforSettleField({ value, onChange, disabled = false }) {
 	const block = value || {};
 	const settle = block.settle || {};
+	const concurrent = block.concurrent || {};
 	const witness = block.witness || {};
 	const issuer = block.issuer || {};
 	const funding = block.funding || {};
@@ -40,6 +41,18 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 				Offline receive
 			</div>
+			<label className="checkbox field">
+				<input type="checkbox" checked={concurrent.enabled !== false} disabled={disabled} data-testid="ffor-concurrent"
+					onChange={e => onChange({ ...block, concurrent: { enabled: e.target.checked } })} />
+				Advertise concurrent offline receive support
+			</label>
+			{settle.enabled && <label className="checkbox field">
+				<input type="checkbox" checked={settle.acceptConcurrent !== false} disabled={disabled} data-testid="ffor-accept-concurrent"
+					onChange={e => patchSettle('acceptConcurrent', e.target.checked)} />
+				Accept new concurrent books
+				<Help>Turning this off refuses new books while existing books remain serviceable.</Help>
+			</label>}
+
 			<label className="checkbox field">
 				<input
 					type="checkbox"

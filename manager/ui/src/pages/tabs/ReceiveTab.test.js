@@ -736,3 +736,37 @@ test('offline requests block on unavailable peers or quote failures without an o
 		}
 	}
 });
+
+test('a pending offline request survives remount and amount retyping with its original identity', async () => {
+  sessionStorage.clear();
+  stubReceivingNodes();
+  const api = stubLfbwApi();
+  const post = api.post;
+  api.post = async (path, body) => {
+    if (path === '/receive/invoice') {
+      api.calls.push(['POST', path, body]);
+      throw Object.assign(Error('Request pending'), { code: 'RECEIVE_PENDING' });
+    }
+    return post(path, body);
+  };
+  let view = await mountLfbw(api, regularRec, optionalConfig);
+  await enterAmount(view, '20000');
+  await click(offlineBox(view));
+  await settle(400);
+  await click(createButton(view));
+  await settle(50);
+  const first = api.calls.find(([m,p]) => m === 'POST' && p === '/receive/invoice')[2];
+  await view.unmount();
+  view = await mountLfbw(api, regularRec, optionalConfig);
+  try {
+    for (const amount of ['2','20','200','2000','20000']) await enterAmount(view, amount);
+    await click(offlineBox(view));
+    await settle(400);
+    await click(createButton(view));
+    await settle(50);
+    const tries = api.calls.filter(([m,p]) => m === 'POST' && p === '/receive/invoice');
+    assert.equal(tries.at(-1)[2].requestId, first.requestId);
+    const quote = api.calls.filter(([m,p]) => m === 'GET' && p.startsWith('/receive/quote?')).at(-1)[1];
+    assert.equal(new URLSearchParams(quote.split('?')[1]).get('requestId'), first.requestId);
+  } finally { await view.unmount(); sessionStorage.clear(); }
+});

@@ -165,3 +165,14 @@ test('witnesses, the issuer offer and the setup progress are read off the record
 	assert.equal(lines[0].text, 'W: 1 receipt, 1 credited');
 	assert.match(lines[1].text, /02zz… did not answer/);
 });
+
+
+test('concurrent receipt refresh reports only redeemed credit and retains unresolved reservations', () => {
+  const view = describeReturn({ action: 'synced', preimagesKnown: [1, 2], epoch: epoch('DRAINING', ['redeemed', 'settled', 'exposed'], { concurrent: true, concurrentVersion: 2 }) });
+  assert.equal(view.credited, 1);
+  assert.equal(view.complete, false);
+  assert.match(view.detail, /reserv/);
+  const active = describeReturn({ action: 'synced', epoch: epoch('ACTIVE', ['redeemed', 'exposed'], { concurrent: true, concurrentVersion: 2 }) });
+  assert.equal(active.outcome, 'synced');
+  assert.equal(active.credited, 1);
+});

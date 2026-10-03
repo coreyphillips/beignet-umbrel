@@ -128,7 +128,7 @@ export function bookFits(budgetSats, channel) {
 			note: `The book needs ${fmtSats(budgetSats)} on the peer's side of the channel, which holds ${fmtSats(remote)}.`
 		};
 	}
-	return { ok: true, note: `The peer's side holds ${fmtSats(remote)}; the book locks ${fmtSats(budgetSats)} of it until the epoch closes.` };
+	return { ok: true, note: `The peer's side holds ${fmtSats(remote)}; the book locks ${fmtSats(budgetSats)} of it until each slot is safely resolved.` };
 }
 
 /** The wallet's channels a settlement candidate is on the other end of, tagged with its name. */
@@ -167,7 +167,10 @@ export function slotCounts(epoch) {
 	const by = (s) => slots.filter((x) => x.state === s).length;
 	return {
 		total: slots.length,
-		settled: by('settled'),
+		settled: epoch?.concurrent ? by('redeemed') : by('settled'),
+		redeemed: by('redeemed'),
+		cancelled: by('cancelled'),
+		unknown: slots.filter(s => !['redeemed', 'cancelled'].includes(s.state)).length,
 		exposed: by('exposed'),
 		unissued: by('unissued'),
 		unsettled: by('unsettled')
@@ -225,14 +228,18 @@ export function describeEpoch(epoch, tip, channel = null) {
 }
 
 /** A slot's state in plain words. */
-export function slotLabel(slot) {
+export function slotLabel(slot, concurrent = false) {
 	switch (slot && slot.state) {
 		case 'unissued':
 			return 'Waiting for an invoice';
 		case 'exposed':
 			return 'Invoice shared';
+		case 'redeemed':
+			return 'Credited';
+		case 'cancelled':
+			return 'Resolved without payment';
 		case 'settled':
-			return 'Paid while away';
+			return concurrent ? 'Payment proof received' : 'Paid while away';
 		case 'unsettled':
 			return 'Not paid';
 		case 'settling':
@@ -246,8 +253,10 @@ export function slotLabel(slot) {
 
 export function slotTone(slot) {
 	switch (slot && slot.state) {
-		case 'settled':
+		case 'redeemed':
 			return 'green';
+		case 'settled':
+			return 'blue';
 		case 'exposed':
 			return 'blue';
 		case 'unsettled':
@@ -292,11 +301,11 @@ export function describeReturn(ret) {
 	const counts = slotCounts(ret.epoch);
 	// preimagesKnown is what witnesses returned before the close; a
 	// cooperative close credits through the settled bitmap.
-	const credited = Math.max(Array.isArray(ret.preimagesKnown) ? ret.preimagesKnown.length : 0, counts.settled);
+	const credited = ret.epoch?.concurrent ? counts.redeemed : Math.max(Array.isArray(ret.preimagesKnown) ? ret.preimagesKnown.length : 0, counts.settled);
 	const action = ret.action || (ret.error ? 'failed' : 'nothing');
 	const state = ret.epoch ? ret.epoch.state : null;
 	const outcome = ret.outcome || returnOutcome({ action, state, channelState: ret.channelState, error: ret.error });
-	const complete = (outcome === 'closed' || outcome === 'force-closed') && counts.unsettled === 0;
+	const complete = (outcome === 'closed' || outcome === 'force-closed') && (ret.epoch?.concurrent ? counts.unknown === 0 : counts.unsettled === 0);
 	let tone = 'green';
 	let title;
 	let detail;
@@ -308,10 +317,13 @@ export function describeReturn(ret) {
 		tone = 'yellow';
 		title = 'Your settlement peer was not reachable';
 		detail = `${counts.settled} of ${counts.total} vouchers are known paid so far. The epoch stays open until the peer is back, or you enforce it on-chain.`;
+	} else if (outcome === 'synced') {
+		title = 'Receipt refresh requested';
+		detail = `${credited} vouchers credited at the last status update. The book remains open for its other vouchers.`;
 	} else if (outcome === 'draining') {
 		tone = 'blue';
 		title = 'Closing the book with your settlement peer';
-		detail = `${counts.settled} of ${counts.total} vouchers known paid so far; the rest are settling. This updates by itself.`;
+		detail = ret.epoch?.concurrentVersion === 2 ? `${credited} vouchers credited; ${counts.unknown} unresolved slots remain reserved. Ordinary payments can use remaining capacity.` : `${counts.settled} of ${counts.total} vouchers known paid so far; the rest are settling. This updates by itself.`;
 	} else if (outcome === 'enforced') {
 		tone = 'yellow';
 		title = 'Enforced on-chain';
@@ -344,6 +356,7 @@ export function returnOutcome({ action, state, channelState, error }) {
 	if (action === 'force-closed') return 'force-closed';
 	if (state === 'DRAINING') return 'draining';
 	if (isClosedChannelState(channelState)) return 'enforced';
+	if (action === 'synced' && state === 'ACTIVE') return 'synced';
 	return 'unreachable';
 }
 

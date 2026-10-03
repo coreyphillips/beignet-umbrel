@@ -160,3 +160,20 @@ test('an epoch closing retires its offer', () => {
 	m._forgetIssuance('r1', CH);
 	assert.deepEqual(Object.keys(store.r1.fforIssuance), ['other']);
 });
+
+test('manual setup requests version 2 without automatic quote headroom and preserves explicit baseline', async () => {
+  const { m } = managerWith();
+  m.concurrentOfflineReceiveSupported = true;
+  m.epoch.concurrent = true;
+  m.epoch.concurrentVersion = 2;
+  await m.fforSetupEpoch('r1', { channelId: CH, ...START });
+  const body = m.calls.find(([, , p]) => p === '/ffor/epoch/start')[3];
+  assert.equal(body.concurrent, true);
+  assert.equal(body.concurrentVersion, 2);
+  assert.ok(!m.calls.some(([, , p]) => p.startsWith('/receive/quote')));
+  await assert.rejects(m.fforSetupEpoch('r1', { channelId: CH, ...START, issuer: { walletId: 'w1' }, witnessWalletIds: ['w1'] }), /issuer provisioning/);
+  const baseline = managerWith().m;
+  baseline.concurrentOfflineReceiveSupported = true;
+  await baseline.fforSetupEpoch('r1', { channelId: CH, ...START, concurrent: false });
+  assert.equal(baseline.calls.find(([, , p]) => p === '/ffor/epoch/start')[3].concurrent, false);
+});

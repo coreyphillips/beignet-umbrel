@@ -299,7 +299,8 @@ test('automatic receive reservations are excluded from deposit channelization', 
 	});
 	m.offlineReceiveSupported = true;
 	await m._lfbwChannelize('w1');
-	assert.equal(m.calls.find((c) => c.path === '/channel/splice-in').body.channelId, 'spendable');
+	assert.ok(!m.calls.some((c) => ['/channel/splice-in', '/channel/open'].includes(c.path)));
+	assert.equal(m.runtimeState('w1').lfbwLast.action, 'wait');
 });
 test('an unreadable reservation journal prevents channelization', async () => {
 	const { m } = harness({

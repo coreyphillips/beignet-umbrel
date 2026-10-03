@@ -36,7 +36,7 @@ const SETUP_STATES = ['NEGOTIATING', 'VOUCHERS_COMMITTED', 'ACTIVATING'];
  * other end of an open channel; every beignet node advertises the protocol
  * whether or not it settles, so the list comes from the manager's records.
  */
-export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
+export default function OfflineReceiveCard({ id, api, rec, tick, info, config }) {
 	const toast = useToast();
 	const tip = info?.blockHeight || 0;
 	// A 404 is an engine that predates the routes; the card then says so
@@ -63,6 +63,8 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 	const [feeBase, setFeeBase] = useState(String(DEFAULT_FEE.baseMsat));
 	const [feePpm, setFeePpm] = useState(String(DEFAULT_FEE.ppm));
 	const [advanced, setAdvanced] = useState(false);
+	const [baseline, setBaseline] = useState(false);
+	const concurrent = config?.concurrentOfflineReceiveAvailable === true && !baseline;
 	const [busy, setBusy] = useState(false);
 	const [refusal, setRefusal] = useState(null);
 	const [another, setAnother] = useState(false);
@@ -92,7 +94,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 	const chosen = eligible.find((c) => c.channelId === channelId) || null;
 	const fit = plan.body ? bookFits(plan.budgetSats, chosen) : null;
 	const witnessOptions = useMemo(() => witnessCandidates(candidates, chosen ? chosen.peerPubkey : null), [candidates, chosen]);
-	const issuerOptions = witnessOptions.filter((c) => c.issues && witnessIds.includes(c.id));
+	const issuerOptions = concurrent ? [] : witnessOptions.filter((c) => c.issues && witnessIds.includes(c.id));
 	useEffect(() => {
 		if (issuerId && !issuerOptions.some((c) => c.id === issuerId)) setIssuerId('');
 	}, [issuerId, issuerOptions]);
@@ -110,6 +112,8 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 		try {
 			await manager.fforEpoch(id, {
 				...plan.body,
+				concurrent,
+				...(concurrent ? { concurrentVersion: 2 } : {}),
 				witnessWalletIds: witnessIds,
 				...(issuerId ? { issuer: { walletId: issuerId, description: offerDescription || 'Offline receive' } } : {})
 			});
@@ -166,7 +170,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 	const closeNow = async () => {
 		setBusy(true);
 		try {
-			await manager.fforReturn(id, { channelId: epoch.channelId });
+			await api.post('/ffor/epoch/close', { channelId: epoch.channelId });
 			toast('Closing the epoch with your settlement peer', 'success');
 		} catch (e) {
 			toast(e.message, 'error');
@@ -186,7 +190,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 	return (
 		<Card
 			title="Receive while offline"
-			help="Pre-sign a book of fixed-amount vouchers with a sibling wallet that stays online, hand out one invoice per voucher, and get paid while this wallet is off. The sibling settles each payment at once; the money lands in your channel balance when this wallet is back and closes the book."
+			help="Pre-sign a book of fixed-amount vouchers with a sibling wallet that stays online, hand out one invoice per voucher, and get paid while this wallet is off. The sibling settles each payment at once; concurrent receipts credit when this wallet reconnects while the remaining vouchers stay payable."
 			className="grid-full"
 		>
 			{unsupported ? (
@@ -211,7 +215,13 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 					) : (
 						<>
 							<div className="row">
-								<Field label="Settlement peer">
+								{config?.concurrentOfflineReceiveAvailable && <Field label="Receive profile">
+                                      <select value={baseline ? 'baseline' : 'concurrent'} onChange={e => setBaseline(e.target.value === 'baseline')}>
+                                        <option value="concurrent">Keep ordinary payments available</option>
+                                        <option value="baseline">Legacy peer compatibility</option>
+                                      </select>
+                                    </Field>}
+                                    <Field label="Settlement peer">
 									<select value={channelId} onChange={(e) => setChannelId(e.target.value)} data-testid="ffor-channel">
 										{eligible.map((c) => (
 											<option key={c.channelId} value={c.channelId}>
@@ -396,7 +406,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 											<td className="mono">{slot.k}</td>
 											<td>{fmtSats(sats)}</td>
 											<td>
-												<Badge tone={slotTone(slot)}>{slotLabel(slot)}</Badge>
+												<Badge tone={slotTone(slot)}>{slotLabel(slot, epoch.concurrent)}</Badge>
 											</td>
 											<td>
 												{slot.state === 'unissued' && epoch.state === 'ACTIVE' && !described.enforced && !issuance && (
@@ -435,11 +445,12 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 					</div>
 					{epoch.state === 'ACTIVE' && !described.enforced && (
 						<div className="center-actions" style={{ justifyContent: 'flex-start', marginTop: 10 }}>
+							{epoch.concurrent && <Button className="sm" busy={busy} onClick={() => manager.fforReturn(id, { channelId: epoch.channelId }).catch(e => toast(e.message, 'error'))}>Refresh receipts</Button>}
 							<Button className="sm" busy={busy} onClick={closeNow}>
 								Close the book now
 							</Button>
 							<span className="wallet-meta">
-								Collects what was paid and releases the rest. The manager does this by itself after every start.
+								Stops new invoices and payment admissions. Unknown version 2 slots remain reserved until safely resolved.
 							</span>
 						</div>
 					)}
@@ -450,7 +461,8 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info }) {
 							</Button>
 						</div>
 					)}
-					{epoch.state === 'DRAINING' && <div className="wallet-meta" style={{ marginTop: 8 }}>Settling the paid vouchers into your balance…</div>}
+					{epoch.concurrent && <div className="wallet-meta">Concurrent version {epoch.concurrentVersion}. Reserved inbound: {fmtSats(epochChannel?.ffor?.reservedInboundSats || 0)}. Unresolved slots: {epochChannel?.ffor?.unresolvedSlots ?? '?'}. Ordinary HTLC deadlines still apply while this wallet is stopped.</div>}
+					{epoch.state === 'DRAINING' && <div className="wallet-meta" style={{ marginTop: 8 }}>Paid vouchers reconcile into your balance. Unknown slots may remain reserved; ordinary payments can use the remaining capacity.</div>}
 				</>
 			)}
 		</Card>

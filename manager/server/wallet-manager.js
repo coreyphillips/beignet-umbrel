@@ -54,6 +54,7 @@ const {
 	guardianRotationAvailable,
 
 	fforAvailable,
+	concurrentOfflineReceiveAvailable,
 	offlineReceiveAvailable,
 	torProxyScopeAvailable
 } = require('./engine');
@@ -182,6 +183,7 @@ class WalletManager {
 		// 0.21.4, the role switches the daemon honours; probed on the bundle.
 
 		this.fforSupported = fforAvailable();
+		this.concurrentOfflineReceiveSupported = concurrentOfflineReceiveAvailable();
 		this.offlineReceiveSupported = offlineReceiveAvailable();
 		// The Tor proxy scoped to .onion peers (beignet #963, engine 0.22.0):
 		// what lets a Clearnet or Hybrid wallet dial clearnet peers directly and
@@ -644,6 +646,10 @@ class WalletManager {
 
 	torProxyScopeAvailable() {
 		return this.torProxyScopeSupported === true;
+	}
+
+	concurrentOfflineReceiveAvailable() {
+		return this.concurrentOfflineReceiveSupported === true;
 	}
 
 	fforAvailable() {
@@ -1532,7 +1538,11 @@ class WalletManager {
 			port: rec.port,
 			token,
 			log: (m) => this._log(id, m),
+			onConnect: () => this._fforReturn(id, { concurrentOnly: true }),
 			onEvent: (name, data) => {
+				if (name === 'peer:connect') {
+					void this._fforReturn(id, { concurrentOnly: true, peer: data?.pubkey }).catch(err => this._log(id, `Receipt refresh failed: ${err.message}`));
+				}
 				// Channel lifecycle events (and errors naming a channel) go to the
 				// durable per-wallet history, so a close that happens while nobody
 				// is watching still has a story the detail view can tell later. A
@@ -1569,6 +1579,8 @@ class WalletManager {
 				// is the one case the wallet must enforce on-chain; kept on the
 				// runtime so the dashboard can say so until the epoch ends.
 				if (name.startsWith('ffor:')) {
+					if (data?.channelId && rt.fforReturn?.channelId === data.channelId)
+						void this._refreshFforReturn(id, data.channelId).catch(() => {});
 					const summary = name === 'ffor:state' || name === 'ffor:enforce'
 						? { channelId: data && data.channelId, state: data && data.state }
 						: data || {};
@@ -2670,27 +2682,18 @@ class WalletManager {
 		}
 	}
 
-	/**
-	 * The return half of an offline receive (FFOR, beignet #729). While the
-	 * wallet was away its settlement peer settled payers' HTLCs against the
-	 * pre-signed voucher book and sent the wallet nothing; the engine does
-	 * not reconcile on reestablish by itself, so every start asks the daemon
-	 * to: fetch any witnesses, then close the epoch cooperatively, which is
-	 * when the settled bitmap and the preimages arrive and the credit lands
-	 * on the channel. Never force-closes on its own; that stays a user
-	 * action (Enforce) the dashboard offers when the peer is gone.
-	 */
-	async _fforReturn(id) {
+	/** Synchronize receiver books after startup or reconnect without retiring concurrent books. */
+	async _fforReturn(id, { concurrentOnly = false, peer } = {}) {
 		const rec = this.registry.get(id);
 		if (!rec || rec.onchainOnly || !this.fforAvailable()) return;
 		const epochs = await this._daemonCall(rec, 'GET', '/ffor/epochs').catch(() => null);
 		// The daemon preserves automatic requests until paid or expired. Fail closed if its journal is unavailable.
 		const managed = this.offlineReceiveAvailable() ? await this._daemonCall(rec, 'GET', '/receive/status') : null;
-		const owned = new Set((managed?.requests || []).map((j) => j.channelId));
+		const owned = new Set((managed?.requests || []).filter(j => !j.done).map((j) => j.channelId));
 		if (!ffor.returnJobs(epochs).length) return;
 		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
-		for (const channelId of ffor.returnJobs(epochs, channels).filter((channelId) => !owned.has(channelId))) {
-			await this.fforReturn(id, { channelId, waitForPeer: true }).catch(() => {});
+		for (const job of ffor.returnJobs(epochs, channels, true).filter((job) => !owned.has(job.channelId) && (!concurrentOnly || job.concurrentVersion) && (!peer || channels?.some(ch => ch.channelId === job.channelId && ch.peerPubkey === peer)))) {
+			await this.fforReturn(id, { ...job, waitForPeer: true }).catch(() => {});
 		}
 	}
 
@@ -2719,10 +2722,7 @@ class WalletManager {
 			await this._connectEpochWitnesses(rec, channelId);
 			let result;
 			try {
-				result = await this._daemonCall(rec, 'POST', '/ffor/recover', {
-					channelId,
-					forceCloseIfUnreachable: false
-				});
+				result = await this._daemonCall(rec, 'POST', '/ffor/recover', { channelId, forceCloseIfUnreachable: false });
 			} catch (err) {
 				rt.fforReturn = { at: Date.now(), channelId, action: null, error: err.message, code: err.code || null };
 				this._log(id, ffor.returnLogLine(channelId, null, err));
@@ -2737,7 +2737,7 @@ class WalletManager {
 			// for a peer that is not there), so the outcome is read off the
 			// epoch and the channel instead.
 			let epoch = result && result.epoch ? result.epoch : null;
-			if (result && (result.action !== 'nothing' || (epoch && epoch.state === 'DRAINING'))) {
+			if (result && !epoch?.concurrent && result.action !== 'synced' && (result.action !== 'nothing' || (epoch && epoch.state === 'DRAINING'))) {
 				epoch = (await this._waitEpochSettled(rec, channelId)) || epoch;
 			}
 			const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
@@ -2753,18 +2753,28 @@ class WalletManager {
 				preimagesKnown: (result && result.preimagesKnown) || [],
 				witnesses: (result && result.witnesses) || [],
 				epoch: epoch
-					? { state: epoch.state, epochId: epoch.epochId, slots: epoch.slots, activationMismatch: !!epoch.activationMismatch }
+					? { state: epoch.state, epochId: epoch.epochId, slots: epoch.slots, concurrent: epoch.concurrent, concurrentVersion: epoch.concurrentVersion, snapshotSeq: epoch.snapshotSeq, capabilityHold: epoch.capabilityHold, activationMismatch: !!epoch.activationMismatch }
 					: null,
 				error: null
 			};
 			this._log(id, ffor.returnLogLine(channelId, rt.fforReturn));
 			// A drain that outlasted the wait is still a return in progress:
 			// keep watching it and update the record when it completes.
-			if (outcome === 'draining') this._fforTrackDrain(id, channelId);
+			if (outcome === 'draining' && !epoch?.concurrentVersion) this._fforTrackDrain(id, channelId);
 			return rt.fforReturn;
 		} finally {
 			rt.fforReturning = false;
 		}
+	}
+
+	async _refreshFforReturn(id, channelId) {
+		const rec = this.registry.get(id);
+		const rt = this.runtimeState(id);
+		if (!rec || !rt.proc) return;
+		const epoch = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`);
+		if (rt.fforReturn?.channelId !== channelId || rt.fforReturn?.epoch?.epochId !== epoch?.epochId) return;
+		rt.fforReturn = { ...rt.fforReturn, at: Date.now(), epoch,
+			outcome: ffor.returnOutcome({ action: rt.fforReturn.action, epoch }) };
 	}
 
 	// Keep a return whose drain is still running updated: poll the epoch
@@ -2897,7 +2907,14 @@ class WalletManager {
 		if (rt.fforSetup && rt.fforSetup.running) throw httpError(409, 'FFOR_SETUP_IN_PROGRESS', 'An epoch setup is already running');
 		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => []);
 		const ch = (channels || []).find((c) => c.channelId === channelId);
-		const plan = ffor.planSetup({ witnessWalletIds, issuer }, this.fforCandidates(id), ch ? ch.peerPubkey : null);
+		// Request the chosen profile explicitly. The engine negotiates it with the peer;
+		// automatic receive quotes impose additional capacity policy on manual books.
+		if (this.concurrentOfflineReceiveAvailable() && start.concurrent !== false) {
+			start.concurrent = true;
+			start.concurrentVersion = 2;
+		}
+
+		const plan = ffor.planSetup({ witnessWalletIds, issuer, concurrent: start.concurrent, concurrentVersion: start.concurrentVersion }, this.fforCandidates(id), ch ? ch.peerPubkey : null);
 		// The book's fee terms are what the settlement peer charges on the
 		// last hop. A payer prices that hop from the peer's channel_update
 		// when the channel is public and from the invoice hint when it is
@@ -2948,6 +2965,7 @@ class WalletManager {
 						: 'the book did not reach ACTIVE in time';
 				throw httpError(502, 'FFOR_SETUP_FAILED', reason);
 			}
+			if (start.concurrent && active.concurrentVersion !== 2) throw httpError(502, 'FFOR_SETUP_FAILED', 'The requested concurrent profile was not negotiated');
 			await this._fforProvision(rec, rt, setup, plan);
 			setup.step = 'done';
 			return setup;
@@ -2971,7 +2989,7 @@ class WalletManager {
 		const view = await this._daemonCall(rec, 'GET', `/ffor/epoch?channelId=${channelId}`).catch(() => null);
 		if (!view || view.role !== 'R') throw httpError(404, 'NOT_FOUND', 'No epoch of this wallet on that channel');
 		if (view.state !== 'ACTIVE') throw httpError(409, 'FFOR_NOT_ACTIVE', `The epoch is ${view.state}, not ACTIVE`);
-		const plan = ffor.planSetup({ witnessWalletIds, issuer }, this.fforCandidates(id), view.peerNodeId);
+		const plan = ffor.planSetup({ witnessWalletIds, issuer, concurrent: view.concurrent, concurrentVersion: view.concurrentVersion }, this.fforCandidates(id), view.peerNodeId);
 		// A witness the book did not name cannot sit on the path: the
 		// settlement peer refuses delegated HTLCs from anyone else.
 		const named = new Set(Array.isArray(view.witnessPeers) ? view.witnessPeers : []);
@@ -3240,13 +3258,16 @@ class WalletManager {
 			if (Array.isArray(channels)) this._forgetPreviousPrimary(rec, channels);
 			const receive = this.offlineReceiveAvailable() ? await this._daemonCall(rec, 'GET', '/receive/status') : null;
 			const reserved = new Set(receive?.reservedChannelIds || []);
-			const availableChannels = Array.isArray(channels) ? channels.filter((c) => !reserved.has(c.channelId)) : channels;
+			for (const channel of channels || []) {
+				if (channel.ffor && !['CLOSED', 'ABORTED'].includes(channel.ffor.state)) reserved.add(channel.channelId);
+			}
 			const target = lfbw.channelizeTarget({
 				onchainSats,
 				utxos,
-				channels: availableChannels,
+				channels,
 				primaryPubkey: lf.primaryPubkey
 			});
+			if (target.action === 'splice-in' && reserved.has(target.channelId)) return decided({ action: 'wait', reason: 'offline-receive' });
 			if (target.action === 'wait') return decided(target);
 			const fees = await this._daemonCall(rec, 'GET', '/fees/estimates').catch(() => null);
 			const feeNormal = fees && fees.normal > 0 ? fees.normal : 0;

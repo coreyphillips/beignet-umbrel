@@ -261,3 +261,42 @@ test('startup leaves automatic requests to the daemon coordinator and fails clos
 	};
 	await assert.rejects(m._fforReturn('r1'), /journal unavailable/);
 });
+
+
+test('concurrent startup refreshes receipts without closing the book or treating proof as credit', async () => {
+  const { m } = managerWith({ r1: receiver() });
+  m.runtimeState('r1').proc = {};
+  const epoch = { ...activeEpoch(), concurrent: true, concurrentVersion: 2, snapshotSeq: 3, slots: [{ k: 1, state: 'redeemed' }, { k: 2, state: 'settled' }] };
+  m._daemonCall = async (_rec, method, path, body) => {
+    m.calls.push([method, path, body]);
+    if (path === '/ffor/epochs') return [epoch];
+    if (path === '/channels') return [{ channelId: CH, state: 'NORMAL' }];
+    if (path.startsWith('/ffor/epoch?')) return epoch;
+    if (path === '/ffor/recover') return { action: 'synced', epoch };
+    throw Error(`Unexpected ${path}`);
+  };
+  await m._fforReturn('r1');
+  assert.equal(m.calls.filter(([, p]) => p === '/ffor/recover').length, 1);
+  assert.ok(!m.calls.some(([, p]) => ['/ffor/epoch/close', '/ffor/enforce'].includes(p)));
+  const result = m.runtimeState('r1').fforReturn;
+  assert.equal(result.epoch.snapshotSeq, 3);
+  assert.equal(ffor.describeReturn(result).credited, 1);
+  assert.equal(ffor.describeReturn(result).complete, false);
+});
+
+test('reconnect skips legacy books and scopes concurrent recovery to the reconnected peer', async () => {
+  const { m } = managerWith({ r1: receiver() });
+  m.runtimeState('r1').proc = {};
+  const epoch = { ...activeEpoch(), concurrent: true, concurrentVersion: 2 };
+  m._daemonCall = async (_rec, _method, path) => {
+    if (path === '/ffor/epochs') return [epoch, { ...activeEpoch(), channelId: 'legacy' }];
+    if (path === '/channels') return [{ channelId: CH, state: 'NORMAL', peerPubkey: 'settler' }, { channelId: 'legacy', state: 'NORMAL', peerPubkey: 'settler' }];
+    throw Error(`Unexpected ${path}`);
+  };
+  const calls = [];
+  m.fforReturn = async (_id, job) => calls.push(job.channelId);
+  await m._fforReturn('r1', { concurrentOnly: true, peer: 'witness' });
+  assert.deepEqual(calls, []);
+  await m._fforReturn('r1', { concurrentOnly: true, peer: 'settler' });
+  assert.deepEqual(calls, [CH]);
+});
