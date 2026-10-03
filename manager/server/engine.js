@@ -162,7 +162,15 @@ function offlineReceiveAvailable(bin = process.env.BEIGNET_BIN) {
 		probe(bin, 'config.js', ['BEIGNET_FFOR_RECEIVE_FUNDING'])
 	);
 }
+/** Require the configuration, listener and connection-string surface together. */
+function irohAvailable(bin = process.env.BEIGNET_BIN) {
+	return probe(bin, 'config.js', ['BEIGNET_IROH'])
+		&& probe(bin, 'iroh-config.js', ['BEIGNET_IROH_RELAYS'])
+		&& probe(bin, 'beignet-node.js', ['listenIroh(', 'irohUri']);
+}
+
 module.exports = {
+	irohAvailable,
 	concurrentOfflineReceiveAvailable,
 
 	offlineReceiveAvailable,

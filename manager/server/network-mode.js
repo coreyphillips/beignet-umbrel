@@ -185,7 +185,42 @@ function validateNetworkChoice({ mode, publicHost, onchainOnly } = {}) {
 	}
 }
 
+/** Iroh is an opt-in listener independent of the routing mode. */
+function normalizeIroh(input, { existing, available = false, onchainOnly = false } = {}) {
+	const value = input === undefined ? (existing || { enabled: false }) : input;
+	const bad = (message) => httpError(400, 'BAD_IROH', message);
+	if (!value || typeof value !== 'object' || Array.isArray(value)) throw bad('Iroh settings must be an object.');
+	if (value.enabled !== undefined && typeof value.enabled !== 'boolean') throw bad('Iroh enabled must be true or false.');
+	const enabled = !onchainOnly && (value.enabled ?? existing?.enabled ?? false);
+	if (enabled && !available && input !== undefined) {
+		throw httpError(400, 'IROH_UNSUPPORTED', 'The bundled engine does not support Iroh.');
+	}
+	const relays = !enabled || value.relays === undefined ? existing?.relays : value.relays === null ? undefined : value.relays;
+	if (relays !== undefined && (!Array.isArray(relays) || relays.length > 16)) throw bad('Provide at most 16 relay URLs.');
+	const normalized = relays?.map((relay) => {
+		if (typeof relay !== 'string' || relay.length > 2048 || /[\s,]/.test(relay)) throw bad('Relay URLs cannot contain spaces or commas.');
+		let url;
+		try { url = new URL(relay); } catch (_) { throw bad('Enter a valid HTTP or HTTPS relay URL.'); }
+		if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
+			throw bad('Relay URLs must use HTTP or HTTPS without credentials, query parameters or fragments.');
+		}
+		return url.href;
+	});
+	return { enabled, ...(normalized?.length ? { relays: [...new Set(normalized)] } : {}) };
+}
+
+function irohEnv(rec, available) {
+	if (!available || rec.onchainOnly || rec.iroh?.enabled !== true) return {};
+	return {
+		BEIGNET_IROH: 'true',
+		BEIGNET_IROH_DISCOVERY: rec.iroh.relays?.length ? 'false' : 'true',
+		...(rec.iroh.relays?.length ? { BEIGNET_IROH_RELAYS: rec.iroh.relays.join(',') } : {})
+	};
+}
+
 module.exports = {
+	normalizeIroh,
+	irohEnv,
 	MODES,
 	DEFAULT_MODE,
 	isEngineIpv6,

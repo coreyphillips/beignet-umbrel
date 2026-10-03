@@ -93,11 +93,11 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 					</span>
 				</div>
 
-			{nodeUris({ nodeId: info?.nodeId, rec, lanHost: window.location.hostname })
+			{nodeUris({ nodeId: info?.nodeId, rec, info, lanHost: window.location.hostname })
 				.filter((way) => way.key !== 'local' && way.uri)
 				.map((way) => (
 					<div className="field" key={way.key}>
-						<span className="field-label">{way.label} connection URI (share for inbound channels)</span>
+						<span className="field-label">{way.key === 'iroh' ? 'Iroh phone link (pair only with your own phone)' : `${way.label} connection URI (share for inbound channels)`}</span>
 						<CopyText value={way.uri} />
 						<span className="field-hint">{way.hint}</span>
 					</div>
@@ -114,6 +114,7 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 								<tr>
 									<th>Peer</th>
 									<th>Address</th>
+									<th>Transport</th>
 									<th>State</th>
 									<th />
 								</tr>
@@ -131,7 +132,8 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 												<CopyText value={p.pubkey} label={shortId(p.pubkey)} truncate />
 											</div>
 										</td>
-										<td className="mono">{p.host}:{p.port}</td>
+										<td className="mono">{p.transport === 'iroh' ? p.iroh?.endpointId || p.host : `${p.host}:${p.port}`}</td>
+										<td>{p.transport === 'iroh' ? `Iroh (${p.iroh?.path || 'unknown'})` : p.transport || 'tcp'}{Number.isFinite(p.iroh?.rttMs) ? `, ${Math.round(p.iroh.rttMs)} ms` : ''}</td>
 										<td>
 											<Badge tone={p.state === 'connected' ? 'green' : 'yellow'}>{p.state}</Badge>
 										</td>

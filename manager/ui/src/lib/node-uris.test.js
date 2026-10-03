@@ -61,3 +61,15 @@ test('each missing way in says why', () => {
 	assert.equal(uri(loading, 'local'), null);
 	assert.equal(hint(loading, 'local'), 'Not available yet.');
 });
+
+test('Iroh pairing is opt-in and independent of announcement and routing mode', () => {
+	const uri = `${NODE}@iroh:${'a'.repeat(64)}?relay=https%3A%2F%2Frelay.example%2F`;
+	const info = { irohAvailable: true, irohUri: uri };
+	for (const networkMode of ['tor', 'clearnet', 'hybrid']) {
+		const rec = { networkMode, announce: false, iroh: { enabled: true } };
+		assert.equal(nodeUris({ nodeId: NODE, rec, info })[0].uri, uri);
+		assert.equal(nodeUris({ nodeId: NODE, rec, info: {} }).some((w) => w.key === 'iroh'), false);
+		assert.equal(nodeUris({ nodeId: NODE, rec: { ...rec, onchainOnly: true }, info }).some((w) => w.key === 'iroh'), false);
+	}
+	assert.equal(nodeUris({ nodeId: NODE, rec: {}, info }).some((w) => w.key === 'iroh'), false);
+});

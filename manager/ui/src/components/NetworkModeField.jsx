@@ -24,6 +24,11 @@ export default function NetworkModeField({
 	// The host port peers dial, known once the wallet has its port.
 	publicPort = null,
 	torAvailable = true,
+	irohAvailable = false,
+	iroh = false,
+	onIroh,
+	irohRelays = '',
+	onIrohRelays,
 	// The engine's onion-only proxy scope (beignet #963); without it the two
 	// direct modes dial with no proxy at all.
 	torProxyScopeAvailable = true
@@ -56,7 +61,7 @@ export default function NetworkModeField({
 				options={MODES.map((key) => [key, MODE_LABELS[key], key === 'tor' && !torAvailable, 'This app has no Tor proxy'])}
 			/>
 			<span className="field-hint" style={{ display: 'block', margin: '8px 0 12px' }} data-testid="network-note">
-				{NOTES[mode] || NOTES.hybrid}
+				{iroh && mode === 'tor' ? 'Other peers are reached over Tor. The Iroh phone link connects directly or through a relay, which can see your IP address.' : NOTES[mode] || NOTES.hybrid}
 			</span>
 			{!torProxyScopeAvailable && mode !== 'tor' && (
 				<div className="info-note">
@@ -93,10 +98,27 @@ export default function NetworkModeField({
 				<Help>
 					On: the addresses the mode uses go into the public Lightning gossip, onto the Overview
 					tab to share, and into this wallet&apos;s payment requests so a payer can reach it
-					directly. Off: nothing is announced and no address is handed out; the wallet still dials
-					out, and wallets in this app still reach it.
+					directly. Off: no Tor or clearnet address is announced; the wallet still dials
+					out, wallets in this app still reach it, and an enabled Iroh phone link remains available.
 				</Help>
 			</label>
+			{irohAvailable && (
+				<>
+					<label className="checkbox field">
+						<input type="checkbox" data-testid="iroh-enabled" checked={iroh} onChange={(e) => onIroh(e.target.checked)} />
+						Phone link over Iroh (experimental)
+						<Help>Iroh adds a phone connection without port forwarding. Your phone and the relay can see this Umbrel&apos;s IP address, including in Tor mode. Default relays also use n0 discovery, which sees this Umbrel&apos;s IP and publishes its endpoint record. Custom relays disable n0 discovery. Use it for a node you control. Other peers keep using the selected network mode. Iroh addresses are shared privately and never announced in Lightning gossip.</Help>
+					</label>
+					{iroh && (
+						<details className="field">
+							<summary>Advanced Iroh settings</summary>
+							<Field label="Custom relay URLs" hint="Leave blank for n0's public relays. Separate custom HTTP or HTTPS relay URLs with commas. Custom relays replace the public defaults and disable n0 discovery.">
+								<input data-testid="iroh-relays" value={irohRelays} onChange={(e) => onIrohRelays(e.target.value)} placeholder="https://relay.example.com/" />
+							</Field>
+						</details>
+					)}
+				</>
+			)}
 		</>
 	);
 }

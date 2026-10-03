@@ -22,15 +22,23 @@ export function hostForUri(host) {
 const ANNOUNCE_OFF = 'Announcing is off for this wallet. Turn it on with Edit above.';
 
 /**
- * The ways a peer can reach this node, in the order worth sharing: the
+ * The private Iroh phone link, followed by the ways other peers can reach this node: the
  * public address (Clearnet and Hybrid), the Tor address (Tor and Hybrid),
  * and the address on the home network, which every wallet has because the
  * app publishes the wallet ports on the Umbrel. `uri` is null with a `hint`
  * saying why when a way is not there yet.
  */
-export function nodeUris({ nodeId, rec, lanHost }) {
+export function nodeUris({ nodeId, rec, lanHost, info }) {
 	const mode = modeOf(rec);
 	const out = [];
+	if (rec?.iroh?.enabled && !rec?.onchainOnly && info?.irohAvailable) {
+		out.push({
+			key: 'iroh', label: 'Iroh phone link', uri: info.irohUri || null,
+			hint: info.irohListenError?.message || (info.irohUri
+				? `Scan with Chicory to pair your own phone. Your phone and the relay can see this Umbrel's IP address. ${rec.iroh.relays?.length ? "Custom relays disable n0 discovery." : "n0 discovery also sees your IP and publishes the endpoint record."}`
+				: 'Starting the Iroh listener. Its address will appear when ready.')
+		});
+	}
 	if (usesPublic(mode)) {
 		let hint;
 		if (rec?.publicAddress) {

@@ -56,7 +56,8 @@ const {
 	fforAvailable,
 	concurrentOfflineReceiveAvailable,
 	offlineReceiveAvailable,
-	torProxyScopeAvailable
+	torProxyScopeAvailable,
+	irohAvailable
 } = require('./engine');
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
@@ -189,6 +190,7 @@ class WalletManager {
 		// what lets a Clearnet or Hybrid wallet dial clearnet peers directly and
 		// still reach onion peers through the app's Tor.
 		this.torProxyScopeSupported = torProxyScopeAvailable();
+		this.irohSupported = irohAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 	}
@@ -644,6 +646,10 @@ class WalletManager {
 		return this.offlineReceiveSupported === true;
 	}
 
+	irohAvailable() {
+		return this.irohSupported === true;
+	}
+
 	torProxyScopeAvailable() {
 		return this.torProxyScopeSupported === true;
 	}
@@ -852,6 +858,7 @@ class WalletManager {
 		wordCount,
 		tor,
 		networkMode,
+		iroh,
 		publicHost,
 		announce,
 		onchainOnly,
@@ -870,6 +877,7 @@ class WalletManager {
 			mnemonic,
 			tor,
 			networkMode,
+			iroh,
 			publicHost,
 			announce,
 			onchainOnly,
@@ -888,6 +896,7 @@ class WalletManager {
 		mnemonic,
 		tor,
 		networkMode,
+		iroh,
 		publicHost,
 		announce,
 		onchainOnly,
@@ -911,6 +920,7 @@ class WalletManager {
 			mnemonic: normalized,
 			tor,
 			networkMode,
+			iroh,
 			publicHost,
 			announce,
 			onchainOnly,
@@ -929,6 +939,7 @@ class WalletManager {
 		mnemonic,
 		tor,
 		networkMode,
+		iroh,
 		publicHost,
 		announce,
 		onchainOnly,
@@ -954,6 +965,7 @@ class WalletManager {
 		const mode = netmode.requestedMode({ networkMode, tor }, netmode.DEFAULT_MODE);
 		const host = netmode.normalizePublicHost(publicHost);
 		netmode.validateNetworkChoice({ mode, publicHost: host, onchainOnly: !!onchainOnly });
+		const irohBlock = netmode.normalizeIroh(iroh, { available: this.irohAvailable(), onchainOnly: !!onchainOnly });
 		const port = this._allocatePort();
 		const rec = {
 			id,
@@ -961,6 +973,7 @@ class WalletManager {
 			network: net,
 			electrum: resolvedElectrum,
 			networkMode: mode,
+			iroh: irohBlock,
 			publicHost: host,
 			// Announcing is inbound Lightning, which an on-chain only wallet
 			// has sworn off, so the flag wins over the checkbox.
@@ -1038,6 +1051,7 @@ class WalletManager {
 			electrum,
 			tor,
 			networkMode,
+			iroh,
 			publicHost,
 			announce,
 			onchainOnly,
@@ -1093,10 +1107,12 @@ class WalletManager {
 		const nextMode = netmode.requestedMode({ networkMode, tor }, netmode.networkMode(rec));
 		const nextHost = publicHost !== undefined ? netmode.normalizePublicHost(publicHost) : rec.publicHost || '';
 		netmode.validateNetworkChoice({ mode: nextMode, publicHost: nextHost, onchainOnly: nextOnchainOnly });
+		const nextIroh = netmode.normalizeIroh(iroh, { existing: rec.iroh, available: this.irohAvailable(), onchainOnly: nextOnchainOnly });
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
 
 		rec.networkMode = nextMode;
+		rec.iroh = nextIroh;
 		rec.publicHost = nextHost;
 		// The mode replaced the outbound-over-Tor flag; a record written by an
 		// earlier release loses the flag here so there is one truth.
@@ -1229,6 +1245,7 @@ class WalletManager {
 			publicHost: rec.publicHost,
 			publicPort: this.publicPort(rec)
 		});
+		Object.assign(env, netmode.irohEnv(rec, this.irohAvailable()));
 		if (announced.length) env.BEIGNET_ANNOUNCE_ADDRESSES = announced.join(',');
 		// Channel backup (the Recovery Protocol). Off contributes nothing, so
 		// an engine that predates the feature sees the env it always saw. It
@@ -3450,6 +3467,7 @@ class WalletManager {
 			// host the record holds, the host port peers dial it at, and the two
 			// addresses the wallet announces, each null while it does not.
 			networkMode: netmode.networkMode(rec),
+			iroh: { ...rec.iroh, enabled: rec.iroh?.enabled === true && !rec.onchainOnly },
 			publicHost: rec.publicHost || '',
 			publicPort: this.publicPort(rec),
 			publicAddress: pub ? `${netmode.hostForUri(pub.host)}:${pub.port}` : null,

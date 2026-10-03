@@ -389,3 +389,19 @@ test('with no published window the listen port is the public port, as on a nativ
 		assert.equal(env.BEIGNET_ANNOUNCE_ADDRESSES, '127.0.0.1:9001');
 	});
 });
+
+test('Iroh is isolated per wallet, independent of network mode and never enabled for parked wallets', () => {
+	const manager = bareManager();
+	manager.irohSupported = true;
+	for (const networkMode of ['tor', 'clearnet', 'hybrid']) {
+		const enabled = rec({ networkMode, iroh: { enabled: true } });
+		const env = manager._daemonEnv(enabled, PATHS, 'seed words', 'token');
+		assert.equal(env.BEIGNET_IROH, 'true');
+		assert.equal(env.BEIGNET_IROH_RELAYS, undefined);
+		assert.equal(manager._daemonEnv({ ...enabled, onchainOnly: true }, PATHS, 'seed words', 'token').BEIGNET_IROH, undefined);
+	}
+	assert.equal(manager._daemonEnv(rec(), PATHS, 'seed words', 'token').BEIGNET_IROH, undefined);
+	assert.equal(manager._daemonEnv(rec({ iroh: { enabled: true, relays: ['https://relay.example/'] } }), PATHS, 'seed words', 'token').BEIGNET_IROH_RELAYS, 'https://relay.example/');
+	manager.irohSupported = false;
+	assert.equal(manager._daemonEnv(rec({ iroh: { enabled: true } }), PATHS, 'seed words', 'token').BEIGNET_IROH, undefined);
+});

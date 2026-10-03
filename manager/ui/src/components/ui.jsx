@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Component, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { m, useMotionValue, useMotionValueEvent, useReducedMotion, useSpring } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -446,11 +446,35 @@ export function ExplorerLink({ url, children }) {
 	);
 }
 
+class QRFallback extends Component {
+	state = { failed: false };
+	static getDerivedStateFromError() {
+		return { failed: true };
+	}
+	render() {
+		return this.state.failed ? (
+			<span className="field-hint">
+				This address is too long for a QR code. Copy the address instead.
+			</span>
+		) : (
+			this.props.children
+		);
+	}
+}
+
 export function QR({ value, size = 180 }) {
 	if (!value) return null;
 	return (
 		<div className="qr">
-			<QRCodeSVG value={value} size={size} bgColor="#ffffff" fgColor="#111111" includeMargin />
+			<QRFallback key={value}>
+				<QRCodeSVG
+					value={value}
+					size={size}
+					bgColor="#ffffff"
+					fgColor="#111111"
+					includeMargin
+				/>
+			</QRFallback>
 		</div>
 	);
 }

@@ -154,6 +154,7 @@ async function main() {
 				// The Tor proxy scoped to .onion peers (beignet #963): without it a
 				// Clearnet or Hybrid wallet dials with no proxy at all.
 				torProxyScopeAvailable: manager.torProxyScopeAvailable(),
+				irohAvailable: manager.irohAvailable(),
 				// Channel backup (the Recovery Protocol) needs an engine that
 				// carries its surface; older engines get no controls for it.
 				engineVersion: manager.engineVersion,

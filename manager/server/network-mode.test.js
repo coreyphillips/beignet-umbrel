@@ -146,3 +146,43 @@ test('clearnet needs a public address unless the wallet runs no Lightning; an un
 	rejects(() => nm.validateNetworkChoice({ mode: 'onion', publicHost: '' }), 'BAD_NETWORK_MODE');
 	rejects(() => nm.validateNetworkChoice({ mode: undefined }), 'BAD_NETWORK_MODE');
 });
+
+test('Iroh defaults off, validates relay choices and retains settings on unrelated edits', () => {
+	assert.deepEqual(nm.normalizeIroh(), { enabled: false });
+	const existing = { enabled: true, relays: ['https://relay.example/'] };
+	assert.deepEqual(nm.normalizeIroh(undefined, { existing, available: true }), existing);
+	assert.deepEqual(nm.normalizeIroh({ enabled: true, relays: null }, { existing, available: true }), { enabled: true });
+	assert.deepEqual(nm.normalizeIroh(undefined, { existing, onchainOnly: true }), { ...existing, enabled: false });
+	assert.throws(() => nm.normalizeIroh({ enabled: true }), { code: 'IROH_UNSUPPORTED' });
+	for (const relays of ['https://relay.example', ['ftp://relay.example'], ['https://user:pass@relay.example'], ['https://relay.example/?key=x'], ['https://relay.example/#x'], ['https://relay.example/,https://other.example']]) {
+		assert.throws(() => nm.normalizeIroh({ enabled: true, relays }, { available: true }), { code: 'BAD_IROH' });
+	}
+	assert.throws(() => nm.normalizeIroh({ enabled: 'true' }), { code: 'BAD_IROH' });
+});
+
+
+test('empty relay lists use defaults and hidden relay input cannot prevent disabling', () => {
+	assert.deepEqual(
+		nm.normalizeIroh({ enabled: true, relays: [] }, { available: true }),
+		{ enabled: true }
+	);
+	const existing = { enabled: true, relays: ['https://relay.example/'] };
+	for (const onchainOnly of [false, true]) {
+		assert.deepEqual(
+			nm.normalizeIroh(
+				{ enabled: onchainOnly, relays: ['invalid'] },
+				{ onchainOnly, existing, available: true }
+			),
+			{ ...existing, enabled: false }
+		);
+	}
+	assert.deepEqual(nm.irohEnv({ iroh: { enabled: true, relays: [] } }, true), {
+		BEIGNET_IROH: 'true',
+		BEIGNET_IROH_DISCOVERY: 'true'
+	});
+	assert.deepEqual(nm.irohEnv({ iroh: existing }, true), {
+		BEIGNET_IROH: 'true',
+		BEIGNET_IROH_DISCOVERY: 'false',
+		BEIGNET_IROH_RELAYS: 'https://relay.example/'
+	});
+});
