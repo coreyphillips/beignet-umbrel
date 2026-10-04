@@ -125,7 +125,7 @@ test('the primary daemon is restarted once when it was spawned without the provi
 	await m.setupLfbw('w1');
 	assert.deepEqual(m.restarts, ['p1']);
 	// The restart spawned it with the role; the next setup leaves it alone.
-	m.runtimeState('p1').spawnedEnv = { BEIGNET_JIT_RECEIVE: 'true', BEIGNET_DF_RELAY: 'true', BEIGNET_JIT_FLAT_FEE_SAT: '0', BEIGNET_JIT_FEE_PPM: '0', BEIGNET_JIT_MAX_CLIENT_FUNDING_SAT: '1000000', BEIGNET_JIT_MAX_CONCURRENT_FUNDINGS: '3' };
+	m.runtimeState('p1').spawnedEnv = { BEIGNET_JIT_RECEIVE: 'true', BEIGNET_DF_RELAY: 'true', BEIGNET_WAIVE_CLIENT_RESERVE: 'true', BEIGNET_JIT_FLAT_FEE_SAT: '0', BEIGNET_JIT_FEE_PPM: '0', BEIGNET_JIT_MAX_CLIENT_FUNDING_SAT: '1000000', BEIGNET_JIT_MAX_CONCURRENT_FUNDINGS: '3' };
 	await m.setupLfbw('w1');
 	assert.deepEqual(m.restarts, ['p1']);
 });

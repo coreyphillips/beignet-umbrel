@@ -143,6 +143,33 @@ const modalText = (r) => {
 	return detail.textContent.replace(/\s+/g, ' ').trim();
 };
 
+test('channel detail names the reserve direction and never infers a waiver from a zero amount', async () => {
+	const restoreFetch = stubManagerFetch();
+	const channel = {
+		channelId: 'a'.repeat(64), peerPubkey: '02' + 'a'.repeat(64),
+		capacitySats: 1_000_000, localBalanceSats: 500_000, remoteBalanceSats: 500_000,
+		state: 'NORMAL', localReserveSats: 10000, remoteReserveSats: 0,
+		localReserveWaived: false, remoteReserveWaived: true
+	};
+	let view = await render(wrapped, tabProps({ channels: [channel], diagnostics: { state: 'NORMAL', isPeerConnected: true, issues: [] } }));
+	try {
+		await settle(50);
+		await click(view.$('tr.row-clickable'));
+		await settle(50);
+		assert.match(modalText(view), /Our reserve\s*10,000 sats\s*Peer reserve\s*Waived for this channel/);
+		await view.unmount();
+		view = await render(wrapped, tabProps({ channels: [{ ...channel, localReserveSats: 0, remoteReserveWaived: false }], diagnostics: { state: 'NORMAL', isPeerConnected: true, issues: [] } }));
+		await settle(50);
+		await click(view.$('tr.row-clickable'));
+		await settle(50);
+		assert.match(modalText(view), /Our reserve\s*0 sats\s*Peer reserve\s*0 sats/);
+		assert.doesNotMatch(modalText(view), /Waived for this channel/);
+	} finally {
+		await view.unmount();
+		restoreFetch();
+	}
+});
+
 test('a force-closed channel tells its story and drops the live apparatus', async () => {
 	const restoreFetch = stubManagerFetch();
 	const r = await render(wrapped, tabProps());

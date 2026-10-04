@@ -37,6 +37,22 @@ that way. You can also switch it on by hand to serve external wallets.
 The fees default to zero because a provider's clients are, by default, your
 own wallets.
 
+**Waive the reserve for lightning-first clients** lets compatible clients
+spend their channel balance without retaining a channel reserve. It defaults
+on after compatibility qualification; an explicit operator choice to turn it
+off is preserved. It applies
+only to new JIT channels opened by this provider and new private inbound
+channels. Both peers must advertise support. Turning it off gives new
+channels the usual reserve; existing channels keep their negotiated terms.
+The provider never gives up its own reserve. Channel details show **Our
+reserve** and **Peer reserve** separately, including whether each was waived.
+
+A client at zero balance can publish an old state without risking its own
+funds, so keep the provider online to detect and respond within the channel's
+contest period. The wallet record stores this choice as
+`jit.waiveClientReserve`, and the manager passes it to provider daemons as
+`BEIGNET_WAIVE_CLIENT_RESERVE`.
+
 ## Swaps
 
 A liquidity provider can also serve swaps between Lightning and on-chain

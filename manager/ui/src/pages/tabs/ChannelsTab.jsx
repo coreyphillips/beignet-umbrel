@@ -1206,6 +1206,12 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 						</div>
 					)}
 				</DetailRow>
+				<DetailRow label="Our reserve">
+					{channel.localReserveWaived === true ? 'Waived for this channel' : channel.localReserveSats != null ? fmtSats(channel.localReserveSats) : 'Not reported'}
+				</DetailRow>
+				<DetailRow label="Peer reserve">
+					{channel.remoteReserveWaived === true ? 'Waived for this channel' : channel.remoteReserveSats != null ? fmtSats(channel.remoteReserveSats) : 'Not reported'}
+				</DetailRow>
 				{scid && (
 					<DetailRow label="Short channel id">
 						<span className="mono" title={diag.effectiveScid}>

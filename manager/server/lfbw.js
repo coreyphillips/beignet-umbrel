@@ -70,6 +70,7 @@ const MAX_LEASE_RATES = Object.freeze({
 // clients are, by default, the operator's own wallets; the caps are the
 // engine's own defaults, written out so the operator can see them.
 const JIT_DEFAULTS = Object.freeze({
+	waiveClientReserve: true,
 	flatFeeSat: 0,
 	feePpm: 0,
 	maxClientFundingSats: 1000000,
@@ -296,9 +297,16 @@ function dependentsOf(rec, records) {
 /** Validated JIT provider policy, defaults filled in, or throws. */
 function normalizeJit(input, existing) {
 	const base = { ...JIT_DEFAULTS, ...(existing || {}) };
+	base.waiveClientReserve = base.waiveClientReserve === true;
 	if (input === undefined || input === null) return base;
 	if (typeof input !== 'object') throw httpError(400, 'BAD_JIT', 'jit must be an object');
 	const out = { ...base };
+	if ('waiveClientReserve' in input) {
+		if (typeof input.waiveClientReserve !== 'boolean') {
+			throw httpError(400, 'BAD_JIT', 'waiveClientReserve must be a boolean');
+		}
+		out.waiveClientReserve = input.waiveClientReserve;
+	}
 	for (const key of Object.keys(JIT_BOUNDS)) {
 		if (!(key in input)) continue;
 		const raw = input[key];
@@ -390,6 +398,7 @@ function providerEnv(rec) {
 	const jit = normalizeJit(undefined, rec.jit);
 	const env = {
 		BEIGNET_JIT_RECEIVE: 'true',
+		BEIGNET_WAIVE_CLIENT_RESERVE: String(jit.waiveClientReserve),
 		BEIGNET_JIT_FLAT_FEE_SAT: String(jit.flatFeeSat),
 		BEIGNET_JIT_FEE_PPM: String(jit.feePpm),
 		BEIGNET_JIT_MAX_CLIENT_FUNDING_SAT: String(jit.maxClientFundingSats),
@@ -425,7 +434,7 @@ function operatorEnv(source = process.env) {
 function providerRoleChanged(spawnedEnv, rec) {
 	const want = providerEnv(rec);
 	const have = spawnedEnv || {};
-	const keys = new Set([...Object.keys(want), ...Object.keys(have).filter((k) => /^BEIGNET_(JIT_|DF_RELAY)/.test(k))]);
+	const keys = new Set([...Object.keys(want), ...Object.keys(have).filter((k) => /^BEIGNET_(JIT_|DF_RELAY|WAIVE_CLIENT_RESERVE)/.test(k))]);
 	for (const k of keys) {
 		if ((want[k] || null) !== (have[k] || null)) return true;
 	}
