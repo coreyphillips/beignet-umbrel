@@ -22,7 +22,7 @@ services:
     # exact multi-arch index that version's build published, and proves it
     # exists: main must never name an image that has not been built (see
     # check-release).
-    image: ghcr.io/coreyphillips/beignet-app:0.27.0@sha256:96599fbcbad5423c408c959118dabc2d473ee08b530bb7803fb94c529c950528
+    image: ghcr.io/coreyphillips/beignet-app:0.28.0@sha256:72f48d3e3ebee3a740304d5513ee7bcb91e6e2cdc6a52c1c19d7855fb0cf9282
     restart: on-failure
     init: true
     stop_grace_period: 1m
