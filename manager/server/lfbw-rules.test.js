@@ -164,6 +164,7 @@ test('normalizeJit fills defaults, validates whole numbers, and lets the lifetim
 	assert.deepEqual(lfbw.normalizeJit(undefined), { ...lfbw.JIT_DEFAULTS });
 	const edited = lfbw.normalizeJit({ flatFeeSat: '100', maxConcurrentFundings: 1, maxTotalFundingSats: '' }, { feePpm: 500 });
 	assert.deepEqual(edited, {
+		waiveClientReserve: true,
 		flatFeeSat: 100,
 		feePpm: 500,
 		maxClientFundingSats: 1000000,
@@ -181,6 +182,7 @@ test('only a liquidity provider runs the JIT role and the relay, with its caps w
 	assert.deepEqual(lfbw.providerEnv({ liquidityProvider: true, onchainOnly: true }), {}, 'an on-chain only wallet fronts nothing');
 	assert.deepEqual(lfbw.providerEnv({ liquidityProvider: true }), {
 		BEIGNET_JIT_RECEIVE: 'true',
+		BEIGNET_WAIVE_CLIENT_RESERVE: 'true',
 		BEIGNET_JIT_FLAT_FEE_SAT: '0',
 		BEIGNET_JIT_FEE_PPM: '0',
 		BEIGNET_JIT_MAX_CLIENT_FUNDING_SAT: '1000000',
@@ -194,6 +196,21 @@ test('only a liquidity provider runs the JIT role and the relay, with its caps w
 	assert.equal(budgeted.BEIGNET_JIT_FLAT_FEE_SAT, '250');
 	assert.equal(budgeted.BEIGNET_JIT_FEE_PPM, '1500');
 	assert.equal(budgeted.BEIGNET_JIT_MAX_TOTAL_FUNDING_SAT, '5000000');
+});
+
+test('client reserve waiver accepts only booleans and follows provider role changes', () => {
+	const on = lfbw.normalizeJit({ waiveClientReserve: true });
+	assert.equal(on.waiveClientReserve, true);
+	assert.equal(lfbw.normalizeJit({ feePpm: 5 }, on).waiveClientReserve, true);
+	assert.equal(lfbw.normalizeJit({ waiveClientReserve: false }, on).waiveClientReserve, false);
+	for (const value of ['true', 'false', 1, 0, null, {}]) {
+		assert.throws(() => lfbw.normalizeJit({ waiveClientReserve: value }), (error) => error.code === 'BAD_JIT');
+	}
+	assert.equal(lfbw.normalizeJit(undefined, { waiveClientReserve: 'false' }).waiveClientReserve, false);
+	const provider = { liquidityProvider: true, jit: on };
+	assert.equal(lfbw.providerEnv(provider).BEIGNET_WAIVE_CLIENT_RESERVE, 'true');
+	assert.equal(lfbw.providerRoleChanged(lfbw.providerEnv(provider), { ...provider, jit: { waiveClientReserve: false } }), true);
+	assert.equal(lfbw.providerEnv({ ...provider, liquidityProvider: false }).BEIGNET_WAIVE_CLIENT_RESERVE, undefined);
 });
 
 test('operator policy passes through from the manager env only when set', () => {

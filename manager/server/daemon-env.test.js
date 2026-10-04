@@ -143,6 +143,10 @@ test('only a liquidity provider gets the JIT role and the relay', () => {
 		't'
 	);
 	assert.equal(provider.BEIGNET_JIT_RECEIVE, 'true');
+	assert.equal(provider.BEIGNET_WAIVE_CLIENT_RESERVE, 'true');
+	const waiving = m._daemonEnv(rec({ liquidityProvider: true, jit: { waiveClientReserve: true } }), PATHS, 's', 't');
+	assert.equal(waiving.BEIGNET_WAIVE_CLIENT_RESERVE, 'true');
+	assert.equal(client.BEIGNET_WAIVE_CLIENT_RESERVE, undefined);
 	assert.equal(provider.BEIGNET_DF_RELAY, 'true');
 	assert.equal(provider.BEIGNET_JIT_FLAT_FEE_SAT, '100');
 	assert.equal(provider.BEIGNET_JIT_FEE_PPM, '0');

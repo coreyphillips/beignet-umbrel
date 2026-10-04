@@ -176,6 +176,16 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 			)}
 			{value && (
 				<>
+					<label className="checkbox field">
+						<input type="checkbox" checked={jit.waiveClientReserve === undefined || jit.waiveClientReserve === true} onChange={(e) => patchJit('waiveClientReserve', e.target.checked)} />
+						Waive the reserve for lightning-first clients
+						<Help>
+							Applies to new JIT channels and private inbound channels with compatible clients.
+							Existing channels and this node's own reserve stay unchanged. A client with no
+							balance can publish an old state without risking its own funds, so keep this
+							node online to detect and respond within the channel's contest period.
+						</Help>
+					</label>
 					<div className="row">
 						<Field label="Flat fee (sats)">
 							<input value={jit.flatFeeSat ?? ''} onChange={(e) => patchJit('flatFeeSat', e.target.value.replace(/[^0-9]/g, ''))} />

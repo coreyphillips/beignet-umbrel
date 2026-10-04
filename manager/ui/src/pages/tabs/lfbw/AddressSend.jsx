@@ -48,13 +48,14 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	const [fetchingAddr, setFetchingAddr] = useState(false);
 	const [focused, setFocused] = useState(false);
 	const [busy, setBusy] = useState(false);
-	const [quote, setQuote] = useState(null);
+	const [quoted, setQuote] = useState(null);
 	const [quoteError, setQuoteError] = useState(null);
 	const [result, setResult] = useState(null);
 	const [directFunding, setDirectFunding] = useState(true);
 	// The request the latest direct funding paid, and which press that was.
 	const [stepsFor, setStepsFor] = useState(null);
 	const inputRef = useRef(null);
+	const amountWaitingForQuote = useRef(false);
 	const { data: fees } = usePoll(() => api.get('/fees/estimates').catch(() => null), 30000, []);
 	const { data: wallets } = usePoll(() => manager.listWallets().catch(() => []), 15000, []);
 	const { data: utxos } = usePoll(() => api.get('/utxos').catch(() => null), 30000, [id]);
@@ -75,6 +76,9 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	}, [parsed.kind]);
 	const effRate = parseInt(feeRate, 10) || fees?.normal || null;
 	const feeratePerkw = effRate ? perkwFromSatVb(effRate) : null;
+	const quoteAddress = parsed.kind === 'onchain' ? parsed.address : undefined;
+	const quoteKey = JSON.stringify([home?.channelId, feeratePerkw, quoteAddress]);
+	const quote = quoted?.key === quoteKey ? quoted.value : null;
 
 	// The box is made to hold the address the parser settled on, whatever
 	// arrived, with the request's own figure filled in once.
@@ -102,6 +106,7 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 			message: parsed.message || parsed.label,
 			funding: parsed.funding
 		});
+		amountWaitingForQuote.current = false;
 		setMaxMode(false);
 		setAmount(parsed.amountSats != null ? String(parsed.amountSats) : '');
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -110,17 +115,18 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	// The daemon prices the splice-out: which reserve the peer set, the exact
 	// weight, and the most that can leave at this rate net of the fee.
 	useEffect(() => {
+		setQuote(null);
+		setQuoteError(null);
 		if (!home || !feeratePerkw) {
-			setQuote(null);
 			return undefined;
 		}
 		let alive = true;
 		const t = setTimeout(() => {
 			api
-				.post('/channel/splice-quote', { channelId: home.channelId, direction: 'out', feeratePerkw })
+				.post('/channel/splice-quote', { channelId: home.channelId, direction: 'out', feeratePerkw, ...(quoteAddress ? { address: quoteAddress } : {}) })
 				.then((q) => {
 					if (!alive) return;
-					setQuote(q);
+					setQuote({ key: quoteKey, value: q });
 					setQuoteError(null);
 				})
 				.catch((e) => {
@@ -132,16 +138,27 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 			alive = false;
 			clearTimeout(t);
 		};
-	}, [api, home?.channelId, feeratePerkw]);
+	}, [api, home?.channelId, feeratePerkw, quoteAddress, quoteKey]);
 
 	const ceiling = quote ? quote.maxAmountSats || 0 : 0;
 	const feeSats = quote ? quote.feeSats ?? null : null;
 	const typed = parseInt(amount, 10) || 0;
 	const shownAmount = maxMode ? String(ceiling) : amount;
 	const amountNum = maxMode ? ceiling : typed;
+	useEffect(() => {
+		if (!quote || !amountWaitingForQuote.current) return;
+		amountWaitingForQuote.current = false;
+		if (!maxMode && ceiling > 0 && typed >= ceiling) setMaxMode(true);
+	}, [quote, maxMode, ceiling, typed]);
 	const feeMax = Math.max(1, Math.max(fees?.fast ? fees.fast * FEE_CAP_MULTIPLE : 100, parseInt(feeRate, 10) || 0));
 
 	const setAmountManually = (val) => {
+		amountWaitingForQuote.current = !quote;
+		if (!quote) {
+			setMaxMode(false);
+			setAmount(val);
+			return;
+		}
 		const next = parseInt(val, 10) || 0;
 		if (maxMode) {
 			if (next >= ceiling) return;

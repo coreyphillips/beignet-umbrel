@@ -541,7 +541,8 @@ env:
   # removal is irrevocable, an MPP part refused once the parts out reach the
   # total, the daily spend ledger kept across a restart, no second payment of
   # a completed hash) and wallet refresh fixes (#959 to #973).
-  BEIGNET_VERSION: "0.26.0"
+  # 0.27.0 adds exact send max, client reserve waivers and durable drain primitives.
+  BEIGNET_VERSION: "0.27.0"
 
 jobs:
   build:

@@ -104,6 +104,28 @@ test('a wallet with no dependents may drop the provider role, and the env follow
 	assert.equal(env.BEIGNET_JIT_RECEIVE, undefined);
 });
 
+test('editing the client reserve policy persists it and restarts the provider with the new policy', async () => {
+	const { m, store } = managerWith({ p1: primary() });
+	let restarts = 0;
+	m._restartWallet = async () => { restarts++; };
+	m.runtimeState('p1').proc = { pid: 1 };
+	const enabled = await m.updateWallet('p1', { jit: { waiveClientReserve: true } });
+	assert.equal(enabled.jit.waiveClientReserve, true);
+	assert.equal(store.p1.jit.waiveClientReserve, true);
+	assert.equal(m._daemonEnv(store.p1, { home: '/h', data: '/d' }, 's', 't').BEIGNET_WAIVE_CLIENT_RESERVE, 'true');
+	assert.equal(restarts, 1);
+	await m.updateWallet('p1', { name: 'Hub' });
+	assert.equal(store.p1.jit.waiveClientReserve, true);
+	assert.equal(restarts, 2);
+	await m.updateWallet('p1', { jit: { waiveClientReserve: false } });
+	assert.equal(m.publicRecord('p1').jit.waiveClientReserve, false);
+	assert.equal(m._daemonEnv(store.p1, { home: '/h', data: '/d' }, 's', 't').BEIGNET_WAIVE_CLIENT_RESERVE, 'false');
+	assert.equal(restarts, 3);
+	await assert.rejects(m.updateWallet('p1', { jit: { waiveClientReserve: 'true' } }), (err) => err.code === 'BAD_JIT');
+	assert.equal(store.p1.jit.waiveClientReserve, false);
+	assert.equal(restarts, 3);
+});
+
 test('an edit can make an ordinary wallet lightning-first, and an on-chain only one cannot be', async () => {
 	const { m, store } = managerWith({ p1: primary(), w2: { ...dependent(), id: 'w2', lfbw: null } });
 	const out = await m.updateWallet('w2', { lfbw: { enabled: true, primaryWalletId: 'p1' } });
@@ -144,7 +166,7 @@ test('the public record names the node, the listen port, the reach, and who depe
 	assert.equal(p.listenPort, 3901 + 6000);
 	assert.equal(p.reach, null, 'no onion, no PUBLIC_HOST: nothing to advertise');
 	assert.equal(p.liquidityProvider, true);
-	assert.deepEqual(p.jit, { flatFeeSat: 0, feePpm: 0, maxClientFundingSats: 1000000, maxConcurrentFundings: 3, maxTotalFundingSats: null });
+	assert.deepEqual(p.jit, { waiveClientReserve: true, flatFeeSat: 0, feePpm: 0, maxClientFundingSats: 1000000, maxConcurrentFundings: 3, maxTotalFundingSats: null });
 	assert.deepEqual(p.lfbwDependents, [{ id: 'w1', name: 'Spending' }]);
 	const w = m.publicRecord('w1');
 	assert.equal(w.lfbw.primaryWalletId, 'p1');

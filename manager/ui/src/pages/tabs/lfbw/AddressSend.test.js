@@ -16,6 +16,7 @@ import { encodeFundingEnvelope } from '../../../lib/funding-envelope.js';
 import AddressSend from './AddressSend.jsx';
 
 const ADDR = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+const TAPROOT_ADDR = 'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0';
 
 /** A daemon refusal, as api.js throws it: the daemon's message and code. */
 function refused(message, code) {
@@ -150,6 +151,130 @@ test('with no home channel there is nothing to send from, and the form says so',
 	}
 });
 
+test('max is repriced for the destination and sends that address at its own ceiling', async () => {
+	const base = stubApi();
+	const api = {
+		...base,
+		post: async (path, body) => {
+			if (path === '/channel/splice-quote' && body.address === TAPROOT_ADDR) {
+				base.calls.push(['POST', path, body]);
+				return { feeSats: 1400, maxAmountSats: 379800 };
+			}
+			return base.post(path, body);
+		}
+	};
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), ADDR);
+		await type(view.$('.amount-input'), '390000');
+		await settle(300);
+		assert.equal(view.$('.amount-input').value, '380000');
+		await type(view.$('input[placeholder^="bc1"]'), TAPROOT_ADDR);
+		assert.equal(sendButton(view).disabled, true, 'the previous destination cannot supply a ceiling');
+		await settle(300);
+		assert.equal(view.$('.amount-input').value, '379800');
+		const quotes = base.calls.filter(([, path]) => path === '/channel/splice-quote');
+		assert.deepEqual(quotes.at(-1)[2], { channelId: HOME.channelId, direction: 'out', feeratePerkw: 1750, address: TAPROOT_ADDR });
+		await click(sendButton(view));
+		await settle(50);
+		const splice = base.calls.find(([, path]) => path === '/channel/splice-out');
+		assert.deepEqual(splice[2], { channelId: HOME.channelId, amountSats: 379800, feeratePerkw: 1750, address: TAPROOT_ADDR });
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('an old destination response cannot replace the current quote', async () => {
+	const base = stubApi();
+	let finishOld;
+	const api = {
+		...base,
+		post: async (path, body) => {
+			if (path === '/channel/splice-quote' && body.address) {
+				base.calls.push(['POST', path, body]);
+				if (body.address === ADDR) return new Promise((resolve) => { finishOld = resolve; });
+				return { feeSats: 1400, maxAmountSats: 379800 };
+			}
+			return base.post(path, body);
+		}
+	};
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), ADDR);
+		await type(view.$('.amount-input'), '390000');
+		await settle(300);
+		assert.equal(sendButton(view).disabled, true);
+		assert.equal(typeof finishOld, 'function');
+		await type(view.$('input[placeholder^="bc1"]'), TAPROOT_ADDR);
+		await settle(300);
+		assert.equal(view.$('.amount-input').value, '379800');
+		finishOld({ feeSats: 1200, maxAmountSats: 380000 });
+		await settle(20);
+		assert.equal(view.$('.amount-input').value, '379800');
+		assert.equal(sendButton(view).disabled, false);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a failed destination quote keeps the previous maximum unavailable', async () => {
+	const base = stubApi();
+	const api = {
+		...base,
+		post: async (path, body) => {
+			if (path === '/channel/splice-quote' && body.address === TAPROOT_ADDR) throw new Error('Channel is busy');
+			return base.post(path, body);
+		}
+	};
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), ADDR);
+		await type(view.$('.amount-input'), '390000');
+		await settle(300);
+		await type(view.$('input[placeholder^="bc1"]'), TAPROOT_ADDR);
+		await settle(300);
+		assert.equal(sendButton(view).disabled, true);
+		assert.match(view.text(), /Channel is busy/);
+		assert.equal(base.calls.some(([, path]) => path === '/channel/splice-out'), false);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('typing while a changed destination is being quoted deselects max and keeps the new amount', async () => {
+	const base = stubApi();
+	let finishQuote;
+	const api = {
+		...base,
+		post: async (path, body) => {
+			if (path === '/channel/splice-quote' && body.address === TAPROOT_ADDR)
+				return new Promise((resolve) => { finishQuote = resolve; });
+			return base.post(path, body);
+		}
+	};
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), ADDR);
+		await type(view.$('.amount-input'), '390000');
+		await settle(300);
+		assert.equal(sendButton(view).textContent.trim(), 'Send max');
+		await type(view.$('input[placeholder^="bc1"]'), TAPROOT_ADDR);
+		await type(view.$('.amount-input'), '10000');
+		await settle(300);
+		assert.equal(view.$('.amount-input').value, '10000');
+		assert.equal(sendButton(view).disabled, true);
+		finishQuote({ feeSats: 1400, maxAmountSats: 379800 });
+		await settle(20);
+		assert.equal(view.$('.amount-input').value, '10000');
+		assert.equal(sendButton(view).textContent.trim(), 'Send');
+		await click(sendButton(view));
+		await settle(50);
+		assert.equal(base.calls.find(([, path]) => path === '/channel/splice-out')[2].amountSats, 10000);
+	} finally {
+		await view.unmount();
+	}
+});
+
 test('the amount, the fee and Send wait for an address, and stay while it is edited', async () => {
 	const view = await mount(stubApi());
 	try {
@@ -225,6 +350,34 @@ test('a pasted request has the daemon start dialing the recipient before Send, c
 		const prepared = api.calls.filter(([m, p]) => m === 'POST' && p === '/direct-funding/prepare');
 		assert.deepEqual(prepared.map(([, , body]) => body), [{ request: REQUEST }]);
 		assert.equal(api.calls.some(([m, p]) => m === 'POST' && p === '/direct-funding/send'), false);
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('a fixed request above the channel ceiling stays fixed and can use a covering direct-funding coin', async () => {
+	const amountSats = 500_000;
+	const funding = encodeFundingEnvelope({ nodeId: NODE, expiresAt: Date.now() + 3_600_000, amountSats });
+	const api = stubApi({
+		utxos: [{ txid: 'a'.repeat(64), vout: 0, valueSats: 700_000, height: 100 }],
+		sendAnswer: { status: 'MEMPOOL_SEEN', fundingTxid: 'f'.repeat(64), amountSat: amountSats }
+	});
+	const view = await mount(api);
+	try {
+		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, amountSats }));
+		await settle(300);
+		assert.equal(view.$('.amount-input').value, '500000');
+		assert.equal(sendButton(view).textContent.trim(), 'Send');
+		assert.equal(sendButton(view).disabled, true, 'a plain request cannot fit the channel');
+		await type(view.$('input[placeholder^="bc1"]'), buildBip21({ address: ADDR, funding }));
+		await settle(300);
+		assert.equal(view.$('.amount-input').value, '500000');
+		assert.equal(sendButton(view).textContent.trim(), 'Pay as direct funding');
+		assert.equal(sendButton(view).disabled, false);
+		await click(sendButton(view));
+		await settle(50);
+		assert.equal(api.calls.find(([, path]) => path === '/direct-funding/send')[2].amountSats, amountSats);
+		assert.equal(api.calls.some(([, path]) => path === '/channel/splice-out'), false);
 	} finally {
 		await view.unmount();
 	}

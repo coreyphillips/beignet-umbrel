@@ -9,9 +9,45 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement, useState } from 'react';
 import { click, render, select, type } from '../../test/render.mjs';
-import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from './LfbwFields.jsx';
+import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates, ProviderFields } from './LfbwFields.jsx';
 
 const PK = '02' + 'ab'.repeat(32);
+
+test('new providers display the qualified waiver default while explicit opt-out remains off', async () => {
+	for (const [jit, expected] of [[{}, true], [{ waiveClientReserve: false }, false], [{ waiveClientReserve: true }, true]]) {
+		const view = await render(ProviderFields, { value: true, jit, onChange: () => {}, onJit: () => {} });
+		try {
+			const label = view.$$('label').find((item) => item.textContent.includes('Waive the reserve for lightning-first clients'));
+			assert.equal(label.querySelector('input').checked, expected);
+		} finally {
+			await view.unmount();
+		}
+	}
+});
+
+test('the provider reserve setting sends a boolean and preserves the fee settings', async () => {
+	let latest;
+	function ProviderHarness() {
+		const [jit, setJit] = useState({ waiveClientReserve: false, flatFeeSat: 12 });
+		return createElement(ProviderFields, {
+			value: true, jit, onChange: () => {}, onJit: (next) => { latest = next; setJit(next); }
+		});
+	}
+	const view = await render(ProviderHarness);
+	try {
+		const label = view.$$('label').find((item) => item.textContent.includes('Waive the reserve for lightning-first clients'));
+		assert.ok(label);
+		assert.match(label.textContent, /new JIT channels and private inbound channels/);
+		assert.match(label.textContent, /Existing channels and this node's own reserve stay unchanged/);
+		assert.match(label.textContent, /contest period/);
+		await click(label.querySelector('input'));
+		assert.deepEqual(latest, { waiveClientReserve: true, flatFeeSat: 12 });
+		await click(label.querySelector('input'));
+		assert.deepEqual(latest, { waiveClientReserve: false, flatFeeSat: 12 });
+	} finally {
+		await view.unmount();
+	}
+});
 
 test('lfbwBody posts the internal or the external shape, and nothing when off', () => {
 	assert.deepEqual(lfbwBody({ ...EMPTY_LFBW }), { enabled: false });
