@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.27.0"
+version: "0.28.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,19 +30,18 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.26.0 and adds an experimental Iroh phone link for pairing
-  Chicory with your own node without forwarding a port. Enable the phone link
-  in a wallet's Network settings, then scan or copy its Iroh pairing address
-  into Chicory's primary node settings. The link is off by default and can be
-  used alongside Clearnet, Tor or Hybrid. Direct peers and relays can see your
-  IP address. Defaults use n0 public relays and endpoint discovery; choosing
-  custom relays disables n0 discovery. Existing network modes stay available.
+  Bundles beignet 0.27.0 with exact Lightning send max, destination-aware
+  splice quotes, cooperative close to an address and durable loose-coin sweeps.
+  Liquidity providers can waive a supported client's reserve on new private
+  channels. The setting is on by default and can be turned off; existing
+  channels retain their reserve. Channel details show both waiver directions.
+  The primary keeps its own reserve and must stay online to protect channels
+  whose client reserve is waived.
 
 
-  Also includes concurrent offline receive books from beignet 0.25.0, with
-  negotiated receive capacity, durable requests and signed receipt tracking.
-  This release includes validation and pairing fixes, including a copyable
-  address when a custom relay URL is too long for a QR code.
+  Address send quotes now price the parsed destination, including Taproot,
+  and refresh when it changes. Existing Iroh phone pairing and concurrent
+  offline receive features remain available.
 
 
 dependencies: []
