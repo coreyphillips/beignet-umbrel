@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.28.1"
+version: "0.29.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,13 +30,15 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  The wallet edit dialog now reloads saved automatic receive funding settings
-  correctly. The funding checkbox, channel limits and concurrent receive
-  preference retain their saved values when reopening or making unrelated edits.
+  Bundles beignet 0.28.0 for a lighter wallet startup. The Lightning network
+  map that every mainnet wallet loads when it starts is now applied in small
+  slices, so the wallet keeps answering the dashboard and its peers while it
+  loads, and the map it ends up with is the same.
 
 
-  Turning off Lightning also disables automatic funding cleanly while preserving
-  its configured limits. Includes beignet 0.27.0.
+  The wallet seed is now derived once per start instead of several times, and
+  reopening encrypted storage no longer reads back records that are already
+  encrypted. Nothing changes in the dashboard or in your wallets' settings.
 
 dependencies: []
 path: ""
