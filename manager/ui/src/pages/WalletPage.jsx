@@ -556,7 +556,7 @@ function ResumeBanner({ recovery }) {
 	);
 }
 
-function EditWalletModal({
+export function EditWalletModal({
 	rec,
 	origin,
 	presets,
@@ -631,18 +631,22 @@ function EditWalletModal({
 	const [guardianServe, setGuardianServe] = useState(!!rec.guardianServe);
 	// FFOR: the roles this wallet serves siblings (settle, witness, issuer).
 	const [fforBlock, setFforBlock] = useState(() => ({
+		concurrent: { ...((rec.ffor && rec.ffor.concurrent) || {}) },
 		settle: { ...((rec.ffor && rec.ffor.settle) || {}) },
 		witness: { ...((rec.ffor && rec.ffor.witness) || {}) },
-		issuer: { ...((rec.ffor && rec.ffor.issuer) || {}) }
+		issuer: { ...((rec.ffor && rec.ffor.issuer) || {}) },
+		funding: { ...((rec.ffor && rec.ffor.funding) || {}) }
 	}));
 	const fforRolesOf = (b) => ({
 		settle: !!(b && b.settle && b.settle.enabled),
 		witness: !!(b && b.witness && b.witness.enabled),
-		issuer: !!(b && b.issuer && b.issuer.enabled)
+		issuer: !!(b && b.issuer && b.issuer.enabled),
+		funding: !!(b && b.funding && b.funding.enabled),
+		concurrent: b?.concurrent?.enabled !== false
 	});
 	const fforWas = fforRolesOf(rec.ffor);
 	const fforNow = fforRolesOf(fforBlock);
-	const fforChanged = fforWas.settle !== fforNow.settle || fforWas.witness !== fforNow.witness || fforWas.issuer !== fforNow.issuer;
+	const fforChanged = Object.keys(fforWas).some(key => fforWas[key] !== fforNow[key]);
 	const pinnedGuardians = rec.recovery?.guardians || [];
 	const [busy, setBusy] = useState(false);
 	// Whether this wallet has OPEN channels, asked the moment the modal opens.
@@ -695,7 +699,7 @@ function EditWalletModal({
 			};
 			if (fforAvailable) {
 				body.ffor = onchainOnly
-					? { settle: { enabled: false }, witness: { enabled: false }, issuer: { enabled: false } }
+					? { settle: { enabled: false }, witness: { enabled: false }, issuer: { enabled: false }, funding: { enabled: false } }
 					: fforBlock;
 			}
 			if (lfbwAvailable) {
