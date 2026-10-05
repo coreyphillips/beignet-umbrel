@@ -9,6 +9,8 @@ import { withPeerHint } from '../../lib/hints.js';
 import { isClosedChannel, isClosedChannelState } from '../../lib/channels.js';
 import { closeStory, rebroadcastAlreadyDone } from '../../lib/close-story.js';
 import { watchChannelOpen } from '../../lib/channel-open.js';
+import { nodeNames } from '../../lib/node-names.js';
+import PeerName from '../../components/PeerName.jsx';
 import { manager, walletApi } from '../../api.js';
 
 const STATE_TONE = {
@@ -36,14 +38,15 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 		async () => {
 			const list = await api.get('/channels').catch(() => []);
 			// The channel list carries no alias; resolve each peer's from the gossip
-			// graph, the same lookup the Peers tab uses, and fall back to null on a
-			// miss (an unannounced peer).
-			return Promise.all(
-				list.map(async (c) => {
-					const node = await api.get(`/graph/node?pubkey=${c.peerPubkey}`).catch(() => null);
-					return { ...c, alias: node?.alias || null };
-				})
-			);
+			// graph, the same lookup the Peers tab uses. The names are remembered
+			// (lib/node-names), so a peer is asked about once, not once per channel
+			// row on every poll, and a private peer the map does not know, such as
+			// a phone wallet, stops filling the wallet's log with misses.
+			const names = await nodeNames.lookup(api, id, list.map((c) => c.peerPubkey));
+			return list.map((c) => {
+				const name = names[c.peerPubkey] || null;
+				return { ...c, alias: name?.alias || null, peerName: name };
+			});
 		},
 		8000,
 		[id, tick]
@@ -116,11 +119,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 						>
 							<td>
 								<div className="peer-id">
-									{c.alias ? (
-										<span className="peer-alias">{c.alias}</span>
-									) : (
-										<span className="peer-alias muted">unknown node</span>
-									)}
+									<PeerName name={c.peerName} />
 									<span className="mono" title={c.peerPubkey}>{shortId(c.peerPubkey)}</span>
 								</div>
 							</td>

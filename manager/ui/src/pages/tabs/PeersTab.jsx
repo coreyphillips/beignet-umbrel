@@ -5,21 +5,24 @@ import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
 import { shortId } from '../../lib/format.js';
 
 import { withPeerHint } from '../../lib/hints.js';
+import { nodeNames } from '../../lib/node-names.js';
 import { nodeUris } from '../../lib/node-uris.js';
+import PeerName from '../../components/PeerName.jsx';
 
 export default function PeersTab({ id, api, info, rec, tick, bump }) {
 	const toast = useToast();
 	const { data: peers, refresh } = usePoll(
 		async () => {
 			const list = await api.get('/peers').catch(() => []);
-			// The peer list has no alias; the gossip graph does. Ask it per peer
-			// and fall back to null when the node never announced one (a 404).
-			return Promise.all(
-				list.map(async (p) => {
-					const node = await api.get(`/graph/node?pubkey=${p.pubkey}`).catch(() => null);
-					return { ...p, alias: node?.alias || null };
-				})
-			);
+			// The peer list has no alias; the gossip graph does. The names are
+			// remembered (lib/node-names), the Channels tab's too, so a peer is
+			// asked about once rather than on every poll, and a private peer the map
+			// does not know (a 404, as a phone wallet always is) is named as one.
+			const names = await nodeNames.lookup(api, id, list.map((p) => p.pubkey));
+			return list.map((p) => {
+				const name = names[p.pubkey] || null;
+				return { ...p, alias: name?.alias || null, peerName: name };
+			});
 		},
 		8000,
 		[id, tick]
@@ -124,11 +127,7 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 									<tr key={p.pubkey}>
 										<td>
 											<div className="peer-id">
-												{p.alias ? (
-													<span className="peer-alias">{p.alias}</span>
-												) : (
-													<span className="peer-alias muted">unknown node</span>
-												)}
+												<PeerName name={p.peerName} />
 												<CopyText value={p.pubkey} label={shortId(p.pubkey)} truncate />
 											</div>
 										</td>
