@@ -553,3 +553,67 @@ test('a channel without closeStatus (older daemon) shows no Close section', asyn
 		restoreFetch();
 	}
 });
+
+test('a phone wallet is named a private peer, and asked about once for all its channels', async () => {
+	// A phone wallet never announces itself, so the map answers NOT_FOUND for
+	// it and the daemon logs the miss. Every poll used to ask once per channel
+	// row: four lines every 8 seconds for a phone with three closed channels.
+	const PHONE = '03' + '7'.repeat(64);
+	const NAMED = '02' + '8'.repeat(64);
+	const asked = [];
+	const row = (id, peerPubkey, state) => ({
+		channelId: id.repeat(64),
+		peerPubkey,
+		capacitySats: 120_000,
+		localBalanceSats: 110_000,
+		remoteBalanceSats: 10_000,
+		state
+	});
+	const api = {
+		get: async (path) => {
+			if (path === '/channels') {
+				return [
+					row('1', PHONE, 'AWAITING_REESTABLISH'),
+					row('2', PHONE, 'CLOSED'),
+					row('3', PHONE, 'CLOSED'),
+					row('4', NAMED, 'NORMAL')
+				];
+			}
+			if (path === '/peers') return [];
+			if (path.startsWith('/graph/node')) {
+				const pk = new URLSearchParams(path.split('?')[1]).get('pubkey');
+				asked.push(pk);
+				if (pk === NAMED) return { pubkey: pk, alias: 'Seven of Nine' };
+				const err = new Error('Node not found in graph');
+				err.code = 'NOT_FOUND';
+				err.status = 404;
+				throw err;
+			}
+			return null;
+		},
+		post: async () => ({})
+	};
+	const restore = stubManagerFetch({ fail: true });
+	const view = await render(wrapped, { id: 'w1', api, rec: {}, tick: 0, bump: () => {} });
+	try {
+		await settle(50);
+		assert.equal(asked.filter((pk) => pk === PHONE).length, 1, 'one lookup for its three channels');
+		const labels = view.$$('tbody .peer-alias').map((el) => ({
+			text: el.textContent,
+			muted: el.classList.contains('muted'),
+			title: el.getAttribute('title')
+		}));
+		assert.deepEqual(
+			labels.map((l) => l.text),
+			['Private peer', 'Seven of Nine'],
+			'the open channels name their peers'
+		);
+		assert.equal(labels[0].muted, true);
+		assert.match(labels[0].title, /phone wallet/);
+		assert.equal(labels[1].muted, false);
+		assert.ok(!/unknown node/i.test(view.text()), 'nothing is called unknown');
+	} finally {
+		await view.unmount();
+		restore();
+	}
+});
