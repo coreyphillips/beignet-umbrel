@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.28.0"
+version: "0.28.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,19 +30,13 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.27.0 with exact Lightning send max, destination-aware
-  splice quotes, cooperative close to an address and durable loose-coin sweeps.
-  Liquidity providers can waive a supported client's reserve on new private
-  channels. The setting is on by default and can be turned off; existing
-  channels retain their reserve. Channel details show both waiver directions.
-  The primary keeps its own reserve and must stay online to protect channels
-  whose client reserve is waived.
+  The wallet edit dialog now reloads saved automatic receive funding settings
+  correctly. The funding checkbox, channel limits and concurrent receive
+  preference retain their saved values when reopening or making unrelated edits.
 
 
-  Address send quotes now price the parsed destination, including Taproot,
-  and refresh when it changes. Existing Iroh phone pairing and concurrent
-  offline receive features remain available.
-
+  Turning off Lightning also disables automatic funding cleanly while preserving
+  its configured limits. Includes beignet 0.27.0.
 
 dependencies: []
 path: ""
