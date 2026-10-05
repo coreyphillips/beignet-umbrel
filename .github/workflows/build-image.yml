@@ -542,7 +542,12 @@ env:
   # total, the daily spend ledger kept across a restart, no second payment of
   # a completed hash) and wallet refresh fixes (#959 to #973).
   # 0.27.0 adds exact send max, client reserve waivers and durable drain primitives.
-  BEIGNET_VERSION: "0.27.0"
+  # 0.28.0 imports the Rapid Gossip Sync snapshot in slices that leave the event
+  # loop free (same graph, leaner parsing; syncRapidGossip is single-flight),
+  # derives the wallet seed once per node and skips already encrypted rows on
+  # open. dist/cli differs from 0.27.0 in beignet-node.js only: no route or env
+  # var changes, and the dependency set is identical.
+  BEIGNET_VERSION: "0.28.0"
 
 jobs:
   build:
