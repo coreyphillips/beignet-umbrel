@@ -547,7 +547,11 @@ env:
   # derives the wallet seed once per node and skips already encrypted rows on
   # open. dist/cli differs from 0.27.0 in beignet-node.js only: no route or env
   # var changes, and the dependency set is identical.
-  BEIGNET_VERSION: "0.28.0"
+  # 0.30.0 reuses Lightning key and curve setup, avoids rewriting fully
+  # resolved monitors at startup, and bounds gossip serving work per message.
+  # The optional deferred graph restore remains off for the daemon. Routes,
+  # environment settings and the dependency set are unchanged from 0.28.0.
+  BEIGNET_VERSION: "0.30.0"
 
 jobs:
   build:
