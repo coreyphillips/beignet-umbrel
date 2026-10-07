@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.29.1"
+version: "0.30.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,14 +30,9 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Peers that never announce themselves to the Lightning network, such as a
-  phone wallet, now show as a private peer in the Channels and Peers tabs
-  instead of an unknown node, with the reason on hover.
-
-
-  The dashboard now looks up each peer's name once and remembers it, so a
-  private peer no longer adds a "Node not found in graph" line to the wallet's
-  log every few seconds. Still bundles beignet 0.28.0.
+  Bundles beignet 0.30.0. Wallet startup avoids repeating key initialization
+  and rewriting fully resolved channel monitors. Gossip replies yield more
+  often so other node work can run.
 
 dependencies: []
 path: ""
