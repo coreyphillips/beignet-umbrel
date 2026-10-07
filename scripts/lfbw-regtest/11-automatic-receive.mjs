@@ -23,14 +23,21 @@ try {
 		async () => (await w(P.id, '/balance')).onchain >= 5000000 && (await w(X.id, '/balance')).onchain >= 3000000
 	);
 	const R = await mk('Automatic receiving wallet', {
-		lfbw: { enabled: true, primaryWalletId: P.id, initialChannelSats: 0 }
+		lfbw: { enabled: true, primaryWalletId: P.id, initialChannelSats: 200000 }
 	});
 	try {
 		await healthy(R.id);
 		await waitFor('LFBW link ready', async () => (await api(`/wallets/${R.id}`)).lfbw.setup === 'ready');
 		const primary = (await api(`/wallets/${P.id}`)).nodeId;
 		await openSiblingChannel(X.id, P.id, 500000);
+		// Offline receive uses existing inbound capacity; it never opens a channel.
+		await waitFor('receiver home channel has room for offline receive', async () =>
+			(await w(R.id, '/channels')).some((c) =>
+				c.peerPubkey === primary && c.state === 'NORMAL' && c.htlcUsable && c.remoteBalanceSats >= 70000
+			)
+		);
 		const quote = await w(R.id, `/receive/quote?peer=${primary}&amountSats=20000`);
+		assert.equal(quote.mode, 'bolt11', 'Existing inbound capacity must provide an offline invoice');
 		const body = {
 			peer: primary,
 			amountSats: 20000,
