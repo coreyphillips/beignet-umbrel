@@ -30,6 +30,13 @@ function pickLocalIp() {
  * port (ADD_ONION), mapping each wallet listen port to an onion virtual port.
  * The connection is kept open so the onion lives with the manager; on drop it
  * reconnects and re-adds using the persisted key, keeping a stable address.
+ *
+ * It also listens for Tor's descriptor events, so the manager can tell a Tor
+ * that is still publishing the onion from one that cannot build circuits:
+ * publishedAt is when this Tor process took the onion, uploadedAt when it
+ * first uploaded the onion's descriptor (null until then). Both are on the
+ * monotonic clock (performance.now()), which a boot-time NTP step on a board
+ * without a hardware clock cannot move.
  */
 class TorControl {
 	constructor({ host, port, password, keyFile, ports, log, onPublished }) {
@@ -44,6 +51,9 @@ class TorControl {
 		this.socket = null;
 		this.stopped = false;
 		this._resolveFirst = null;
+		this.serviceId = null;
+		this.publishedAt = null;
+		this.uploadedAt = null;
 	}
 
 	// Resolves with the onion (or null) after the first publish attempt; keeps
@@ -111,6 +121,7 @@ class TorControl {
 					const { serviceId, privKey } = this._parseAddOnion(lines);
 					if (!serviceId) throw new Error('no ServiceID in ADD_ONION response');
 					onion = `${serviceId}.onion`;
+					this._published(serviceId);
 					this._writeState(privKey || state.key, onion, targetIp);
 				} catch (addErr) {
 					// A detached onion from a previous run is still registered with
@@ -133,20 +144,34 @@ class TorControl {
 							const parsed = this._parseAddOnion(lines);
 							if (!parsed.serviceId) throw new Error('no ServiceID in ADD_ONION response');
 							onion = `${parsed.serviceId}.onion`;
+							this._published(parsed.serviceId);
 							this._writeState(parsed.privKey || state.key, onion, targetIp);
 						} catch (reErr) {
 							// Re-publish failed; keep the stable identity so outbound and
 							// the known address survive, and retry on the next reconnect.
 							onion = state.address;
+							this._adopted(serviceId);
 							this.log(`tor-control: republish failed (${reErr.message}); adopting ${onion}`);
 							this._writeState(state.key, onion, state.target);
 						}
 					} else {
 						onion = state.address;
+						this._adopted(serviceId);
 						this.log(`tor-control: onion already published, adopting ${onion}`);
 						// Record the current target for legacy state that predates it.
 						this._writeState(state.key, onion, state.target || targetIp);
 					}
+				}
+				// Subscribed only now, the last command on this connection: events
+				// arriving mid-command would keep resetting the reply deadline above.
+				// The upload takes seconds, so none is missed in between.
+				try {
+					await this._cmd(socket, 'SETEVENTS HS_DESC');
+				} catch (err) {
+					// No telling when the upload happens, so the onion is taken as
+					// uploaded at once and probed from the start.
+					if (this.uploadedAt === null) this.uploadedAt = this.publishedAt;
+					this.log(`tor-control: no descriptor events (${err.message}); probing the onion from the start`);
 				}
 				this.onion = onion;
 				// Publish done; the connection now just sits idle to keep the onion
@@ -162,6 +187,7 @@ class TorControl {
 			}
 		});
 
+		this._watchEvents(socket);
 		socket.on('error', (err) => this.log(`tor-control: socket error: ${err.message}`));
 		socket.on('close', () => {
 			this.onion = null;
@@ -171,14 +197,52 @@ class TorControl {
 		});
 	}
 
+	// ADD_ONION created the service in this Tor process, so nobody can reach it
+	// until Tor uploads its descriptor.
+	_published(serviceId) {
+		this.serviceId = serviceId.toLowerCase();
+		this.publishedAt = performance.now();
+		this.uploadedAt = null;
+	}
+
+	// The onion was already registered with this Tor process, which has had it
+	// since an earlier manager run and so has uploaded it already.
+	_adopted(serviceId) {
+		this.serviceId = serviceId.toLowerCase();
+		if (this.publishedAt === null) this.publishedAt = performance.now();
+		if (this.uploadedAt === null) this.uploadedAt = performance.now();
+	}
+
+	// Async events ("650 ...") arrive on the control connection once it has
+	// subscribed. Only the first upload of our own descriptor matters here; the
+	// wallets' lookups of onion peers show up too and are ignored.
+	_watchEvents(socket) {
+		let buf = '';
+		socket.on('data', (chunk) => {
+			buf += chunk.toString('utf8');
+			const lines = buf.split('\r\n');
+			buf = lines.pop();
+			for (const line of lines) {
+				const m = line.match(/^650 HS_DESC UPLOADED (\S+) /);
+				if (!m || this.uploadedAt !== null || !this.serviceId) continue;
+				if (m[1].toLowerCase() !== this.serviceId) continue;
+				this.uploadedAt = performance.now();
+				this.log(
+					`tor-control: onion descriptor uploaded ${Math.round((this.uploadedAt - this.publishedAt) / 1000)}s after publishing`
+				);
+			}
+		});
+	}
+
 	// Sends one control command and resolves with all response lines once the
-	// final "<code> " line arrives; rejects on a non-2xx reply.
+	// final "<code> " line arrives; rejects on a non-2xx reply. Async event
+	// lines are skipped, so an event can never be taken for a reply.
 	_cmd(socket, command) {
 		return new Promise((resolve, reject) => {
 			let buf = '';
 			const onData = (chunk) => {
 				buf += chunk.toString('utf8');
-				const lines = buf.split('\r\n');
+				const lines = buf.split('\r\n').filter((l) => !l.startsWith('650'));
 				for (const line of lines) {
 					if (/^\d{3} /.test(line)) {
 						socket.removeListener('data', onData);
