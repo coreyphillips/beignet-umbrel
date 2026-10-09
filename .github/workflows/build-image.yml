@@ -551,7 +551,14 @@ env:
   # resolved monitors at startup, and bounds gossip serving work per message.
   # The optional deferred graph restore remains off for the daemon. Routes,
   # environment settings and the dependency set are unchanged from 0.28.0.
-  BEIGNET_VERSION: "0.30.0"
+  # 0.30.1 prices on-chain sends and send max on the coins they spend, stops
+  # two overlapping sends picking the same coins, signals RBF on sendMax,
+  # refuses off-curve points in v2 opens, holds every channel of a database
+  # put back by `restore db` (no automatic force close, no new HTLCs) and
+  # encrypts the node's metadata table at rest. That table is encrypted on
+  # the first open, so 0.30.0 cannot read it back after a downgrade. Routes,
+  # environment settings and the dependency set are unchanged from 0.30.0.
+  BEIGNET_VERSION: "0.30.1"
 
 jobs:
   build:
