@@ -13,6 +13,7 @@ const { Registry } = require('./registry');
 const { Settings } = require('./settings');
 const { TorControl, pickLocalIp } = require('./tor-control');
 const { probeSocksConnect } = require('./socks-probe');
+const { TorHealth } = require('./tor-health');
 const { subscribeToEvents } = require('./node-events');
 const { ChannelEventLog } = require('./channel-events');
 const { DirectFundingFallbackLog } = require('./direct-funding-fallbacks');
@@ -96,10 +97,9 @@ const CHAIN_WATCH_POLL_MS = 30000;
 const CHAIN_STALL_POLLS = 3;
 const CHAIN_STALL_RESTART_COOLDOWN_MS = 5 * 60 * 1000;
 // Tor circuit health: a wallet with Tor enabled dials every peer through
-// Umbrel's SOCKS proxy, so if Tor cannot build circuits every connection
-// times out. Probe by connecting back to our own onion through the proxy.
-const TOR_CIRCUIT_CHECK_MS = 5 * 60 * 1000;
-const TOR_CIRCUIT_FIRST_CHECK_MS = 90 * 1000;
+// the app's SOCKS proxy, so if Tor cannot build circuits every connection
+// times out. Probe by connecting back to our own onion through the proxy,
+// on the schedule tor-health.js sets.
 const TOR_PROBE_TIMEOUT_MS = 30000;
 // Direct-funding steps (umbrel #147) live in the daemon's action log, which it
 // never prints. The log is read every DF_PULL_SLOW_MS as a backstop, and on
@@ -160,8 +160,10 @@ class WalletManager {
 		this.torControl = null;
 		// null = unknown/not applicable, true/false = last probe result.
 		this.torCircuitOk = null;
+		this.torHealth = new TorHealth();
 		this.torProbeTimer = null;
 		this.torProbeRunning = false;
+		this.torProbeStopped = false;
 		// The bundled engine's version (null when it cannot be read), which
 		// decides whether the dashboard offers features the engine predates.
 		this.engineVersion = engineVersion();
@@ -234,21 +236,26 @@ class WalletManager {
 				);
 			}
 		}
-		if (config.torProxy) {
-			setTimeout(() => {
-				this._checkTorCircuit().catch(() => {});
-			}, TOR_CIRCUIT_FIRST_CHECK_MS);
-			this.torProbeTimer = setInterval(() => {
-				this._checkTorCircuit().catch(() => {});
-			}, TOR_CIRCUIT_CHECK_MS);
-		}
+		if (config.torProxy) this._scheduleTorCheck();
+	}
+
+	// One check at a time, each scheduling the next: soon while Tor is unknown
+	// or failing, every few minutes once it is healthy.
+	_scheduleTorCheck() {
+		if (this.torProbeStopped) return;
+		this.torProbeTimer = setTimeout(async () => {
+			await this._checkTorCircuit().catch(() => {});
+			this._scheduleTorCheck();
+		}, this.torHealth.nextDelayMs(this.torCircuitOk));
 	}
 
 
 	// Connect back to our own onion through the Tor SOCKS proxy. Success
 	// requires working circuits, HSDir lookups, and a rendezvous, which is
 	// the same machinery every wallet needs for its .onion peers and its own
-	// onion address, and a Tor-mode wallet for every peer.
+	// onion address, and a Tor-mode wallet for every peer. A Tor that has just
+	// started cannot pass this until it has uploaded the onion's descriptor,
+	// so until then (or until it plainly never will) nothing is probed.
 	async _checkTorCircuit() {
 		if (!config.torProxy || !this.onion || this.torProbeRunning) return;
 		// Only a wallet whose listen port is actually onion-mapped can be probed;
@@ -271,6 +278,12 @@ class WalletManager {
 			this.torCircuitOk = null;
 			return;
 		}
+		// The same monotonic clock TorControl stamps its times with.
+		const ready = this.torHealth.shouldProbe(performance.now(), {
+			publishedAt: this.torControl?.publishedAt ?? null,
+			uploadedAt: this.torControl?.uploadedAt ?? null
+		});
+		if (!ready) return;
 		this.torProbeRunning = true;
 		try {
 			const targetIp = pickLocalIp();
@@ -290,15 +303,16 @@ class WalletManager {
 				port: listenPort,
 				timeoutMs: TOR_PROBE_TIMEOUT_MS
 			});
-			if (this.torCircuitOk !== ok) {
+			const verdict = this.torHealth.record(performance.now(), ok, this.torCircuitOk);
+			if (this.torCircuitOk !== verdict) {
 				process.stdout.write(
-					ok
+					verdict
 						? 'tor circuit check: ok\n'
 
 						: 'tor circuit check: failing (peers over Tor will time out: every peer of a Tor-mode wallet, .onion peers of the rest)\n'
 				);
 			}
-			this.torCircuitOk = ok;
+			this.torCircuitOk = verdict;
 		} finally {
 			this.torProbeRunning = false;
 		}
@@ -3644,8 +3658,9 @@ class WalletManager {
 
 	async shutdown() {
 		if (this.torControl) this.torControl.stop();
+		this.torProbeStopped = true;
 		if (this.torProbeTimer) {
-			clearInterval(this.torProbeTimer);
+			clearTimeout(this.torProbeTimer);
 			this.torProbeTimer = null;
 		}
 		const pending = [];
