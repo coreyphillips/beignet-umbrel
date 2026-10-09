@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.30.0"
+version: "0.30.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,9 +30,13 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.30.0. Wallet startup avoids repeating key initialization
-  and rewriting fully resolved channel monitors. Gossip replies yield more
-  often so other node work can run.
+  Bundles beignet 0.30.1. On-chain sends and send max are priced on the coins
+  they actually spend, two sends made at once no longer pick the same coins,
+  and send max signals RBF. Small coins are now judged against each address
+  type's own dust limit, so an on-chain balance may shift by a few sats. A
+  wallet database put back from a backup holds its channels until their
+  state is proven. Wallet metadata such as swap records is now encrypted at
+  rest; after this update, going back to 0.30.0 needs a database backup.
 
 dependencies: []
 path: ""
