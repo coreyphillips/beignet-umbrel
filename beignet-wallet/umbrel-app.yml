@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.30.2"
+version: "0.30.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,16 +30,18 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  After the app or your Umbrel restarts, the wallet page no longer says the
-  app's Tor cannot build circuits while Tor is only starting up. The warning
-  now shows only when Tor keeps failing, and it clears soon after Tor recovers
-  instead of up to five minutes later.
+  Bundles beignet 0.30.2. On-chain fee quotes and Send max now match the
+  transaction the wallet actually builds. A small coin no longer blocks a
+  payment you can afford, and small transactions are no longer charged for
+  bytes they do not have. Speeding up a transaction keeps any message it
+  carries and refuses a replacement it cannot rebuild exactly.
 
 
-  The app's Tor now keeps its state across restarts, so it is ready within
-  seconds instead of downloading the Tor network directory and picking new
-  entry guards every time. Still bundles beignet 0.30.1, so going back to
-  0.30.0 needs a database backup.
+  The first start after this update rebuilds each wallet's database file
+  once, to wipe unencrypted leftovers that an older version left in free
+  space. On a wallet with a long history, that start takes longer than usual.
+  The Raw API's payment list now returns at most 1000 payments per call,
+  newest first.
 
 dependencies: []
 path: ""
