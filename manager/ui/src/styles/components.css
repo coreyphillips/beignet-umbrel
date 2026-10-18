@@ -2530,3 +2530,40 @@ tr:focus-within .row-actions,
 .back-link:hover {
 	color: var(--text);
 }
+
+/* ---------- Key / value table (Node status) ---------- */
+.kv-table td {
+	padding: 9px 0;
+	border-bottom: 1px solid var(--line-1);
+	vertical-align: top;
+}
+
+.kv-table tr:last-child td {
+	border-bottom: 0;
+}
+
+.kv-table tbody tr:hover {
+	background: transparent;
+}
+
+.kv-table td.kv-key {
+	width: 130px;
+	color: var(--muted);
+	font-size: var(--fs-md);
+	padding-right: var(--sp-3);
+}
+
+.kv-table td.kv-val {
+	font-size: var(--fs-base);
+	text-align: left;
+	display: table-cell;
+}
+
+.liq-wrap {
+	margin-top: var(--sp-4);
+}
+
+.stat-row + .note,
+.stat-row + .center-actions {
+	margin-top: var(--sp-4);
+}

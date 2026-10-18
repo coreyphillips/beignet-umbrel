@@ -1,18 +1,8 @@
 import { useEffect, useState } from 'react';
-import { AnimatePresence, m } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
 import { usePoll } from '../../../hooks/usePoll.js';
 import { useToast } from '../../../components/Toast.jsx';
-import {
-	Badge,
-	BalanceBar,
-	Button,
-	Card,
-	CopyText,
-	Modal,
-	Stat,
-	staggerContainer,
-	staggerItem
-} from '../../../components/ui.jsx';
+import { Badge, BalanceBar, Button, Card, CopyText, Modal, Note, Stat, StatRow } from '../../../components/ui.jsx';
 import { fmtSats, shortId } from '../../../lib/format.js';
 import { lfbwStatus } from '../../../lib/lfbw.js';
 import { manager } from '../../../api.js';
@@ -159,38 +149,37 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 	return (
 		<div>
 			{lf?.setup === 'pending' && (
-				<div className="info-note" style={{ marginBottom: 14 }}>
+				<Note tone="info">
 					Setting up the link to your primary node. This takes a moment after the wallet starts.
-				</div>
+				</Note>
 			)}
 			{lf?.setup === 'failed' && (
-				<div className="error-note" style={{ marginBottom: 14 }}>
+				<Note tone="error">
 					Could not finish setting up the primary node: {lf.setupError}
-					<div className="center-actions">
+					<div className="center-actions start">
 						<Button className="sm" busy={retrying} onClick={retrySetup}>
 							Retry setup
 						</Button>
 					</div>
-				</div>
+				</Note>
 			)}
 
-			<m.div className="grid cols-4" style={{ marginBottom: 18 }} variants={staggerContainer} initial="hidden" animate="show">
-				{[
-					<Stat key="total" label="Total balance" num={status.total} suffix=" sats" />,
-					<Stat key="send" label="Can send" num={status.canSend} suffix=" sats" />,
-					<Stat key="recv" label="Can receive" num={status.canReceive} suffix=" sats" sub={lf?.setup === 'ready' ? 'more is provisioned as needed' : undefined} />,
-					<Stat key="pending" label="Pending" num={status.pending} suffix=" sats" sub={status.pending > 0 ? 'arriving' : undefined} />
-				].map((stat, i) => (
-					<m.div key={i} variants={staggerItem}>
-						{stat}
-					</m.div>
-				))}
-			</m.div>
+			<StatRow className="lfbw-stats">
+				<Stat label="Total balance" num={status.total} suffix=" sats" />
+				<Stat label="Can send" num={status.canSend} suffix=" sats" />
+				<Stat
+					label="Can receive"
+					num={status.canReceive}
+					suffix=" sats"
+					sub={lf?.setup === 'ready' ? 'more is provisioned as needed' : undefined}
+				/>
+				<Stat label="Pending" num={status.pending} suffix=" sats" sub={status.pending > 0 ? 'arriving' : undefined} />
+			</StatRow>
 
 			{status.notes.map((note) => (
-				<div key={note} className="info-note" style={{ marginBottom: 14 }} role="status">
+				<Note key={note} tone="info" role="status">
 					{note}
-				</div>
+				</Note>
 			))}
 			{status.feeWait && (
 				<div className="center-actions" style={{ marginTop: -6, marginBottom: 14 }}>
