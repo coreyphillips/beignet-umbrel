@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
-import { Badge, Button, Card, CopyText, Help, QR, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
-import { fmtSats, pct } from '../../lib/format.js';
+import { Badge, Card, Chip, CopyText, Empty, Help, Note, QR, SkeletonRows, Stat, StatRow } from '../../components/ui.jsx';
+import { fmtSats, pct, shortId } from '../../lib/format.js';
+import { humanize } from '../../lib/labels.js';
 import { isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
 
@@ -126,121 +127,113 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 		? (liq.totalRemoteBalanceSats / cap) * 100
 		: liq?.inboundLiquidityPct ?? 0;
 
+	const n = (x) => (x === null || x === undefined ? '-' : Number(x).toLocaleString('en-US'));
+
 	return (
 		<div>
 			{splicing > 0 && (
-				<div className="info-note" style={{ marginBottom: 14 }}>
-					A splice is confirming: {fmtSats(splicing)} rejoin your Lightning
-					balance when it locks. Payments keep working in the meantime.
-				</div>
+				<Note tone="info">
+					A splice is confirming: {fmtSats(splicing)} rejoin your Lightning balance when it locks.
+					Payments keep working in the meantime.
+				</Note>
 			)}
-			<m.div
-				className={onchainOnly ? 'grid cols-2' : 'grid cols-4'}
-				style={{ marginBottom: 18 }}
-				variants={staggerContainer}
-				initial="hidden"
-				animate="show"
-			>
-				{(onchainOnly
-					? [
-							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
-							<Stat key="height" label="Block height" num={info?.blockHeight} />
-					  ]
-					: [
-							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
-							<Stat
-								key="ln"
-								label="Lightning"
-								num={bal?.lightning ?? info?.lightningBalanceSats}
-								suffix=" sats"
-								sub={splicing > 0 ? `+ ${fmtSats(splicing)} splicing` : undefined}
-							/>,
-							<Stat key="total" label="Total" num={bal?.total} suffix=" sats" />,
-							<Stat
-								key="ch"
-								label="Channels"
-								num={openCount ?? info?.channelCount}
-								sub={`${info?.peerCount ?? 0} peers`}
-							/>
-					  ]
-				).map((stat, i) => (
-					<m.div key={i} variants={staggerItem}>
-						{stat}
-					</m.div>
-				))}
-			</m.div>
 
 			<div className="grid cols-2">
+				{!onchainOnly && (
+					<Card
+						title="Liquidity"
+						help="What you can send over Lightning right now, what others can send you, and the channels that carry it. Can send is your balance above the channel reserve."
+					>
+						{!data ? (
+							<SkeletonRows rows={2} height={46} />
+						) : (
+							<>
+								<StatRow>
+									<Stat label="Can send" num={liq ? sendable : null} suffix=" sats" sub="outbound" />
+									<Stat label="Can receive" num={liq?.totalRemoteBalanceSats} suffix=" sats" sub="inbound" />
+									<Stat
+										label="Channels"
+										num={openCount ?? info?.channelCount}
+										sub={`${n(info?.peerCount ?? 0)} ${(info?.peerCount ?? 0) === 1 ? 'peer' : 'peers'}`}
+									/>
+								</StatRow>
+								{liq && (openCount ?? liq.channelCount) > 0 ? (
+									<div className="liq-wrap">
+										<div className="liq">
+											<div className="out" style={{ width: `${outBarPct}%` }} />
+											{reserveBarPct > 0 && (
+												<div
+													className="reserve-seg"
+													style={{ width: `${reserveBarPct}%` }}
+													title="Locked as channel reserve"
+												/>
+											)}
+											<div className="in" style={{ width: `${inBarPct}%` }} />
+										</div>
+										<div className="liq-legend">
+											<span className="k">Outbound {pct(outBarPct)}</span>
+											<span className="k in">Inbound {pct(inBarPct)}</span>
+										</div>
+										{belowReserve && (
+											<div className="reserve-note">
+												<div className="reserve-head">Fill the channel reserve before you can send</div>
+												<div className="reserve-bar">
+													<div className="reserve-fill" style={{ width: `${reservePct}%` }} />
+												</div>
+												<div className="reserve-legend">
+													<span>{fmtSats(liq.totalLocalBalanceSats)} balance</span>
+													<span>{fmtSats(liq.reserveSats)} reserve</span>
+												</div>
+											</div>
+										)}
+										<div className="wallet-meta" style={{ marginTop: 10 }}>
+											{liq.activeChannelCount}/{openCount ?? liq.channelCount} channels active · capacity{' '}
+											{fmtSats(liq.totalCapacitySats)}
+										</div>
+									</div>
+								) : (
+									<Empty>No channels yet. Open one from the Channels tab.</Empty>
+								)}
+							</>
+						)}
+					</Card>
+				)}
+
 				<Card title="Node status">
-					<table>
+					<table className="kv-table">
 						<tbody>
-							<Row k="Sync" v={<Badge tone={health?.status === 'ready' ? 'green' : 'yellow'}>{health?.status || '-'}</Badge>} />
-							<Row k="Block height" v={info?.blockHeight ?? '-'} />
-							<Row k="Electrum" v={<Badge tone={health?.electrumConnected ? 'green' : 'red'}>{health?.electrumConnected ? 'connected' : 'disconnected'}</Badge>} />
-							{!onchainOnly && <Row k="Listening" v={info?.listening ? 'yes' : 'no'} />}
+							<Row
+								k="Sync"
+								v={
+									<Badge tone={health ? (health.status === 'ready' ? 'green' : 'yellow') : 'muted'}>
+										{health ? (health.status === 'ready' ? 'Ready' : humanize(health.status)) : '-'}
+									</Badge>
+								}
+							/>
+							<Row
+								k="Electrum"
+								v={
+									<Badge tone={health ? (health.electrumConnected ? 'green' : 'red') : 'muted'}>
+										{health ? (health.electrumConnected ? 'Connected' : 'Disconnected') : '-'}
+									</Badge>
+								}
+							/>
+							<Row k="Block height" v={n(info?.blockHeight)} />
+							{info?.nodeId && <Row k="Node id" v={<CopyText value={info.nodeId} label={shortId(info.nodeId)} />} />}
+							{!onchainOnly && <Row k="Listening" v={info?.listening ? 'Yes' : 'No'} />}
 							{!onchainOnly && (
-								<Row k="Graph" v={health ? `${health.graphNodes} nodes / ${health.graphChannels} channels` : '-'} />
+								<Row
+									k="Graph"
+									v={health ? `${n(health.graphNodes)} nodes / ${n(health.graphChannels)} channels` : '-'}
+								/>
 							)}
 							{!onchainOnly && <Row k="Pending close" v={fmtSats(info?.pendingCloseBalanceSats)} />}
-						{splicing > 0 && <Row k="Splicing" v={fmtSats(splicing)} />}
+							{splicing > 0 && <Row k="Splicing" v={fmtSats(splicing)} />}
 							{!onchainOnly && <BackupRow recovery={recovery} rec={rec} />}
 							{fforOn && <EpochRow epochs={epochs} tip={info?.blockHeight} />}
 						</tbody>
 					</table>
 				</Card>
-
-				{!onchainOnly && (
-				<Card title="Liquidity">
-					{liq && (openCount ?? liq.channelCount) > 0 ? (
-						<>
-							<div className="liq">
-								<div className="out" style={{ width: `${outBarPct}%` }} />
-								{reserveBarPct > 0 && (
-									<div
-										className="reserve-seg"
-										style={{ width: `${reserveBarPct}%` }}
-										title="Locked as channel reserve"
-									/>
-								)}
-								<div className="in" style={{ width: `${inBarPct}%` }} />
-							</div>
-							<div className="liq-legend">
-								<span>◆ Outbound {pct(outBarPct)}</span>
-								<span>Inbound {pct(inBarPct)} ◆</span>
-							</div>
-							<div className="grid cols-2" style={{ marginTop: 12 }}>
-								<Stat label="Can send" num={sendable} suffix=" sats" sub="outbound" />
-								<Stat
-									label="Can receive"
-									num={liq.totalRemoteBalanceSats}
-									suffix=" sats"
-									sub="inbound"
-								/>
-							</div>
-							{belowReserve && (
-								<div className="reserve-note">
-									<div className="reserve-head">
-										Fill the channel reserve before you can send
-									</div>
-									<div className="reserve-bar">
-										<div className="reserve-fill" style={{ width: `${reservePct}%` }} />
-									</div>
-									<div className="reserve-legend">
-										<span>{fmtSats(liq.totalLocalBalanceSats)} balance</span>
-										<span>{fmtSats(liq.reserveSats)} reserve</span>
-									</div>
-								</div>
-							)}
-							<div className="wallet-meta" style={{ marginTop: 10 }}>
-								{liq.activeChannelCount}/{openCount ?? liq.channelCount} channels
-								active · capacity {fmtSats(liq.totalCapacitySats)}
-							</div>
-						</>
-					) : (
-						<div className="empty">No channels yet. Open one from the Channels tab.</div>
-					)}
-				</Card>
-				)}
 
 				{provider && <ProviderCard jit={jit} rec={rec} />}
 				{swapping && <SwapsCard swaps={swaps} rec={rec} />}
@@ -249,15 +242,15 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 				{witnessing && <WitnessCard status={witnessStatus} />}
 				{issuing && <IssuerCard status={issuerStatus} />}
 
-				<Card title="Fees">
+				<Card title="Fees" help="Current fee estimates from the chain, in satoshis per virtual byte, for a fast, a normal and a slow confirmation.">
 					{feeEst ? (
-						<div className="grid cols-3">
-							<Stat label="Fast" num={feeEst.fast} sub="sat/vB" />
-							<Stat label="Normal" num={feeEst.normal} sub="sat/vB" />
-							<Stat label="Slow" num={feeEst.slow} sub="sat/vB" />
-						</div>
+						<StatRow>
+							<Stat size="sm" label="Fast" num={feeEst.fast} sub="sat/vB" />
+							<Stat size="sm" label="Normal" num={feeEst.normal} sub="sat/vB" />
+							<Stat size="sm" label="Slow" num={feeEst.slow} sub="sat/vB" />
+						</StatRow>
 					) : (
-						<div className="empty">Fee estimates not available yet.</div>
+						<Empty>Fee estimates not available yet.</Empty>
 					)}
 					{fees && !onchainOnly && (
 						<div className="wallet-meta" style={{ marginTop: 10 }}>
@@ -265,7 +258,6 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 						</div>
 					)}
 				</Card>
-
 
 				{!onchainOnly && <ConnectCard info={info} rec={rec} />}
 			</div>
@@ -295,20 +287,14 @@ function ConnectCard({ info, rec }) {
 			title="Connect to this node"
 			help={`${ways.some((item) => item.key === 'iroh') ? "The Iroh phone link is for your own phone. Your phone and relay can see this Umbrel's IP, including in Tor mode. Defaults also contact n0 discovery; custom relays disable discovery. " : ''}Each other way in follows this wallet's network mode: its public address in Clearnet and Hybrid, Tor in Tor and Hybrid, and your home network in every mode. Forward the public port on your router for internet peers.`}
 		>
-			<div style={{ display: 'flex', gap: 6, marginBottom: 12 }} data-testid="connect-ways">
+			<div className="chip-row" style={{ marginBottom: 12 }} data-testid="connect-ways">
 				{ways.map((w) => (
-					<Button
-						key={w.key}
-						className="sm"
-						style={{ flex: 1 }}
-						variant={w.key === key ? 'primary' : 'ghost'}
-						onClick={() => setPicked(w.key)}
-					>
+					<Chip key={w.key} pressed={w.key === key} onClick={() => setPicked(w.key)}>
 						{w.label}
-					</Button>
+					</Chip>
 				))}
 			</div>
-			{way.uri ? <><CopyText value={way.uri} />{way.key === 'iroh' && <QR value={way.uri} />}</> : <div className="empty">Not available yet.</div>}
+			{way.uri ? <><CopyText value={way.uri} />{way.key === 'iroh' && <QR value={way.uri} />}</> : <Empty>Not available yet.</Empty>}
 			<span className="field-hint" style={{ display: 'block', marginTop: 8 }} data-testid="connect-hint">
 				{way.hint}
 			</span>
@@ -341,11 +327,11 @@ function ProviderCard({ jit, rec }) {
 			{!jit ? (
 				<div className="wallet-meta">Reading the provider status…</div>
 			) : !lsp ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not running the provider role. It takes it on its next start
 					(the Edit dialog restarts the wallet), or the bundled engine predates the
 					status route.
-				</div>
+				</Note>
 			) : (
 				<>
 					<div className="grid cols-4">
@@ -424,12 +410,12 @@ function SwapsCard({ swaps, rec }) {
 			{!swaps ? (
 				<div className="wallet-meta">Reading the swap status…</div>
 			) : !swaps.enabled ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not running the swap role, so nothing is being served yet. Either it
 					has not restarted since you turned swaps on (the Edit dialog restarts it), or the
 					bundled engine drops this policy on the way to the node, which no restart fixes and
 					an app update does.
-				</div>
+				</Note>
 			) : (
 				<>
 					{sharing && <SwapBudget reverse={swaps} submarine={swaps.submarine} />}
@@ -442,10 +428,10 @@ function SwapsCard({ swaps, rec }) {
 								sharing={sharing}
 							/>
 						) : (
-							<div className="info-note" style={{ marginTop: 10 }}>
+							<Note tone="info">
 								The on-chain to Lightning direction starts with the wallet's next restart, or the
 								bundled engine predates it (beignet 0.16.0).
-							</div>
+							</Note>
 						))}
 				</>
 			)}
@@ -495,7 +481,7 @@ function SwapBudget({ reverse, submarine }) {
 	const slotsLeft = Number.isFinite(maxCount) ? Math.max(0, maxCount - liveCount) : null;
 	return (
 		<div style={{ marginTop: 10 }}>
-			<div className="field-label" style={{ marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Both directions together
 			</div>
 			<div className="grid cols-3">
@@ -539,7 +525,7 @@ function SwapDirection({ label, status, sharing }) {
 	const exposedRows = Number((status.counts || {}).EXPOSED || 0);
 	return (
 		<div style={{ marginTop: 10 }}>
-			<div className="field-label" style={{ marginBottom: 8 }}>
+			<div className="section-title standalone">
 				{label}
 			</div>
 			<div className={`grid cols-${sharing ? 3 : 4}`}>
@@ -602,11 +588,11 @@ function GuardianCard({ guardian, rec, info }) {
 			{!guardian ? (
 				<div className="wallet-meta">Reading the guardian status…</div>
 			) : guardian.serving === false ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not serving yet. Either it has not restarted since you turned this on
 					(the Edit dialog restarts it), or the bundled engine drops the setting on the way to
 					the node, which no restart fixes and an app update does.
-				</div>
+				</Note>
 			) : (
 				<>
 					<div className="grid cols-4">
@@ -618,7 +604,7 @@ function GuardianCard({ guardian, rec, info }) {
 					<div className="wallet-meta" style={{ marginTop: 10 }}>
 						Guardian id: <code>{guardian.guardianId}</code>
 					</div>
-					<div className="field-label" style={{ marginTop: 10, marginBottom: 6 }}>
+					<div className="section-title standalone">
 						Address to share
 					</div>
 
@@ -639,10 +625,10 @@ function GuardianCard({ guardian, rec, info }) {
 							</div>
 						</>
 					) : (
-						<div className="info-note">
+						<Note tone="info">
 							Turn on announcing in Edit so nodes outside this Umbrel can reach this guardian.
 							{localUri ? ` Wallets on this Umbrel can use ${localUri}.` : ''}
-						</div>
+						</Note>
 					)}
 				</>
 			)}
@@ -708,7 +694,7 @@ function SettlementCard({ settlements }) {
 			{!settlements ? (
 				<div className="wallet-meta">Reading the settlement status…</div>
 			) : settlements.length === 0 ? (
-				<div className="empty">No voucher book is open with this wallet right now.</div>
+				<Empty>No voucher book is open with this wallet right now.</Empty>
 			) : (
 				<div className="table-wrap">
 					<table>
@@ -758,12 +744,12 @@ function WitnessCard({ status }) {
 			{!status ? (
 				<div className="wallet-meta">Reading the witness status…</div>
 			) : !status.enabled ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not running the witness role. It takes it on its next start (the Edit dialog
 					restarts the wallet), or the bundled engine predates the status route.
-				</div>
+				</Note>
 			) : status.mailboxes.length === 0 ? (
-				<div className="empty">No mailbox is open here right now.</div>
+				<Empty>No mailbox is open here right now.</Empty>
 			) : (
 				<div className="table-wrap">
 					<table>
@@ -807,12 +793,12 @@ function IssuerCard({ status }) {
 			{!status ? (
 				<div className="wallet-meta">Reading the issuer status…</div>
 			) : !status.enabled ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not running the issuer role. It takes it on its next start (the Edit dialog
 					restarts the wallet), or the bundled engine predates the status route.
-				</div>
+				</Note>
 			) : status.manifests.length === 0 ? (
-				<div className="empty">No offer is delegated here right now.</div>
+				<Empty>No offer is delegated here right now.</Empty>
 			) : (
 				<div className="table-wrap">
 					<table>
@@ -848,10 +834,8 @@ function IssuerCard({ status }) {
 function Row({ k, v }) {
 	return (
 		<tr>
-			<td className="wallet-meta" style={{ width: 130 }}>
-				{k}
-			</td>
-			<td>{v}</td>
+			<td className="kv-key">{k}</td>
+			<td className="kv-val">{v}</td>
 		</tr>
 	);
 }

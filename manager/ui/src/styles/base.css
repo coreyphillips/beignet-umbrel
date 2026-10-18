@@ -15,7 +15,8 @@ body {
 	background: var(--bg-deep);
 	color: var(--text);
 	line-height: 1.5;
-	font-size: 14px;
+	font-size: var(--fs-base);
+	font-weight: var(--fw-regular);
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
 }
@@ -30,12 +31,16 @@ h2,
 h3,
 h4 {
 	margin: 0;
-	font-weight: 620;
+	font-weight: var(--fw-semibold);
 	letter-spacing: -0.01em;
 }
 
+p {
+	margin: 0;
+}
+
 ::selection {
-	background: rgba(247, 147, 26, 0.3);
+	background: var(--accent-dim);
 }
 
 :focus-visible {
@@ -44,25 +49,28 @@ h4 {
 	border-radius: var(--r-sm);
 }
 
-/* Slim, glassy scrollbars (WebKit) */
+/* A theme switch cross-fades the whole page for a moment instead of snapping. */
+html.theme-fade,
+html.theme-fade *,
+html.theme-fade *::before,
+html.theme-fade *::after {
+	transition: background-color 260ms ease, color 260ms ease, border-color 260ms ease,
+		fill 260ms ease, stroke 260ms ease !important;
+}
+
+/* Slim scrollbars (WebKit) */
 ::-webkit-scrollbar {
 	width: 10px;
 	height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-	background: rgba(255, 255, 255, 0.12);
-	border-radius: 999px;
+	background: var(--surface-3);
+	border-radius: var(--r-full);
 	border: 3px solid transparent;
 	background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-	background: rgba(255, 255, 255, 0.22);
-	border: 3px solid transparent;
-	background-clip: content-box;
-}
-
-:root[data-theme='light'] ::-webkit-scrollbar-thumb {
-	background: rgba(20, 30, 60, 0.18);
+	background: var(--line-3);
 	border: 3px solid transparent;
 	background-clip: content-box;
 }
@@ -81,17 +89,16 @@ h4 {
 }
 
 .ambient::before {
-	/* Gradient mesh: amber / violet / teal blobs, Umbrel-wallpaper-esque */
+	/* Gradient mesh: amber, violet and teal blobs, quieter than a wallpaper. */
 	content: '';
 	position: absolute;
 	inset: -20%;
 	background:
-		radial-gradient(38% 45% at 16% 12%, rgba(247, 147, 26, 0.13), transparent 70%),
-		radial-gradient(45% 55% at 88% 22%, rgba(96, 72, 190, 0.17), transparent 70%),
-		radial-gradient(50% 55% at 50% 100%, rgba(32, 110, 140, 0.14), transparent 72%),
-		radial-gradient(30% 35% at 72% 72%, rgba(184, 92, 30, 0.08), transparent 70%);
-	animation: ambient-drift 70s ease-in-out infinite alternate;
-	will-change: transform;
+		radial-gradient(38% 45% at 16% 12%, rgba(247, 147, 26, 0.1), transparent 70%),
+		radial-gradient(45% 55% at 88% 22%, rgba(96, 72, 190, 0.14), transparent 70%),
+		radial-gradient(50% 55% at 50% 100%, rgba(32, 110, 140, 0.11), transparent 72%),
+		radial-gradient(30% 35% at 72% 72%, rgba(184, 92, 30, 0.06), transparent 70%);
+	animation: ambient-drift 110s ease-in-out infinite alternate;
 }
 
 .ambient::after {
@@ -104,12 +111,11 @@ h4 {
 }
 
 :root[data-theme='light'] .ambient::before {
-	/* Light theme wears its color proudly — stronger pastel blobs */
 	background:
-		radial-gradient(38% 45% at 16% 12%, rgba(247, 147, 26, 0.22), transparent 70%),
-		radial-gradient(45% 55% at 88% 22%, rgba(126, 96, 245, 0.2), transparent 70%),
-		radial-gradient(50% 55% at 50% 100%, rgba(38, 168, 210, 0.18), transparent 72%),
-		radial-gradient(30% 35% at 72% 72%, rgba(245, 120, 40, 0.1), transparent 70%);
+		radial-gradient(38% 45% at 16% 12%, rgba(247, 147, 26, 0.18), transparent 70%),
+		radial-gradient(45% 55% at 88% 22%, rgba(126, 96, 245, 0.16), transparent 70%),
+		radial-gradient(50% 55% at 50% 100%, rgba(38, 168, 210, 0.14), transparent 72%),
+		radial-gradient(30% 35% at 72% 72%, rgba(245, 120, 40, 0.08), transparent 70%);
 }
 
 :root[data-theme='light'] .ambient::after {
@@ -124,5 +130,5 @@ h4 {
 .container {
 	max-width: var(--content-max);
 	margin: 0 auto;
-	padding: 24px 22px 56px;
+	padding: var(--sp-6) 22px 64px;
 }

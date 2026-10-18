@@ -4,12 +4,14 @@ import { AnimatePresence, m } from 'motion/react';
 import { manager } from './api.js';
 import { BACKUP_EVENT } from './lib/backup.js';
 import { useToast } from './components/Toast.jsx';
+import { Icon } from './components/icons.jsx';
+import { Spinner } from './components/motion.jsx';
 import BackupModal from './components/BackupModal.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import WalletsPage from './pages/WalletsPage.jsx';
 import WalletPage from './pages/WalletPage.jsx';
 
-const SPOT_SURFACES = '.card, .wallet, .stat, .whead, .wnav';
+const SPOT_SURFACES = '.card, .hero, .wallet-card, .stat-row';
 
 /** Tracks the cursor over glass surfaces so their spotlight bloom follows it. */
 function useSpotlight() {
@@ -19,7 +21,7 @@ function useSpotlight() {
 			if (raf) return;
 			raf = requestAnimationFrame(() => {
 				raf = 0;
-				// Nested surfaces (a .stat inside a .card) each get their own glow.
+				// Nested surfaces (a .stat-row inside a .card) each get their own glow.
 				let el = e.target instanceof Element ? e.target.closest(SPOT_SURFACES) : null;
 				while (el) {
 					const r = el.getBoundingClientRect();
@@ -44,15 +46,33 @@ function ThemeToggle() {
 		localStorage.setItem('beignet-theme', theme);
 	}, [theme]);
 	const dark = theme === 'dark';
+	const flip = () => {
+		// Every colour on the page crosses over together instead of snapping.
+		const html = document.documentElement;
+		html.classList.add('theme-fade');
+		setTheme(dark ? 'light' : 'dark');
+		setTimeout(() => html.classList.remove('theme-fade'), 320);
+	};
 	return (
 		<button
 			type="button"
 			className="theme-toggle"
 			title={dark ? 'Switch to light theme' : 'Switch to dark theme'}
 			aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}
-			onClick={() => setTheme(dark ? 'light' : 'dark')}
+			onClick={flip}
 		>
-			{dark ? '☾' : '☀'}
+			<AnimatePresence mode="wait" initial={false}>
+				<m.span
+					key={theme}
+					style={{ display: 'inline-grid' }}
+					initial={{ rotate: -50, opacity: 0, scale: 0.6 }}
+					animate={{ rotate: 0, opacity: 1, scale: 1 }}
+					exit={{ rotate: 50, opacity: 0, scale: 0.6 }}
+					transition={{ duration: 0.18, ease: 'easeOut' }}
+				>
+					<Icon name={dark ? 'moon' : 'sun'} size={15} />
+				</m.span>
+			</AnimatePresence>
 		</button>
 	);
 }
@@ -62,6 +82,7 @@ export default function App() {
 	const toast = useToast();
 	useSpotlight();
 	const [settings, setSettings] = useState(null); // { config, origin } | null
+	const [loadingSettings, setLoadingSettings] = useState(false);
 	// The backup dialog: asked for by the Settings dialog and by the empty
 	// first-run screen, so it is held here rather than in either of them.
 	const [backup, setBackup] = useState(null); // { mode, origin } | null
@@ -77,11 +98,14 @@ export default function App() {
 
 	const openSettings = async (e) => {
 		const origin = { x: e.clientX, y: e.clientY };
+		setLoadingSettings(true);
 		try {
 			const config = await manager.config();
 			setSettings({ config, origin });
 		} catch (err) {
 			toast(err.message, 'error');
+		} finally {
+			setLoadingSettings(false);
 		}
 	};
 
@@ -102,46 +126,49 @@ export default function App() {
 						className="icon-btn"
 						title="Settings"
 						aria-label="Settings"
+						aria-busy={loadingSettings || undefined}
+						disabled={loadingSettings}
 						onClick={openSettings}
 					>
-						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-							<circle cx="12" cy="12" r="3" />
-							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-						</svg>
+						{loadingSettings ? <Spinner /> : <Icon name="settings" size={16} />}
 					</button>
 					<ThemeToggle />
 				</div>
 			</header>
-			{settings && (
-				<SettingsModal
-					config={settings.config}
-					origin={settings.origin}
-					onClose={() => setSettings(null)}
-					onSaved={(c) => {
-						setSettings(null);
-						toast('Settings saved', 'success');
-						// Let any mounted page (WalletsPage) refresh its copy of config.
-						window.dispatchEvent(new CustomEvent('beignet:config', { detail: c }));
-					}}
-				/>
-			)}
-			{backup && (
-				<BackupModal
-					mode={backup.mode}
-					origin={backup.origin}
-					onClose={() => setBackup(null)}
-					onRestored={() => {
-						// The Settings dialog this may have been opened over is
-						// holding the defaults the restore just replaced; saving
-						// it now would put them straight back.
-						setSettings(null);
-						toast('Wallets restored. Start each one when you are ready.', 'success');
-					}}
-				/>
-			)}
+			<AnimatePresence>
+				{settings && (
+					<SettingsModal
+						key="settings"
+						config={settings.config}
+						origin={settings.origin}
+						onClose={() => setSettings(null)}
+						onSaved={(c) => {
+							setSettings(null);
+							toast('Settings saved', 'success');
+							// Let any mounted page (WalletsPage) refresh its copy of config.
+							window.dispatchEvent(new CustomEvent('beignet:config', { detail: c }));
+						}}
+					/>
+				)}
+				{backup && (
+					<BackupModal
+						key="backup"
+						mode={backup.mode}
+						origin={backup.origin}
+						onClose={() => setBackup(null)}
+						onRestored={() => {
+							// The Settings dialog this may have been opened over is
+							// holding the defaults the restore just replaced; saving
+							// it now would put them straight back.
+							setSettings(null);
+							toast('Wallets restored. Start each one when you are ready.', 'success');
+						}}
+					/>
+				)}
+			</AnimatePresence>
 			<AnimatePresence mode="popLayout" initial={false}>
 				{/* Opacity-only at the page root: transforms here would break the
-				    sticky wnav and the cross-page layoutId morphs. */}
+				    cross-page layoutId morphs. */}
 				<m.div
 					key={pageKey}
 					style={{ width: '100%' }}

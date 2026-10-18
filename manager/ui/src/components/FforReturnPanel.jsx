@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Badge, Button, Modal } from './ui.jsx';
+import { AnimatePresence } from 'motion/react';
+import { Badge, Button, Modal, Note } from './ui.jsx';
 import { useToast } from './Toast.jsx';
 import { describeReturn, witnessLines } from '../lib/ffor.js';
 import { usePoll } from '../hooks/usePoll.js';
@@ -127,16 +128,17 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 					</Button>
 				)}
 			</div>
+			<AnimatePresence>
 			{confirming && (
-				<Modal title="Enforce the epoch on-chain" onClose={() => setConfirming(false)}>
-					<div className="error-note">
+				<Modal key="enforce" title="Enforce the epoch on-chain" onClose={() => setConfirming(false)}>
+					<Note tone="error">
 						This force-closes the channel with your settlement peer. Every voucher this wallet holds a
 						preimage for is claimed on-chain through the signature the peer gave at setup; the
 						vouchers nobody paid time out back to the peer at the voucher expiry height. The channel
 						is gone afterwards and the funds return to your on-chain balance as the close confirms,
 						after the usual delays. Do this when the peer stays unreachable or contradicts the epoch,
 						not while a cooperative return could still happen.
-					</div>
+					</Note>
 					<div className="center-actions">
 						<Button variant="primary" busy={busy} onClick={doEnforce}>
 							Force close and claim
@@ -145,6 +147,7 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 					</div>
 				</Modal>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }

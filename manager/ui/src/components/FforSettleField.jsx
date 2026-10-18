@@ -38,7 +38,7 @@ export default function FforSettleField({ value, onChange, disabled = false }) {
 	const digits = (e) => e.target.value.replace(/[^0-9]/g, '');
 	return (
 		<>
-			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Offline receive
 			</div>
 			<label className="checkbox field">

@@ -65,7 +65,7 @@ export default function GuardianRotateFields({ walletId, pinned, disabled = fals
 
 	return (
 		<>
-			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Rotate guardians
 				<Help>
 					Replace one guardian or all three while the channels keep running. Paste a guardian entry

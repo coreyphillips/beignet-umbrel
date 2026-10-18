@@ -1,4 +1,4 @@
-import { Field, Help, Segmented } from './ui.jsx';
+import { Field, Help, Segmented, Note } from './ui.jsx';
 import { MODE_LABELS, MODES, hostForUri, usesPublic } from '../lib/node-uris.js';
 
 /**
@@ -39,7 +39,7 @@ export default function NetworkModeField({
 		: 'The port to forward on your router is shown on the Overview tab once the wallet exists.';
 	return (
 		<>
-			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Network
 				<Help>
 					How this wallet reaches its peers and where they reach it, the Tor and Clearnet choice of
@@ -64,10 +64,10 @@ export default function NetworkModeField({
 				{iroh && mode === 'tor' ? 'Other peers are reached over Tor. The Iroh phone link connects directly or through a relay, which can see your IP address.' : NOTES[mode] || NOTES.hybrid}
 			</span>
 			{!torProxyScopeAvailable && mode !== 'tor' && (
-				<div className="info-note">
+				<Note tone="info">
 					This app&apos;s engine cannot keep Tor for onion peers only, so in this mode clearnet peers are
 					dialed without a proxy and onion peers are out of reach until the app updates its engine.
-				</div>
+				</Note>
 			)}
 			{usesPublic(mode) && (
 				<Field

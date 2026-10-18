@@ -1,13 +1,17 @@
 import { irohBody } from '../lib/iroh.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AnimatePresence, m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useSSE } from '../hooks/useSSE.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
-import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal } from '../components/ui.jsx';
+import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal, Note } from '../components/ui.jsx';
+import { Icon } from '../components/icons.jsx';
+import WalletHero from '../components/WalletHero.jsx';
+import TabBar from '../components/TabBar.jsx';
+import DeleteWalletModal from '../components/DeleteWalletModal.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
@@ -47,10 +51,12 @@ const TABS = [
 	['peers', 'Peers', PeersTab],
 	['activity', 'Activity', ActivityTab],
 	['offers', 'Offers', OffersTab],
-	['tools', 'Tools', ToolsTab],
-	['logs', 'Logs', LogsTab],
-	['console', 'Console', ConsoleTab]
+	['tools', 'Tools', ToolsTab, true],
+	['logs', 'Logs', LogsTab, true],
+	['console', 'Console', ConsoleTab, true]
 ];
+// Send and Receive are reached from the hero's two buttons, not the bar.
+const HERO_ROUTES = new Set(['send', 'receive']);
 
 // A lightning-first wallet's whole surface: one balance, receive, send. The
 // full tab set is a toggle away, for looking under the hood.
@@ -280,91 +286,80 @@ export default function WalletPage() {
 		if (simple && !tabs.some((t) => t[0] === tab)) navigate(`/w/${id}/overview`, { replace: true });
 	}, [simple, tab, tabs, id, navigate]);
 
+	const nav = tabs.filter(([key]) => !HERO_ROUTES.has(key));
+	const [starting, setStarting] = useState(false);
+	const [deleting, setDeleting] = useState(null); // click origin or null
+	const start = async () => {
+		setStarting(true);
+		try {
+			await manager.startWallet(id);
+			toast('Starting…', 'info');
+			refreshRec();
+		} catch (e) {
+			toast(e.message, 'error');
+		} finally {
+			setStarting(false);
+		}
+	};
+	const stop = async () => {
+		try {
+			await manager.stopWallet(id);
+			toast('Stopping…', 'info');
+			refreshRec();
+		} catch (e) {
+			toast(e.message, 'error');
+		}
+	};
+
+	// What the hero says beside the name, and what it flags underneath. Only
+	// a condition that wants the owner's eye becomes a flag: a healthy
+	// Electrum connection or an ordinary backup tier says nothing.
+	const chips = [];
+	if (rec) chips.push({ label: rec.network, tone: 'chip' });
+	if (rec?.onchainOnly) chips.push({ label: 'On-chain only' });
+	if (isLfbw) chips.push({ label: 'Lightning-first' });
+	if (rec?.lfbwDependents?.length > 0) chips.push({ label: `Primary for ${rec.lfbwDependents.length}` });
+	const attention = [];
+	if (health && !health.electrumConnected) attention.push({ label: 'Electrum down', tone: 'red' });
+	if (backup?.degraded && !rec?.onchainOnly) attention.push({ label: backup.tier, tone: backup.tone });
+	if (epochBadge && epochBadge.state === 'ACTIVE' && !epochBadge.mismatch && !epochBadge.enforced) {
+		attention.push({ label: 'Receiving offline', tone: 'green' });
+	}
+	if (epochBadge && epochBadge.enforced) attention.push({ label: 'Enforced on-chain', tone: 'yellow' });
+	if (rec?.fforEnforce || (epochBadge && epochBadge.mismatch && !epochBadge.enforced)) {
+		attention.push({ label: 'Enforce on-chain', tone: 'red' });
+	}
+	if (rec && !rec.onchainOnly && rec.torCircuitOk === false) attention.push({ label: 'Tor circuits down', tone: 'red' });
+
 	return (
 		<div className="container">
 			<Link to="/" className="back-link">
-				← All wallets
+				<Icon name="back" size={14} />
+				Wallets
 			</Link>
 
-			<m.div layoutId={`wallet-card-${id}`} className="whead">
-				<div className="wallet-title">
-					<m.div layoutId={`wallet-name-${id}`}>
-						<h2>{rec?.name || 'Wallet'}</h2>
-					</m.div>
-					{rec && (
-						<m.span layoutId={`wallet-status-${id}`}>
-							<Badge tone={running ? 'green' : rec.status === 'stopped' ? 'muted' : 'yellow'}>
-								<span className="dot" />
-								{rec.status}
-							</Badge>
-						</m.span>
-					)}
-					{rec && <Badge tone="blue">{rec.network}</Badge>}
-					{rec?.onchainOnly && <Badge tone="muted">on-chain only</Badge>}
-					{isLfbw && <Badge tone="blue">lightning first</Badge>}
-					{rec?.lfbwDependents?.length > 0 && (
-						<Badge tone="muted">
-							primary for {rec.lfbwDependents.length}
-						</Badge>
-					)}
-					{health && (
-						<Badge tone={health.electrumConnected ? 'green' : 'red'}>
-							{health.electrumConnected ? 'electrum ok' : 'electrum down'}
-						</Badge>
-					)}
-					{backup?.degraded && !rec?.onchainOnly && (
-						<Badge tone={backup.tone}>{backup.tier}</Badge>
-					)}
-					{epochBadge && epochBadge.state === 'ACTIVE' && !epochBadge.mismatch && !epochBadge.enforced && (
-						<Badge tone="green">receiving offline</Badge>
-					)}
-					{epochBadge && epochBadge.enforced && <Badge tone="yellow">enforced on-chain</Badge>}
-					{(rec?.fforEnforce || (epochBadge && epochBadge.mismatch && !epochBadge.enforced)) && (
-						<Badge tone="red">enforce on-chain</Badge>
-					)}
-					<Button className="sm" onClick={(e) => setEditing({ x: e.clientX, y: e.clientY })}>
-						Edit
-					</Button>
-				</div>
-				<div className="wallet-meta">
-					{info ? (
-						<>
-							{simple ? (
-								// One balance: a lightning-first wallet does not present its
-								// two rails as two figures, the arriving part is said on its
-								// Overview instead.
-								<>
-									<AnimatedNumber
-										value={(info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0)}
-										suffix=" sats"
-									/>{' '}
-									·{' '}
-								</>
-							) : (
-								<>
-									<AnimatedNumber value={info.onchainBalanceSats} suffix=" sats" /> on-chain ·{' '}
-									{!rec?.onchainOnly && (
-										<>
-											<AnimatedNumber value={info.lightningBalanceSats} suffix=" sats" /> lightning ·{' '}
-										</>
-									)}
-								</>
-							)}
-							node <CopyText value={info.nodeId} label={shortId(info.nodeId)} /> · height{' '}
-							{info.blockHeight}
-						</>
-					) : rec?.electrum ? (
-						`electrum ${rec.electrum.host}:${rec.electrum.port}`
-					) : (
-						'Loading…'
-					)}
-				</div>
-			</m.div>
+			<WalletHero
+				id={id}
+				rec={rec}
+				info={info}
+				running={running}
+				simple={simple}
+				isLfbw={isLfbw}
+				advanced={advanced}
+				onToggleAdvanced={toggleAdvanced}
+				chips={chips}
+				attention={attention}
+				onEdit={(e) => setEditing({ x: e?.clientX ?? 0, y: e?.clientY ?? 0 })}
+				onStart={start}
+				onStop={stop}
+				onDelete={(e) => setDeleting({ x: e?.clientX ?? 0, y: e?.clientY ?? 0 })}
+				starting={starting}
+			/>
 
 			{rec?.status === 'restarting' && rec.lastStartError && (
-				<div className="error-note" style={{ marginBottom: 14 }}>
+				<Note tone="error">
 					The wallet's last start failed and it is retrying: {rec.lastStartError.message}
-				</div>
+				</Note>
 			)}
 
 			{showRestore ? (
@@ -385,31 +380,8 @@ export default function WalletPage() {
 						else bump();
 					}}
 				/>
-			) : !running ? (
-				<div className="card">
-					<div className="empty">
-						This wallet is not running.
-						<div className="center-actions" style={{ justifyContent: 'center' }}>
-							<Button
-								variant="primary"
-								onClick={async () => {
-									try {
-										await manager.startWallet(id);
-										toast('Starting…', 'info');
-										refreshRec();
-									} catch (e) {
-										toast(e.message, 'error');
-									}
-								}}
-							>
-								Start wallet
-							</Button>
-							<Button onClick={() => navigate('/')}>Back</Button>
-						</div>
-					</div>
-				</div>
-			) : (
-				<div className="wallet-layout">
+			) : running ? (
+				<>
 					<ResumeBanner recovery={recovery} />
 					{fforOn && (
 						<FforReturnPanel
@@ -423,7 +395,7 @@ export default function WalletPage() {
 						/>
 					)}
 					{capsuleOffer(recovery, info) && (
-						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+						<div style={{ marginBottom: 14 }}>
 							<CapsuleRestoreCard
 								api={api}
 								offer={capsuleOffer(recovery, info)}
@@ -437,7 +409,7 @@ export default function WalletPage() {
 					)}
 
 					{rec && !rec.onchainOnly && rec.torCircuitOk === false && (
-						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+						<Note tone="error">
 							The app&apos;s Tor cannot build circuits right now.{' '}
 							{modeOf(rec) === 'tor'
 								? 'Every peer of this wallet is reached over Tor, so connections will time out.'
@@ -447,32 +419,13 @@ export default function WalletPage() {
 							{modeOf(rec) === 'tor'
 								? ', or switch this wallet to Clearnet or Hybrid so clearnet peers are dialed directly.'
 								: '.'}
-						</div>
+						</Note>
 					)}
-					<nav className="wnav">
-						{tabs.map(([key, label]) => (
-							<NavLink key={key} to={`/w/${id}/${key}`} className={key === tab ? 'active' : ''}>
-								{key === tab && (
-									<m.span
-										layoutId="wnav-indicator"
-										className="wnav-indicator"
-										transition={{ type: 'spring', stiffness: 500, damping: 40 }}
-									/>
-								)}
-								{label}
-							</NavLink>
-						))}
-						{!simple && (
-							<a href={`/swagger.html?id=${id}`} target="_blank" rel="noreferrer">
-								Raw API ↗
-							</a>
-						)}
-						{isLfbw && (
-							<button type="button" className="wnav-toggle" onClick={toggleAdvanced}>
-								{advanced ? 'Simple view' : 'Advanced view'}
-							</button>
-						)}
-					</nav>
+
+					{/* One screen needs no bar: the simple lightning-first view is its Overview. */}
+					{nav.length > 1 && (
+						<TabBar id={id} items={nav} active={nav.some((t) => t[0] === tab) ? tab : null} rawApi={!simple} />
+					)}
 					<AnimatePresence mode="wait" initial={false}>
 						<m.div
 							key={tab}
@@ -495,15 +448,16 @@ export default function WalletPage() {
 							/>
 						</m.div>
 					</AnimatePresence>
-				</div>
-			)}
+				</>
+			) : null}
 
+			<AnimatePresence>
 			{editing && rec && (
 				<EditWalletModal
+					key="edit"
 					rec={rec}
 					origin={editing}
 					presets={config?.electrumPresets || []}
-
 					torAvailable={!!config?.torAvailable}
 					torProxyScopeAvailable={config?.torProxyScopeAvailable !== false}
 					irohAvailable={!!config?.irohAvailable}
@@ -529,6 +483,20 @@ export default function WalletPage() {
 					}}
 				/>
 			)}
+			{deleting && rec && (
+				<DeleteWalletModal
+					key="delete"
+					wallet={rec}
+					origin={deleting}
+					onClose={() => setDeleting(null)}
+					onDeleted={() => {
+						setDeleting(null);
+						toast('Wallet deleted', 'success');
+						navigate('/');
+					}}
+				/>
+			)}
+			</AnimatePresence>
 		</div>
 	);
 }
@@ -543,7 +511,7 @@ function ResumeBanner({ recovery }) {
 	if (complete || channels.total === 0 || channels.pending === 0) return null;
 	const landed = channels.resumed + channels.closing;
 	return (
-		<div className="info-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+		<Note tone="info">
 			Channels resuming: {landed} of {channels.total}
 			{channels.closing > 0 ? ` (${channels.closing} closing safely, funds return on-chain)` : ''}.
 			<Help>
@@ -552,7 +520,7 @@ function ResumeBanner({ recovery }) {
 					? ', and the guardians must confirm this device owns them before any payment moves.'
 					: '.'}
 			</Help>
-		</div>
+		</Note>
 	);
 }
 
@@ -717,11 +685,38 @@ export function EditWalletModal({
 	};
 
 	return (
-		<Modal title="Edit wallet" onClose={onClose} origin={origin}>
+		<Modal
+			title="Edit wallet"
+			onClose={onClose}
+			origin={origin}
+			foot={
+				<>
+					<Button onClick={onClose}>Cancel</Button>
+					<span className="spacer" />
+					{/* The consequence rides the button: saving while parking channels
+					    is a deliberate act, named at the moment of the click rather
+					    than behind a second dialog. */}
+					<Button
+						variant="primary"
+						busy={busy}
+						onClick={save}
+						disabled={
+							!electrum.host ||
+							!lfbwComplete(lfbw) ||
+							(!onchainOnly && networkMode === 'clearnet' && !publicHost.trim())
+						}
+					>
+						{parkingChannels && openChannels > 0
+							? `Save and park ${openChannels} channel${openChannels === 1 ? '' : 's'}`
+							: 'Save changes'}
+					</Button>
+				</>
+			}
+		>
 			<Field label="Name">
 				<input value={name} onChange={(e) => setName(e.target.value)} />
 			</Field>
-			<div className="field-label" style={{ marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Electrum server
 				<Help>
 					Changing the Electrum server restarts this wallet so it reconnects. The network
@@ -729,7 +724,7 @@ export function EditWalletModal({
 				</Help>
 			</div>
 			<ElectrumFields presets={presets} value={electrum} onChange={setElectrum} />
-			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Lightning
 			</div>
 			<label className="checkbox field">
@@ -742,13 +737,13 @@ export function EditWalletModal({
 				Lightning enabled
 			</label>
 			{dependents.length > 0 && (
-				<div className="info-note">
+				<Note tone="info">
 					Lightning stays on: this wallet is the primary node of{' '}
 					{dependents.map((d) => `"${d.name}"`).join(', ')}.
-				</div>
+				</Note>
 			)}
 			{parkingChannels && (
-				<div className="error-note">
+				<Note tone="error">
 					{openChannels > 0
 						? `This wallet has ${openChannels} open channel${openChannels === 1 ? '' : 's'}. `
 						: 'This wallet may have open channels (they could not be read just now). '}
@@ -757,20 +752,20 @@ export function EditWalletModal({
 					stop, and the dashboard puts the Channels tab away until Lightning is switched
 					back on. Parked for more than about two weeks, the node force-closes channels
 					it cannot reach, by design, and the funds return on-chain.
-				</div>
+				</Note>
 			)}
 			{onchainOnly && !rec.onchainOnly && !parkingChannels && (
-				<div className="info-note">
+				<Note tone="info">
 					The wallet stops listening for Lightning peers and the dashboard puts the
 					Lightning apparatus away. The seed is untouched and the node identity stays
 					derived from it, so flipping this back on later loses nothing.
-				</div>
+				</Note>
 			)}
 			{!onchainOnly && rec.onchainOnly && (
-				<div className="info-note">
+				<Note tone="info">
 					The wallet starts listening for Lightning peers on its next start. Open a
 					channel in the Channels tab and it is a Lightning node like any other.
-				</div>
+				</Note>
 			)}
 			{recoveryAvailable && !onchainOnly && (
 				<>
@@ -787,23 +782,23 @@ export function EditWalletModal({
 						<RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} disabled={restoring} />
 					)}
 					{restoring && (
-						<div className="info-note">
+						<Note tone="info">
 							Channel backup cannot change while this wallet is waiting for, or running,
 							a restore from its guardians.
-						</div>
+						</Note>
 					)}
 					{recoveryMode === (rec.recovery?.mode || 'off') &&
 						recoveryMode === 'peer-storage' &&
 						recoveryAutoApply !== !!rec.recovery?.autoApply && (
-							<div className="info-note">Changing this restarts the wallet.</div>
+							<Note tone="info">Changing this restarts the wallet.</Note>
 						)}
 					{recoveryMode !== (rec.recovery?.mode || 'off') && (
-						<div className="info-note">
+						<Note tone="info">
 							Changing channel backup restarts this wallet.
 							{pinnedGuardians.length === 0 && isGuardianMode(recoveryMode)
 								? ' A guardian mode registers the wallet with the guardians in Settings on its next start, and that set stays with the wallet until it is rotated here.'
 								: ''}
-						</div>
+						</Note>
 					)}
 					{guardianRotationAvailable &&
 						isGuardianMode(rec.recovery?.mode) &&
@@ -824,12 +819,12 @@ export function EditWalletModal({
 
 					<GuardianServeField value={guardianServe} onChange={setGuardianServe} announced={announced} />
 					{guardianServe !== !!rec.guardianServe && (
-						<div className="info-note">
+						<Note tone="info">
 							Changing this restarts the wallet.
 							{!guardianServe && rec.guardianServe
 								? ' Nodes that pinned this wallet as a guardian lose one of their three until it serves again; their sets cannot be changed.'
 								: ''}
-						</div>
+						</Note>
 					)}
 				</>
 			)}
@@ -837,7 +832,7 @@ export function EditWalletModal({
 				<>
 					<FforSettleField value={fforBlock} onChange={setFforBlock} />
 					{fforChanged && (
-						<div className="info-note">
+						<Note tone="info">
 							Changing this restarts the wallet.
 							{fforWas.settle && !fforNow.settle
 								? ' A sibling with an open voucher book here keeps it: the book was signed and stays claimable, but no new one can be started.'
@@ -845,7 +840,7 @@ export function EditWalletModal({
 							{fforWas.witness && !fforNow.witness
 								? ' Receipts this wallet holds for siblings stay on disk but are not served until it witnesses again.'
 								: ''}
-						</div>
+						</Note>
 					)}
 				</>
 			)}
@@ -853,17 +848,17 @@ export function EditWalletModal({
 				<>
 					<LfbwFields value={lfbw} onChange={setLfbw} candidates={candidates} editing currentPrimary={currentPrimary} />
 					{lfbw.enabled && rec.lfbw?.enabled && primaryChanged(lfbw, rec.lfbw) && (
-						<div className="info-note">
+						<Note tone="info">
 							The channel with your current primary stays open after the change. The Overview lists it as
 							your previous primary's channel and offers to move its funds into the new one.
-						</div>
+						</Note>
 					)}
 					{lfbw.enabled !== !!rec.lfbw?.enabled && (
-						<div className="info-note">
+						<Note tone="info">
 							{lfbw.enabled
 								? 'The wallet pairs with its primary node on its next start: mutual zero-conf trust when the primary is your own wallet, direct funding armed, and its confirmed on-chain balance moves into the channel from then on. Its existing channels are untouched.'
 								: 'The wallet keeps its channels and its balance; only the lightning-first behaviour stops (no automatic channel funding, the full tab set back).'}
-						</div>
+						</Note>
 					)}
 					{!lfbw.enabled && (
 						<ProviderFields
@@ -897,30 +892,9 @@ export function EditWalletModal({
 						irohRelays={irohRelays}
 						onIrohRelays={setIrohRelays}
 					/>
-					{networkChanged && <div className="info-note">Changing this restarts the wallet.</div>}
+					{networkChanged && <Note tone="info">Changing this restarts the wallet.</Note>}
 				</>
 			)}
-			<div className="center-actions">
-				{/* The consequence rides the button: saving while parking channels
-				    is a deliberate act, named at the moment of the click rather
-				    than behind a second dialog. */}
-
-				<Button
-					variant="primary"
-					busy={busy}
-					onClick={save}
-					disabled={
-						!electrum.host ||
-						!lfbwComplete(lfbw) ||
-						(!onchainOnly && networkMode === 'clearnet' && !publicHost.trim())
-					}
-				>
-					{parkingChannels && openChannels > 0
-						? `Save and park ${openChannels} channel${openChannels === 1 ? '' : 's'}`
-						: 'Save changes'}
-				</Button>
-				<Button onClick={onClose}>Cancel</Button>
-			</div>
 		</Modal>
 	);
 }

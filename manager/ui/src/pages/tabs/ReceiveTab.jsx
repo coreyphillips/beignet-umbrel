@@ -3,8 +3,10 @@ import { AnimatePresence, m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Button, Card, CopyText, Field, Help, QR, Badge } from '../../components/ui.jsx';
-import { fmtSats, shortId } from '../../lib/format.js';
+import { Badge, Button, Card, CopyText, Disclosure, Empty, Field, Help, Note, QR, SkeletonRows } from '../../components/ui.jsx';
+import { Check } from '../../components/motion.jsx';
+import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
+import { invoiceStatusLabel } from '../../lib/labels.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
 import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
 import OfflineReceiveCard from '../../components/OfflineReceiveCard.jsx';
@@ -488,7 +490,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			<Card
 				title={isLfbw ? 'Deposit bitcoin' : 'On-chain'}
 				actions={
-					<Button className="sm" onClick={newAddress}>
+					<Button className="sm" icon="refresh" onClick={newAddress}>
 						New address
 					</Button>
 				}>
@@ -504,10 +506,8 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 				<Field label="Message (optional)">
 					<input value={onchainMessage} onChange={(e) => setOnchainMessage(e.target.value)} placeholder="Coffee" />
 				</Field>
-				<div style={{ textAlign: 'center' }}>
+				<div className="qr-stage">
 					<QR value={request} />
-				</div>
-				<div style={{ marginTop: 12, textAlign: 'center' }}>
 					<CopyText value={request} truncate={isRequest} />
 				</div>
 				{/* Built out of what is actually attached, sentence by sentence. Said
@@ -537,7 +537,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 				</div>
 				{invoice && !paid && (
 					<>
-						<label className="checkbox field" style={{ marginTop: 10 }}>
+						<label className="checkbox field switch" style={{ marginTop: 10 }}>
 							<input
 								type="checkbox"
 								checked={includeInvoice}
@@ -636,12 +636,12 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 						Changing this option requires a new invoice. Already shared invoices stay unchanged.
 					</div>
 					{quoteLine && (
-						<div
-							className={quoteLine.tone === 'error' ? 'error-note' : 'info-note'}
+						<Note
+							tone={quoteLine.tone === 'error' ? 'error' : 'info'}
 							role="status"
 							data-testid={wantsOffline ? 'receive-quote' : 'jit-quote'}>
 							{quoteLine.text}
-						</div>
+						</Note>
 					)}
 					<Button variant="primary" busy={busy} disabled={!!quoteLine?.blocks} onClick={createInvoice}>
 						Create invoice
@@ -654,14 +654,15 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 								initial={{ opacity: 0, scale: 0.92, y: 8 }}
 								animate={{ opacity: 1, scale: 1, y: 0 }}
 								exit={{ opacity: 0, scale: 0.96 }}>
-								<QR value={invoice.bolt11} />
-								<div style={{ marginTop: 12 }}>
+								<div className="qr-stage">
+									<QR value={invoice.bolt11} />
 									<CopyText value={invoice.bolt11} truncate />
+									<InvoiceExpiry invoice={invoice} />
 								</div>
 								{invoice.offlineReceive && (
-									<div className="info-note" role="status">
+									<Note tone="success" role="status">
 										You can close your wallet. Payments will appear when you reopen it.
-									</div>
+									</Note>
 								)}
 								{jitInfo && (
 									<div className="field-hint" style={{ marginTop: 10 }} role="status">
@@ -683,14 +684,23 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 								role="status"
 								initial={{ opacity: 0, scale: 0.9 }}
 								animate={{ opacity: 1, scale: 1 }}>
-								<div className="paid-check" aria-hidden="true">
-									✓
-								</div>
+								<Check size={52} />
 								<div className="paid-title">Paid</div>
 								<div className="wallet-meta">
 									{paidInfo.amountSats != null
 										? `${fmtSats(paidInfo.amountSats)} received over Lightning.`
 										: 'Received over Lightning.'}
+								</div>
+								<div className="center-actions">
+									<Button
+										className="sm"
+										onClick={() => {
+											setInvoice(null);
+											setJitInfo(null);
+										}}
+									>
+										New invoice
+									</Button>
 								</div>
 							</m.div>
 						)}
@@ -702,16 +712,17 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			    sibling that stays online, one invoice per voucher, payable with
 			    this wallet off. Only on an engine that carries the routes. */}
 			{!onchainOnly && !isLfbw && config?.fforAvailable && (
-				<details className="grid-full">
-					<summary>Advanced offline receive</summary>
+				<Disclosure label="Advanced offline receive" className="grid-full" persist>
 					<OfflineReceiveCard config={config} id={id} api={api} rec={rec} tick={tick} info={info} />
-				</details>
+				</Disclosure>
 			)}
 
 			{!onchainOnly && (
 				<Card title="Recent invoices" className="grid-full">
-					{!invoices || invoices.length === 0 ? (
-						<div className="empty">No invoices yet.</div>
+					{!invoices ? (
+						<SkeletonRows rows={3} />
+					) : invoices.length === 0 ? (
+						<Empty>No invoices yet.</Empty>
 					) : (
 						<div className="table-wrap">
 							<table>
@@ -726,8 +737,8 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 								<tbody>
 									{invoices.slice(0, 20).map((inv) => (
 										<tr key={inv.paymentHash}>
-											<td>{inv.amountSats ? fmtSats(inv.amountSats) : 'any'}</td>
-											<td>{inv.description || '-'}</td>
+											<td className="amt">{inv.amountSats ? fmtSats(inv.amountSats) : 'any'}</td>
+											<td className="wallet-meta">{inv.description || '-'}</td>
 											{/* The invoice itself rather than its hash: an invoice you cannot
 										    hand out again is of no use to anyone, and the hash never was. */}
 											<td>
@@ -738,8 +749,8 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 												)}
 											</td>
 											<td>
-												<Badge tone={inv.status === 'PAID' || inv.status === 'COMPLETED' ? 'green' : 'muted'}>
-													{inv.status || 'open'}
+												<Badge tone={invoiceStatusLabel(inv.status).tone} title={inv.status || 'open'}>
+													{invoiceStatusLabel(inv.status).label}
 												</Badge>
 											</td>
 										</tr>
@@ -752,4 +763,34 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 			)}
 		</div>
 	);
+}
+
+
+/** When an invoice runs out, said from its own fields. Nothing when it does not say. */
+function invoiceExpiresAt(inv) {
+	if (!inv) return null;
+	const expiry = Number(inv.expiry ?? inv.expirySecs ?? inv.expirySeconds);
+	if (!Number.isFinite(expiry) || expiry <= 0) return null;
+	let created = Number(inv.createdAt ?? inv.timestamp);
+	if (!Number.isFinite(created) || created <= 0) created = Date.now() / 1000;
+	if (created > 1e12) created /= 1000;
+	return (created + expiry) * 1000;
+}
+
+/**
+ * A countdown under the invoice. Its own clock, so the QR above it is not
+ * redrawn every second.
+ */
+function InvoiceExpiry({ invoice }) {
+	const expiresAt = useMemo(() => invoiceExpiresAt(invoice), [invoice]);
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!expiresAt) return undefined;
+		const t = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(t);
+	}, [expiresAt]);
+	if (!expiresAt) return null;
+	const left = Math.round((expiresAt - now) / 1000);
+	if (left <= 0) return <div className="expiry expired">This invoice has expired. Create a new one.</div>;
+	return <div className={`expiry ${left < 120 ? 'soon' : ''}`}>Expires in {fmtDuration(left)}</div>;
 }

@@ -1,6 +1,8 @@
-/* Design tokens — glassmorphism + futuristic minimalist, Umbrel-adjacent. */
+/* Design tokens. Calm glass: one wallpaper, glass panels, flat insets.
+   Every colour a component needs comes from here, in both themes, so no
+   stylesheet carries a dark-theme rgba that the light theme has to patch. */
 :root {
-	/* Base canvas (under the ambient gradient mesh) */
+	/* Canvas under the ambient wallpaper */
 	--bg-deep: #0a0c12;
 
 	/* Text */
@@ -8,53 +10,106 @@
 	--muted: #a0a7ba;
 	--faint: #667086;
 
-	/* Brand + semantic hues */
+	/* Brand */
 	--accent: #f7931a;
 	--accent-2: #ffb454;
 	--accent-glow: rgba(247, 147, 26, 0.35);
 	--accent-dim: rgba(247, 147, 26, 0.12);
+	--on-accent: #221200;
+
+	/* Semantic hues (for text and icons drawn directly in a hue) */
 	--green: #3ddc97;
 	--red: #ff5c61;
 	--yellow: #f0c23f;
 	--blue: #6ea8ff;
 
-	/* Glass surfaces */
-	--glass-bg: rgba(22, 25, 36, 0.55);
-	--glass-bg-heavy: rgba(17, 20, 30, 0.78);
-	--glass-inner: rgba(255, 255, 255, 0.04);
-	--glass-inner-2: rgba(255, 255, 255, 0.07);
-	--glass-border: rgba(255, 255, 255, 0.09);
-	--glass-border-bright: rgba(255, 255, 255, 0.18);
-	--hairline: rgba(255, 255, 255, 0.06);
-	--glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
-	--glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+	/* Tones: a foreground, a fill and a line per meaning. Badges, notes,
+	   toasts and status dots read these and nothing else. */
+	--tone-green-fg: #5fe6ab;
+	--tone-green-bg: rgba(61, 220, 151, 0.1);
+	--tone-green-line: rgba(61, 220, 151, 0.32);
+	--tone-red-fg: #ff9a9d;
+	--tone-red-bg: rgba(255, 92, 97, 0.1);
+	--tone-red-line: rgba(255, 92, 97, 0.34);
+	--tone-yellow-fg: #f5cf5e;
+	--tone-yellow-bg: rgba(240, 194, 63, 0.1);
+	--tone-yellow-line: rgba(240, 194, 63, 0.34);
+	--tone-blue-fg: #9cc2ff;
+	--tone-blue-bg: rgba(110, 168, 255, 0.1);
+	--tone-blue-line: rgba(110, 168, 255, 0.32);
+	--tone-accent-fg: #ffb454;
+	--tone-accent-bg: rgba(247, 147, 26, 0.1);
+	--tone-accent-line: rgba(247, 147, 26, 0.36);
+	--tone-muted-fg: #a0a7ba;
+	--tone-muted-bg: rgba(255, 255, 255, 0.05);
+	--tone-muted-line: rgba(255, 255, 255, 0.11);
+
+	/* Surfaces: panel (glass), inset (flat), and the lines between them */
+	--glass-bg: rgba(22, 25, 36, 0.58);
+	--glass-bg-heavy: rgba(17, 20, 30, 0.84);
+	--glass-solid: #141724;
+	--surface-2: rgba(255, 255, 255, 0.04);
+	--surface-2-hover: rgba(255, 255, 255, 0.07);
+	--surface-3: rgba(255, 255, 255, 0.1);
+	--line-1: rgba(255, 255, 255, 0.06);
+	--line-2: rgba(255, 255, 255, 0.1);
+	--line-3: rgba(255, 255, 255, 0.18);
+	--glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+	--glass-shadow: 0 10px 36px rgba(0, 0, 0, 0.34);
+	/* Cursor spotlight tints */
+	--spot-warm: rgba(247, 147, 26, 0.04);
+	--spot-cool: rgba(110, 168, 255, 0.035);
+	--pop-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
+	--scrim: rgba(4, 5, 9, 0.56);
 	--blur: 22px;
 	--blur-soft: 10px;
+	--qr-bg: #ffffff;
+	--qr-fg: #111111;
+	--chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a0a7ba' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
 
 	/* Shape */
+	--r-xs: 6px;
 	--r-sm: 10px;
-	--r-md: 16px;
-	--r-lg: 22px;
+	--r-md: 14px;
+	--r-lg: 20px;
 	--r-full: 999px;
-	--radius: var(--r-md); /* legacy alias */
+
+	/* Space */
+	--sp-1: 4px;
+	--sp-2: 8px;
+	--sp-3: 12px;
+	--sp-4: 16px;
+	--sp-5: 20px;
+	--sp-6: 24px;
+	--sp-7: 32px;
+	--sp-8: 40px;
+
+	/* Type */
+	--fs-xs: 11px;
+	--fs-sm: 12px;
+	--fs-md: 13px;
+	--fs-base: 14px;
+	--fs-lg: 16px;
+	--fs-xl: 20px;
+	--fs-2xl: 28px;
+	--fs-display: 40px;
+	--fw-regular: 450;
+	--fw-medium: 550;
+	--fw-semibold: 620;
+	--fw-bold: 680;
+	--font-ui: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+		Arial, sans-serif;
+	--font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 
 	/* Layout */
-	--sidebar: 220px;
 	--content-max: 1080px;
 
 	/* Motion */
 	--ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+	--ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 	--dur-fast: 150ms;
-	--dur-med: 300ms;
-
-	/* Cursor spotlight tints */
-	--spot-warm: rgba(247, 147, 26, 0.04);
-	--spot-cool: rgba(110, 168, 255, 0.035);
-
-	/* Type */
-	--font-ui: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
-		Arial, sans-serif;
-	--font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+	--dur-med: 280ms;
+	--dur-slow: 450ms;
 
 	color-scheme: dark;
 }
@@ -71,23 +126,48 @@
 	--accent-2: #f7a23b;
 	--accent-glow: rgba(236, 133, 8, 0.3);
 	--accent-dim: rgba(236, 133, 8, 0.14);
+	--on-accent: #221200;
+
 	--green: #0f9d63;
 	--red: #d93a40;
 	--yellow: #b8890b;
 	--blue: #2f6fdb;
 
-	--glass-bg: rgba(255, 255, 255, 0.52);
-	--glass-bg-heavy: rgba(255, 255, 255, 0.82);
-	--glass-inner: rgba(20, 30, 60, 0.045);
-	--glass-inner-2: rgba(20, 30, 60, 0.08);
-	--glass-border: rgba(20, 30, 60, 0.1);
-	--glass-border-bright: rgba(20, 30, 60, 0.18);
-	--hairline: rgba(20, 30, 60, 0.08);
-	--glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.65);
-	--glass-shadow: 0 8px 32px rgba(35, 45, 80, 0.12);
+	--tone-green-fg: #0c7a4b;
+	--tone-green-bg: rgba(15, 157, 99, 0.1);
+	--tone-green-line: rgba(15, 157, 99, 0.32);
+	--tone-red-fg: #b0272c;
+	--tone-red-bg: rgba(217, 58, 64, 0.09);
+	--tone-red-line: rgba(217, 58, 64, 0.32);
+	--tone-yellow-fg: #8a6508;
+	--tone-yellow-bg: rgba(184, 137, 11, 0.11);
+	--tone-yellow-line: rgba(184, 137, 11, 0.34);
+	--tone-blue-fg: #2b579a;
+	--tone-blue-bg: rgba(47, 111, 219, 0.09);
+	--tone-blue-line: rgba(47, 111, 219, 0.3);
+	--tone-accent-fg: #b2600a;
+	--tone-accent-bg: rgba(236, 133, 8, 0.11);
+	--tone-accent-line: rgba(236, 133, 8, 0.38);
+	--tone-muted-fg: #59627a;
+	--tone-muted-bg: rgba(20, 30, 60, 0.05);
+	--tone-muted-line: rgba(20, 30, 60, 0.12);
 
+	--glass-bg: rgba(255, 255, 255, 0.56);
+	--glass-bg-heavy: rgba(255, 255, 255, 0.86);
+	--glass-solid: #f7f8fc;
+	--surface-2: rgba(20, 30, 60, 0.045);
+	--surface-2-hover: rgba(20, 30, 60, 0.08);
+	--surface-3: rgba(20, 30, 60, 0.11);
+	--line-1: rgba(20, 30, 60, 0.08);
+	--line-2: rgba(20, 30, 60, 0.11);
+	--line-3: rgba(20, 30, 60, 0.2);
+	--glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+	--glass-shadow: 0 10px 36px rgba(35, 45, 80, 0.12);
 	--spot-warm: rgba(247, 147, 26, 0.07);
 	--spot-cool: rgba(47, 111, 219, 0.05);
+	--pop-shadow: 0 14px 44px rgba(35, 45, 80, 0.22);
+	--scrim: rgba(30, 40, 70, 0.32);
+	--chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2359627a' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
 
 	color-scheme: light;
 }

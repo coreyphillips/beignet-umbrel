@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePoll } from '../../../hooks/usePoll.js';
 import { useToast } from '../../../components/Toast.jsx';
-import { AmountField, Button, Card, FeeField, Field } from '../../../components/ui.jsx';
+import { AmountField, Button, Card, Chip, CopyText, FeeField, Field, Note } from '../../../components/ui.jsx';
+import { Check, Reveal } from '../../../components/motion.jsx';
+import { shortId } from '../../../lib/format.js';
 import { fmtSats } from '../../../lib/format.js';
 import { FEE_CAP_MULTIPLE, perkwFromSatVb } from '../../../lib/fees.js';
 import { parsePayment } from '../../../lib/payment-uri.js';
@@ -337,23 +339,23 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 				/>
 			</Field>
 			{parsed.kind === 'invalid' && mayRefuse && (
-				<div className="error-note" role="alert">
+				<Note tone="error" role="alert">
 					{parsed.message}
-				</div>
+				</Note>
 			)}
 			{parsed.kind === 'onchain' && parsed.warnings.length > 0 && (
-				<div className="info-note" role="status">
+				<Note tone="info" role="status">
 					{parsed.warnings.map((w) => w.message).join(' ')}
-				</div>
+				</Note>
 			)}
 			{(parsed.kind === 'bolt11' || parsed.kind === 'bolt12') && (
-				<div className="info-note" role="status">
+				<Note tone="info" role="status">
 					That is a Lightning {parsed.kind === 'bolt12' ? 'offer' : 'invoice'}. Pay it from the Lightning
 					rail above.
-				</div>
+				</Note>
 			)}
 			{request && parsed.kind === 'onchain' && (
-				<div className="info-note" role="status">
+				<Note tone="info" role="status">
 					Read from a payment request
 					{request.amountSats != null ? `, which asks for ${fmtSats(request.amountSats)}` : ''}.
 					{funding
@@ -361,7 +363,7 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 							? ' It comes from a beignet wallet, and a confirmed deposit of yours can become their channel funding directly.'
 							: ' It comes from a beignet wallet: paid from your Lightning balance, it lands as an ordinary transaction they move into Lightning after one confirmation.'
 						: ''}
-				</div>
+				</Note>
 			)}
 			{funding && coveringCoin && (
 				<label className="checkbox field">
@@ -379,7 +381,7 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 					<div className="static-value">{request.message}</div>
 				</div>
 			)}
-			{expanded && (
+			<Reveal open={expanded}>
 				<>
 					<AmountField
 						label="Amount (sats)"
@@ -395,9 +397,9 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 						}
 					/>
 					{overCeiling && (
-						<div className="error-note" role="alert">
+						<Note tone="error" role="alert">
 							That is more than the channel can release right now ({fmtSats(ceiling)} at this fee rate).
-						</div>
+						</Note>
 					)}
 					<FeeField
 						label="Fee rate (sat/vB)"
@@ -408,63 +410,78 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 						hint="The splice transaction pays this. Leave empty to let the wallet pick."
 					/>
 					{fees && (
-						<div className="preset-row" style={{ marginBottom: 14 }}>
+						<div className="chip-row" style={{ marginBottom: 14 }}>
 							{[
 								['Fast', fees.fast],
 								['Normal', fees.normal],
 								['Slow', fees.slow]
 							].map(([label, rate]) => (
-								<button key={label} type="button" className="btn sm" onClick={() => setFeeRate(String(rate))}>
+								<Chip key={label} pressed={feeRate === String(rate)} onClick={() => setFeeRate(String(rate))}>
 									{label} · {rate} sat/vB
-								</button>
+								</Chip>
 							))}
 						</div>
 					)}
-					{feeSats != null && !payDirect && (
-						<div className="wallet-meta" style={{ marginBottom: 12 }}>
-							Fee: {fmtSats(feeSats)} at {effRate} sat/vB ({feeratePerkw} sat/kw), priced by the wallet.
+					<div className="summary-bar">
+						<div className="summary-text">
+							{feeSats != null && !payDirect ? (
+								<>
+									Fee <strong>{fmtSats(feeSats)}</strong> at {effRate} sat/vB ({feeratePerkw} sat/kw), priced by the
+									wallet.
+								</>
+							) : payDirect ? (
+								'Paid as a direct funding: your coin becomes their channel in one transaction.'
+							) : (
+								'Enter an amount to price the transaction.'
+							)}
 						</div>
-					)}
-					<Button
-						variant="primary"
-						busy={busy}
-						onClick={send}
-						disabled={parsed.kind !== 'onchain' || amountNum <= 0 || fetchingAddr || (!payDirect && (!home || !quote || overCeiling))}
-					>
-						{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
-					</Button>
+						<Button
+							variant="primary"
+							busy={busy}
+							onClick={send}
+							disabled={parsed.kind !== 'onchain' || amountNum <= 0 || fetchingAddr || (!payDirect && (!home || !quote || overCeiling))}
+						>
+							{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
+						</Button>
+					</div>
 				</>
-			)}
+			</Reveal>
 			{result?.kind === 'unknown' && (
-				<div className={result.waiting ? 'info-note' : 'error-note'} style={{ marginTop: 12 }} role="status">
+				<Note tone={result.waiting ? 'info' : 'error'} role="status">
 					{describeUnknown(result)}
-				</div>
+				</Note>
 			)}
 			{result?.fallback && (
-				<div className="info-note" style={{ marginTop: 12 }} role="status">
+				<Note tone="info" role="status">
 					{describeFallback(result.fallback)}
 					{result.fallback.persisted === false && (
 						<div role="alert">
 							The fallback reason could not be saved to Activity. Keep this note for your records.
 						</div>
 					)}
-				</div>
+				</Note>
 			)}
 			{result?.kind === 'splice' && (
-				<div className="info-note" style={{ marginTop: 12 }}>
-					Sent from your channel.{result.txid ? ' Transaction: ' : ''}
-					{result.txid && <span className="mono">{result.txid}</span>}
+				<div className="result" role="status">
+					<Check />
+					<div className="result-title">Sent from your channel.</div>
+					{result.txid && (
+						<div className="result-meta">
+							<span>Transaction:</span>
+							<CopyText value={result.txid} label={shortId(result.txid, 8)} />
+						</div>
+					)}
 				</div>
 			)}
 			{result?.kind === 'funding' && (
-				<div className={result.outcome.failed ? 'error-note' : 'info-note'} style={{ marginTop: 12 }}>
+				<Note tone={result.outcome.failed ? 'error' : 'info'}>
 					{describeFunding(result.outcome)}
 					{result.outcome.txid && (
 						<div>
 							Transaction: <span className="mono">{result.outcome.txid}</span>
 						</div>
 					)}
-				</div>
+				</Note>
 			)}
 			{stepsFor && <LiveFundingSteps key={stepsFor.attempt} walletId={id} requestId={stepsFor.requestId} />}
 		</Card>

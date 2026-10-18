@@ -1,46 +1,104 @@
-import { irohBody } from '../lib/iroh.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { m } from 'motion/react';
+import { AnimatePresence, m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
-import { usePoll } from '../hooks/usePoll.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import {
-	Button,
-	Card,
-	Modal,
-	Field,
-	Help,
+	AnimatedNumber,
 	Badge,
-	Segmented,
+	BalanceBar,
+	Button,
+	Empty,
+	Menu,
+	Modal,
 	Skeleton,
+	StatusDot,
 	staggerContainer,
 	staggerItem
 } from '../components/ui.jsx';
-import ElectrumFields from '../components/ElectrumFields.jsx';
-import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
-
-import GuardianServeField from '../components/GuardianServeField.jsx';
-import NetworkModeField from '../components/NetworkModeField.jsx';
-import FforSettleField from '../components/FforSettleField.jsx';
-import RecoveryModeField from '../components/RecoveryModeField.jsx';
-import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
-import { copy, fmtSats } from '../lib/format.js';
-
+import DeleteWalletModal from '../components/DeleteWalletModal.jsx';
+import NewWalletModal from '../components/NewWalletModal.jsx';
+import { copy } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
-import { usesOnion, usesPublic } from '../lib/node-uris.js';
 import { openBackup } from '../lib/backup.js';
+import { walletStatusLabel } from '../lib/labels.js';
 
-function statusTone(s) {
-	if (s === 'running') return 'green';
-	if (s === 'starting' || s === 'restarting' || s === 'waiting-electrum' || s === 'restore-required') {
-		return 'yellow';
+const clickOrigin = (e) => ({ x: e?.clientX ?? 0, y: e?.clientY ?? 0 });
+const TRANSIENT = new Set(['starting', 'restarting', 'stopping', 'waiting-electrum']);
+
+// The last list this page showed and the config it read, kept across mounts:
+// coming back from a wallet then renders at once, the hero morphs back into
+// its card, and a fresh poll corrects the figures quietly.
+let cache = null; // { list, infos }
+let cachedConfig = null;
+let refreshSeq = 0;
+
+/**
+ * One running wallet's figures: /info plus, from /channels, the count of open
+ * channels and the local/remote split for the liquidity bar. Null until the
+ * daemon answers.
+ */
+async function loadInfo(id) {
+	const api = walletApi(id);
+	try {
+		const [info, channels] = await Promise.all([api.get('/info'), api.get('/channels').catch(() => null)]);
+		// The daemon's /info channelCount is every channel it has ever had,
+		// closed ones included, so a wallet whose channels all closed still
+		// reads "2 channels" forever. Count open ones from the list itself; on
+		// any hiccup fall back to the daemon figure rather than showing nothing.
+		const open = channels ? channels.filter((c) => !isClosedChannel(c)) : null;
+		info.openChannelCount = open ? open.length : info.channelCount;
+		if (open) {
+			info.outboundSats = open.reduce((a, c) => a + (c.localBalanceSats || 0), 0);
+			info.inboundSats = open.reduce((a, c) => a + (c.remoteBalanceSats || 0), 0);
+		}
+		return info;
+	} catch (_) {
+		return null; // not ready
 	}
-	return 'muted';
 }
 
-const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
+/**
+ * The wallet list with each running wallet's figures. The list is published
+ * as soon as it arrives (names and statuses), and each wallet's figures the
+ * moment that wallet answers, so one slow node never holds the others back.
+ */
+function useWalletList(intervalMs) {
+	const [data, setData] = useState(cache);
+	const refresh = useCallback(async () => {
+		const seq = ++refreshSeq;
+		let list;
+		try {
+			list = await manager.listWallets();
+		} catch (_) {
+			return; // keep what is shown; the next poll tries again
+		}
+		if (seq !== refreshSeq) return; // a newer refresh has overtaken this one
+		const publish = (next) => {
+			cache = next;
+			setData(next);
+		};
+		const running = list.filter((w) => w.status === 'running').map((w) => w.id);
+		const kept = {};
+		for (const id of running) if (cache?.infos?.[id]) kept[id] = cache.infos[id];
+		publish({ list, infos: kept });
+		await Promise.all(
+			running.map(async (id) => {
+				const info = await loadInfo(id);
+				// Dropped when the wallet has since stopped or been deleted.
+				if (!info || !cache?.list.some((w) => w.id === id && w.status === 'running')) return;
+				publish({ list: cache.list, infos: { ...cache.infos, [id]: info } });
+			})
+		);
+	}, []);
+	useEffect(() => {
+		refresh();
+		const t = setInterval(refresh, intervalMs);
+		return () => clearInterval(t);
+	}, [refresh, intervalMs]);
+	return { data, refresh };
+}
 
 /**
  * Renders nothing; watches one running wallet for money arriving. The list
@@ -64,70 +122,141 @@ function ReceiveWatcher({ wallet }) {
 	return null;
 }
 
+function walletType(w) {
+	if (w.lfbw?.enabled) return 'Lightning-first';
+	if (w.onchainOnly) return 'On-chain only';
+	return 'Lightning';
+}
+
+/**
+ * One wallet on the home page. The whole card opens it; what else can be
+ * done to it waits in the menu, so the page holds balances rather than
+ * buttons. The card morphs into the wallet's hero through the shared ids.
+ */
+function WalletCard({ w, info, onOpen, onStart, onStop, onDelete }) {
+	const status = walletStatusLabel(w.status);
+	const openable = w.status === 'running' || w.status === 'restore-required';
+	const total = w.onchainOnly
+		? info?.onchainBalanceSats || 0
+		: (info?.onchainBalanceSats || 0) + (info?.lightningBalanceSats || 0);
+	const menu = [
+		openable
+			? { label: 'Open', icon: 'chevron', onSelect: () => onOpen(w) }
+			: { label: 'Start', icon: 'play', onSelect: () => onStart(w) },
+		...(w.status !== 'stopped' ? [{ label: 'Stop', icon: 'stop', onSelect: () => onStop(w) }] : []),
+		'sep',
+		{ label: 'Delete', icon: 'trash', danger: true, onSelect: (e) => onDelete(w, e) }
+	];
+	// Lightning wallets with an open channel show how their capacity splits.
+	const showBar = !!info && !w.onchainOnly && info.outboundSats != null && info.openChannelCount > 0;
+	const warning =
+		w.lfbw?.enabled && w.lfbw.setup === 'failed'
+			? `Primary node setup failed: ${w.lfbw.setupError}`
+			: w.status === 'restore-required'
+			? 'Channels waiting to be restored from guardians'
+			: w.status === 'restarting' && w.lastStartError
+			? `Last start failed: ${w.lastStartError.message}`
+			: null;
+
+	return (
+		<m.div
+			layoutId={`wallet-card-${w.id}`}
+			variants={staggerItem}
+			className="wallet-card"
+			role="link"
+			tabIndex={0}
+			aria-label={`Open ${w.name}`}
+			onClick={() => onOpen(w)}
+			onKeyDown={(e) => {
+				if (e.target !== e.currentTarget) return;
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					onOpen(w);
+				}
+			}}
+		>
+			<div className="wallet-card-top">
+				<m.div layoutId={`wallet-name-${w.id}`} className="wallet-name" layout="position">
+					{w.name}
+				</m.div>
+				<Badge chip>{walletType(w)}</Badge>
+				{w.lfbwDependents?.length > 0 && <Badge chip>Primary for {w.lfbwDependents.length}</Badge>}
+				<Menu label={`Actions for ${w.name}`} items={menu} />
+			</div>
+			{info ? (
+				<m.div className="wallet-balance" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+					<AnimatedNumber value={total} />
+					<span className="unit">sats</span>
+				</m.div>
+			) : (
+				<div className="wallet-balance" aria-hidden="true">
+					<span style={{ color: 'var(--faint)' }}>·</span>
+				</div>
+			)}
+			{showBar && (
+				<div className="wallet-liq">
+					<BalanceBar local={info.outboundSats} remote={info.inboundSats} />
+				</div>
+			)}
+			<div className="wallet-meta meta-row">
+				<m.span
+					layoutId={`wallet-status-${w.id}`}
+					layout="position"
+					style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+				>
+					<StatusDot tone={status.tone} pulse={TRANSIENT.has(w.status)} />
+					{status.label}
+				</m.span>
+				{info && !w.onchainOnly && (
+					<>
+						<span>·</span>
+						<span>
+							{info.openChannelCount ?? info.channelCount} {(info.openChannelCount ?? info.channelCount) === 1 ? 'channel' : 'channels'}
+						</span>
+						<span>·</span>
+						<span>
+							{info.peerCount} {info.peerCount === 1 ? 'peer' : 'peers'}
+						</span>
+					</>
+				)}
+				{w.network !== 'mainnet' && (
+					<>
+						<span>·</span>
+						<span>{w.network}</span>
+					</>
+				)}
+			</div>
+			{warning && <div className="wallet-warn">{warning}</div>}
+		</m.div>
+	);
+}
+
 export default function WalletsPage() {
 	const toast = useToast();
 	const navigate = useNavigate();
-	const [config, setConfig] = useState(null);
-	const { data, refresh } = usePoll(
-		async () => {
-			const list = await manager.listWallets();
-			const infos = {};
-			await Promise.all(
-				list
-					.filter((w) => w.status === 'running')
-					.map(async (w) => {
-						try {
-							const api = walletApi(w.id);
-							const info = await api.get('/info');
-							// The daemon's /info channelCount is every channel it has ever
-							// had, closed ones included, so a wallet whose channels all
-							// closed still reads "2 channels" forever. Count open ones from
-							// the list itself; on any hiccup fall back to the daemon figure
-							// rather than showing nothing.
-							try {
-								const channels = await api.get('/channels');
-								info.openChannelCount = channels.filter(
-									(c) => !isClosedChannel(c)
-								).length;
-							} catch (_) {
-								info.openChannelCount = info.channelCount;
-							}
-							infos[w.id] = info;
-						} catch (_) {
-							/* not ready */
-						}
-					})
-			);
-			return { list, infos };
-		},
-		4000,
-		[]
-	);
+	const [config, setConfig] = useState(cachedConfig);
+	const { data, refresh } = useWalletList(4000);
 	const wallets = data?.list;
 	const infos = data?.infos || {};
 	const [modal, setModal] = useState(null); // {type, origin?, ...}
-	// Stagger the list entrance only once; later polls re-render silently.
-	const staggered = useRef(false);
+	// Stagger the grid entrance only once, and not at all when the page comes
+	// back with its list already in hand; later polls re-render silently.
+	const staggered = useRef(!!cache);
 	useEffect(() => {
 		if (wallets) staggered.current = true;
 	}, [wallets]);
 
 	useEffect(() => {
-		manager.config().then(setConfig).catch((e) => toast(e.message, 'error'));
+		const take = (c) => {
+			cachedConfig = c;
+			setConfig(c);
+		};
+		manager.config().then(take).catch((e) => toast(e.message, 'error'));
 		// The header's Settings dialog broadcasts saved config so ours stays fresh.
-		const onCfg = (e) => setConfig(e.detail);
+		const onCfg = (e) => take(e.detail);
 		window.addEventListener('beignet:config', onCfg);
 		return () => window.removeEventListener('beignet:config', onCfg);
 	}, [toast]);
-
-	if (!config) {
-		return (
-			<div className="container">
-				<Skeleton height={180} style={{ marginBottom: 18 }} />
-				<Skeleton height={280} />
-			</div>
-		);
-	}
 
 	const act = async (fn, ok) => {
 		try {
@@ -139,115 +268,27 @@ export default function WalletsPage() {
 		}
 	};
 
-	const openWallet = (w) =>
-		navigate(`/w/${w.id}`, { state: { wallet: w, info: infos[w.id] || null } });
-
+	const openWallet = (w) => navigate(`/w/${w.id}`, { state: { wallet: w, info: infos[w.id] || null } });
+	const runningCount = (wallets || []).filter((w) => w.status === 'running').length;
 	const hasWallets = wallets && wallets.length > 0;
-	const walletsCard = (
-		<Card title="Wallets" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
-			{!wallets ? (
-				<>
-					<Skeleton height={74} style={{ marginBottom: 10 }} />
-					<Skeleton height={74} />
-				</>
-			) : !hasWallets ? (
-				<div className="empty">
-					No wallets yet. Create or import one below, or put a box back as it was.
-					<div className="center-actions" style={{ justifyContent: 'center' }}>
-						<Button
-							data-testid="first-run-restore"
-							onClick={(e) => openBackup('restore', { x: e.clientX, y: e.clientY })}
-						>
-							Restore from backup
-						</Button>
+
+	if (!config) {
+		return (
+			<div className="container">
+				<div className="page-head">
+					<div>
+						<h2>Wallets</h2>
 					</div>
 				</div>
-			) : (
-				<m.div
-					variants={staggerContainer}
-					initial={staggered.current ? false : 'hidden'}
-					animate="show"
-				>
-					{wallets.map((w) => {
-						const info = infos[w.id];
-						return (
-							<m.div
-								key={w.id}
-								layoutId={`wallet-card-${w.id}`}
-								variants={staggerItem}
-								className="wallet"
-								onClick={() => openWallet(w)}
-							>
-								<div className="wallet-main">
-									<m.div layoutId={`wallet-name-${w.id}`} className="wallet-name">
-										{w.name}
-									</m.div>
-									<div className="wallet-meta">
-										{w.network} · {w.electrum.host}:{w.electrum.port}
-										{w.onchainOnly ? ' · on-chain only' : ''}
-										{w.lfbw?.enabled ? ' · lightning first' : ''}
-										{w.lfbwDependents?.length > 0
-											? ` · primary for ${w.lfbwDependents.length}`
-											: ''}
-									</div>
-									{w.lfbw?.enabled && w.lfbw.setup === 'failed' && (
-										<div className="wallet-meta">Primary node setup failed: {w.lfbw.setupError}</div>
-									)}
-									{w.status === 'restore-required' && (
-										<div className="wallet-meta">Channels waiting to be restored from guardians</div>
-									)}
-									{w.status === 'restarting' && w.lastStartError && (
-										<div className="wallet-meta">Last start failed: {w.lastStartError.message}</div>
-									)}
-									{info && (
-										<div className="wallet-meta">
-											{w.onchainOnly ? (
-												fmtSats(info.onchainBalanceSats || 0)
-											) : (
-												<>
-													{fmtSats((info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0))} ·{' '}
-													{info.openChannelCount ?? info.channelCount} channels ·{' '}
-													{info.peerCount} peers
-												</>
-											)}
-										</div>
-									)}
-								</div>
-								<div className="wallet-actions" onClick={(e) => e.stopPropagation()}>
-									<m.span layoutId={`wallet-status-${w.id}`}>
-										<Badge tone={statusTone(w.status)}>
-											<span className="dot" />
-											{w.status}
-										</Badge>
-									</m.span>
-									{w.status === 'running' || w.status === 'restore-required' ? (
-										<Button className="sm" onClick={() => openWallet(w)}>
-											Open
-										</Button>
-									) : (
-										<Button className="sm" onClick={() => act(() => manager.startWallet(w.id))}>
-											Start
-										</Button>
-									)}
-									{w.status !== 'stopped' && (
-										<Button className="sm" onClick={() => act(() => manager.stopWallet(w.id))}>
-											Stop
-										</Button>
-									)}
-									<Button
-										className="sm"
-										onClick={(e) => setModal({ type: 'delete', wallet: w, origin: clickOrigin(e) })}
-									>
-										Delete
-									</Button>
-								</div>
-							</m.div>
-						);
-					})}
-				</m.div>
-			)}
-		</Card>
-	);
+				<div className="wallet-grid" aria-busy="true">
+					<Skeleton height={132} />
+					<Skeleton height={132} />
+					<Skeleton height={132} />
+					<Skeleton height={132} />
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="container">
@@ -256,261 +297,101 @@ export default function WalletsPage() {
 				.map((w) => (
 					<ReceiveWatcher key={w.id} wallet={w} />
 				))}
-			{hasWallets && walletsCard}
-			<NewWallet config={config} wallets={wallets} onDone={refresh} onSeed={(s) => setModal(s)} onOpen={openWallet} />
-			{!hasWallets && walletsCard}
 
-			{modal?.type === 'seed' && (
-				<SeedModal name={modal.name} mnemonic={modal.mnemonic} onClose={() => setModal(null)} />
-			)}
-			{modal?.type === 'delete' && (
-				<DeleteModal
-					wallet={modal.wallet}
-					origin={modal.origin}
-					onClose={() => setModal(null)}
-					onDeleted={() => {
-						setModal(null);
-						toast('Wallet deleted', 'success');
-						refresh();
-					}}
-				/>
-			)}
-		</div>
-	);
-}
-
-function emptyElectrum(config) {
-	return config.defaultElectrum
-		? { ...config.defaultElectrum }
-		: { host: '', port: 50001, tls: false };
-}
-
-function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
-	const toast = useToast();
-	const [tab, setTab] = useState('create');
-	const [lfbw, setLfbw] = useState({ ...EMPTY_LFBW });
-	const [name, setName] = useState('');
-	const [network, setNetwork] = useState(config.defaultNetwork);
-	const [wordCount, setWordCount] = useState(24);
-	const [mnemonic, setMnemonic] = useState('');
-	const [custom, setCustom] = useState(!config.defaultElectrum);
-	const [electrum, setElectrum] = useState(emptyElectrum(config));
-
-	// The network mode (umbrel #193): hybrid is the posture a new wallet always
-	// had, direct dials with the onion announced when announcing is on, plus a
-	// public address once one is entered.
-	const [networkMode, setNetworkMode] = useState('hybrid');
-	const [publicHost, setPublicHost] = useState('');
-	const [announce, setAnnounce] = useState(false);
-	const [iroh, setIroh] = useState(false);
-	const [irohRelays, setIrohRelays] = useState('');
-	const announced = announce && (usesOnion(networkMode) || (usesPublic(networkMode) && !!publicHost.trim()));
-	const [onchainOnly, setOnchainOnly] = useState(false);
-	// Channel backup defaults to seed only until peer-storage restore is
-	// reachable end to end; the choice is there for anyone opting in now.
-	const [recoveryMode, setRecoveryMode] = useState('off');
-	// The one-time answer a peer-storage import asks for: is the previous
-	// device stopped? With it the daemon applies the newest checkpoint its
-	// peers return by itself (beignet #690). Import only: a fresh wallet has
-	// nothing anywhere to restore.
-	const [recoveryAutoApply, setRecoveryAutoApply] = useState(false);
-	// Serve the reference guardian to other beignet nodes at this wallet's
-	// Lightning address (beignet #699). Off by default: it is an obligation
-	// to stay online for whoever pins this node.
-	const [guardianServe, setGuardianServe] = useState(false);
-	const asksGuardianServe = !!config.guardianHostingAvailable && !onchainOnly;
-	// Settle offline receives for siblings (FFOR, beignet #729). Off by
-	// default: each book locks its whole amount on this wallet's side.
-	const [fforBlock, setFforBlock] = useState({ settle: { enabled: false }, witness: { enabled: false }, issuer: { enabled: false } });
-	const asksFfor = !!config.fforAvailable && !onchainOnly;
-	const [busy, setBusy] = useState(false);
-	const guardiansConfigured = (config.recoveryGuardians || []).length === 3;
-	const asksAutoApply =
-		tab === 'import' && !onchainOnly && recoveryMode === 'peer-storage' && !!config.recoveryAutoApplyAvailable;
-
-	const submit = async () => {
-		setBusy(true);
-		try {
-			const elec = custom
-				? { host: electrum.host.trim(), port: parseInt(electrum.port, 10), tls: !!electrum.tls }
-				: undefined;
-			if (tab === 'create') {
-				const r = await manager.createWallet({
-					name,
-					network,
-					wordCount,
-					electrum: elec,
-					networkMode,
-					...(config.irohAvailable ? { iroh: irohBody(iroh && !onchainOnly, irohRelays) } : {}),
-					publicHost,
-					announce,
-					onchainOnly,
-					recoveryMode: onchainOnly ? 'off' : recoveryMode,
-					...(asksGuardianServe ? { guardianServe } : {}),
-					...(asksFfor ? { ffor: fforBlock } : {}),
-					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
-				});
-				onSeed({ type: 'seed', name: r.record.name, mnemonic: r.mnemonic });
-			} else {
-				const r = await manager.importWallet({
-					name,
-					network,
-					mnemonic,
-					electrum: elec,
-					networkMode,
-					...(config.irohAvailable ? { iroh: irohBody(iroh && !onchainOnly, irohRelays) } : {}),
-					publicHost,
-					announce,
-					onchainOnly,
-					recoveryMode: onchainOnly ? 'off' : recoveryMode,
-					...(asksAutoApply ? { recoveryAutoApply } : {}),
-					...(asksGuardianServe ? { guardianServe } : {}),
-					...(asksFfor ? { ffor: fforBlock } : {}),
-					...(config.lfbwAvailable && !onchainOnly ? { lfbw: lfbwBody(lfbw) } : {})
-				});
-				toast('Wallet imported. It will sync in the background.', 'success');
-				// A guardian-mode import may land in the restore hold (the
-				// guardians already hold this seed's channels); the wallet page
-				// is where that is answered, so go there.
-				if (!onchainOnly && (recoveryMode === 'async-remote' || recoveryMode === 'quorum') && r?.record?.id) {
-					setName('');
-					setMnemonic('');
-					onDone();
-					onOpen(r.record);
-					return;
-				}
-			}
-			setName('');
-			setMnemonic('');
-			setLfbw({ ...EMPTY_LFBW });
-			onDone();
-		} catch (e) {
-			toast(e.message, 'error');
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	return (
-		<Card>
-			<Segmented
-				id="new-wallet"
-				value={tab}
-				onChange={setTab}
-				options={[
-					['create', 'Create wallet'],
-					['import', 'Import wallet']
-				]}
-			/>
-
-			<div className="row">
-				<Field label="Name">
-					<input value={name} placeholder="My wallet" onChange={(e) => setName(e.target.value)} />
-				</Field>
-				<Field label="Network">
-					<select value={network} onChange={(e) => setNetwork(e.target.value)}>
-						{config.supportedNetworks.map((n) => (
-							<option key={n} value={n}>
-								{n}
-							</option>
-						))}
-					</select>
-				</Field>
-				{tab === 'create' && (
-					<Field label="Seed length">
-						<select value={wordCount} onChange={(e) => setWordCount(parseInt(e.target.value, 10))}>
-							<option value={24}>24 words</option>
-							<option value={12}>12 words</option>
-						</select>
-					</Field>
-				)}
+			<div className="page-head">
+				<div>
+					<h2>Wallets</h2>
+					{hasWallets && (
+						<div className="sub">
+							{wallets.length} {wallets.length === 1 ? 'wallet' : 'wallets'} · {runningCount} running
+						</div>
+					)}
+				</div>
+				<div className="page-actions">
+					<Button variant="primary" icon="plus" onClick={(e) => setModal({ type: 'new', origin: clickOrigin(e) })}>
+						New wallet
+					</Button>
+				</div>
 			</div>
 
-			{tab === 'import' && (
-				<Field label="Recovery phrase">
-					<textarea
-						rows={3}
-						value={mnemonic}
-						placeholder="Enter your 12 or 24 word seed phrase"
-						onChange={(e) => setMnemonic(e.target.value)}
+			{!wallets ? (
+				<div className="wallet-grid" aria-busy="true">
+					<Skeleton height={132} />
+					<Skeleton height={132} />
+				</div>
+			) : !hasWallets ? (
+				<div className="card">
+					<Empty
+						title="No wallets yet"
+						actions={
+							<>
+								<Button variant="primary" icon="plus" onClick={(e) => setModal({ type: 'new', origin: clickOrigin(e) })}>
+									Create a wallet
+								</Button>
+								<Button
+									data-testid="first-run-restore"
+									onClick={(e) => openBackup('restore', { x: e.clientX, y: e.clientY })}
+								>
+									Restore from backup
+								</Button>
+							</>
+						}
+					>
+						Create or import one, or put a box back as it was.
+					</Empty>
+				</div>
+			) : (
+				<m.div
+					className="wallet-grid"
+					variants={staggerContainer}
+					initial={staggered.current ? false : 'hidden'}
+					animate="show"
+				>
+					{wallets.map((w) => (
+						<WalletCard
+							key={w.id}
+							w={w}
+							info={infos[w.id]}
+							onOpen={openWallet}
+							onStart={(x) => act(() => manager.startWallet(x.id))}
+							onStop={(x) => act(() => manager.stopWallet(x.id))}
+							onDelete={(x, e) => setModal({ type: 'delete', wallet: x, origin: clickOrigin(e) })}
+						/>
+					))}
+				</m.div>
+			)}
+
+			<AnimatePresence>
+				{modal?.type === 'new' && (
+					<NewWalletModal
+						key="new"
+						config={config}
+						wallets={wallets}
+						origin={modal.origin}
+						onClose={() => setModal(null)}
+						onDone={refresh}
+						onSeed={(s) => setModal(s)}
+						onOpen={openWallet}
 					/>
-				</Field>
-			)}
-
-			<label className="checkbox field" style={{ marginTop: 4 }}>
-				<input type="checkbox" checked={custom} onChange={(e) => setCustom(e.target.checked)} />
-				{config.defaultElectrum ? 'Use a different Electrum server for this wallet' : 'Electrum server'}
-			</label>
-			{!config.defaultElectrum && !custom && (
-				<div className="info-note">No default Electrum server set. Choose one here or in Settings.</div>
-			)}
-			{custom && (
-				<ElectrumFields presets={config.electrumPresets} value={electrum} onChange={setElectrum} />
-			)}
-
-			<label className="checkbox field">
-				<input
-					type="checkbox"
-					checked={onchainOnly}
-					onChange={(e) => setOnchainOnly(e.target.checked)}
-				/>
-				On-chain only (no Lightning)
-				<Help>
-					A plain Bitcoin wallet: addresses, transactions and coins, with the Lightning apparatus
-					put away and no Lightning listener running. The same seed backs both modes, so Lightning
-					can be switched on later from the wallet's Edit dialog without touching the seed.
-					{tab === 'import'
-						? " Importing reads the seed's history off the chain itself, reaching back to before this wallet existed, as far as the standard address scan finds use."
-						: ''}
-				</Help>
-			</label>
-
-			{config.recoveryAvailable && !onchainOnly && (
-				<RecoveryModeField
-					value={recoveryMode}
-					onChange={setRecoveryMode}
-					guardiansConfigured={guardiansConfigured}
-					settingsGuardians={config.recoveryGuardians || []}
-					importing={tab === 'import'}
-				/>
-			)}
-			{asksAutoApply && <RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} />}
-
-			{asksGuardianServe && <GuardianServeField value={guardianServe} onChange={setGuardianServe} announced={announced} />}
-			{asksFfor && <FforSettleField value={fforBlock} onChange={setFforBlock} />}
-
-			{config.lfbwAvailable && !onchainOnly && (
-				<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />
-			)}
-
-
-			{!onchainOnly && (
-				<NetworkModeField
-					mode={networkMode}
-					onMode={setNetworkMode}
-					publicHost={publicHost}
-					onPublicHost={setPublicHost}
-					announce={announce}
-					onAnnounce={setAnnounce}
-					torAvailable={!!config.torAvailable}
-					torProxyScopeAvailable={config.torProxyScopeAvailable !== false}
-					irohAvailable={!!config.irohAvailable}
-					iroh={iroh}
-					onIroh={setIroh}
-					irohRelays={irohRelays}
-					onIrohRelays={setIrohRelays}
-				/>
-			)}
-
-			<Button
-				variant="primary"
-				busy={busy}
-				onClick={submit}
-				disabled={!onchainOnly && (!lfbwComplete(lfbw) || (networkMode === 'clearnet' && !publicHost.trim()))}
-			>
-				{tab === 'create' ? 'Create wallet' : 'Import wallet'}
-			</Button>
-		</Card>
+				)}
+				{modal?.type === 'seed' && (
+					<SeedModal key="seed" name={modal.name} mnemonic={modal.mnemonic} onClose={() => setModal(null)} />
+				)}
+				{modal?.type === 'delete' && (
+					<DeleteWalletModal
+						key="delete"
+						wallet={modal.wallet}
+						origin={modal.origin}
+						onClose={() => setModal(null)}
+						onDeleted={() => {
+							setModal(null);
+							toast('Wallet deleted', 'success');
+							refresh();
+						}}
+					/>
+				)}
+			</AnimatePresence>
+		</div>
 	);
 }
 
@@ -518,17 +399,32 @@ function SeedModal({ name, mnemonic, onClose }) {
 	const toast = useToast();
 	const words = useMemo(() => mnemonic.split(' '), [mnemonic]);
 	return (
-		<Modal title={`Backup seed for "${name}"`} onClose={onClose}>
-			<div className="error-note">
-				Write these words down in order and keep them offline. Anyone with this phrase can spend
-				your funds. This is the only time it is shown here.
+		<Modal
+			title={`Backup seed for "${name}"`}
+			onClose={onClose}
+			foot={
+				<>
+					<Button
+						icon="copy"
+						onClick={async () => {
+							const ok = await copy(mnemonic);
+							toast(ok ? 'Seed copied' : 'Copy failed', ok ? 'info' : 'error');
+						}}
+					>
+						Copy phrase
+					</Button>
+					<span className="spacer" />
+					<Button variant="primary" onClick={onClose}>
+						I have saved it
+					</Button>
+				</>
+			}
+		>
+			<div className="note error">
+				Write these words down in order and keep them offline. Anyone with this phrase can spend your
+				funds. This is the only time it is shown here.
 			</div>
-			<m.div
-				className="seed-grid"
-				variants={staggerContainer}
-				initial="hidden"
-				animate="show"
-			>
+			<m.div className="seed-grid" variants={staggerContainer} initial="hidden" animate="show">
 				{words.map((w, i) => (
 					<m.div key={i} variants={staggerItem} className="seed-word">
 						<span>{i + 1}</span>
@@ -536,67 +432,6 @@ function SeedModal({ name, mnemonic, onClose }) {
 					</m.div>
 				))}
 			</m.div>
-			<div className="center-actions">
-				<Button
-					onClick={async () => {
-						const ok = await copy(mnemonic);
-						toast(ok ? 'Seed copied' : 'Copy failed', ok ? 'info' : 'error');
-					}}
-				>
-					Copy phrase
-				</Button>
-				<Button variant="primary" onClick={onClose}>
-					I have saved it
-				</Button>
-			</div>
-		</Modal>
-	);
-}
-
-function DeleteModal({ wallet, origin, onClose, onDeleted }) {
-	const toast = useToast();
-	const [purge, setPurge] = useState(false);
-	const [busy, setBusy] = useState(false);
-	const [refused, setRefused] = useState(null);
-	const dependents = refused?.dependents || wallet.lfbwDependents || [];
-	return (
-		<Modal title={`Delete "${wallet.name}"`} onClose={onClose} origin={origin}>
-			<div className="error-note">
-				Deleting removes this wallet from Beignet. If you also erase its data and have not backed
-				up the seed, any funds will be lost permanently.
-			</div>
-			{dependents.length > 0 && (
-				<div className="error-note" role="alert">
-					This wallet is the primary node of {dependents.map((d) => `"${d.name}"`).join(', ')}: their
-					home channel, inbound capacity and deposits all run through it. Change their primary node
-					or delete them first.
-				</div>
-			)}
-			<label className="checkbox field">
-				<input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-				Also erase wallet data (seed, database) from disk
-			</label>
-			<div className="center-actions">
-				<Button
-					variant="danger"
-					busy={busy}
-					onClick={async () => {
-						setBusy(true);
-						try {
-							await manager.deleteWallet(wallet.id, purge);
-							onDeleted();
-						} catch (e) {
-							if (e.code === 'PRIMARY_IN_USE') setRefused(e.details || { dependents: [] });
-							toast(e.message, 'error');
-							setBusy(false);
-						}
-					}}
-					disabled={dependents.length > 0}
-				>
-					Delete wallet
-				</Button>
-				<Button onClick={onClose}>Cancel</Button>
-			</div>
 		</Modal>
 	);
 }

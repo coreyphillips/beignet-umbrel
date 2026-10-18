@@ -1,18 +1,8 @@
 import { useEffect, useState } from 'react';
-import { m } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
 import { usePoll } from '../../../hooks/usePoll.js';
 import { useToast } from '../../../components/Toast.jsx';
-import {
-	Badge,
-	BalanceBar,
-	Button,
-	Card,
-	CopyText,
-	Modal,
-	Stat,
-	staggerContainer,
-	staggerItem
-} from '../../../components/ui.jsx';
+import { Badge, BalanceBar, Button, Card, CopyText, Modal, Note, Stat, StatRow, Empty } from '../../../components/ui.jsx';
 import { fmtSats, shortId } from '../../../lib/format.js';
 import { lfbwStatus } from '../../../lib/lfbw.js';
 import { manager } from '../../../api.js';
@@ -159,38 +149,37 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 	return (
 		<div>
 			{lf?.setup === 'pending' && (
-				<div className="info-note" style={{ marginBottom: 14 }}>
+				<Note tone="info">
 					Setting up the link to your primary node. This takes a moment after the wallet starts.
-				</div>
+				</Note>
 			)}
 			{lf?.setup === 'failed' && (
-				<div className="error-note" style={{ marginBottom: 14 }}>
+				<Note tone="error">
 					Could not finish setting up the primary node: {lf.setupError}
-					<div className="center-actions">
+					<div className="center-actions start">
 						<Button className="sm" busy={retrying} onClick={retrySetup}>
 							Retry setup
 						</Button>
 					</div>
-				</div>
+				</Note>
 			)}
 
-			<m.div className="grid cols-4" style={{ marginBottom: 18 }} variants={staggerContainer} initial="hidden" animate="show">
-				{[
-					<Stat key="total" label="Total balance" num={status.total} suffix=" sats" />,
-					<Stat key="send" label="Can send" num={status.canSend} suffix=" sats" />,
-					<Stat key="recv" label="Can receive" num={status.canReceive} suffix=" sats" sub={lf?.setup === 'ready' ? 'more is provisioned as needed' : undefined} />,
-					<Stat key="pending" label="Pending" num={status.pending} suffix=" sats" sub={status.pending > 0 ? 'arriving' : undefined} />
-				].map((stat, i) => (
-					<m.div key={i} variants={staggerItem}>
-						{stat}
-					</m.div>
-				))}
-			</m.div>
+			<StatRow className="lfbw-stats">
+				<Stat label="Total balance" num={status.total} suffix=" sats" />
+				<Stat label="Can send" num={status.canSend} suffix=" sats" />
+				<Stat
+					label="Can receive"
+					num={status.canReceive}
+					suffix=" sats"
+					sub={lf?.setup === 'ready' ? 'more is provisioned as needed' : undefined}
+				/>
+				<Stat label="Pending" num={status.pending} suffix=" sats" sub={status.pending > 0 ? 'arriving' : undefined} />
+			</StatRow>
 
 			{status.notes.map((note) => (
-				<div key={note} className="info-note" style={{ marginBottom: 14 }} role="status">
+				<Note key={note} tone="info" role="status">
 					{note}
-				</div>
+				</Note>
 			))}
 			{status.feeWait && (
 				<div className="center-actions" style={{ marginTop: -6, marginBottom: 14 }}>
@@ -203,7 +192,7 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 			<div className="grid cols-2">
 				<Card title="Primary node">
 					{!primaryPubkey ? (
-						<div className="empty">Not linked yet.</div>
+						<Empty>Not linked yet.</Empty>
 					) : (
 						<div>
 							<div className="peer-id" style={{ marginBottom: 10 }}>
@@ -241,10 +230,10 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 
 				<Card title="Your channel">
 					{status.channels.length === 0 ? (
-						<div className="empty">
+						<Empty>
 							No channel with the primary node yet. Deposit bitcoin or create an invoice on the
 							Receive tab, and the channel appears by itself.
-						</div>
+						</Empty>
 					) : (
 						status.channels.map((c) => (
 							<div key={c.channelId} style={{ marginBottom: 12 }}>
@@ -316,8 +305,9 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 				<DirectFundingPolicy api={api} tick={tick} />
 			</div>
 
+			<AnimatePresence>
 			{closing && (
-				<Modal title="Close the channel with your primary node" onClose={() => setClosing(null)}>
+				<Modal key="close" title="Close the channel with your primary node" onClose={() => setClosing(null)}>
 					<p className="wallet-meta">
 						This cooperatively closes the channel. Your Lightning balance ({fmtSats(closing.localBalanceSats)})
 						returns to this wallet on-chain. While the wallet stays lightning-first, that balance moves
@@ -346,7 +336,7 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 				</Modal>
 			)}
 			{confirmMoveHome && (
-				<Modal title="Move funds to the new primary" onClose={() => setConfirmMoveHome(false)}>
+				<Modal key="move" title="Move funds to the new primary" onClose={() => setConfirmMoveHome(false)}>
 					<p className="wallet-meta">
 						This cooperatively closes your channel with the previous primary, which pays an on-chain
 						fee. The balance ({fmtSats(status.previousChannels.reduce((s, c) => s + (c.localBalanceSats || 0), 0))})
@@ -361,6 +351,7 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 					</div>
 				</Modal>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }

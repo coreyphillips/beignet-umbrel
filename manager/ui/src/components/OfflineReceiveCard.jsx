@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { usePoll } from '../hooks/usePoll.js';
 import { useToast } from './Toast.jsx';
-import { Badge, Button, Card, CopyText, Field, Help, QR } from './ui.jsx';
+import { Badge, Button, Card, CopyText, Field, Help, QR, Note } from './ui.jsx';
 import { fmtSats } from '../lib/format.js';
 import { manager } from '../api.js';
 import {
@@ -194,7 +194,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info, config })
 			className="grid-full"
 		>
 			{unsupported ? (
-				<div className="info-note">The bundled engine predates offline receive; update the app first.</div>
+				<Note tone="info">The bundled engine predates offline receive; update the app first.</Note>
 			) : !epochs ? (
 				<div className="wallet-meta">Reading the offline-receive status…</div>
 			) : showForm ? (
@@ -205,13 +205,13 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info, config })
 						</div>
 					)}
 					{eligible.length === 0 ? (
-						<div className="info-note" data-testid="ffor-no-peer">
+						<Note tone="info" data-testid="ffor-no-peer">
 							{!channels
 								? 'Reading your channels…'
 								: (candidates || []).length === 0
 								? 'No sibling wallet settles offline receives yet. On the wallet that stays online (your primary node, say), open Edit and turn on "Settle offline receives"; it restarts with the role.'
 								: `Open a channel to ${candidates.map((c) => `"${c.name}"`).join(' or ')} first: that wallet settles offline receives, but this one has no open channel with it.`}
-						</div>
+						</Note>
 					) : (
 						<>
 							<div className="row">
@@ -244,7 +244,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info, config })
 							</div>
 							{witnessOptions.length > 0 && (
 								<>
-									<div className="field-label" style={{ marginTop: 4, marginBottom: 6 }}>
+									<div className="section-title standalone">
 										Witnesses (optional)
 										<Help>
 											A witness sits on the payment path before the settlement peer and keeps an encrypted
@@ -323,9 +323,9 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info, config })
 									: 'Each voucher is one fixed-amount invoice; a payer pays exactly that amount.'}
 							</div>
 							{refusal && (
-								<div className="error-note" role="status" data-testid="ffor-refusal">
+								<Note tone="error" role="status" data-testid="ffor-refusal">
 									{refusal}
-								</div>
+								</Note>
 							)}
 							<Button variant="primary" busy={busy} disabled={!plan.body || (fit && !fit.ok)} onClick={start}>
 								Start receiving offline
@@ -335,10 +335,10 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info, config })
 				</>
 			) : SETUP_STATES.includes(epoch.state) ? (
 				<>
-					<div className="info-note">
+					<Note tone="info">
 						Setting up the voucher book with {epochPeer}: {described.detail} This takes a few seconds while the
 						two sides sign.
-					</div>
+					</Note>
 					{setup && setup.running && <SetupProgress setup={setup} />}
 					<Button className="sm" busy={busy} onClick={cancelSetup}>
 						Cancel setup

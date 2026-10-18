@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Card } from './ui.jsx';
+import { Button, Card, Note } from './ui.jsx';
 import { shortId } from '../lib/format.js';
 
 /**
@@ -106,7 +106,7 @@ export default function CapsuleRestoreCard({ api, offer, onRestored }) {
 				instead closes those channels safely and returns the funds on-chain.
 			</p>
 			{offer.guardians.length > 0 && (
-				<div className="info-note">
+				<Note tone="info">
 					This checkpoint names {offer.guardians.length} guardians, so its channels are also
 					held by a guardian set, which can resume them exactly. To try that instead, set
 					those guardians in Settings and import the seed with a guardian mode:
@@ -119,9 +119,9 @@ export default function CapsuleRestoreCard({ api, offer, onRestored }) {
 							</li>
 						))}
 					</ul>
-				</div>
+				</Note>
 			)}
-			{refusal && <div className="error-note">The restore was refused: {refusal}</div>}
+			{refusal && <Note tone="error">The restore was refused: {refusal}</Note>}
 			<div className="center-actions">
 				<Button variant="primary" busy={busy === 'capsule'} disabled={busy === 'scb'} onClick={resume}>
 					Resume channels

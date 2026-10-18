@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
+import { Badge, Button, Card, CopyText, Field, Empty } from '../../components/ui.jsx';
 import { shortId } from '../../lib/format.js';
 
 import { withPeerHint } from '../../lib/hints.js';
@@ -109,7 +109,7 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 
 			<Card title="Connected peers" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
 				{!peers || peers.length === 0 ? (
-					<div className="empty">No peers connected.</div>
+					<Empty>No peers connected.</Empty>
 				) : (
 					<div className="table-wrap">
 						<table>
@@ -137,9 +137,11 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 											<Badge tone={p.state === 'connected' ? 'green' : 'yellow'}>{p.state}</Badge>
 										</td>
 										<td>
-											<Button className="sm" onClick={() => disconnect(p.pubkey)}>
-												Disconnect
-											</Button>
+											<div className="row-actions">
+												<Button className="sm" onClick={() => disconnect(p.pubkey)}>
+													Disconnect
+												</Button>
+											</div>
 										</td>
 									</tr>
 								))}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { manager } from '../../api.js';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Button, Card } from '../../components/ui.jsx';
+import { Button, Card, Empty, Note } from '../../components/ui.jsx';
 import { copy, fmtDate } from '../../lib/format.js';
 import { formatNodeError } from '../../lib/channel-open.js';
 
@@ -79,12 +79,12 @@ export default function LogsTab({ id, tick }) {
 						wallet itself and some are what a peer told us; each one says which.
 					</div>
 					{recentErrors.map((e, i) => (
-						<div className="error-note" key={`${e.timestamp}-${i}`} style={{ marginBottom: 8 }}>
+						<Note tone="error" key={`${e.timestamp}-${i}`} style={{ marginBottom: 8 }}>
 							<div>{formatNodeError(e)}</div>
 							<div className="wallet-meta" style={{ marginTop: 4 }}>
 								{fmtDate(e.timestamp)} · <span className="mono">{e.code}</span>
 							</div>
-						</div>
+						</Note>
 					))}
 				</Card>
 			)}
@@ -127,11 +127,11 @@ export default function LogsTab({ id, tick }) {
 				</div>
 
 				{shown.length === 0 ? (
-					<div className="empty">
+					<Empty>
 						{lines.length === 0
 							? 'No output yet. The wallet daemon logs here as it runs.'
 							: 'No lines match the filter.'}
-					</div>
+					</Empty>
 				) : (
 					<div className="log-body" ref={bodyRef}>
 						{shown.map((line, i) => {
