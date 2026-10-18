@@ -34,6 +34,59 @@
 	}
 }
 
+/* ---------- Cursor spotlight ----------
+   App.jsx sets --spot-x/--spot-y on the hovered surface (pointermove
+   delegation); this layer paints a soft colour bloom that follows the cursor.
+   Warm on glass panels, cool on the stat strips inside them. */
+.card,
+.hero,
+.wallet-card,
+.stat-row {
+	position: relative;
+}
+
+.card::before,
+.hero::before,
+.wallet-card::before,
+.stat-row::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 400ms ease;
+	background: radial-gradient(
+		380px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+		var(--spot-warm),
+		transparent 65%
+	);
+}
+
+.stat-row::before {
+	background: radial-gradient(
+		320px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+		var(--spot-cool),
+		transparent 65%
+	);
+}
+
+.card:hover::before,
+.hero:hover::before,
+.wallet-card:hover::before,
+.stat-row:hover::before {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.card::before,
+	.hero::before,
+	.wallet-card::before,
+	.stat-row::before {
+		display: none;
+	}
+}
+
 /* ---------- Topbar ---------- */
 .topbar {
 	display: flex;
@@ -2531,6 +2584,7 @@ tr:focus-within .row-actions,
 	color: var(--muted);
 	font-size: var(--fs-md);
 	display: inline-flex;
+	align-items: center;
 	gap: 6px;
 	margin-bottom: 14px;
 	transition: color var(--dur-fast) ease;

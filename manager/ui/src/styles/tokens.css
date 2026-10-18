@@ -56,6 +56,9 @@
 	--line-3: rgba(255, 255, 255, 0.18);
 	--glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 	--glass-shadow: 0 10px 36px rgba(0, 0, 0, 0.34);
+	/* Cursor spotlight tints */
+	--spot-warm: rgba(247, 147, 26, 0.04);
+	--spot-cool: rgba(110, 168, 255, 0.035);
 	--pop-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
 	--scrim: rgba(4, 5, 9, 0.56);
 	--blur: 22px;
@@ -160,6 +163,8 @@
 	--line-3: rgba(20, 30, 60, 0.2);
 	--glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.65);
 	--glass-shadow: 0 10px 36px rgba(35, 45, 80, 0.12);
+	--spot-warm: rgba(247, 147, 26, 0.07);
+	--spot-cool: rgba(47, 111, 219, 0.05);
 	--pop-shadow: 0 14px 44px rgba(35, 45, 80, 0.22);
 	--scrim: rgba(30, 40, 70, 0.32);
 	--chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2359627a' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
