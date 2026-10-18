@@ -1102,8 +1102,8 @@ tr:focus-within .row-actions,
 
 .hero-balance {
 	font-size: var(--fs-display);
-	font-weight: var(--fw-semibold);
-	letter-spacing: -0.03em;
+	font-weight: var(--fw-medium);
+	letter-spacing: -0.035em;
 	line-height: 1;
 	font-variant-numeric: tabular-nums;
 	display: flex;
@@ -1114,8 +1114,8 @@ tr:focus-within .row-actions,
 
 .hero-balance .unit {
 	font-size: var(--fs-lg);
-	font-weight: var(--fw-medium);
-	color: var(--muted);
+	font-weight: var(--fw-regular);
+	color: var(--faint);
 	letter-spacing: 0;
 }
 
@@ -1281,30 +1281,43 @@ tr:focus-within .row-actions,
 	white-space: nowrap;
 }
 
+/* The name is a quiet label; the figure carries the card. Medium weight at
+   display size with tight tracking reads lighter than bold without losing
+   presence, and the unit hangs off the baseline in the faintest ink. */
 .wallet-name {
-	font-weight: var(--fw-semibold);
-	font-size: var(--fs-lg);
-	letter-spacing: -0.01em;
+	font-weight: var(--fw-medium);
+	font-size: var(--fs-base);
+	letter-spacing: -0.005em;
+	color: var(--text);
 }
 
 .wallet-balance {
-	font-size: var(--fs-2xl);
-	font-weight: var(--fw-semibold);
-	letter-spacing: -0.025em;
-	line-height: 1.1;
+	font-size: 30px;
+	font-weight: var(--fw-medium);
+	letter-spacing: -0.035em;
+	line-height: 1.05;
 	font-variant-numeric: tabular-nums;
 	display: flex;
 	align-items: baseline;
-	gap: 6px;
-	margin-top: 6px;
+	gap: 7px;
+	margin-top: 10px;
 	white-space: nowrap;
 }
 
 .wallet-balance .unit {
-	font-size: var(--fs-md);
-	font-weight: var(--fw-medium);
-	color: var(--muted);
-	letter-spacing: 0;
+	font-size: var(--fs-sm);
+	font-weight: var(--fw-regular);
+	color: var(--faint);
+	letter-spacing: 0.01em;
+}
+
+.wallet-liq {
+	margin: 3px 0 2px;
+}
+
+.wallet-liq .balbar {
+	height: 5px;
+	min-width: 0;
 }
 
 .wallet-meta {

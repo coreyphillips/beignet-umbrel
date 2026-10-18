@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
-import { usePoll } from '../hooks/usePoll.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import {
 	AnimatedNumber,
 	Badge,
+	BalanceBar,
 	Button,
 	Empty,
 	Menu,
@@ -26,6 +26,79 @@ import { walletStatusLabel } from '../lib/labels.js';
 
 const clickOrigin = (e) => ({ x: e?.clientX ?? 0, y: e?.clientY ?? 0 });
 const TRANSIENT = new Set(['starting', 'restarting', 'stopping', 'waiting-electrum']);
+
+// The last list this page showed and the config it read, kept across mounts:
+// coming back from a wallet then renders at once, the hero morphs back into
+// its card, and a fresh poll corrects the figures quietly.
+let cache = null; // { list, infos }
+let cachedConfig = null;
+let refreshSeq = 0;
+
+/**
+ * One running wallet's figures: /info plus, from /channels, the count of open
+ * channels and the local/remote split for the liquidity bar. Null until the
+ * daemon answers.
+ */
+async function loadInfo(id) {
+	const api = walletApi(id);
+	try {
+		const [info, channels] = await Promise.all([api.get('/info'), api.get('/channels').catch(() => null)]);
+		// The daemon's /info channelCount is every channel it has ever had,
+		// closed ones included, so a wallet whose channels all closed still
+		// reads "2 channels" forever. Count open ones from the list itself; on
+		// any hiccup fall back to the daemon figure rather than showing nothing.
+		const open = channels ? channels.filter((c) => !isClosedChannel(c)) : null;
+		info.openChannelCount = open ? open.length : info.channelCount;
+		if (open) {
+			info.outboundSats = open.reduce((a, c) => a + (c.localBalanceSats || 0), 0);
+			info.inboundSats = open.reduce((a, c) => a + (c.remoteBalanceSats || 0), 0);
+		}
+		return info;
+	} catch (_) {
+		return null; // not ready
+	}
+}
+
+/**
+ * The wallet list with each running wallet's figures. The list is published
+ * as soon as it arrives (names and statuses), and each wallet's figures the
+ * moment that wallet answers, so one slow node never holds the others back.
+ */
+function useWalletList(intervalMs) {
+	const [data, setData] = useState(cache);
+	const refresh = useCallback(async () => {
+		const seq = ++refreshSeq;
+		let list;
+		try {
+			list = await manager.listWallets();
+		} catch (_) {
+			return; // keep what is shown; the next poll tries again
+		}
+		if (seq !== refreshSeq) return; // a newer refresh has overtaken this one
+		const publish = (next) => {
+			cache = next;
+			setData(next);
+		};
+		const running = list.filter((w) => w.status === 'running').map((w) => w.id);
+		const kept = {};
+		for (const id of running) if (cache?.infos?.[id]) kept[id] = cache.infos[id];
+		publish({ list, infos: kept });
+		await Promise.all(
+			running.map(async (id) => {
+				const info = await loadInfo(id);
+				// Dropped when the wallet has since stopped or been deleted.
+				if (!info || !cache?.list.some((w) => w.id === id && w.status === 'running')) return;
+				publish({ list: cache.list, infos: { ...cache.infos, [id]: info } });
+			})
+		);
+	}, []);
+	useEffect(() => {
+		refresh();
+		const t = setInterval(refresh, intervalMs);
+		return () => clearInterval(t);
+	}, [refresh, intervalMs]);
+	return { data, refresh };
+}
 
 /**
  * Renders nothing; watches one running wallet for money arriving. The list
@@ -74,6 +147,8 @@ function WalletCard({ w, info, onOpen, onStart, onStop, onDelete }) {
 		'sep',
 		{ label: 'Delete', icon: 'trash', danger: true, onSelect: (e) => onDelete(w, e) }
 	];
+	// Lightning wallets with an open channel show how their capacity splits.
+	const showBar = !!info && !w.onchainOnly && info.outboundSats != null && info.openChannelCount > 0;
 	const warning =
 		w.lfbw?.enabled && w.lfbw.setup === 'failed'
 			? `Primary node setup failed: ${w.lfbw.setupError}`
@@ -109,13 +184,18 @@ function WalletCard({ w, info, onOpen, onStart, onStop, onDelete }) {
 				<Menu label={`Actions for ${w.name}`} items={menu} />
 			</div>
 			{info ? (
-				<div className="wallet-balance">
+				<m.div className="wallet-balance" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
 					<AnimatedNumber value={total} />
 					<span className="unit">sats</span>
-				</div>
+				</m.div>
 			) : (
 				<div className="wallet-balance" aria-hidden="true">
 					<span style={{ color: 'var(--faint)' }}>·</span>
+				</div>
+			)}
+			{showBar && (
+				<div className="wallet-liq">
+					<BalanceBar local={info.outboundSats} remote={info.inboundSats} />
 				</div>
 			)}
 			<div className="wallet-meta meta-row">
@@ -154,53 +234,26 @@ function WalletCard({ w, info, onOpen, onStart, onStop, onDelete }) {
 export default function WalletsPage() {
 	const toast = useToast();
 	const navigate = useNavigate();
-	const [config, setConfig] = useState(null);
-	const { data, refresh } = usePoll(
-		async () => {
-			const list = await manager.listWallets();
-			const infos = {};
-			await Promise.all(
-				list
-					.filter((w) => w.status === 'running')
-					.map(async (w) => {
-						try {
-							const api = walletApi(w.id);
-							const info = await api.get('/info');
-							// The daemon's /info channelCount is every channel it has ever
-							// had, closed ones included, so a wallet whose channels all
-							// closed still reads "2 channels" forever. Count open ones from
-							// the list itself; on any hiccup fall back to the daemon figure
-							// rather than showing nothing.
-							try {
-								const channels = await api.get('/channels');
-								info.openChannelCount = channels.filter((c) => !isClosedChannel(c)).length;
-							} catch (_) {
-								info.openChannelCount = info.channelCount;
-							}
-							infos[w.id] = info;
-						} catch (_) {
-							/* not ready */
-						}
-					})
-			);
-			return { list, infos };
-		},
-		4000,
-		[]
-	);
+	const [config, setConfig] = useState(cachedConfig);
+	const { data, refresh } = useWalletList(4000);
 	const wallets = data?.list;
 	const infos = data?.infos || {};
 	const [modal, setModal] = useState(null); // {type, origin?, ...}
-	// Stagger the grid entrance only once; later polls re-render silently.
-	const staggered = useRef(false);
+	// Stagger the grid entrance only once, and not at all when the page comes
+	// back with its list already in hand; later polls re-render silently.
+	const staggered = useRef(!!cache);
 	useEffect(() => {
 		if (wallets) staggered.current = true;
 	}, [wallets]);
 
 	useEffect(() => {
-		manager.config().then(setConfig).catch((e) => toast(e.message, 'error'));
+		const take = (c) => {
+			cachedConfig = c;
+			setConfig(c);
+		};
+		manager.config().then(take).catch((e) => toast(e.message, 'error'));
 		// The header's Settings dialog broadcasts saved config so ours stays fresh.
-		const onCfg = (e) => setConfig(e.detail);
+		const onCfg = (e) => take(e.detail);
 		window.addEventListener('beignet:config', onCfg);
 		return () => window.removeEventListener('beignet:config', onCfg);
 	}, [toast]);
