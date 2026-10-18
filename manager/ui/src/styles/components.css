@@ -869,6 +869,11 @@ tr:focus-within .row-actions,
 
 .cap-cell .wallet-meta {
 	margin-top: 5px;
+	line-height: 1.4;
+}
+
+.cap-cell .cap-figures {
+	color: var(--text);
 }
 
 /* ---------- Bars ---------- */
@@ -1253,11 +1258,15 @@ tr:focus-within .row-actions,
 	color: var(--muted);
 	font-size: var(--fs-sm);
 	font-variant-numeric: tabular-nums;
+	min-width: 0;
+}
+
+/* A line of small facts separated by dots. */
+.meta-row {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	flex-wrap: wrap;
-	min-width: 0;
 }
 
 .wallet-warn {
@@ -2566,4 +2575,29 @@ tr:focus-within .row-actions,
 .stat-row + .note,
 .stat-row + .center-actions {
 	margin-top: var(--sp-4);
+}
+
+/* ---------- Row endings ---------- */
+.row-end {
+	display: flex;
+	gap: 6px;
+	justify-content: flex-end;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.badge-row {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+.wallet-meta.closer {
+	margin-top: 5px;
+	max-width: 360px;
+}
+
+.badge-row + .closer {
+	display: block;
 }

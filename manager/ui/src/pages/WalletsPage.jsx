@@ -118,7 +118,7 @@ function WalletCard({ w, info, onOpen, onStart, onStop, onDelete }) {
 					<span style={{ color: 'var(--faint)' }}>·</span>
 				</div>
 			)}
-			<div className="wallet-meta">
+			<div className="wallet-meta meta-row">
 				<m.span
 					layoutId={`wallet-status-${w.id}`}
 					layout="position"

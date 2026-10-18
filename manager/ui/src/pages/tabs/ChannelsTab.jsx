@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { AmountField, Badge, BalanceBar, Button, Card, CopyText, DetailRow, Field, FeeField, Help, Modal, Segmented } from '../../components/ui.jsx';
+import { AmountField, Badge, BalanceBar, Button, Card, Chip, CopyText, DetailRow, Empty, ExplorerLink, Field, FeeField, Help, Modal, Note, Segmented } from '../../components/ui.jsx';
+import { channelStateLabel } from '../../lib/labels.js';
+import { Icon } from '../../components/icons.jsx';
+import { Spinner } from '../../components/motion.jsx';
+import { txUrl } from '../../lib/explorer.js';
 import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
@@ -14,22 +18,13 @@ import { nodeNames } from '../../lib/node-names.js';
 import PeerName from '../../components/PeerName.jsx';
 import { manager, walletApi } from '../../api.js';
 
-const STATE_TONE = {
-	NORMAL: 'green',
-	SPLICING: 'yellow',
-	AWAITING_CHANNEL_READY: 'yellow',
-	AWAITING_FUNDING_CONFIRMED: 'yellow',
-	AWAITING_REESTABLISH: 'yellow',
-	SHUTTING_DOWN: 'yellow',
-	NEGOTIATING_CLOSING: 'yellow',
-	FORCE_CLOSED: 'red',
-	CLOSED: 'muted'
-};
-
 // beignet splice/open feerates are per-kiloweight. Users think in sat/vB.
 const SATVB_TO_PERKW = 250;
 
 const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
+
+// The two legs of an open, in the order the daemon walks them.
+const OPEN_STEPS = ['Connecting to the peer…', 'Negotiating with the peer and funding the channel…'];
 
 export default function ChannelsTab({ id, api, rec, tick, bump }) {
 	const toast = useToast();
@@ -105,14 +100,16 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 				<thead>
 					<tr>
 						<th>Peer</th>
-						<th>Capacity</th>
-						<th style={{ width: 180 }}>Local / Remote</th>
+						<th style={{ width: 230 }}>Balance</th>
 						<th>State</th>
 						<th />
 					</tr>
 				</thead>
 				<tbody>
-					{list.map((c) => (
+					{list.map((c) => {
+						const state = channelStateLabel(c.state);
+						const story = view === 'closed' && c.closeStatus ? closeStory(c.closeStatus, null) : null;
+						return (
 						<tr
 							key={c.channelId}
 							className="row-clickable"
@@ -121,57 +118,67 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 							<td>
 								<div className="peer-id">
 									<PeerName name={c.peerName} />
-									<span className="mono" title={c.peerPubkey}>{shortId(c.peerPubkey)}</span>
+									<span className="mono wallet-meta" title={c.peerPubkey}>{shortId(c.peerPubkey)}</span>
 								</div>
 							</td>
-							<td>{fmtSats(c.capacitySats)}</td>
-							<td>
+							<td className="cap-cell">
 								<BalanceBar local={c.localBalanceSats} remote={c.remoteBalanceSats} />
-								<div className="wallet-meta" style={{ marginTop: 4 }}>
-									{fmtSats(c.localBalanceSats)} / {fmtSats(c.remoteBalanceSats)}
+								<div className="wallet-meta">
+									<div className="cap-figures">
+										<span className="amt in">{fmtSats(c.localBalanceSats)}</span> / {fmtSats(c.remoteBalanceSats)}
+									</div>
+									<div>{fmtSats(c.capacitySats)} capacity</div>
 								</div>
 							</td>
 							<td>
-								<Badge tone={STATE_TONE[c.state] || 'muted'}>{c.state}</Badge>
-								{c.isPrivate && <Badge tone="muted">private</Badge>}
-								{peerOffline(c) && <Badge tone="red">peer offline</Badge>}
+								<div className="badge-row">
+									<Badge tone={state.tone} title={state.raw}>{state.label}</Badge>
+									{c.isPrivate && <Badge>private</Badge>}
+									{peerOffline(c) && <Badge tone="red">peer offline</Badge>}
+								</div>
+								{story && <div className="wallet-meta closer">{story.closer}</div>}
 							</td>
 							{/* The buttons act on the channel; only the rest of the row opens
-							    it. Closed channels have nothing left to act on. */}
+							    it. Closed channels have nothing left to act on. Reconnect is
+							    a state the row should show; the rest wait for a hover. */}
 							<td onClick={(e) => e.stopPropagation()}>
 								{withActions && (
-									<div className="wallet-actions">
+									<div className="row-end">
 										{peerOffline(c) && (
 											<Button className="sm" onClick={() => reconnectPeer(c.peerPubkey)}>
 												Reconnect
 											</Button>
 										)}
-										{/* Only an explicit no hides these. The daemon reads
-										    option_splice + option_quiesce off the peer's init and
-										    says so on the listing (beignet 0.8.2+): offering a
-										    splice to an LND peer is offering an action the daemon
-										    refuses every time. Absent means unknown, an old
-										    daemon or a disconnected peer, and unknown keeps the
-										    buttons: hiding on ignorance would strip them from
-										    every channel whose peer blinked. */}
-										{c.peerSupportsSplicing !== false && (
-											<>
-												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
-													Splice in
-												</Button>
-												<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'out', channel: c, origin: clickOrigin(e) })}>
-													Splice out
-												</Button>
-											</>
-										)}
-										<Button className="sm" onClick={(e) => setModal({ type: 'close', channel: c, origin: clickOrigin(e) })}>
-											Close
-										</Button>
+										<div className="row-actions">
+											{/* Only an explicit no hides these. The daemon reads
+											    option_splice + option_quiesce off the peer's init and
+											    says so on the listing (beignet 0.8.2+): offering a
+											    splice to an LND peer is offering an action the daemon
+											    refuses every time. Absent means unknown, an old
+											    daemon or a disconnected peer, and unknown keeps the
+											    buttons: hiding on ignorance would strip them from
+											    every channel whose peer blinked. A channel that is
+											    not yet, or no longer, NORMAL cannot splice either. */}
+											{c.peerSupportsSplicing !== false && c.state === 'NORMAL' && (
+												<>
+													<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'in', channel: c, origin: clickOrigin(e) })}>
+														Splice in
+													</Button>
+													<Button className="sm" onClick={(e) => setModal({ type: 'splice', dir: 'out', channel: c, origin: clickOrigin(e) })}>
+														Splice out
+													</Button>
+												</>
+											)}
+											<Button className="sm" onClick={(e) => setModal({ type: 'close', channel: c, origin: clickOrigin(e) })}>
+												Close
+											</Button>
+										</div>
 									</div>
 								)}
 							</td>
 						</tr>
-					))}
+						);
+					})}
 				</tbody>
 			</table>
 		</div>
@@ -198,17 +205,15 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 				}
 			>
 				{view === 'closed' && closedChannels.length > 0 && (
-					<div className="wallet-meta" style={{ marginBottom: 10 }}>
-						Funds from a close return to your on-chain balance: right away for a
-						cooperative close, after the security delay for a force close.
-					</div>
+					<Note tone="muted">
+						Funds from a close return to your on-chain balance: right away for a cooperative close,
+						after the security delay for a force close.
+					</Note>
 				)}
 				{shown.length === 0 ? (
-					<div className="empty">
-						{view === 'closed'
-							? 'No closed channels.'
-							: 'No channels. Open one to start using Lightning.'}
-					</div>
+					<Empty>
+						{view === 'closed' ? 'No closed channels.' : 'No channels. Open one to start using Lightning.'}
+					</Empty>
 				) : (
 					renderRows(shown, { withActions: view === 'open' })
 				)}
@@ -222,6 +227,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 				<ChannelDetailModal
 					key="detail"
 					id={id}
+					network={rec?.network}
 					api={api}
 					channel={modal.channel}
 					origin={modal.origin}
@@ -563,7 +569,25 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 	};
 
 	return (
-		<Modal title="Open channel" onClose={onClose} origin={origin}>
+		<Modal
+			title="Open channel"
+			onClose={onClose}
+			origin={origin}
+			foot={
+				<>
+					<Button onClick={onClose}>{error ? 'Close' : 'Cancel'}</Button>
+					<span className="spacer" />
+					<Button
+						variant="primary"
+						busy={busy}
+						onClick={open}
+						disabled={!pubkey || !host || amountNum <= 0 || overBalance || pushTooBig}
+					>
+						Connect &amp; open
+					</Button>
+				</>
+			}
+		>
 			<div className="wallet-meta" style={{ marginBottom: 12 }}>
 				On-chain available: {fmtSats(balance)}
 			</div>
@@ -645,22 +669,21 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 				}
 			/>
 			{fees && (
-				<div className="preset-row" style={{ marginBottom: 14 }}>
+				<div className="chip-row" style={{ marginBottom: 14 }}>
 					{[
 						['Fast', fees.fast],
 						['Normal', fees.normal],
 						['Slow', fees.slow]
 					].map(([label, rate]) => (
-						<button
+						<Chip
 							key={label}
-							type="button"
-							className="btn sm"
+							pressed={String(effRate) === String(rate) && feeRate !== ''}
 							disabled={rate > feeMax}
 							title={rate > feeMax ? 'Lower the amount to afford this fee rate' : undefined}
 							onClick={() => setFeeRateManually(String(rate))}
 						>
 							{label} · {rate} sat/vB
-						</button>
+						</Chip>
 					))}
 				</div>
 			)}
@@ -671,46 +694,42 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 				<input value={push} onChange={(e) => setPush(e.target.value)} placeholder="0" />
 			</Field>
 			{shownFee != null && amountNum > 0 && (
-				<div className="wallet-meta" style={{ marginBottom: 12 }}>
-					Funding fee: {fmtSats(shownFee)} at {effRate} sat/vB over {vsize} vB. Total needed:{' '}
-					{fmtSats(amountNum + shownFee)}. This is what the transaction pays, not an estimate.
+				<div className="summary-bar">
+					<div className="summary-text">
+						Funding fee <strong>{fmtSats(shownFee)}</strong> at {effRate} sat/vB over {vsize} vB. Total needed{' '}
+						<strong>{fmtSats(amountNum + shownFee)}</strong>. This is what the transaction pays, not an estimate.
+					</div>
 				</div>
 			)}
-			{pushTooBig && (
-				<div className="error-note" style={{ marginBottom: 12 }}>
-					Push amount must be smaller than the channel amount.
-				</div>
-			)}
-			{belowCommonMin && (
-				<div className="info-note" style={{ marginBottom: 12 }}>
-					Many nodes reject channels under {fmtSats(COMMON_MIN_CHANNEL_SATS)}.
-				</div>
-			)}
+			{pushTooBig && <Note tone="error">Push amount must be smaller than the channel amount.</Note>}
+			{belowCommonMin && <Note tone="info">Many nodes reject channels under {fmtSats(COMMON_MIN_CHANNEL_SATS)}.</Note>}
 			{status && (
-				<div className="info-note" style={{ marginBottom: 12 }}>
-					{status} This can take a minute. The channel is not open until the funding
-					transaction is broadcast.
+				<div className="steps" aria-live="polite">
+					{OPEN_STEPS.map((label, i) => {
+						const current = status.startsWith('Negotiating') ? 1 : 0;
+						const cls = i < current ? 'done' : i === current ? 'current' : '';
+						return (
+							<div key={label} className={`step ${cls}`}>
+								<span className="step-mark">
+									{i < current ? <Icon name="check" size={12} strokeWidth={2.4} /> : i === current ? <Spinner /> : i + 1}
+								</span>
+								{i === current ? status : label}
+							</div>
+						);
+					})}
+					<div className="field-hint">
+						This can take a minute. The channel is not open until the funding transaction is broadcast.
+					</div>
 				</div>
 			)}
 			{error && (
-				<div className="error-note" style={{ marginBottom: 12 }}>
+				<Note tone="error">
 					{error}
 					<div style={{ marginTop: 6, opacity: 0.85 }}>
 						The full daemon output is in the <strong>Logs</strong> tab.
 					</div>
-				</div>
+				</Note>
 			)}
-			<div className="center-actions">
-				<Button
-					variant="primary"
-					busy={busy}
-					onClick={open}
-					disabled={!pubkey || !host || amountNum <= 0 || overBalance || pushTooBig}
-				>
-					Connect &amp; open
-				</Button>
-				<Button onClick={onClose}>{error ? 'Close' : 'Cancel'}</Button>
-			</div>
 		</Modal>
 	);
 }
@@ -1061,7 +1080,7 @@ function PolicyRow({ api, channelId, policy, onSaved }) {
 	);
 }
 
-function ChannelDetailModal({ id, api, channel, origin, onClose }) {
+function ChannelDetailModal({ id, api, channel, origin, onClose, network }) {
 	const toast = useToast();
 	const [diag, setDiag] = useState(null);
 	const [health, setHealth] = useState(null);
@@ -1177,10 +1196,13 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 		<Modal title="Channel" onClose={onClose} origin={origin} wide>
 			<div className="detail">
 				<DetailRow label="State">
-					<Badge tone={STATE_TONE[state] || 'muted'}>{state}</Badge>
+					<Badge tone={channelStateLabel(state).tone}>{channelStateLabel(state).label}</Badge>
+					<Badge chip title="The daemon's own state code">
+						<code>{state}</code>
+					</Badge>
 					{!closed && diag && (
 						<Badge tone={diag.isPeerConnected ? 'green' : 'red'}>
-							{diag.isPeerConnected ? 'peer connected' : 'peer offline'}
+							{diag.isPeerConnected ? 'Peer connected' : 'Peer offline'}
 						</Badge>
 					)}
 					{!closed && diag && !diag.isPeerConnected && (
@@ -1248,9 +1270,9 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 				{!closed && diag?.issues?.length > 0 && (
 					<DetailRow label="Issues">
 						{diag.issues.map((issue, i) => (
-							<div className="error-note" key={i} style={{ marginBottom: 6 }}>
+							<Note tone="error" key={i} style={{ marginBottom: 6 }}>
 								{issue}
-							</div>
+							</Note>
 						))}
 					</DetailRow>
 				)}
@@ -1273,9 +1295,10 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 							{story.closer}
 						</div>
 						{story.closingTxid && (
-							<div style={{ marginBottom: 4 }}>
+							<div style={{ marginBottom: 4, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
 								<span className="wallet-meta">Closing transaction </span>
 								<CopyText value={story.closingTxid} truncate />
+								<ExplorerLink url={txUrl(network, story.closingTxid)}>View on mempool.space</ExplorerLink>
 							</div>
 						)}
 						<div className="wallet-meta" style={{ marginBottom: 4 }}>
@@ -1308,9 +1331,7 @@ function ChannelDetailModal({ id, api, channel, origin, onClose }) {
 				{(historyState.entries.length > 0 || closed) && (
 					<DetailRow label="History">
 						{historyState.status === 'error' ? (
-							<div className="error-note">
-								Channel history could not be loaded.
-							</div>
+							<Note tone="error">Channel history could not be loaded.</Note>
 						) : historyState.status === 'loading' ? (
 							<div className="wallet-meta">Loading history…</div>
 						) : historyState.entries.length > 0 ? (

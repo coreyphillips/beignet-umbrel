@@ -38,6 +38,29 @@ export function fmtDuration(seconds) {
 	return `${days} day${days === 1 ? '' : 's'}`;
 }
 
+/**
+ * How long ago, in the unit a glance wants: "just now", "12 min ago",
+ * "3 hours ago", "2 days ago", then the date. The exact time belongs in a
+ * title beside it.
+ */
+export function fmtRelative(ts, now = Date.now()) {
+	if (!ts) return '-';
+	const t = Number(ts);
+	if (Number.isNaN(t)) return '-';
+	const diff = Math.round((now - t) / 1000);
+	if (diff < 45) return 'just now';
+	if (diff < 3600) return `${Math.max(1, Math.round(diff / 60))} min ago`;
+	if (diff < 86400) {
+		const h = Math.round(diff / 3600);
+		return `${h} hour${h === 1 ? '' : 's'} ago`;
+	}
+	if (diff < 7 * 86400) {
+		const d = Math.round(diff / 86400);
+		return `${d} day${d === 1 ? '' : 's'} ago`;
+	}
+	return new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
 export function pct(n) {
 	if (n === null || n === undefined) return '-';
 	return `${Math.round(Number(n))}%`;

@@ -6,20 +6,25 @@ import {
 	Badge,
 	Button,
 	Card,
+	Chip,
 	CopyText,
 	DetailRow,
+	Empty,
 	ExplorerLink,
 	Field,
 	Modal,
-	Segmented
+	Note,
+	Segmented,
+	SkeletonRows
 } from '../../components/ui.jsx';
-import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
+import { Switch } from '../../components/motion.jsx';
+import { fmtDate, fmtRelative, fmtSats, shortId } from '../../lib/format.js';
+import { paymentStatusLabel } from '../../lib/labels.js';
 import { addressUrl, txUrl } from '../../lib/explorer.js';
 import { describeFallback, persistFallback } from '../../lib/direct-funding.js';
 import { manager } from '../../api.js';
 import { FundingSteps } from '../../components/FundingSteps.jsx';
 
-const STATUS_TONE = { COMPLETED: 'green', PENDING: 'yellow', FAILED: 'red' };
 
 const confirmations = (tx, tipHeight) =>
 	tx.confirmed && tx.height ? Math.max(1, tipHeight - tx.height + 1) : 0;
@@ -90,10 +95,13 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 				}
 			/>
 
+			<Switch value={tab}>
 			{tab === 'onchain' && (
 				<Card title="On-chain transactions">
-					{!data?.txs || data.txs.length === 0 ? (
-						<div className="empty">No on-chain transactions yet.</div>
+					{!data ? (
+						<SkeletonRows rows={4} />
+					) : !data.txs || data.txs.length === 0 ? (
+						<Empty>No on-chain transactions yet.</Empty>
 					) : (
 						<div className="table-wrap">
 							<table>
@@ -124,8 +132,11 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 													<Badge tone="yellow">direct funding not taken</Badge>
 												)}
 											</td>
-											<td>{fmtSats(Math.abs(t.valueSats))}</td>
-											<td>{t.feeSats != null ? fmtSats(t.feeSats) : '-'}</td>
+											<td className={`amt ${t.type === 'received' ? 'in' : 'out'}`}>
+												{t.type === 'received' ? '+' : '-'}
+												{fmtSats(Math.abs(t.valueSats))}
+											</td>
+											<td className="wallet-meta">{t.feeSats != null ? fmtSats(t.feeSats) : '-'}</td>
 											<td>
 												{t.confirmed ? (
 													<Badge tone="green">{Math.max(1, tipHeight - t.height + 1)}</Badge>
@@ -133,21 +144,25 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 													<Badge tone="yellow">pending</Badge>
 												)}
 											</td>
-											<td className="mono" title={t.txid}>{shortId(t.txid)}</td>
-											<td className="wallet-meta">{fmtDate(t.confirmTimestamp || t.timestamp)}</td>
+											<td className="mono wallet-meta" title={t.txid}>{shortId(t.txid)}</td>
+											<td className="wallet-meta" title={fmtDate(t.confirmTimestamp || t.timestamp)}>
+												{fmtRelative(t.confirmTimestamp || t.timestamp)}
+											</td>
 											<td>
 												{!t.confirmed && boostMethod[t.txid] && (
-													<button
-														type="button"
-														className="btn sm"
-														// The row opens the details; this button does its own job.
-														onClick={(e) => {
-															e.stopPropagation();
-															setBumping({ tx: t, method: boostMethod[t.txid] });
-														}}
-													>
-														Bump fee
-													</button>
+													<div className="row-actions">
+														<button
+															type="button"
+															className="btn sm"
+															// The row opens the details; this button does its own job.
+															onClick={(e) => {
+																e.stopPropagation();
+																setBumping({ tx: t, method: boostMethod[t.txid] });
+															}}
+														>
+															Bump fee
+														</button>
+													</div>
 												)}
 											</td>
 										</tr>
@@ -161,8 +176,10 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 
 			{tab === 'lightning' && !rec?.onchainOnly && (
 				<Card title="Lightning payments">
-					{!data?.payments || data.payments.length === 0 ? (
-						<div className="empty">No Lightning payments yet.</div>
+					{!data ? (
+						<SkeletonRows rows={4} />
+					) : !data.payments || data.payments.length === 0 ? (
+						<Empty>No Lightning payments yet.</Empty>
 					) : (
 						<div className="table-wrap">
 							<table>
@@ -188,13 +205,20 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 													{p.direction === 'INCOMING' ? 'received' : 'sent'}
 												</Badge>
 											</td>
-											<td>{fmtSats(p.amountSats)}</td>
-											<td>{p.feeSats != null ? fmtSats(p.feeSats) : '-'}</td>
-											<td>
-												<Badge tone={STATUS_TONE[p.status] || 'muted'}>{p.status}</Badge>
+											<td className={`amt ${p.direction === 'INCOMING' ? 'in' : 'out'}`}>
+												{p.direction === 'INCOMING' ? '+' : '-'}
+												{fmtSats(p.amountSats)}
 											</td>
-											<td className="mono" title={p.paymentHash}>{shortId(p.paymentHash)}</td>
-											<td className="wallet-meta">{fmtDate(p.completedAt || p.createdAt)}</td>
+											<td className="wallet-meta">{p.feeSats != null ? fmtSats(p.feeSats) : '-'}</td>
+											<td>
+												<Badge tone={paymentStatusLabel(p.status).tone} title={p.status}>
+													{paymentStatusLabel(p.status).label}
+												</Badge>
+											</td>
+											<td className="mono wallet-meta" title={p.paymentHash}>{shortId(p.paymentHash)}</td>
+											<td className="wallet-meta" title={fmtDate(p.completedAt || p.createdAt)}>
+												{fmtRelative(p.completedAt || p.createdAt)}
+											</td>
 										</tr>
 									))}
 								</tbody>
@@ -206,8 +230,10 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 
 			{tab === 'utxos' && (
 				<Card title="Unspent outputs">
-					{!data?.utxos || data.utxos.length === 0 ? (
-						<div className="empty">No unspent outputs.</div>
+					{!data ? (
+						<SkeletonRows rows={3} />
+					) : !data.utxos || data.utxos.length === 0 ? (
+						<Empty>No unspent outputs.</Empty>
 					) : (
 						<div className="table-wrap">
 							<table>
@@ -236,8 +262,8 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 											<td className="mono trunc-cell" title={u.address}>
 												{u.address}
 											</td>
-											<td>{fmtSats(u.valueSats)}</td>
-											<td className="wallet-meta">{u.height || 'unconfirmed'}</td>
+											<td className="amt">{fmtSats(u.valueSats)}</td>
+											<td className="wallet-meta">{u.height ? u.height.toLocaleString('en-US') : 'unconfirmed'}</td>
 										</tr>
 									))}
 								</tbody>
@@ -246,6 +272,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 					)}
 				</Card>
 			)}
+			</Switch>
 
 			<AnimatePresence>
 			{detail && (
@@ -314,7 +341,7 @@ function TxDetail({ tx, network, tipHeight, fallback }) {
 			    and the payer's daemon gave a reason that used to outlive nothing.
 			    Said first, because it is why the operator opened the row. */}
 			{fallback && (
-				<div className="info-note" style={{ marginBottom: 12 }}>
+				<Note tone="info">
 					{describeFallback(fallback)}
 					<div className="wallet-meta" style={{ marginTop: 4 }}>
 						Recorded {fmtDate(fallback.timestamp)}
@@ -322,7 +349,7 @@ function TxDetail({ tx, network, tipHeight, fallback }) {
 						{fallback.requestId ? ` · request ${shortId(fallback.requestId)}` : ''}
 					</div>
 					<FundingSteps steps={fallback.steps} />
-				</div>
+				</Note>
 			)}
 			<DetailRow label="Type">
 				<Badge tone={tx.type === 'received' ? 'green' : 'blue'}>{tx.type}</Badge>
@@ -390,20 +417,23 @@ function PaymentDetail({ payment: p }) {
 				{p.feeSats != null ? fmtSats(p.feeSats) : '-'}
 			</DetailRow>
 			<DetailRow label="Status">
-				<Badge tone={STATUS_TONE[p.status] || 'muted'}>{p.status}</Badge>
+				<Badge tone={paymentStatusLabel(p.status).tone}>{paymentStatusLabel(p.status).label}</Badge>
+				<Badge chip>
+					<code>{p.status}</code>
+				</Badge>
 			</DetailRow>
 
 			{/* A failed payment knows why it failed. The list said only "FAILED",
 			    which is the least useful half of what the wallet has. */}
 			{failed && (p.failureDescription || p.failureCode != null) && (
-				<div className="error-note" style={{ marginBottom: 12 }}>
+				<Note tone="error">
 					{p.failureDescription || 'The payment failed.'}
 					{p.failureCode != null && (
 						<div className="wallet-meta" style={{ marginTop: 4 }}>
 							Failure code {p.failureCode}
 						</div>
 					)}
-				</div>
+				</Note>
 			)}
 
 			<DetailRow label="Payment hash">
@@ -479,20 +509,32 @@ function BumpFeeModal({ api, tx, method, onReplaced, onClose, onDone }) {
 	};
 
 	return (
-		<Modal title="Bump transaction fee" onClose={onClose}>
-			<table style={{ marginBottom: 14 }}>
+		<Modal
+			title="Bump transaction fee"
+			onClose={onClose}
+			foot={
+				<>
+					<Button onClick={onClose}>Cancel</Button>
+					<span className="spacer" />
+					<Button variant="primary" busy={busy} onClick={boost}>
+						Bump fee
+					</Button>
+				</>
+			}
+		>
+			<table className="kv-table" style={{ marginBottom: 14 }}>
 				<tbody>
 					<tr>
-						<td className="wallet-meta">Transaction</td>
-						<td className="mono">{shortId(tx.txid)}</td>
+						<td className="kv-key">Transaction</td>
+						<td className="kv-val mono">{shortId(tx.txid)}</td>
 					</tr>
 					<tr>
-						<td className="wallet-meta">Amount</td>
-						<td>{fmtSats(Math.abs(tx.valueSats))}</td>
+						<td className="kv-key">Amount</td>
+						<td className="kv-val">{fmtSats(Math.abs(tx.valueSats))}</td>
 					</tr>
 					<tr>
-						<td className="wallet-meta">Current fee</td>
-						<td>{tx.feeSats != null ? fmtSats(tx.feeSats) : 'unknown'}</td>
+						<td className="kv-key">Current fee</td>
+						<td className="kv-val">{tx.feeSats != null ? fmtSats(tx.feeSats) : 'unknown'}</td>
 					</tr>
 				</tbody>
 			</table>
@@ -507,24 +549,18 @@ function BumpFeeModal({ api, tx, method, onReplaced, onClose, onDone }) {
 				<input value={feeRate} onChange={(e) => setFeeRate(e.target.value)} placeholder="auto" />
 			</Field>
 			{fees && (
-				<div className="preset-row" style={{ marginBottom: 14 }}>
+				<div className="chip-row" style={{ marginBottom: 4 }}>
 					{[
 						['Fast', fees.fast],
 						['Normal', fees.normal],
 						['Slow', fees.slow]
 					].map(([label, rate]) => (
-						<button key={label} type="button" className="btn sm" onClick={() => setFeeRate(String(rate))}>
+						<Chip key={label} pressed={feeRate === String(rate)} onClick={() => setFeeRate(String(rate))}>
 							{label} · {rate} sat/vB
-						</button>
+						</Chip>
 					))}
 				</div>
 			)}
-			<div className="center-actions">
-				<Button onClick={onClose}>Cancel</Button>
-				<Button variant="primary" busy={busy} onClick={boost}>
-					Bump fee
-				</Button>
-			</div>
 		</Modal>
 	);
 }
