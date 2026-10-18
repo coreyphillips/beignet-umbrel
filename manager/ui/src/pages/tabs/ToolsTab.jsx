@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '../../components/Toast.jsx';
-import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
+import { Badge, Button, Card, CopyText, Field, Note } from '../../components/ui.jsx';
 import { shortId } from '../../lib/format.js';
 
 /**
@@ -56,7 +56,7 @@ function SignCard({ api }) {
 				Sign with node key
 			</Button>
 			{signed && signed.message === message && (
-				<div className="info-note" role="status" style={{ marginTop: 14 }}>
+				<Note tone="success" role="status" style={{ marginTop: 14 }}>
 					<div className="field-label">Signature</div>
 					<CopyText value={signed.signature} truncate />
 					<div className="wallet-meta" style={{ marginTop: 8 }}>
@@ -64,7 +64,7 @@ function SignCard({ api }) {
 						node's identity key. Anyone can check it in the card beside this one, or with
 						lncli verifymessage.
 					</div>
-				</div>
+				</Note>
 			)}
 		</Card>
 	);
@@ -125,13 +125,13 @@ function VerifyCard({ api }) {
 				Verify
 			</Button>
 			{result && !result.valid && (
-				<div className="error-note" role="alert" style={{ marginTop: 14 }}>
+				<Note tone="error" role="alert">
 					Not a valid signature over this message. Either the signature is damaged, or the
 					message is not exactly the text that was signed.
-				</div>
+				</Note>
 			)}
 			{result?.valid && (
-				<div className="info-note" role="status" style={{ marginTop: 14 }}>
+				<Note tone="success" role="status" style={{ marginTop: 14 }}>
 					<Badge tone="green">valid</Badge>
 					{result.knownNode ? (
 						<Badge tone="blue">announced node</Badge>
@@ -152,7 +152,7 @@ function VerifyCard({ api }) {
 							? ' This key belongs to a node announced in the network graph.'
 							: ' This key is not announced in the network graph, which is normal for private nodes.'}
 					</div>
-				</div>
+				</Note>
 			)}
 		</Card>
 	);

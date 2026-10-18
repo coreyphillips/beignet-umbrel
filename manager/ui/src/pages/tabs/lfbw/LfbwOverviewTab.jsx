@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { usePoll } from '../../../hooks/usePoll.js';
 import { useToast } from '../../../components/Toast.jsx';
-import { Badge, BalanceBar, Button, Card, CopyText, Modal, Note, Stat, StatRow } from '../../../components/ui.jsx';
+import { Badge, BalanceBar, Button, Card, CopyText, Modal, Note, Stat, StatRow, Empty } from '../../../components/ui.jsx';
 import { fmtSats, shortId } from '../../../lib/format.js';
 import { lfbwStatus } from '../../../lib/lfbw.js';
 import { manager } from '../../../api.js';
@@ -192,7 +192,7 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 			<div className="grid cols-2">
 				<Card title="Primary node">
 					{!primaryPubkey ? (
-						<div className="empty">Not linked yet.</div>
+						<Empty>Not linked yet.</Empty>
 					) : (
 						<div>
 							<div className="peer-id" style={{ marginBottom: 10 }}>
@@ -230,10 +230,10 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 
 				<Card title="Your channel">
 					{status.channels.length === 0 ? (
-						<div className="empty">
+						<Empty>
 							No channel with the primary node yet. Deposit bitcoin or create an invoice on the
 							Receive tab, and the channel appears by itself.
-						</div>
+						</Empty>
 					) : (
 						status.channels.map((c) => (
 							<div key={c.channelId} style={{ marginBottom: 12 }}>

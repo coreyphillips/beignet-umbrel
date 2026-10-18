@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePoll } from '../hooks/usePoll.js';
-import { Badge, Button, Card } from './ui.jsx';
+import { Badge, Button, Card, Empty, Note } from './ui.jsx';
 import { shortId } from '../lib/format.js';
 import { describeRecovery, restoreProgress } from '../lib/recovery.js';
 
@@ -106,7 +106,7 @@ export default function RestorePanel({ id, api, rec, tick = 0, onStarted, onDone
 	if (!status) {
 		return (
 			<Card title="Restore from guardians">
-				<div className="empty">Reading the wallet's recovery status…</div>
+				<Empty>Reading the wallet's recovery status…</Empty>
 			</Card>
 		);
 	}
@@ -134,10 +134,10 @@ export default function RestorePanel({ id, api, rec, tick = 0, onStarted, onDone
 					</div>
 				)}
 				{refusal && (
-					<div className="error-note">
+					<Note tone="error">
 						The guardians refused the restore: {refusal} The wallet keeps holding; try again
 						once the guardians are reachable.
-					</div>
+					</Note>
 				)}
 				<div className="center-actions">
 					<Button variant="primary" busy={busy} onClick={start}>
@@ -165,9 +165,9 @@ export default function RestorePanel({ id, api, rec, tick = 0, onStarted, onDone
 		const d = describeRecovery(status, rec || {});
 		return (
 			<Card title="Restore from guardians">
-				<div className="error-note">
+				<Note tone="error">
 					{d.tier}. {d.detail}
-				</div>
+				</Note>
 				<div className="center-actions">
 					<Button onClick={() => finish(true)}>Back</Button>
 				</div>

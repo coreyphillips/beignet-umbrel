@@ -1,4 +1,4 @@
-import { Field, Help } from './ui.jsx';
+import { Field, Help, Note } from './ui.jsx';
 
 export const EMPTY_LFBW = {
 	enabled: false,
@@ -51,7 +51,7 @@ export default function LfbwFields({ value, onChange, candidates, editing = fals
 	const choice = value.primaryWalletId || '';
 	return (
 		<>
-			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Lightning-first
 			</div>
 			<label className="checkbox field">
@@ -67,9 +67,9 @@ export default function LfbwFields({ value, onChange, candidates, editing = fals
 			{value.enabled && (
 				<>
 					{editing && currentPrimary && (
-						<div className="info-note">
+						<Note tone="info">
 							Currently paired with {currentPrimary}; changing the primary starts the setup over.
-						</div>
+						</Note>
 					)}
 					<Field
 						label="Primary node"
@@ -86,10 +86,10 @@ export default function LfbwFields({ value, onChange, candidates, editing = fals
 						</select>
 					</Field>
 					{candidates.length === 0 && (
-						<div className="info-note">
+						<Note tone="info">
 							No wallet of yours can serve as primary right now: it must be running, on the same
 							network, with Lightning on, and not lightning-first itself.
-						</div>
+						</Note>
 					)}
 					{choice === 'external' && (
 						<Field label="External node URI" hint="The node must run beignet with JIT receive on to provide inbound capacity.">
@@ -156,7 +156,7 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 	const digits = (e) => e.target.value.replace(/[^0-9]/g, '');
 	return (
 		<>
-			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Liquidity provider
 			</div>
 			<label className="checkbox field">
@@ -169,10 +169,10 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 				</Help>
 			</label>
 			{locked && (
-				<div className="info-note">
+				<Note tone="info">
 					Serving as the primary node of {dependents.map((d) => `"${d.name}"`).join(', ')}. Change their
 					primary node or delete them before switching this off.
-				</div>
+				</Note>
 			)}
 			{value && (
 				<>
@@ -215,7 +215,7 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 							/>
 						</Field>
 					</div>
-					<div className="field-label" style={{ marginTop: 12, marginBottom: 8 }}>
+					<div className="section-title standalone">
 						Reverse swaps
 					</div>
 					<label className="checkbox field">
@@ -265,7 +265,7 @@ export function ProviderFields({ value, jit, swaps = {}, onChange, onJit, onSwap
 									<input value={swaps.maxConcurrent ?? ''} onChange={(e) => patchSwaps('maxConcurrent', digits(e))} />
 								</Field>
 							</div>
-							<div className="field-label" style={{ marginTop: 12, marginBottom: 8 }}>
+							<div className="section-title standalone">
 								Submarine swaps
 							</div>
 							<label className="checkbox field">

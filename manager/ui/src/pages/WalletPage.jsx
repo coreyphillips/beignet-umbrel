@@ -685,11 +685,38 @@ export function EditWalletModal({
 	};
 
 	return (
-		<Modal title="Edit wallet" onClose={onClose} origin={origin}>
+		<Modal
+			title="Edit wallet"
+			onClose={onClose}
+			origin={origin}
+			foot={
+				<>
+					<Button onClick={onClose}>Cancel</Button>
+					<span className="spacer" />
+					{/* The consequence rides the button: saving while parking channels
+					    is a deliberate act, named at the moment of the click rather
+					    than behind a second dialog. */}
+					<Button
+						variant="primary"
+						busy={busy}
+						onClick={save}
+						disabled={
+							!electrum.host ||
+							!lfbwComplete(lfbw) ||
+							(!onchainOnly && networkMode === 'clearnet' && !publicHost.trim())
+						}
+					>
+						{parkingChannels && openChannels > 0
+							? `Save and park ${openChannels} channel${openChannels === 1 ? '' : 's'}`
+							: 'Save changes'}
+					</Button>
+				</>
+			}
+		>
 			<Field label="Name">
 				<input value={name} onChange={(e) => setName(e.target.value)} />
 			</Field>
-			<div className="field-label" style={{ marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Electrum server
 				<Help>
 					Changing the Electrum server restarts this wallet so it reconnects. The network
@@ -697,7 +724,7 @@ export function EditWalletModal({
 				</Help>
 			</div>
 			<ElectrumFields presets={presets} value={electrum} onChange={setElectrum} />
-			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Lightning
 			</div>
 			<label className="checkbox field">
@@ -710,13 +737,13 @@ export function EditWalletModal({
 				Lightning enabled
 			</label>
 			{dependents.length > 0 && (
-				<div className="info-note">
+				<Note tone="info">
 					Lightning stays on: this wallet is the primary node of{' '}
 					{dependents.map((d) => `"${d.name}"`).join(', ')}.
-				</div>
+				</Note>
 			)}
 			{parkingChannels && (
-				<div className="error-note">
+				<Note tone="error">
 					{openChannels > 0
 						? `This wallet has ${openChannels} open channel${openChannels === 1 ? '' : 's'}. `
 						: 'This wallet may have open channels (they could not be read just now). '}
@@ -725,20 +752,20 @@ export function EditWalletModal({
 					stop, and the dashboard puts the Channels tab away until Lightning is switched
 					back on. Parked for more than about two weeks, the node force-closes channels
 					it cannot reach, by design, and the funds return on-chain.
-				</div>
+				</Note>
 			)}
 			{onchainOnly && !rec.onchainOnly && !parkingChannels && (
-				<div className="info-note">
+				<Note tone="info">
 					The wallet stops listening for Lightning peers and the dashboard puts the
 					Lightning apparatus away. The seed is untouched and the node identity stays
 					derived from it, so flipping this back on later loses nothing.
-				</div>
+				</Note>
 			)}
 			{!onchainOnly && rec.onchainOnly && (
-				<div className="info-note">
+				<Note tone="info">
 					The wallet starts listening for Lightning peers on its next start. Open a
 					channel in the Channels tab and it is a Lightning node like any other.
-				</div>
+				</Note>
 			)}
 			{recoveryAvailable && !onchainOnly && (
 				<>
@@ -755,23 +782,23 @@ export function EditWalletModal({
 						<RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} disabled={restoring} />
 					)}
 					{restoring && (
-						<div className="info-note">
+						<Note tone="info">
 							Channel backup cannot change while this wallet is waiting for, or running,
 							a restore from its guardians.
-						</div>
+						</Note>
 					)}
 					{recoveryMode === (rec.recovery?.mode || 'off') &&
 						recoveryMode === 'peer-storage' &&
 						recoveryAutoApply !== !!rec.recovery?.autoApply && (
-							<div className="info-note">Changing this restarts the wallet.</div>
+							<Note tone="info">Changing this restarts the wallet.</Note>
 						)}
 					{recoveryMode !== (rec.recovery?.mode || 'off') && (
-						<div className="info-note">
+						<Note tone="info">
 							Changing channel backup restarts this wallet.
 							{pinnedGuardians.length === 0 && isGuardianMode(recoveryMode)
 								? ' A guardian mode registers the wallet with the guardians in Settings on its next start, and that set stays with the wallet until it is rotated here.'
 								: ''}
-						</div>
+						</Note>
 					)}
 					{guardianRotationAvailable &&
 						isGuardianMode(rec.recovery?.mode) &&
@@ -792,12 +819,12 @@ export function EditWalletModal({
 
 					<GuardianServeField value={guardianServe} onChange={setGuardianServe} announced={announced} />
 					{guardianServe !== !!rec.guardianServe && (
-						<div className="info-note">
+						<Note tone="info">
 							Changing this restarts the wallet.
 							{!guardianServe && rec.guardianServe
 								? ' Nodes that pinned this wallet as a guardian lose one of their three until it serves again; their sets cannot be changed.'
 								: ''}
-						</div>
+						</Note>
 					)}
 				</>
 			)}
@@ -805,7 +832,7 @@ export function EditWalletModal({
 				<>
 					<FforSettleField value={fforBlock} onChange={setFforBlock} />
 					{fforChanged && (
-						<div className="info-note">
+						<Note tone="info">
 							Changing this restarts the wallet.
 							{fforWas.settle && !fforNow.settle
 								? ' A sibling with an open voucher book here keeps it: the book was signed and stays claimable, but no new one can be started.'
@@ -813,7 +840,7 @@ export function EditWalletModal({
 							{fforWas.witness && !fforNow.witness
 								? ' Receipts this wallet holds for siblings stay on disk but are not served until it witnesses again.'
 								: ''}
-						</div>
+						</Note>
 					)}
 				</>
 			)}
@@ -821,17 +848,17 @@ export function EditWalletModal({
 				<>
 					<LfbwFields value={lfbw} onChange={setLfbw} candidates={candidates} editing currentPrimary={currentPrimary} />
 					{lfbw.enabled && rec.lfbw?.enabled && primaryChanged(lfbw, rec.lfbw) && (
-						<div className="info-note">
+						<Note tone="info">
 							The channel with your current primary stays open after the change. The Overview lists it as
 							your previous primary's channel and offers to move its funds into the new one.
-						</div>
+						</Note>
 					)}
 					{lfbw.enabled !== !!rec.lfbw?.enabled && (
-						<div className="info-note">
+						<Note tone="info">
 							{lfbw.enabled
 								? 'The wallet pairs with its primary node on its next start: mutual zero-conf trust when the primary is your own wallet, direct funding armed, and its confirmed on-chain balance moves into the channel from then on. Its existing channels are untouched.'
 								: 'The wallet keeps its channels and its balance; only the lightning-first behaviour stops (no automatic channel funding, the full tab set back).'}
-						</div>
+						</Note>
 					)}
 					{!lfbw.enabled && (
 						<ProviderFields
@@ -865,30 +892,9 @@ export function EditWalletModal({
 						irohRelays={irohRelays}
 						onIrohRelays={setIrohRelays}
 					/>
-					{networkChanged && <div className="info-note">Changing this restarts the wallet.</div>}
+					{networkChanged && <Note tone="info">Changing this restarts the wallet.</Note>}
 				</>
 			)}
-			<div className="center-actions">
-				{/* The consequence rides the button: saving while parking channels
-				    is a deliberate act, named at the moment of the click rather
-				    than behind a second dialog. */}
-
-				<Button
-					variant="primary"
-					busy={busy}
-					onClick={save}
-					disabled={
-						!electrum.host ||
-						!lfbwComplete(lfbw) ||
-						(!onchainOnly && networkMode === 'clearnet' && !publicHost.trim())
-					}
-				>
-					{parkingChannels && openChannels > 0
-						? `Save and park ${openChannels} channel${openChannels === 1 ? '' : 's'}`
-						: 'Save changes'}
-				</Button>
-				<Button onClick={onClose}>Cancel</Button>
-			</div>
 		</Modal>
 	);
 }

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { Button, Card, CopyText, Field, Modal, QR } from '../../components/ui.jsx';
+import { Button, Card, CopyText, Field, Modal, QR, Empty, Note } from '../../components/ui.jsx';
 import { fmtSats, shortId } from '../../lib/format.js';
 import { parsePayment } from '../../lib/payment-uri.js';
 import { beginOwnPayment, endOwnPayment } from '../../lib/own-payments.js';
@@ -157,7 +157,7 @@ export default function OffersTab({ id, api, tick, bump }) {
 							placeholder="lno…"
 						/>
 					</Field>
-					{refusal && <div className="error-note">{refusal}</div>}
+					{refusal && <Note tone="error">{refusal}</Note>}
 					<Field label="Amount (sats, if offer has none)">
 						<input value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
 					</Field>
@@ -169,7 +169,7 @@ export default function OffersTab({ id, api, tick, bump }) {
 
 			<Card title="Your offers" actions={<Button className="sm" onClick={refresh}>Refresh</Button>}>
 				{!offers || offers.length === 0 ? (
-					<div className="empty">No offers yet.</div>
+					<Empty>No offers yet.</Empty>
 				) : (
 					<div className="table-wrap">
 						<table>
@@ -188,12 +188,14 @@ export default function OffersTab({ id, api, tick, bump }) {
 										<td>{o.amountSats ? fmtSats(o.amountSats) : 'any'}</td>
 										<td>{o.encoded ? <CopyText value={o.encoded} truncate /> : shortId(o.offerId)}</td>
 										<td>
-											<Button
-												className="sm"
-												onClick={(e) => setDeleting({ ...o, origin: e.currentTarget })}
-											>
-												Delete
-											</Button>
+											<div className="row-actions">
+												<Button
+													className="sm"
+													onClick={(e) => setDeleting({ ...o, origin: e.currentTarget })}
+												>
+													Delete
+												</Button>
+											</div>
 										</td>
 									</tr>
 								))}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { manager } from '../api.js';
 import { useToast } from './Toast.jsx';
-import { Button, Field, Help, Modal } from './ui.jsx';
+import { Button, Field, Help, Modal, Section } from './ui.jsx';
 import ElectrumFields from './ElectrumFields.jsx';
 import BackupStatus from './BackupStatus.jsx';
 import { guardianEntryLabel, isNodeUri } from '../lib/recovery.js';
@@ -132,7 +132,18 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			help="Defaults for new wallets (each wallet can override). No full node required, point at any Electrum server, or use a preset if you run Electrs/Fulcrum here."
 			onClose={onClose}
 			origin={origin}
+			foot={
+				<>
+					<Button onClick={() => setElectrum({ host: '', port: 50001, tls: false })}>Clear Electrum default</Button>
+					<span className="spacer" />
+					<Button onClick={onClose}>Cancel</Button>
+					<Button variant="primary" busy={busy} onClick={save}>
+						Save settings
+					</Button>
+				</>
+			}
 		>
+			<Section title="Defaults for new wallets">
 			<Field label="Default network">
 				<select value={network} onChange={(e) => setNetwork(e.target.value)}>
 					{config.supportedNetworks.map((n) => (
@@ -146,9 +157,10 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 				Default Electrum server
 			</div>
 			<ElectrumFields presets={config.electrumPresets} value={electrum} onChange={setElectrum} />
+			</Section>
 			{config.recoveryAvailable && (
-				<>
-					<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+				<Section>
+					<div className="section-title">
 						Recovery guardians
 						<Help>
 							Three guardians that hold an encrypted journal of channel state for wallets using a
@@ -213,9 +225,10 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 							</select>
 						</Field>
 					)}
-				</>
+				</Section>
 			)}
-			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+			<Section>
+			<div className="section-title">
 				Backup
 				<Help>
 					An encrypted archive of every wallet&apos;s recovery phrase, API token and record, with the
@@ -225,7 +238,7 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			<BackupStatus wallets={wallets} lastBackupAt={lastBackupAt} />
 			{/* Opened over this dialog rather than in place of it, so settings
 			    typed but not yet saved are still here afterwards. */}
-			<div className="center-actions">
+			<div className="center-actions start">
 				<Button
 					data-testid="settings-backup"
 					onClick={(e) => openBackup('export', { x: e.clientX, y: e.clientY })}
@@ -239,14 +252,7 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 					Restore from backup
 				</Button>
 			</div>
-			<div className="center-actions">
-				<Button variant="primary" busy={busy} onClick={save}>
-					Save settings
-				</Button>
-				<Button onClick={() => setElectrum({ host: '', port: 50001, tls: false })}>
-					Clear Electrum default
-				</Button>
-			</div>
+			</Section>
 		</Modal>
 	);
 }

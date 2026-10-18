@@ -327,11 +327,11 @@ function ProviderCard({ jit, rec }) {
 			{!jit ? (
 				<div className="wallet-meta">Reading the provider status…</div>
 			) : !lsp ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not running the provider role. It takes it on its next start
 					(the Edit dialog restarts the wallet), or the bundled engine predates the
 					status route.
-				</div>
+				</Note>
 			) : (
 				<>
 					<div className="grid cols-4">
@@ -410,12 +410,12 @@ function SwapsCard({ swaps, rec }) {
 			{!swaps ? (
 				<div className="wallet-meta">Reading the swap status…</div>
 			) : !swaps.enabled ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not running the swap role, so nothing is being served yet. Either it
 					has not restarted since you turned swaps on (the Edit dialog restarts it), or the
 					bundled engine drops this policy on the way to the node, which no restart fixes and
 					an app update does.
-				</div>
+				</Note>
 			) : (
 				<>
 					{sharing && <SwapBudget reverse={swaps} submarine={swaps.submarine} />}
@@ -428,10 +428,10 @@ function SwapsCard({ swaps, rec }) {
 								sharing={sharing}
 							/>
 						) : (
-							<div className="info-note" style={{ marginTop: 10 }}>
+							<Note tone="info">
 								The on-chain to Lightning direction starts with the wallet's next restart, or the
 								bundled engine predates it (beignet 0.16.0).
-							</div>
+							</Note>
 						))}
 				</>
 			)}
@@ -481,7 +481,7 @@ function SwapBudget({ reverse, submarine }) {
 	const slotsLeft = Number.isFinite(maxCount) ? Math.max(0, maxCount - liveCount) : null;
 	return (
 		<div style={{ marginTop: 10 }}>
-			<div className="field-label" style={{ marginBottom: 8 }}>
+			<div className="section-title standalone">
 				Both directions together
 			</div>
 			<div className="grid cols-3">
@@ -525,7 +525,7 @@ function SwapDirection({ label, status, sharing }) {
 	const exposedRows = Number((status.counts || {}).EXPOSED || 0);
 	return (
 		<div style={{ marginTop: 10 }}>
-			<div className="field-label" style={{ marginBottom: 8 }}>
+			<div className="section-title standalone">
 				{label}
 			</div>
 			<div className={`grid cols-${sharing ? 3 : 4}`}>
@@ -588,11 +588,11 @@ function GuardianCard({ guardian, rec, info }) {
 			{!guardian ? (
 				<div className="wallet-meta">Reading the guardian status…</div>
 			) : guardian.serving === false ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not serving yet. Either it has not restarted since you turned this on
 					(the Edit dialog restarts it), or the bundled engine drops the setting on the way to
 					the node, which no restart fixes and an app update does.
-				</div>
+				</Note>
 			) : (
 				<>
 					<div className="grid cols-4">
@@ -604,7 +604,7 @@ function GuardianCard({ guardian, rec, info }) {
 					<div className="wallet-meta" style={{ marginTop: 10 }}>
 						Guardian id: <code>{guardian.guardianId}</code>
 					</div>
-					<div className="field-label" style={{ marginTop: 10, marginBottom: 6 }}>
+					<div className="section-title standalone">
 						Address to share
 					</div>
 
@@ -625,10 +625,10 @@ function GuardianCard({ guardian, rec, info }) {
 							</div>
 						</>
 					) : (
-						<div className="info-note">
+						<Note tone="info">
 							Turn on announcing in Edit so nodes outside this Umbrel can reach this guardian.
 							{localUri ? ` Wallets on this Umbrel can use ${localUri}.` : ''}
-						</div>
+						</Note>
 					)}
 				</>
 			)}
@@ -694,7 +694,7 @@ function SettlementCard({ settlements }) {
 			{!settlements ? (
 				<div className="wallet-meta">Reading the settlement status…</div>
 			) : settlements.length === 0 ? (
-				<div className="empty">No voucher book is open with this wallet right now.</div>
+				<Empty>No voucher book is open with this wallet right now.</Empty>
 			) : (
 				<div className="table-wrap">
 					<table>
@@ -744,12 +744,12 @@ function WitnessCard({ status }) {
 			{!status ? (
 				<div className="wallet-meta">Reading the witness status…</div>
 			) : !status.enabled ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not running the witness role. It takes it on its next start (the Edit dialog
 					restarts the wallet), or the bundled engine predates the status route.
-				</div>
+				</Note>
 			) : status.mailboxes.length === 0 ? (
-				<div className="empty">No mailbox is open here right now.</div>
+				<Empty>No mailbox is open here right now.</Empty>
 			) : (
 				<div className="table-wrap">
 					<table>
@@ -793,12 +793,12 @@ function IssuerCard({ status }) {
 			{!status ? (
 				<div className="wallet-meta">Reading the issuer status…</div>
 			) : !status.enabled ? (
-				<div className="info-note">
+				<Note tone="info">
 					The daemon is not running the issuer role. It takes it on its next start (the Edit dialog
 					restarts the wallet), or the bundled engine predates the status route.
-				</div>
+				</Note>
 			) : status.manifests.length === 0 ? (
-				<div className="empty">No offer is delegated here right now.</div>
+				<Empty>No offer is delegated here right now.</Empty>
 			) : (
 				<div className="table-wrap">
 					<table>

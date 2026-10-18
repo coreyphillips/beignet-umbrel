@@ -894,15 +894,15 @@ function SpliceModal({ api, dir, channel, origin, onClose, onDone }) {
 				</div>
 			)}
 			{overBalance && (
-				<div className="error-note" style={{ marginBottom: 12 }}>
+				<Note tone="error">
 					Amount plus the estimated fee exceeds your on-chain balance.
-				</div>
+				</Note>
 			)}
 			{overLocal && (
-				<div className="error-note" style={{ marginBottom: 12 }}>
+				<Note tone="error">
 					Amount plus the estimated fee exceeds what this channel can spare
 					(local balance minus the ~1% channel reserve).
-				</div>
+				</Note>
 			)}
 			<div className="center-actions">
 				<Button

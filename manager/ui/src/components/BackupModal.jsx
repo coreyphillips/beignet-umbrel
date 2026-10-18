@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { manager } from '../api.js';
 import { useToast } from './Toast.jsx';
-import { Button, Field, Modal } from './ui.jsx';
+import { Button, Field, Modal, Note } from './ui.jsx';
 import { fileToBase64, saveFile } from '../lib/backup.js';
 
 // The manager refuses a shorter one; saying so before the request is made
@@ -69,10 +69,10 @@ function ExportPanel() {
 	if (saved) {
 		return (
 			<>
-				<div className="info-note" data-testid="backup-saved">
+				<Note tone="info" data-testid="backup-saved">
 					Saved <code>{saved}</code>. Keep it somewhere this box is not, and keep the passphrase
 					somewhere else again: without it the archive is unreadable, and nothing here can reset it.
-				</div>
+				</Note>
 				<div className="center-actions">
 					<Button onClick={() => setSaved(null)}>Make another</Button>
 				</div>
@@ -82,13 +82,13 @@ function ExportPanel() {
 
 	return (
 		<>
-			<div className="info-note">
+			<Note tone="info">
 				One encrypted file holding every wallet on this box: its recovery phrase, its API token,
 
 				its record (network, Electrum server, network mode and public address, channel backup mode and guardians, the
 				lightning-first link) and the app defaults. Channel databases are not in it; channels come
 				back through the seed and each wallet&apos;s own channel backup.
-			</div>
+			</Note>
 			<Field
 				label="Passphrase"
 				hint={`At least ${MIN_PASSPHRASE} characters. The archive is only as safe as this.`}
@@ -110,8 +110,8 @@ function ExportPanel() {
 					onChange={(e) => setAgain(e.target.value)}
 				/>
 			</Field>
-			{short && <div className="error-note">A passphrase shorter than {MIN_PASSPHRASE} characters is refused.</div>}
-			{mismatch && <div className="error-note">The two passphrases do not match.</div>}
+			{short && <Note tone="error">A passphrase shorter than {MIN_PASSPHRASE} characters is refused.</Note>}
+			{mismatch && <Note tone="error">The two passphrases do not match.</Note>}
 			<div className="center-actions">
 				<Button variant="primary" busy={busy} disabled={!ready} data-testid="backup-export" onClick={run}>
 					Create backup
@@ -172,7 +172,7 @@ function RestorePanel({ onClose, onRestored }) {
 	if (done) {
 		return (
 			<>
-				<div className="info-note" data-testid="restore-done">
+				<Note tone="info" data-testid="restore-done">
 					{done.restored.length === 0 ? (
 						'Restored the app defaults. Every wallet in the archive was already on this box.'
 					) : (
@@ -183,7 +183,7 @@ function RestorePanel({ onClose, onRestored }) {
 							channel backup.
 						</>
 					)}
-				</div>
+				</Note>
 				<div className="center-actions">
 					<Button variant="primary" onClick={onClose}>
 						Done
@@ -198,10 +198,10 @@ function RestorePanel({ onClose, onRestored }) {
 
 	return (
 		<>
-			<div className="info-note">
+			<Note tone="info">
 				Reads an archive made by &ldquo;Back up all wallets&rdquo; and recreates the wallets it
 				holds, with their settings. Nothing is started: each wallet waits until you start it.
-			</div>
+			</Note>
 			<Field label="Backup file">
 				<input
 					type="file"
@@ -238,7 +238,7 @@ function RestorePanel({ onClose, onRestored }) {
 			)}
 			{preview && (
 				<>
-					<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
+					<div className="section-title standalone">
 						This archive
 					</div>
 					<div className="wallet-meta" data-testid="restore-provenance">
@@ -262,12 +262,12 @@ function RestorePanel({ onClose, onRestored }) {
 					</ul>
 					{preview.conflicts.length > 0 && (
 						<>
-							<div className="error-note" role="alert">
+							<Note tone="error" role="alert">
 								{preview.conflicts.length === 1 ? 'A wallet' : `${preview.conflicts.length} wallets`} in
 								this archive would leave this box running one seed from two records. Both records
 								think they own its channels, and that is how channel funds are lost. Restore only if
 								you know the other record is not the same wallet.
-							</div>
+							</Note>
 							<label className="checkbox field">
 								<input
 									type="checkbox"
@@ -280,10 +280,10 @@ function RestorePanel({ onClose, onRestored }) {
 						</>
 					)}
 					{preview.settings && (
-						<div className="info-note">
+						<Note tone="info">
 							The app defaults in the archive (network, Electrum server, recovery guardians) replace
 							the ones on this box.
-						</div>
+						</Note>
 					)}
 					<div className="center-actions">
 						<Button

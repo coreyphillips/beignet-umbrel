@@ -1,4 +1,4 @@
-import { Field } from './ui.jsx';
+import { Field, Note } from './ui.jsx';
 import { MODE_LABELS, RECOVERY_MODES, isGuardianMode } from '../lib/recovery.js';
 
 /**
@@ -103,14 +103,14 @@ export default function RecoveryModeField({
 				</select>
 			</Field>
 			{!guardiansUsable && !disabled && (
-				<div className="info-note">
+				<Note tone="info">
 					{settingsGuardians.length > 0
 						? `Settings has ${settingsGuardians.length} of 3 guardians. Add the rest to use the guardian modes.`
 						: 'Set three guardians in Settings to use the guardian modes.'}
-				</div>
+				</Note>
 			)}
 			{pinned && (
-				<div className="info-note">
+				<Note tone="info">
 					Guardians for this wallet are the set it registered with (three servers); the
 					wallet keeps them until they are rotated, one or all three, below.
 					{differs ? ' Settings now lists a different set; this wallet keeps its own.' : ''}
@@ -121,7 +121,7 @@ export default function RecoveryModeField({
 							</li>
 						))}
 					</ul>
-				</div>
+				</Note>
 			)}
 		</>
 	);
