@@ -9,34 +9,6 @@ import SettingsModal from './components/SettingsModal.jsx';
 import WalletsPage from './pages/WalletsPage.jsx';
 import WalletPage from './pages/WalletPage.jsx';
 
-const SPOT_SURFACES = '.card, .wallet, .stat, .whead, .wnav';
-
-/** Tracks the cursor over glass surfaces so their spotlight bloom follows it. */
-function useSpotlight() {
-	useEffect(() => {
-		let raf = 0;
-		const onMove = (e) => {
-			if (raf) return;
-			raf = requestAnimationFrame(() => {
-				raf = 0;
-				// Nested surfaces (a .stat inside a .card) each get their own glow.
-				let el = e.target instanceof Element ? e.target.closest(SPOT_SURFACES) : null;
-				while (el) {
-					const r = el.getBoundingClientRect();
-					el.style.setProperty('--spot-x', `${e.clientX - r.left}px`);
-					el.style.setProperty('--spot-y', `${e.clientY - r.top}px`);
-					el = el.parentElement ? el.parentElement.closest(SPOT_SURFACES) : null;
-				}
-			});
-		};
-		window.addEventListener('pointermove', onMove, { passive: true });
-		return () => {
-			window.removeEventListener('pointermove', onMove);
-			cancelAnimationFrame(raf);
-		};
-	}, []);
-}
-
 function ThemeToggle() {
 	const [theme, setTheme] = useState(document.documentElement.dataset.theme || 'dark');
 	useEffect(() => {
@@ -60,7 +32,6 @@ function ThemeToggle() {
 export default function App() {
 	const location = useLocation();
 	const toast = useToast();
-	useSpotlight();
 	const [settings, setSettings] = useState(null); // { config, origin } | null
 	// The backup dialog: asked for by the Settings dialog and by the empty
 	// first-run screen, so it is held here rather than in either of them.
