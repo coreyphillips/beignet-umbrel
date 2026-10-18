@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { m } from 'motion/react';
+import { AnimatePresence, m } from 'motion/react';
 import { usePoll } from '../../../hooks/usePoll.js';
 import { useToast } from '../../../components/Toast.jsx';
 import {
@@ -316,8 +316,9 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 				<DirectFundingPolicy api={api} tick={tick} />
 			</div>
 
+			<AnimatePresence>
 			{closing && (
-				<Modal title="Close the channel with your primary node" onClose={() => setClosing(null)}>
+				<Modal key="close" title="Close the channel with your primary node" onClose={() => setClosing(null)}>
 					<p className="wallet-meta">
 						This cooperatively closes the channel. Your Lightning balance ({fmtSats(closing.localBalanceSats)})
 						returns to this wallet on-chain. While the wallet stays lightning-first, that balance moves
@@ -346,7 +347,7 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 				</Modal>
 			)}
 			{confirmMoveHome && (
-				<Modal title="Move funds to the new primary" onClose={() => setConfirmMoveHome(false)}>
+				<Modal key="move" title="Move funds to the new primary" onClose={() => setConfirmMoveHome(false)}>
 					<p className="wallet-meta">
 						This cooperatively closes your channel with the previous primary, which pays an on-chain
 						fee. The balance ({fmtSats(status.previousChannels.reduce((s, c) => s + (c.localBalanceSats || 0), 0))})
@@ -361,6 +362,7 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 					</div>
 				</Modal>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }

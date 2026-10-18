@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { Badge, Button, Modal } from './ui.jsx';
 import { useToast } from './Toast.jsx';
 import { describeReturn, witnessLines } from '../lib/ffor.js';
@@ -127,8 +128,9 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 					</Button>
 				)}
 			</div>
+			<AnimatePresence>
 			{confirming && (
-				<Modal title="Enforce the epoch on-chain" onClose={() => setConfirming(false)}>
+				<Modal key="enforce" title="Enforce the epoch on-chain" onClose={() => setConfirming(false)}>
 					<div className="error-note">
 						This force-closes the channel with your settlement peer. Every voucher this wallet holds a
 						preimage for is claimed on-chain through the signature the peer gave at setup; the
@@ -145,6 +147,7 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 					</div>
 				</Modal>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }

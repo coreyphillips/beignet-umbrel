@@ -203,8 +203,9 @@ export default function OffersTab({ id, api, tick, bump }) {
 				)}
 			</Card>
 
+			<AnimatePresence>
 			{deleting && (
-				<Modal title="Delete offer" onClose={() => setDeleting(null)} origin={deleting.origin}>
+				<Modal key="delete" title="Delete offer" onClose={() => setDeleting(null)} origin={deleting.origin}>
 					<p className="wallet-meta">
 						Delete{' '}
 						{deleting.description ? (
@@ -228,6 +229,7 @@ export default function OffersTab({ id, api, tick, bump }) {
 					</div>
 				</Modal>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }

@@ -498,8 +498,10 @@ export default function WalletPage() {
 				</div>
 			)}
 
+			<AnimatePresence>
 			{editing && rec && (
 				<EditWalletModal
+					key="edit"
 					rec={rec}
 					origin={editing}
 					presets={config?.electrumPresets || []}
@@ -529,6 +531,7 @@ export default function WalletPage() {
 					}}
 				/>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }

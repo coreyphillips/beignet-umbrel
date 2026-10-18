@@ -3,7 +3,12 @@ import { createPortal } from 'react-dom';
 import { m, useMotionValue, useMotionValueEvent, useReducedMotion, useSpring } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import { copy, fmtSats } from '../lib/format.js';
+import { springs } from '../lib/motion.js';
 import { useToast } from './Toast.jsx';
+import { Icon } from './icons.jsx';
+import { Reveal, Spinner } from './motion.jsx';
+
+export { staggerContainer, staggerItem } from '../lib/motion.js';
 
 export function Card({ title, help, actions, children, className = '' }) {
 	return (
@@ -41,10 +46,15 @@ export function AnimatedNumber({ value, suffix = '' }) {
 	return <>{Math.round(display).toLocaleString('en-US') + suffix}</>;
 }
 
-export function Stat({ label, value, num, suffix = '', sub }) {
+/**
+ * A labelled figure. Typographic by default: the label small above, the
+ * number large below, the unit hanging off its baseline. `size` is sm, md
+ * or lg; `tone` colours the number.
+ */
+export function Stat({ label, value, num, suffix = '', sub, size = 'md', tone = '', className = '' }) {
 	const hasNum = num !== null && num !== undefined && Number.isFinite(Number(num));
 	return (
-		<div className="stat">
+		<div className={`stat ${size} ${tone} ${className}`}>
 			<div className="stat-label">{label}</div>
 			<div className="stat-value">
 				{hasNum ? <AnimatedNumber value={num} /> : value ?? '-'}
@@ -55,15 +65,27 @@ export function Stat({ label, value, num, suffix = '', sub }) {
 	);
 }
 
-export function Button({ children, variant = 'ghost', busy, className = '', ...props }) {
+/** A strip of stats on one inset, divided by hairlines. */
+export function StatRow({ children, className = '' }) {
+	return <div className={`stat-row ${className}`}>{children}</div>;
+}
+
+/**
+ * `busy` disables the button and puts a spinner beside the label, which
+ * stays, so the button keeps its width and its name. The spread comes first
+ * so a caller's `disabled` can never re-enable a busy button.
+ */
+export function Button({ children, variant = 'ghost', busy, size = '', icon, className = '', ...props }) {
 	return (
 		<m.button
 			whileTap={{ scale: 0.97 }}
-			className={`btn ${variant} ${className}`}
-			disabled={busy || props.disabled}
 			{...props}
+			className={`btn ${variant} ${size} ${className}`}
+			disabled={busy || props.disabled}
+			aria-busy={busy || undefined}
 		>
-			{busy ? '…' : children}
+			{busy ? <Spinner /> : icon ? <Icon name={icon} size={14} /> : null}
+			{children}
 		</m.button>
 	);
 }
@@ -149,7 +171,7 @@ export function Help({ children, label = 'More info' }) {
 
 	const toggle = () => setOpen((o) => (o === 'pinned' ? false : 'pinned'));
 	// Events from the portalled popover still bubble through React to whatever
-	// holds the "?", a clickable wallet row say; they end here.
+	// holds the "?", a clickable wallet card say; they end here.
 	const swallow = (e) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -186,24 +208,46 @@ export function Help({ children, label = 'More info' }) {
 			</span>
 			{open &&
 				createPortal(
-					<div
+					<m.div
 						ref={pop}
 						className="help-pop"
 						aria-hidden
+						initial={{ opacity: 0, scale: 0.96, y: -2 }}
+						animate={{ opacity: place ? 1 : 0, scale: 1, y: 0 }}
+						transition={{ duration: 0.14, ease: 'easeOut' }}
 						style={place ? { top: place.top, left: place.left } : { top: 0, left: 0, visibility: 'hidden' }}
 						onClick={(e) => e.stopPropagation()}
 						onMouseDown={(e) => e.stopPropagation()}
 					>
 						{children}
-					</div>,
+					</m.div>,
 					document.body
 				)}
 		</>
 	);
 }
 
-export function Badge({ children, tone = 'muted' }) {
-	return <span className={`badge ${tone}`}>{children}</span>;
+export function Badge({ children, tone = 'muted', chip = false, title, className = '' }) {
+	return (
+		<span className={`badge ${tone} ${chip ? 'chip' : ''} ${className}`} title={title}>
+			{children}
+		</span>
+	);
+}
+
+/** A status word with its dot. The raw code rides along in the title. */
+export function StatusBadge({ label, tone = 'muted', raw, pulse }) {
+	return (
+		<span className={`badge ${tone}`} title={raw && raw !== label ? raw : undefined}>
+			<span className={`dot ${pulse ? 'pulse' : ''}`} />
+			{label}
+		</span>
+	);
+}
+
+/** A bare status dot, for a line that names the status itself. */
+export function StatusDot({ tone = 'muted', pulse = false }) {
+	return <span className={`status-dot ${tone} ${pulse ? 'pulse' : ''}`} aria-hidden="true" />;
 }
 
 /**
@@ -273,16 +317,7 @@ export function FeeField({ label, hint, value, onChange, rate, max }) {
  * label here points at the field it names instead, which gets the same click
  * behaviour without claiming the button and the slider as well.
  */
-export function AmountField({
-	label,
-	hint,
-	value,
-	onChange,
-	max,
-	isMax,
-	onMax,
-	disabled
-}) {
+export function AmountField({ label, hint, value, onChange, max, isMax, onMax, disabled }) {
 	const ceiling = Number.isFinite(Number(max)) && Number(max) > 0 ? Math.floor(Number(max)) : 0;
 	const current = Math.min(parseInt(value, 10) || 0, ceiling);
 	const pct = ceiling > 0 ? Math.round((current / ceiling) * 100) : 0;
@@ -343,13 +378,15 @@ export function AmountField({
  * shared layoutId so multiple groups can coexist. `options` is
  * [key, label, disabled?, hint?][]; `hint` is shown as a tooltip when disabled.
  */
-export function Segmented({ id, options, value, onChange }) {
+export function Segmented({ id, options, value, onChange, label }) {
 	return (
-		<div className="pills">
-			{options.map(([key, label, disabled, hint]) => (
+		<div className="pills" role="tablist" aria-label={label}>
+			{options.map(([key, text, disabled, hint]) => (
 				<button
 					key={key}
 					type="button"
+					role="tab"
+					aria-selected={value === key}
 					disabled={disabled}
 					title={disabled ? hint : undefined}
 					className={`pill ${value === key ? 'active' : ''}`}
@@ -362,15 +399,35 @@ export function Segmented({ id, options, value, onChange }) {
 							transition={{ type: 'spring', stiffness: 500, damping: 40 }}
 						/>
 					)}
-					{label}
+					{text}
 				</button>
 			))}
 		</div>
 	);
 }
 
+/** A selectable chip, for presets. `pressed` marks the one in force. */
+export function Chip({ pressed = false, children, className = '', ...props }) {
+	return (
+		<button type="button" className={`chip ${className}`} aria-pressed={pressed} {...props}>
+			{children}
+		</button>
+	);
+}
+
 export function Skeleton({ height = 60, width = '100%', className = '', style }) {
 	return <div className={`skeleton ${className}`} style={{ height, width, ...style }} aria-hidden />;
+}
+
+/** A few placeholder rows while a list is still on its way. */
+export function SkeletonRows({ rows = 3, height = 36 }) {
+	return (
+		<div className="skeleton-rows" aria-hidden>
+			{Array.from({ length: rows }, (_, i) => (
+				<Skeleton key={i} height={height} className="line" style={{ opacity: 1 - i * 0.2 }} />
+			))}
+		</div>
+	);
 }
 
 export function BalanceBar({ local, remote }) {
@@ -383,27 +440,6 @@ export function BalanceBar({ local, remote }) {
 	);
 }
 
-/** The two overlapping sheets everyone recognises as "copy". */
-function CopyIcon() {
-	return (
-		<svg
-			className="copy-icon"
-			viewBox="0 0 16 16"
-			width="13"
-			height="13"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="1.4"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden
-		>
-			<rect x="5.5" y="5.5" width="8" height="9" rx="1.5" />
-			<path d="M10.5 5.5V3a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v6A1.5 1.5 0 0 0 4 10.5h1.5" />
-		</svg>
-	);
-}
-
 /**
  * `label` shows something shorter than what gets copied, for places where the
  * full value would not fit (the wallet header shows a short node id but still
@@ -413,12 +449,13 @@ export function CopyText({ value, label, mono = true, truncate = false }) {
 	const toast = useToast();
 	return (
 		<button
+			type="button"
 			className={`copytext ${mono ? 'mono' : ''} ${truncate ? 'trunc' : ''}`}
 			title="Copy"
 			onClick={async () => toast((await copy(value)) ? 'Copied' : 'Copy failed', 'info')}
 		>
 			<span className="copytext-value">{label ?? value}</span>
-			<CopyIcon />
+			<Icon name="copy" size={13} className="copy-icon" strokeWidth={1.6} />
 		</button>
 	);
 }
@@ -429,6 +466,26 @@ export function DetailRow({ label, children }) {
 		<div className="detail-row">
 			<div className="detail-label">{label}</div>
 			<div className="detail-value">{children}</div>
+		</div>
+	);
+}
+
+/** Key and value on one line, for status panels. */
+export function KeyValue({ children, className = '' }) {
+	return <div className={`kv ${className}`}>{children}</div>;
+}
+
+export function KeyValueRow({ label, help, sub, children }) {
+	return (
+		<div className="kv-row">
+			<div className="kv-key">
+				{label}
+				{help && <Help>{help}</Help>}
+			</div>
+			<div className="kv-val">
+				{children}
+				{sub && <div className="kv-sub">{sub}</div>}
+			</div>
 		</div>
 	);
 }
@@ -467,45 +524,87 @@ export function QR({ value, size = 180 }) {
 	return (
 		<div className="qr">
 			<QRFallback key={value}>
-				<QRCodeSVG
-					value={value}
-					size={size}
-					bgColor="#ffffff"
-					fgColor="#111111"
-					includeMargin
-				/>
+				<QRCodeSVG value={value} size={size} bgColor="#ffffff" fgColor="#111111" includeMargin />
 			</QRFallback>
 		</div>
 	);
 }
 
-const CLOSE_MS = 160;
+// Open dialogs, innermost last. Only the top one answers Escape and the
+// backdrop, so a dialog opened over another closes alone.
+const dialogStack = [];
+const FOCUSABLE =
+	'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function trapTab(e, box) {
+	if (!box) return;
+	const items = [...box.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null || el === box);
+	if (items.length === 0) {
+		e.preventDefault();
+		return;
+	}
+	const first = items[0];
+	const last = items[items.length - 1];
+	const active = document.activeElement;
+	if (e.shiftKey && (active === first || active === box)) {
+		e.preventDefault();
+		last.focus();
+	} else if (!e.shiftKey && active === last) {
+		e.preventDefault();
+		first.focus();
+	}
+}
 
 /**
- * Glass modal that grows out of its trigger. Pass `origin` ({x, y} client
+ * Glass dialog that grows out of its trigger. Pass `origin` ({x, y} client
  * coords from the opening click) to make it fly in from that point; without
- * it, it scales from center. Closing plays a short exit before onClose fires,
- * so call sites can keep conditional rendering.
+ * it, it scales from center. Render it conditionally inside an
+ * <AnimatePresence> and it plays its exit on every way out: Escape, the
+ * backdrop, the close button, or the parent dropping it after a save.
+ *
+ * It takes focus when it opens and hands it back when it closes, keeps Tab
+ * inside, and locks the page behind it from scrolling.
  */
-export function Modal({ title, help, onClose, children, wide = false, origin = null }) {
-	const [closing, setClosing] = useState(false);
-	const closeTimer = useRef(null);
+export function Modal({ title, help, onClose, children, wide = false, origin = null, foot = null }) {
+	const id = useId();
+	const token = useRef({});
+	const box = useRef(null);
 	const reduced = useReducedMotion();
+	const isTop = () => dialogStack[dialogStack.length - 1] === token.current;
 
-	const close = () => {
-		if (closing) return;
-		if (reduced) return onClose();
-		setClosing(true);
-		closeTimer.current = setTimeout(onClose, CLOSE_MS);
-	};
-
-	useEffect(() => () => clearTimeout(closeTimer.current), []);
 	useEffect(() => {
-		const onKey = (e) => e.key === 'Escape' && close();
+		const me = token.current;
+		dialogStack.push(me);
+		const previous = document.activeElement;
+		const open = Number(document.body.dataset.dialogs || 0) + 1;
+		document.body.dataset.dialogs = String(open);
+		document.body.style.overflow = 'hidden';
+		box.current?.focus?.({ preventScroll: true });
+		return () => {
+			const i = dialogStack.indexOf(me);
+			if (i >= 0) dialogStack.splice(i, 1);
+			const left = Number(document.body.dataset.dialogs || 1) - 1;
+			if (left <= 0) {
+				delete document.body.dataset.dialogs;
+				document.body.style.overflow = '';
+			} else {
+				document.body.dataset.dialogs = String(left);
+			}
+			if (previous && typeof previous.focus === 'function' && document.contains(previous)) {
+				previous.focus({ preventScroll: true });
+			}
+		};
+	}, []);
+
+	useEffect(() => {
+		const onKey = (e) => {
+			if (!isTop()) return;
+			if (e.key === 'Escape') onClose();
+			else if (e.key === 'Tab') trapTab(e, box.current);
+		};
 		window.addEventListener('keydown', onKey);
 		return () => window.removeEventListener('keydown', onKey);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [closing]);
+	}, [onClose]);
 
 	// Fly in from the trigger: offset toward the click point, damped so it
 	// reads as growth rather than teleportation.
@@ -518,58 +617,245 @@ export function Modal({ title, help, onClose, children, wide = false, origin = n
 		<m.div
 			className="modal"
 			initial={{ opacity: 0 }}
-			animate={{ opacity: closing ? 0 : 1 }}
+			animate={{ opacity: 1 }}
+			exit={{ opacity: 0 }}
 			transition={{ duration: 0.16 }}
-			onMouseDown={(e) => e.target.classList.contains('modal') && close()}
+			onMouseDown={(e) => e.target.classList.contains('modal') && isTop() && onClose()}
 		>
 			<m.div
+				ref={box}
 				className={`modal-box ${wide ? 'wide' : ''}`}
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby={id}
+				tabIndex={-1}
 				initial={{ opacity: 0, ...from }}
-				animate={
-					closing
-						? { opacity: 0, x: from.x * 0.4, y: from.y * 0.4, scale: 0.9 }
-						: { opacity: 1, x: 0, y: 0, scale: 1 }
-				}
-				transition={
-					closing
-						? { duration: CLOSE_MS / 1000, ease: 'easeIn' }
-						: { type: 'spring', stiffness: 420, damping: 36 }
-				}
+				animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
+				exit={{ opacity: 0, x: from.x * 0.3, y: from.y * 0.3, scale: 0.92 }}
+				transition={reduced ? { duration: 0 } : { type: 'spring', stiffness: 420, damping: 36 }}
 			>
 				<div className="modal-head">
-					<h3>
+					<h3 id={id}>
 						{title}
 						{help && <Help>{help}</Help>}
 					</h3>
-					<Button onClick={close}>Close</Button>
+					<button type="button" className="btn subtle icon sm" aria-label="Close" onClick={onClose}>
+						<Icon name="close" size={15} />
+					</button>
 				</div>
 				<div className="modal-body">{children}</div>
+				{foot && <div className="modal-foot">{foot}</div>}
 			</m.div>
 		</m.div>
 	);
 }
 
-export function Empty({ children }) {
-	return <div className="empty">{children}</div>;
+/** An empty state: a line, or a title with a hint and something to do. */
+export function Empty({ title, children, actions, className = '' }) {
+	return (
+		<div className={`empty ${className}`}>
+			{title && <div className="empty-title">{title}</div>}
+			{children && <div className={title ? 'empty-hint' : undefined}>{children}</div>}
+			{actions && <div className="empty-actions">{actions}</div>}
+		</div>
+	);
+}
+
+const NOTE_ICONS = { info: 'info', success: 'check', warn: 'alert', error: 'alert', muted: 'info' };
+
+/**
+ * A note in a tone: info, success, warn, error or muted. The legacy
+ * `info-note` and `error-note` classes ride along so what looks at them still
+ * finds them.
+ */
+export function Note({ tone = 'info', icon = true, children, className = '', ...rest }) {
+	const legacy = tone === 'error' ? 'error-note' : tone === 'info' ? 'info-note' : '';
+	return (
+		<div
+			className={`note ${tone} ${legacy} ${className}`}
+			role={tone === 'error' ? 'alert' : undefined}
+			{...rest}
+		>
+			{icon && <Icon name={NOTE_ICONS[tone] || 'info'} size={14} />}
+			<div className="note-body">{children}</div>
+		</div>
+	);
 }
 
 export function ErrorNote({ error }) {
 	if (!error) return null;
 	// A refusal, announced as soon as it appears: it is the reason the thing the
 	// reader was doing has stopped.
+	return <Note tone="error">{error.message || String(error)}</Note>;
+}
+
+/** A heading inside a long form or dialog, with an optional one-line hint. */
+export function Section({ title, help, hint, children, className = '' }) {
 	return (
-		<div className="error-note" role="alert">
-			{error.message || String(error)}
+		<div className={`section ${className}`}>
+			{title && (
+				<div className="section-title">
+					{title}
+					{help && <Help>{help}</Help>}
+				</div>
+			)}
+			{hint && <div className="section-hint">{hint}</div>}
+			{children}
 		</div>
 	);
 }
 
-export const staggerContainer = {
-	hidden: {},
-	show: { transition: { staggerChildren: 0.045 } }
-};
+/**
+ * A section that opens on request. `persist` keeps its fields mounted while
+ * closed, for forms whose values must survive being folded away.
+ */
+export function Disclosure({ label, openLabel, defaultOpen = false, open: controlled, onToggle, persist = false, children, className = '' }) {
+	const [own, setOwn] = useState(defaultOpen);
+	const open = controlled ?? own;
+	const id = useId();
+	const toggle = () => {
+		if (onToggle) onToggle(!open);
+		if (controlled === undefined) setOwn(!open);
+	};
+	return (
+		<div className={`disclosure ${className}`}>
+			<button type="button" className="disclosure-btn" aria-expanded={open} aria-controls={id} onClick={toggle}>
+				<Icon name="chevron" size={14} />
+				{open && openLabel ? openLabel : label}
+			</button>
+			<Reveal open={open} persist={persist}>
+				<div id={id} className="disclosure-body">
+					{children}
+				</div>
+			</Reveal>
+		</div>
+	);
+}
 
-export const staggerItem = {
-	hidden: { opacity: 0, y: 10 },
-	show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 380, damping: 34 } }
-};
+/**
+ * An overflow menu behind a "⋯" button. `items` is a list of
+ * { label, onSelect, danger?, disabled?, icon? } or the string 'sep'.
+ * The menu is portalled so no scrolling box clips it, and every click inside
+ * it stops where it is, so a menu on a clickable card never opens the card.
+ */
+export function Menu({ items, label = 'More', align = 'end', size = 'sm', className = '' }) {
+	const trigger = useRef(null);
+	const pop = useRef(null);
+	const [open, setOpen] = useState(false);
+	const [place, setPlace] = useState(null);
+
+	useLayoutEffect(() => {
+		if (!open) {
+			setPlace(null);
+			return;
+		}
+		const t = trigger.current.getBoundingClientRect();
+		const p = pop.current.getBoundingClientRect();
+		const [vw, vh] = [window.innerWidth, window.innerHeight];
+		let left = align === 'end' ? t.right - p.width : t.left;
+		left = Math.max(8, Math.min(left, vw - 8 - p.width));
+		let top = t.bottom + 6;
+		if (top + p.height > vh - 8) top = Math.max(8, t.top - 6 - p.height);
+		setPlace({ left, top });
+	}, [open, align]);
+
+	useEffect(() => {
+		if (!open) return undefined;
+		const close = () => setOpen(false);
+		const onKey = (e) => {
+			if (e.key === 'Escape') {
+				e.stopPropagation();
+				close();
+				trigger.current?.focus();
+				return;
+			}
+			if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+			const items = [...(pop.current?.querySelectorAll('[role="menuitem"]:not([disabled])') || [])];
+			if (!items.length) return;
+			e.preventDefault();
+			const i = items.indexOf(document.activeElement);
+			let next = 0;
+			if (e.key === 'ArrowDown') next = i < 0 ? 0 : (i + 1) % items.length;
+			if (e.key === 'ArrowUp') next = i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length;
+			if (e.key === 'End') next = items.length - 1;
+			items[next].focus();
+		};
+		const onPress = (e) => {
+			if (trigger.current?.contains(e.target) || pop.current?.contains(e.target)) return;
+			close();
+		};
+		window.addEventListener('keydown', onKey, true);
+		window.addEventListener('scroll', close, true);
+		window.addEventListener('resize', close);
+		document.addEventListener('pointerdown', onPress, true);
+		return () => {
+			window.removeEventListener('keydown', onKey, true);
+			window.removeEventListener('scroll', close, true);
+			window.removeEventListener('resize', close);
+			document.removeEventListener('pointerdown', onPress, true);
+		};
+	}, [open]);
+
+	useEffect(() => {
+		if (open && place) pop.current?.querySelector('[role="menuitem"]:not([disabled])')?.focus();
+	}, [open, place]);
+
+	const stop = (e) => e.stopPropagation();
+
+	return (
+		<>
+			<button
+				ref={trigger}
+				type="button"
+				className={`btn subtle icon ${size} ${className}`}
+				aria-label={label}
+				aria-haspopup="menu"
+				aria-expanded={open}
+				onClick={(e) => {
+					stop(e);
+					setOpen((o) => !o);
+				}}
+				onMouseDown={stop}
+			>
+				<Icon name="more" size={16} strokeWidth={2.4} />
+			</button>
+			{open &&
+				createPortal(
+					<m.div
+						ref={pop}
+						className="menu"
+						role="menu"
+						initial={{ opacity: 0, scale: 0.96, y: -4 }}
+						animate={{ opacity: place ? 1 : 0, scale: 1, y: 0 }}
+						transition={springs.snappy}
+						style={place ? { top: place.top, left: place.left } : { top: 0, left: 0, visibility: 'hidden' }}
+						onClick={stop}
+						onMouseDown={stop}
+					>
+						{items.map((it, i) =>
+							it === 'sep' ? (
+								<div key={`sep-${i}`} className="menu-sep" role="separator" />
+							) : (
+								<button
+									key={it.label}
+									type="button"
+									role="menuitem"
+									className={`menu-item ${it.danger ? 'danger' : ''}`}
+									disabled={it.disabled}
+									onClick={(e) => {
+										stop(e);
+										setOpen(false);
+										it.onSelect?.(e);
+									}}
+								>
+									{it.icon && <Icon name={it.icon} size={14} />}
+									{it.label}
+								</button>
+							)
+						)}
+					</m.div>,
+					document.body
+				)}
+		</>
+	);
+}

@@ -1,7 +1,7 @@
 import { irohBody } from '../lib/iroh.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { m } from 'motion/react';
+import { AnimatePresence, m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
@@ -260,11 +260,13 @@ export default function WalletsPage() {
 			<NewWallet config={config} wallets={wallets} onDone={refresh} onSeed={(s) => setModal(s)} onOpen={openWallet} />
 			{!hasWallets && walletsCard}
 
+			<AnimatePresence>
 			{modal?.type === 'seed' && (
-				<SeedModal name={modal.name} mnemonic={modal.mnemonic} onClose={() => setModal(null)} />
+				<SeedModal key="seed" name={modal.name} mnemonic={modal.mnemonic} onClose={() => setModal(null)} />
 			)}
 			{modal?.type === 'delete' && (
 				<DeleteModal
+					key="delete"
 					wallet={modal.wallet}
 					origin={modal.origin}
 					onClose={() => setModal(null)}
@@ -275,6 +277,7 @@ export default function WalletsPage() {
 					}}
 				/>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }

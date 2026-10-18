@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import {
@@ -246,8 +247,10 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 				</Card>
 			)}
 
+			<AnimatePresence>
 			{detail && (
 				<DetailModal
+					key="detail"
 					detail={detail}
 					network={network}
 					tipHeight={tipHeight}
@@ -258,6 +261,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 
 			{bumping && (
 				<BumpFeeModal
+					key="bump"
 					api={api}
 					tx={bumping.tx}
 					method={bumping.method}
@@ -278,6 +282,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 					}}
 				/>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }

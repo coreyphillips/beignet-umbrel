@@ -83,8 +83,10 @@ export default function App() {
 					<ThemeToggle />
 				</div>
 			</header>
+			<AnimatePresence>
 			{settings && (
 				<SettingsModal
+					key="settings"
 					config={settings.config}
 					origin={settings.origin}
 					onClose={() => setSettings(null)}
@@ -98,6 +100,7 @@ export default function App() {
 			)}
 			{backup && (
 				<BackupModal
+					key="backup"
 					mode={backup.mode}
 					origin={backup.origin}
 					onClose={() => setBackup(null)}
@@ -110,6 +113,7 @@ export default function App() {
 					}}
 				/>
 			)}
+			</AnimatePresence>
 			<AnimatePresence mode="popLayout" initial={false}>
 				{/* Opacity-only at the page root: transforms here would break the
 				    sticky wnav and the cross-page layoutId morphs. */}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { AmountField, Badge, BalanceBar, Button, Card, CopyText, DetailRow, Field, FeeField, Help, Modal, Segmented } from '../../components/ui.jsx';
@@ -213,11 +214,13 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 				)}
 			</Card>
 
+			<AnimatePresence>
 			{modal?.type === 'open' && (
-				<OpenChannelModal id={id} api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
+				<OpenChannelModal key="open" id={id} api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
 			)}
 			{modal?.type === 'detail' && (
 				<ChannelDetailModal
+					key="detail"
 					id={id}
 					api={api}
 					channel={modal.channel}
@@ -227,6 +230,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 			)}
 			{modal?.type === 'splice' && (
 				<SpliceModal
+					key="splice"
 					api={api}
 					dir={modal.dir}
 					channel={modal.channel}
@@ -236,7 +240,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 				/>
 			)}
 			{modal?.type === 'close' && (
-				<Modal title="Close channel" onClose={() => setModal(null)} origin={modal.origin}>
+				<Modal key="close" title="Close channel" onClose={() => setModal(null)} origin={modal.origin}>
 					<p className="wallet-meta">
 						Cooperatively close the channel with <span className="mono">{shortId(modal.channel.peerPubkey)}</span>?
 						Your local balance ({fmtSats(modal.channel.localBalanceSats)}) returns on-chain.
@@ -258,6 +262,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 					</div>
 				</Modal>
 			)}
+			</AnimatePresence>
 		</div>
 	);
 }
