@@ -83,10 +83,14 @@ export default function WalletHero({
 
 				<m.div className="hero-main" layout="position">
 					<div>
-						<div className="hero-balance">
-							{info ? <AnimatedNumber value={total} /> : <span>{stopped ? '·' : '…'}</span>}
-							<span className="unit">sats</span>
-						</div>
+						{/* No figure until the daemon has one: a stopped or holding wallet
+						    has nothing to count, and a placeholder would read as a balance. */}
+						{info && (
+							<div className="hero-balance">
+								<AnimatedNumber value={total} />
+								<span className="unit">sats</span>
+							</div>
+						)}
 						<div className="hero-split">
 							{info && !simple && !rec.onchainOnly && (
 								<>
