@@ -2601,3 +2601,21 @@ tr:focus-within .row-actions,
 .badge-row + .closer {
 	display: block;
 }
+
+/* ---------- QR stage ---------- */
+.qr-stage {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--sp-3);
+	margin-top: var(--sp-2);
+	text-align: center;
+}
+
+.qr-stage .copytext {
+	justify-content: center;
+}
+
+.paid-receipt .center-actions {
+	margin-top: var(--sp-2);
+}

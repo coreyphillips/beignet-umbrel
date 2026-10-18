@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
-import { AmountField, Button, Card, Field, FeeField, Badge, Help, Segmented } from '../../components/ui.jsx';
+import { AmountField, Button, Card, Chip, CopyText, ExplorerLink, Field, FeeField, Help, Note, Segmented } from '../../components/ui.jsx';
+import { Check, Reveal, SpinnerLine, Switch } from '../../components/motion.jsx';
+import { txUrl } from '../../lib/explorer.js';
 import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
 import { formatInvoiceWarning } from '../../lib/hints.js';
@@ -175,14 +177,15 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 				}
 			/>
 			{channels && !canLightning && (
-				<div className="info-note" style={{ marginBottom: 14 }}>
+				<Note tone="info">
 					{splicingOnly
 						? 'Your channel is mid-splice. Its funds are safe, and Lightning payments resume when the splice transaction confirms and locks.'
 						: isLfbw
 						? 'Nothing to send yet. Deposit bitcoin or receive a Lightning payment on the Receive tab, and your channel appears by itself.'
 						: 'Lightning payments need an open channel. Open one in the Channels tab.'}
-				</div>
+				</Note>
 			)}
+			<Switch value={mode}>
 			{mode === 'onchain' && isLfbw && (
 				<AddressSend
 					id={id}
@@ -224,6 +227,7 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 				/>
 			)}
 			{mode === 'keysend' && <Keysend api={api} channels={channels} bump={bump} />}
+			</Switch>
 		</div>
 	);
 }
@@ -762,28 +766,25 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 				/>
 			</Field>
 			{arrived && (
-				<div className="info-note" role="status">
+				<Note tone="info" role="status">
 					{arrived}
-				</div>
+				</Note>
 			)}
 			{parsed.kind === 'invalid' && mayRefuse && (
-				<div className="error-note" role="alert">
+				<Note tone="error" role="alert">
 					{parsed.message}
-				</div>
+				</Note>
 			)}
 			{note && (
-				<div
-					className={note.tone === 'error' ? 'error-note' : 'info-note'}
-					role={note.tone === 'error' ? 'alert' : 'status'}
-				>
+				<Note tone={note.tone === 'error' ? 'error' : 'info'} role={note.tone === 'error' ? 'alert' : 'status'}>
 					{note.text}
-				</div>
+				</Note>
 			)}
 			{/* While the box holds something unreadable, that is the only thing worth
 			    saying about it. The request is still held, and says its piece again
 			    as soon as the address is back. */}
 			{request && parsed.kind === 'onchain' && (
-				<div className="info-note" role="status">
+				<Note tone="info" role="status">
 					Read from a payment request
 					{request.amountSats != null ? `, which asks for ${fmtSats(request.amountSats)}` : ''}.
 					{/* The one moment worth saying the payee's figure out loud is the
@@ -829,15 +830,15 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 							</Button>
 						</div>
 					)}
-				</div>
+				</Note>
 			)}
 			{funding && parsed.kind === 'onchain' && (
 				<>
-					<div className="info-note" role="status">
+					<Note tone="info" role="status">
 						This request comes from a beignet wallet
 						{funding.nodeId ? ` (node ${shortId(funding.nodeId)})` : ''}.
 						{maxMode ? ' A direct funding takes a fixed amount, so it is off while Max is on.' : ''}
-					</div>
+					</Note>
 					<label className="checkbox field">
 						<input
 							type="checkbox"
@@ -867,7 +868,7 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					</span>
 				</div>
 			)}
-			{expanded && (
+			<Reveal open={expanded && !txid}>
 				<>
 					<AmountField
 						label="Amount (sats)"
@@ -893,14 +894,14 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 						}
 					/>
 					{requestTooLarge && parsed.kind === 'onchain' && (
-						<div className="error-note" role="alert">
+						<Note tone="error" role="alert">
 							This request asks for {fmtSats(requestedAmount)}, which is more than this wallet can send.{' '}
 							{feeSats != null
 								? `The most it can send at this fee rate is ${fmtSats(ordinaryMax)}, with the fee coming out of the rest. Ask for a smaller amount${
 										feeCouldClose ? ', or lower the fee rate' : ''
 								  }.`
 								: `It holds ${fmtSats(balance)}. Ask for a smaller amount.`}
-						</div>
+						</Note>
 					)}
 					<FeeField
 						label="Fee rate (sat/vB)"
@@ -915,16 +916,15 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 						}
 					/>
 					{fees && (
-						<div className="preset-row" style={{ marginBottom: 14 }}>
+						<div className="chip-row" style={{ marginBottom: 14 }}>
 							{[
 								['Fast', fees.fast],
 								['Normal', fees.normal],
 								['Slow', fees.slow]
 							].map(([label, rate]) => (
-								<button
+								<Chip
 									key={label}
-									type="button"
-									className="btn sm"
+									pressed={feeRate !== '' && String(effRate) === String(rate)}
 									// A preset above the headroom would break the same rule the
 									// slider is held to, so it is offered but not selectable.
 									disabled={rate > feeMax}
@@ -932,63 +932,85 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 									onClick={() => setFeeRateManually(String(rate))}
 								>
 									{label} · {rate} sat/vB
-								</button>
+								</Chip>
 							))}
 						</div>
 					)}
-					{feeSats != null && (
-						<div className="wallet-meta" style={{ marginBottom: 12 }}>
-							Fee: {fmtSats(feeSats)} at {effRate} sat/vB over {vsize} vB. This is what the
-							transaction pays, not an estimate of it.
-						</div>
-					)}
 					{nearMax && (
-						<div className="info-note" style={{ marginBottom: 12 }}>
+						<Note tone="info">
 							This is close to your full balance. Use Max to sweep everything without leaving dust behind.
-						</div>
+						</Note>
 					)}
-					<Button
-						variant="primary"
-						busy={busy}
-						onClick={send}
-						// Nothing but a destination the parser could read goes to the daemon.
-						// It refuses the rest anyway, but it refuses them from inside
-						// transaction building, with a message about fees rather than about
-						// the address, long after the note above said what was wrong.
-						disabled={
-							parsed.kind !== 'onchain' ||
-							amountNum <= 0 ||
-							balance === 0 ||
-							fetchingAddr ||
-							requestTooLarge
-						}
-					>
-						{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
-					</Button>
+					<div className="summary-bar">
+						<div className="summary-text">
+							{feeSats != null ? (
+								<>
+									Fee <strong>{fmtSats(feeSats)}</strong> at {effRate} sat/vB over {vsize} vB. This is what
+									the transaction pays, not an estimate of it.
+								</>
+							) : (
+								'Enter an amount to price the transaction.'
+							)}
+						</div>
+						<Button
+							variant="primary"
+							busy={busy}
+							onClick={send}
+							// Nothing but a destination the parser could read goes to the daemon.
+							// It refuses the rest anyway, but it refuses them from inside
+							// transaction building, with a message about fees rather than about
+							// the address, long after the note above said what was wrong.
+							disabled={
+								parsed.kind !== 'onchain' ||
+								amountNum <= 0 ||
+								balance === 0 ||
+								fetchingAddr ||
+								requestTooLarge
+							}
+						>
+							{payDirect ? 'Pay as direct funding' : maxMode ? 'Send max' : 'Send'}
+						</Button>
+					</div>
 				</>
-			)}
+			</Reveal>
 			{fundingUnknown && (
-				<div className={fundingUnknown.waiting ? 'info-note' : 'error-note'} style={{ marginTop: 12 }} role="status">
+				<Note tone={fundingUnknown.waiting ? 'info' : 'error'} role="status">
 					{describeUnknown(fundingUnknown)}
-				</div>
+				</Note>
 			)}
 			{fellBack && (
-				<div className="info-note" style={{ marginTop: 12 }} role="status">
+				<Note tone="info" role="status">
 					{describeFallback(fellBack)}
 					{fellBack.persisted === false && (
 						<div role="alert">
 							The fallback reason could not be saved to Activity. Keep this note for your records.
 						</div>
 					)}
-				</div>
+				</Note>
 			)}
 			{txid && (
-				<div className="info-note" style={{ marginTop: 12 }}>
-					Broadcast: <span className="mono">{txid}</span>
+				<div className="result" role="status">
+					<Check />
+					<div className="result-title">Sent</div>
+					<div className="result-meta">
+						<span>Broadcast:</span>
+						<CopyText value={txid} label={shortId(txid, 8)} />
+						<ExplorerLink url={txUrl(rec?.network || info?.network, txid)}>View on mempool.space</ExplorerLink>
+					</div>
+					<div className="result-actions">
+						<Button
+							onClick={() => {
+								setTxid('');
+								onChange('');
+							}}
+						>
+							Send another
+						</Button>
+					</div>
 				</div>
 			)}
 			{fundingResult && (
-				<div className={fundingResult.failed ? 'error-note' : 'info-note'} style={{ marginTop: 12 }} role="status">
+				<Note tone={fundingResult.failed ? 'error' : 'info'} role="status">
 					{describeFunding(fundingResult)}
 					{fundingResult.txid && (
 						<div>
@@ -1000,7 +1022,7 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 							Receipt: <span className="mono">{fundingResult.receiptPreimageHex}</span>
 						</div>
 					)}
-				</div>
+				</Note>
 			)}
 			{stepsFor && <LiveFundingSteps key={stepsFor.attempt} walletId={id} requestId={stepsFor.requestId} />}
 		</Card>
@@ -1415,19 +1437,19 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 				/>
 			</Field>
 			{arrived && (
-				<div className="info-note" role="status">
+				<Note tone="info" role="status">
 					{arrived}
-				</div>
+				</Note>
 			)}
 			{parsed.kind === 'invalid' && mayRefuse && (
-				<div className="error-note" role="alert">
+				<Note tone="error" role="alert">
 					{parsed.message}
-				</div>
+				</Note>
 			)}
 			{error && (
-				<div className="error-note" role="alert">
+				<Note tone="error" role="alert">
 					{error}
-				</div>
+				</Note>
 			)}
 			{/* Everything the daemon reads out of the invoice appears here without a
 			    click, which left a screen reader nothing to hang the result on: the
@@ -1439,20 +1461,19 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 				    invoice changes, and the one moment the reader most needs to be told
 				    "this is not your invoice yet" was exactly the moment that gate said
 				    nothing. */}
-				{decoding && (
-					<div className="wallet-meta">Reading the {offer ? 'offer' : 'invoice'}…</div>
-				)}
+				{decoding && <SpinnerLine>Reading the {offer ? 'offer' : 'invoice'}…</SpinnerLine>}
+				<Reveal open={!!decoded}>
 				{decoded && (
 					<>
-					<table style={{ marginTop: 4 }}>
+					<table className="kv-table" style={{ marginTop: 4 }}>
 						<tbody>
 							<tr>
-								<td className="wallet-meta">Amount</td>
-								<td>{decoded.amountSats ? fmtSats(decoded.amountSats) : 'any (you choose below)'}</td>
+								<td className="kv-key">Amount</td>
+								<td className="kv-val">{decoded.amountSats ? fmtSats(decoded.amountSats) : 'any (you choose below)'}</td>
 							</tr>
 							<tr>
-								<td className="wallet-meta">Description</td>
-								<td>{decoded.description || '-'}</td>
+								<td className="kv-key">Description</td>
+								<td className="kv-val">{decoded.description || '-'}</td>
 							</tr>
 							{/* An offer names who is asking rather than who is being paid, and
 							    it may say so in words as well as by node id. The words are the
@@ -1463,7 +1484,7 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 							    button takes longer to come back. Both follow from the exchange,
 							    and neither is a fault. */}
 							<tr>
-								<td className="wallet-meta">
+								<td className="kv-key">
 									{offer ? (
 										<>
 											Issuer
@@ -1479,17 +1500,17 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 									)}
 								</td>
 								{offer && decoded.issuer ? (
-									<td>{decoded.issuer}</td>
+									<td className="kv-val">{decoded.issuer}</td>
 								) : (
-									<td className="mono">
+									<td className="kv-val mono">
 										{shortId(offer ? decoded.issuerId : decoded.payeeNodeKey)}
 									</td>
 								)}
 							</tr>
 							{expiresAt != null && (
 								<tr>
-									<td className="wallet-meta">Expires</td>
-									<td>
+									<td className="kv-key">Expires</td>
+									<td className="kv-val">
 										{expired
 											? `Expired ${fmtDuration((now - expiresAt) / 1000)} ago`
 											: `In ${fmtDuration((expiresAt - now) / 1000)}`}
@@ -1498,8 +1519,8 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 							)}
 							{estimate && !expired && (
 								<tr>
-									<td className="wallet-meta">Estimate</td>
-									<td>
+									<td className="kv-key">Estimate</td>
+									<td className="kv-val">
 										~{fmtSats(estimate.estimatedFeeSats)} fee · {estimate.successProbabilityPct}% success ·{' '}
 										{estimate.hopCount} hops
 									</td>
@@ -1508,9 +1529,9 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 						</tbody>
 					</table>
 					{decoded.warnings?.length > 0 && (
-						<div className="info-note" style={{ marginTop: 12 }}>
+						<Note tone="info">
 							{decoded.warnings.map(formatInvoiceWarning).join(' ')}
-						</div>
+						</Note>
 					)}
 					{needsAmount && (
 						<div style={{ marginTop: 12 }}>
@@ -1528,33 +1549,34 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 						</div>
 					)}
 					{expired && (
-						<div className="error-note" role="alert">
+						<Note tone="error" role="alert">
 							This {offer ? 'offer' : 'invoice'} has expired, so it can no longer be
 							paid. Ask for a new one.
-						</div>
+						</Note>
 					)}
 					{!expired && arriving && (
-						<div className="info-note" role="status" data-testid="arriving-funds" style={{ marginTop: 12 }}>
+						<Note tone="info" role="status" data-testid="arriving-funds" style={{ marginTop: 12 }}>
 							{arriving}
-						</div>
+						</Note>
 					)}
 					{!expired && overTotal && (
-						<div className="error-note" role="alert" data-testid="over-total" style={{ marginTop: 12 }}>
+						<Note tone="error" role="alert" data-testid="over-total" style={{ marginTop: 12 }}>
 							This asks for {fmtSats(askedSats)}, more than this wallet holds in total ({fmtSats(lfbwState.total)}).
-						</div>
+						</Note>
 					)}
 					{/* A lightning-first wallet's own notes above carry better figures
 					    for a shortfall (what is arriving, and when), so they win. */}
 					{!expired && !arriving && !overTotal && noRoute && (
-						<div className="error-note" role="alert" data-testid="no-route" style={{ marginTop: 12 }}>
+						<Note tone="error" role="alert" data-testid="no-route" style={{ marginTop: 12 }}>
 							{noRoute.message}
 							{noRoute.remedy && <Help>{noRoute.remedy}</Help>}
-						</div>
+						</Note>
 					)}
 					</>
 				)}
+				</Reveal>
 			</div>
-			<div className="center-actions">
+			<div className="center-actions start">
 				<Button
 					variant="primary"
 					busy={busy}
@@ -1575,15 +1597,11 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 				{value && <Button onClick={clear}>Clear</Button>}
 			</div>
 			{result && (
-				<div
-					className={result.status === 'COMPLETED' ? 'info-note' : 'error-note'}
-					role={result.status === 'COMPLETED' ? 'status' : 'alert'}
-					style={{ marginTop: 12 }}
-				>
+				<Note tone={result.status === 'COMPLETED' ? 'success' : 'error'} role={result.status === 'COMPLETED' ? 'status' : 'alert'} style={{ marginTop: 12 }}>
 					Payment {result.status}
 					{result.feeSats != null ? ` · fee ${fmtSats(result.feeSats)}` : ''}
 					{result.failureDescription ? ` · ${result.failureDescription}` : ''}
-				</div>
+				</Note>
 			)}
 		</Card>
 	);
@@ -1594,6 +1612,7 @@ function Keysend({ api, channels, bump }) {
 	const [pubkey, setPubkey] = useState('');
 	const [amount, setAmount] = useState('');
 	const [busy, setBusy] = useState(false);
+	const [result, setResult] = useState(null);
 
 	// The most that can leave over Lightning is the local side of the usable
 	// channels. Routing fees and each channel's reserve come out of that, so this
@@ -1616,6 +1635,7 @@ function Keysend({ api, channels, bump }) {
 			} finally {
 				endOwnPayment(own, r?.paymentHash);
 			}
+			setResult(r);
 			toast(r.status === 'COMPLETED' ? 'Keysend sent' : `Keysend ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
 			bump();
 		} catch (e) {
@@ -1642,6 +1662,12 @@ function Keysend({ api, channels, bump }) {
 			<Button variant="primary" busy={busy} onClick={send} disabled={!pubkey || !amount}>
 				Send keysend
 			</Button>
+			{result && (
+				<Note tone={result.status === 'COMPLETED' ? 'success' : 'error'} role="status" style={{ marginTop: 12 }}>
+					Keysend {result.status === 'COMPLETED' ? 'sent' : result.status}
+					{result.feeSats != null ? ` · fee ${fmtSats(result.feeSats)}` : ''}
+				</Note>
+			)}
 		</Card>
 	);
 }
