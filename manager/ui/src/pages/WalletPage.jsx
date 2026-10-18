@@ -1,13 +1,17 @@
 import { irohBody } from '../lib/iroh.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AnimatePresence, m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useSSE } from '../hooks/useSSE.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
-import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal } from '../components/ui.jsx';
+import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal, Note } from '../components/ui.jsx';
+import { Icon } from '../components/icons.jsx';
+import WalletHero from '../components/WalletHero.jsx';
+import TabBar from '../components/TabBar.jsx';
+import DeleteWalletModal from '../components/DeleteWalletModal.jsx';
 import ElectrumFields from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
@@ -47,10 +51,12 @@ const TABS = [
 	['peers', 'Peers', PeersTab],
 	['activity', 'Activity', ActivityTab],
 	['offers', 'Offers', OffersTab],
-	['tools', 'Tools', ToolsTab],
-	['logs', 'Logs', LogsTab],
-	['console', 'Console', ConsoleTab]
+	['tools', 'Tools', ToolsTab, true],
+	['logs', 'Logs', LogsTab, true],
+	['console', 'Console', ConsoleTab, true]
 ];
+// Send and Receive are reached from the hero's two buttons, not the bar.
+const HERO_ROUTES = new Set(['send', 'receive']);
 
 // A lightning-first wallet's whole surface: one balance, receive, send. The
 // full tab set is a toggle away, for looking under the hood.
@@ -280,91 +286,80 @@ export default function WalletPage() {
 		if (simple && !tabs.some((t) => t[0] === tab)) navigate(`/w/${id}/overview`, { replace: true });
 	}, [simple, tab, tabs, id, navigate]);
 
+	const nav = tabs.filter(([key]) => !HERO_ROUTES.has(key));
+	const [starting, setStarting] = useState(false);
+	const [deleting, setDeleting] = useState(null); // click origin or null
+	const start = async () => {
+		setStarting(true);
+		try {
+			await manager.startWallet(id);
+			toast('Starting…', 'info');
+			refreshRec();
+		} catch (e) {
+			toast(e.message, 'error');
+		} finally {
+			setStarting(false);
+		}
+	};
+	const stop = async () => {
+		try {
+			await manager.stopWallet(id);
+			toast('Stopping…', 'info');
+			refreshRec();
+		} catch (e) {
+			toast(e.message, 'error');
+		}
+	};
+
+	// What the hero says beside the name, and what it flags underneath. Only
+	// a condition that wants the owner's eye becomes a flag: a healthy
+	// Electrum connection or an ordinary backup tier says nothing.
+	const chips = [];
+	if (rec) chips.push({ label: rec.network, tone: 'chip' });
+	if (rec?.onchainOnly) chips.push({ label: 'On-chain only' });
+	if (isLfbw) chips.push({ label: 'Lightning-first' });
+	if (rec?.lfbwDependents?.length > 0) chips.push({ label: `Primary for ${rec.lfbwDependents.length}` });
+	const attention = [];
+	if (health && !health.electrumConnected) attention.push({ label: 'Electrum down', tone: 'red' });
+	if (backup?.degraded && !rec?.onchainOnly) attention.push({ label: backup.tier, tone: backup.tone });
+	if (epochBadge && epochBadge.state === 'ACTIVE' && !epochBadge.mismatch && !epochBadge.enforced) {
+		attention.push({ label: 'Receiving offline', tone: 'green' });
+	}
+	if (epochBadge && epochBadge.enforced) attention.push({ label: 'Enforced on-chain', tone: 'yellow' });
+	if (rec?.fforEnforce || (epochBadge && epochBadge.mismatch && !epochBadge.enforced)) {
+		attention.push({ label: 'Enforce on-chain', tone: 'red' });
+	}
+	if (rec && !rec.onchainOnly && rec.torCircuitOk === false) attention.push({ label: 'Tor circuits down', tone: 'red' });
+
 	return (
 		<div className="container">
 			<Link to="/" className="back-link">
-				← All wallets
+				<Icon name="back" size={14} />
+				Wallets
 			</Link>
 
-			<m.div layoutId={`wallet-card-${id}`} className="whead">
-				<div className="wallet-title">
-					<m.div layoutId={`wallet-name-${id}`}>
-						<h2>{rec?.name || 'Wallet'}</h2>
-					</m.div>
-					{rec && (
-						<m.span layoutId={`wallet-status-${id}`}>
-							<Badge tone={running ? 'green' : rec.status === 'stopped' ? 'muted' : 'yellow'}>
-								<span className="dot" />
-								{rec.status}
-							</Badge>
-						</m.span>
-					)}
-					{rec && <Badge tone="blue">{rec.network}</Badge>}
-					{rec?.onchainOnly && <Badge tone="muted">on-chain only</Badge>}
-					{isLfbw && <Badge tone="blue">lightning first</Badge>}
-					{rec?.lfbwDependents?.length > 0 && (
-						<Badge tone="muted">
-							primary for {rec.lfbwDependents.length}
-						</Badge>
-					)}
-					{health && (
-						<Badge tone={health.electrumConnected ? 'green' : 'red'}>
-							{health.electrumConnected ? 'electrum ok' : 'electrum down'}
-						</Badge>
-					)}
-					{backup?.degraded && !rec?.onchainOnly && (
-						<Badge tone={backup.tone}>{backup.tier}</Badge>
-					)}
-					{epochBadge && epochBadge.state === 'ACTIVE' && !epochBadge.mismatch && !epochBadge.enforced && (
-						<Badge tone="green">receiving offline</Badge>
-					)}
-					{epochBadge && epochBadge.enforced && <Badge tone="yellow">enforced on-chain</Badge>}
-					{(rec?.fforEnforce || (epochBadge && epochBadge.mismatch && !epochBadge.enforced)) && (
-						<Badge tone="red">enforce on-chain</Badge>
-					)}
-					<Button className="sm" onClick={(e) => setEditing({ x: e.clientX, y: e.clientY })}>
-						Edit
-					</Button>
-				</div>
-				<div className="wallet-meta">
-					{info ? (
-						<>
-							{simple ? (
-								// One balance: a lightning-first wallet does not present its
-								// two rails as two figures, the arriving part is said on its
-								// Overview instead.
-								<>
-									<AnimatedNumber
-										value={(info.onchainBalanceSats || 0) + (info.lightningBalanceSats || 0)}
-										suffix=" sats"
-									/>{' '}
-									·{' '}
-								</>
-							) : (
-								<>
-									<AnimatedNumber value={info.onchainBalanceSats} suffix=" sats" /> on-chain ·{' '}
-									{!rec?.onchainOnly && (
-										<>
-											<AnimatedNumber value={info.lightningBalanceSats} suffix=" sats" /> lightning ·{' '}
-										</>
-									)}
-								</>
-							)}
-							node <CopyText value={info.nodeId} label={shortId(info.nodeId)} /> · height{' '}
-							{info.blockHeight}
-						</>
-					) : rec?.electrum ? (
-						`electrum ${rec.electrum.host}:${rec.electrum.port}`
-					) : (
-						'Loading…'
-					)}
-				</div>
-			</m.div>
+			<WalletHero
+				id={id}
+				rec={rec}
+				info={info}
+				running={running}
+				simple={simple}
+				isLfbw={isLfbw}
+				advanced={advanced}
+				onToggleAdvanced={toggleAdvanced}
+				chips={chips}
+				attention={attention}
+				onEdit={(e) => setEditing({ x: e?.clientX ?? 0, y: e?.clientY ?? 0 })}
+				onStart={start}
+				onStop={stop}
+				onDelete={(e) => setDeleting({ x: e?.clientX ?? 0, y: e?.clientY ?? 0 })}
+				starting={starting}
+			/>
 
 			{rec?.status === 'restarting' && rec.lastStartError && (
-				<div className="error-note" style={{ marginBottom: 14 }}>
+				<Note tone="error">
 					The wallet's last start failed and it is retrying: {rec.lastStartError.message}
-				</div>
+				</Note>
 			)}
 
 			{showRestore ? (
@@ -385,31 +380,8 @@ export default function WalletPage() {
 						else bump();
 					}}
 				/>
-			) : !running ? (
-				<div className="card">
-					<div className="empty">
-						This wallet is not running.
-						<div className="center-actions" style={{ justifyContent: 'center' }}>
-							<Button
-								variant="primary"
-								onClick={async () => {
-									try {
-										await manager.startWallet(id);
-										toast('Starting…', 'info');
-										refreshRec();
-									} catch (e) {
-										toast(e.message, 'error');
-									}
-								}}
-							>
-								Start wallet
-							</Button>
-							<Button onClick={() => navigate('/')}>Back</Button>
-						</div>
-					</div>
-				</div>
-			) : (
-				<div className="wallet-layout">
+			) : running ? (
+				<>
 					<ResumeBanner recovery={recovery} />
 					{fforOn && (
 						<FforReturnPanel
@@ -423,7 +395,7 @@ export default function WalletPage() {
 						/>
 					)}
 					{capsuleOffer(recovery, info) && (
-						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+						<div style={{ marginBottom: 14 }}>
 							<CapsuleRestoreCard
 								api={api}
 								offer={capsuleOffer(recovery, info)}
@@ -437,7 +409,7 @@ export default function WalletPage() {
 					)}
 
 					{rec && !rec.onchainOnly && rec.torCircuitOk === false && (
-						<div className="error-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+						<Note tone="error">
 							The app&apos;s Tor cannot build circuits right now.{' '}
 							{modeOf(rec) === 'tor'
 								? 'Every peer of this wallet is reached over Tor, so connections will time out.'
@@ -447,32 +419,13 @@ export default function WalletPage() {
 							{modeOf(rec) === 'tor'
 								? ', or switch this wallet to Clearnet or Hybrid so clearnet peers are dialed directly.'
 								: '.'}
-						</div>
+						</Note>
 					)}
-					<nav className="wnav">
-						{tabs.map(([key, label]) => (
-							<NavLink key={key} to={`/w/${id}/${key}`} className={key === tab ? 'active' : ''}>
-								{key === tab && (
-									<m.span
-										layoutId="wnav-indicator"
-										className="wnav-indicator"
-										transition={{ type: 'spring', stiffness: 500, damping: 40 }}
-									/>
-								)}
-								{label}
-							</NavLink>
-						))}
-						{!simple && (
-							<a href={`/swagger.html?id=${id}`} target="_blank" rel="noreferrer">
-								Raw API ↗
-							</a>
-						)}
-						{isLfbw && (
-							<button type="button" className="wnav-toggle" onClick={toggleAdvanced}>
-								{advanced ? 'Simple view' : 'Advanced view'}
-							</button>
-						)}
-					</nav>
+
+					{/* One screen needs no bar: the simple lightning-first view is its Overview. */}
+					{nav.length > 1 && (
+						<TabBar id={id} items={nav} active={nav.some((t) => t[0] === tab) ? tab : null} rawApi={!simple} />
+					)}
 					<AnimatePresence mode="wait" initial={false}>
 						<m.div
 							key={tab}
@@ -495,8 +448,8 @@ export default function WalletPage() {
 							/>
 						</m.div>
 					</AnimatePresence>
-				</div>
-			)}
+				</>
+			) : null}
 
 			<AnimatePresence>
 			{editing && rec && (
@@ -505,7 +458,6 @@ export default function WalletPage() {
 					rec={rec}
 					origin={editing}
 					presets={config?.electrumPresets || []}
-
 					torAvailable={!!config?.torAvailable}
 					torProxyScopeAvailable={config?.torProxyScopeAvailable !== false}
 					irohAvailable={!!config?.irohAvailable}
@@ -531,6 +483,19 @@ export default function WalletPage() {
 					}}
 				/>
 			)}
+			{deleting && rec && (
+				<DeleteWalletModal
+					key="delete"
+					wallet={rec}
+					origin={deleting}
+					onClose={() => setDeleting(null)}
+					onDeleted={() => {
+						setDeleting(null);
+						toast('Wallet deleted', 'success');
+						navigate('/');
+					}}
+				/>
+			)}
 			</AnimatePresence>
 		</div>
 	);
@@ -546,7 +511,7 @@ function ResumeBanner({ recovery }) {
 	if (complete || channels.total === 0 || channels.pending === 0) return null;
 	const landed = channels.resumed + channels.closing;
 	return (
-		<div className="info-note" style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+		<Note tone="info">
 			Channels resuming: {landed} of {channels.total}
 			{channels.closing > 0 ? ` (${channels.closing} closing safely, funds return on-chain)` : ''}.
 			<Help>
@@ -555,7 +520,7 @@ function ResumeBanner({ recovery }) {
 					? ', and the guardians must confirm this device owns them before any payment moves.'
 					: '.'}
 			</Help>
-		</div>
+		</Note>
 	);
 }
 
