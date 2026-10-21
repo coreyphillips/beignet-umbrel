@@ -569,7 +569,24 @@ env:
   # file once to wipe plaintext an older release left in freed pages, so that
   # start takes longer on a large wallet. 0.30.1 still opens the result.
   # Routes, environment settings and the dependency set are unchanged.
-  BEIGNET_VERSION: "0.30.2"
+  # 0.31.0 asks for Node 22.23.4, 24.22.1 or 26.12.1 and later (engines) and
+  # logs a warning at startup on an older release, and it can verify Electrum
+  # TLS certificates (BEIGNET_ELECTRUM_TLS_VERIFY and
+  # BEIGNET_ELECTRUM_TLS_FINGERPRINTS, off unless set; the manager sets
+  # neither). A wallet refresh asks the server about each script hash and
+  # transaction once, sends, sweeps and fee bumps all wait for the wallet's
+  # send lock, a refused storage write is logged at error level, and one
+  # public address can hold at most 8 inbound peer connections (loopback and
+  # private addresses, so Tor and sibling wallets, are exempt). POST
+  # /ffor/enforce, POST /channel/update-commitment-feerate and GET
+  # /ffor/issuer/issued now answer a refusal as an error instead of inside a
+  # 200; the manager reads both shapes for enforce and calls neither other
+  # route. The storage schema moves to 19: the first open moves each
+  # channel's revoked HTLC history into its own table, and 0.30.2 would open
+  # the result without seeing that history, so a wallet with channels must
+  # not go back to it. Stored transaction records drop their input scripts
+  # once on load. The npm dependency set is unchanged.
+  BEIGNET_VERSION: "0.31.0"
 
 jobs:
   build:
