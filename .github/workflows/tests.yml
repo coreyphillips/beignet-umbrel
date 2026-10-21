@@ -4,8 +4,10 @@ name: tests
 # pull request and on every push to main. Nothing else in this repo runs
 # them: build-image.yml only builds, and docker/Dockerfile never tests.
 #
-# Node 22: the manager's test script passes a glob to `node --test`, which
-# the test runner only accepts from Node 21 on.
+# Both jobs run on the Node release the app image runs, read from the
+# NODE_IMAGE line in docker/Dockerfile, so the tests cannot drift from the box.
+# (The manager's test script passes a glob to `node --test`, which the test
+# runner only accepts from Node 21 on.)
 
 on:
   pull_request:
@@ -21,9 +23,16 @@ jobs:
         working-directory: manager
     steps:
       - uses: actions/checkout@v4
+      - name: Node release of the app image
+        id: node
+        working-directory: .
+        run: |
+          VERSION=$(sed -nE 's/^ARG NODE_IMAGE=node:([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/p' docker/Dockerfile)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ steps.node.outputs.version }}
           cache: npm
           cache-dependency-path: manager/package-lock.json
       - run: npm ci
@@ -37,9 +46,16 @@ jobs:
         working-directory: manager/ui
     steps:
       - uses: actions/checkout@v4
+      - name: Node release of the app image
+        id: node
+        working-directory: .
+        run: |
+          VERSION=$(sed -nE 's/^ARG NODE_IMAGE=node:([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/p' docker/Dockerfile)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ steps.node.outputs.version }}
           cache: npm
           cache-dependency-path: manager/ui/package-lock.json
       - run: npm ci
