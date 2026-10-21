@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { manager } from '../api.js';
 import { useToast } from './Toast.jsx';
 import { Button, Field, Help, Modal } from './ui.jsx';
-import ElectrumFields from './ElectrumFields.jsx';
+import ElectrumFields, { electrumBody } from './ElectrumFields.jsx';
 import BackupStatus from './BackupStatus.jsx';
 import { guardianEntryLabel, isNodeUri } from '../lib/recovery.js';
 import { openBackup } from '../lib/backup.js';
@@ -104,9 +104,7 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 		setBusy(true);
 		try {
 			const patch = { defaultNetwork: network };
-			patch.defaultElectrum = electrum.host.trim()
-				? { host: electrum.host.trim(), port: parseInt(electrum.port, 10), tls: !!electrum.tls }
-				: null;
+			patch.defaultElectrum = electrum.host.trim() ? electrumBody(electrum) : null;
 			if (config.recoveryAvailable) {
 				const entries = [];
 				for (let i = 0; i < guardians.length; i++) {
@@ -145,7 +143,12 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			<div className="field-label" style={{ marginBottom: 8 }}>
 				Default Electrum server
 			</div>
-			<ElectrumFields presets={config.electrumPresets} value={electrum} onChange={setElectrum} />
+			<ElectrumFields
+				presets={config.electrumPresets}
+				value={electrum}
+				onChange={setElectrum}
+				verifyAvailable={!!config.electrumTlsVerifyAvailable}
+			/>
 			{config.recoveryAvailable && (
 				<>
 					<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>

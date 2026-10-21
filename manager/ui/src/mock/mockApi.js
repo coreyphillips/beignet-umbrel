@@ -1593,6 +1593,7 @@ function managerRequest(path, method, body) {
 			onionAvailable: true,
 			torProxyScopeAvailable: true,
 			irohAvailable: true,
+			electrumTlsVerifyAvailable: true,
 			engineVersion: '0.12.0',
 			recoveryAvailable: true,
 			recoveryGuardians: store.settings.recoveryGuardians.slice(),

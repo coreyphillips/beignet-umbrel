@@ -195,3 +195,19 @@ test('Iroh requires implemented listener and configuration support', () => {
 		assert.equal(irohAvailable(bin), true);
 	} finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('Electrum certificate verification needs the env parser and the option wiring (beignet #1776)', () => {
+	const { electrumTlsVerifyAvailable } = require('./engine');
+	const { root, bin } = fakeInstall('0.31.0');
+	const dir = path.dirname(bin);
+	try {
+		assert.equal(electrumTlsVerifyAvailable(bin), false, '0.30.2 has neither module');
+		fs.writeFileSync(path.join(dir, 'electrum-tls-config.js'), 'process.env.BEIGNET_ELECTRUM_TLS_VERIFY process.env.BEIGNET_ELECTRUM_TLS_FINGERPRINTS');
+		assert.equal(electrumTlsVerifyAvailable(bin), false, 'parsed but never handed to the node');
+		fs.writeFileSync(path.join(dir, 'daemon-options.js'), 'electrumTlsVerify: config.electrumTlsVerify, electrumTlsFingerprints: config.electrumTlsFingerprints,');
+		assert.equal(electrumTlsVerifyAvailable(bin), true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	assert.equal(electrumTlsVerifyAvailable(undefined), false);
+});

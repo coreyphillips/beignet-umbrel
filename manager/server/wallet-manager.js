@@ -58,8 +58,10 @@ const {
 	concurrentOfflineReceiveAvailable,
 	offlineReceiveAvailable,
 	torProxyScopeAvailable,
+	electrumTlsVerifyAvailable,
 	irohAvailable
 } = require('./engine');
+const { normalizeElectrumTls, electrumTlsEnv, certificateAccepted } = require('./electrum-tls');
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
 const netmode = require('./network-mode');
@@ -193,6 +195,8 @@ class WalletManager {
 		// still reach onion peers through the app's Tor.
 		this.torProxyScopeSupported = torProxyScopeAvailable();
 		this.irohSupported = irohAvailable();
+		// Electrum TLS certificate verification (beignet #1776, engine 0.31.0).
+		this.electrumTlsVerifySupported = electrumTlsVerifyAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 	}
@@ -490,7 +494,8 @@ class WalletManager {
 
 	// Queries an Electrum server for its current chain tip height. Resolves null
 	// if the tip cannot be determined. Honors TLS so it works with either preset.
-	_electrumTip({ host, port, tls: useTls }) {
+	_electrumTip(electrum) {
+		const { host, port, tls: useTls } = electrum;
 		return new Promise((resolve) => {
 			let done = false;
 			let buf = '';
@@ -507,13 +512,16 @@ class WalletManager {
 			};
 			try {
 				socket = useTls
-					? tls.connect({ host, port, rejectUnauthorized: false })
+					? tls.connect({ host, port, servername: net.isIP(host) ? undefined : host, rejectUnauthorized: false })
 					: net.connect({ host, port });
 			} catch (_) {
 				return resolve(null);
 			}
 			socket.setTimeout(ELECTRUM_PROBE_TIMEOUT_MS);
 			socket.once(useTls ? 'secureConnect' : 'connect', () => {
+				// A wallet that verifies its server's certificate does not take
+				// the tip from one the daemon would refuse either.
+				if (useTls && !certificateAccepted(socket, electrum)) return finish(null);
 				socket.write(
 					`${JSON.stringify({ id: 1, method: 'blockchain.headers.subscribe', params: [] })}\n`
 				);
@@ -593,7 +601,7 @@ class WalletManager {
 		if (!Number.isFinite(port) || port <= 0 || port > 65535) {
 			throw httpError(400, 'BAD_ELECTRUM', 'Invalid Electrum port');
 		}
-		return { host, port, tls: !!input.tls };
+		return { host, port, tls: !!input.tls, ...normalizeElectrumTls(input, { supported: this.electrumTlsVerifyAvailable() }) };
 	}
 
 	defaultElectrum() {
@@ -666,6 +674,10 @@ class WalletManager {
 
 	torProxyScopeAvailable() {
 		return this.torProxyScopeSupported === true;
+	}
+
+	electrumTlsVerifyAvailable() {
+		return this.electrumTlsVerifySupported === true;
 	}
 
 	concurrentOfflineReceiveAvailable() {
@@ -1220,6 +1232,8 @@ class WalletManager {
 			BEIGNET_ELECTRUM_HOST: rec.electrum.host,
 			BEIGNET_ELECTRUM_PORT: String(rec.electrum.port),
 			BEIGNET_ELECTRUM_TLS: rec.electrum.tls ? 'true' : 'false',
+			// Certificate verification for a TLS server, when the record asks.
+			...electrumTlsEnv(rec.electrum),
 			// The daemon only builds a logger when a log level is set; without one
 			// it runs silent and its stdout carries nothing to show in the Logs
 			// tab. Overridable so a noisy wallet can be turned down (or up to
@@ -1389,7 +1403,7 @@ class WalletManager {
 		rt.healthy = false;
 		this._log(
 			id,
-			`starting on 127.0.0.1:${rec.port} (network ${rec.network}, electrum ${rec.electrum.host}:${rec.electrum.port} tls=${rec.electrum.tls})`
+			`starting on 127.0.0.1:${rec.port} (network ${rec.network}, electrum ${rec.electrum.host}:${rec.electrum.port} tls=${rec.electrum.tls}${rec.electrum.tlsVerify ? ' verified' : ''})`
 		);
 
 		const proc = spawn(cmd, args, { env, cwd: p.home });

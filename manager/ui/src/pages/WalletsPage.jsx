@@ -18,7 +18,7 @@ import {
 	staggerContainer,
 	staggerItem
 } from '../components/ui.jsx';
-import ElectrumFields from '../components/ElectrumFields.jsx';
+import ElectrumFields, { electrumBody } from '../components/ElectrumFields.jsx';
 import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 
 import GuardianServeField from '../components/GuardianServeField.jsx';
@@ -331,9 +331,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	const submit = async () => {
 		setBusy(true);
 		try {
-			const elec = custom
-				? { host: electrum.host.trim(), port: parseInt(electrum.port, 10), tls: !!electrum.tls }
-				: undefined;
+			const elec = custom ? electrumBody(electrum) : undefined;
 			if (tab === 'create') {
 				const r = await manager.createWallet({
 					name,
@@ -445,7 +443,12 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 				<div className="info-note">No default Electrum server set. Choose one here or in Settings.</div>
 			)}
 			{custom && (
-				<ElectrumFields presets={config.electrumPresets} value={electrum} onChange={setElectrum} />
+				<ElectrumFields
+					presets={config.electrumPresets}
+					value={electrum}
+					onChange={setElectrum}
+					verifyAvailable={!!config.electrumTlsVerifyAvailable}
+				/>
 			)}
 
 			<label className="checkbox field">

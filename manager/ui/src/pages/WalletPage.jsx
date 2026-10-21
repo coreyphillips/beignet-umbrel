@@ -8,7 +8,7 @@ import { useSSE } from '../hooks/useSSE.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal } from '../components/ui.jsx';
-import ElectrumFields from '../components/ElectrumFields.jsx';
+import ElectrumFields, { electrumBody } from '../components/ElectrumFields.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 
@@ -507,6 +507,7 @@ export default function WalletPage() {
 					torAvailable={!!config?.torAvailable}
 					torProxyScopeAvailable={config?.torProxyScopeAvailable !== false}
 					irohAvailable={!!config?.irohAvailable}
+					electrumTlsVerifyAvailable={!!config?.electrumTlsVerifyAvailable}
 					recoveryAvailable={!!config?.recoveryAvailable}
 					recoveryAutoApplyAvailable={!!config?.recoveryAutoApplyAvailable}
 					guardianHostingAvailable={!!config?.guardianHostingAvailable}
@@ -564,6 +565,7 @@ export function EditWalletModal({
 	torAvailable,
 	torProxyScopeAvailable = true,
 	irohAvailable = false,
+	electrumTlsVerifyAvailable = false,
 	recoveryAvailable = false,
 	recoveryAutoApplyAvailable = false,
 	guardianHostingAvailable = false,
@@ -691,11 +693,7 @@ export function EditWalletModal({
 				// Serving a guardian rides the Lightning listener; parking
 				// Lightning drops it, and the manager drops it too.
 				...(guardianHostingAvailable ? { guardianServe: onchainOnly ? false : guardianServe } : {}),
-				electrum: {
-					host: electrum.host.trim(),
-					port: parseInt(electrum.port, 10),
-					tls: !!electrum.tls
-				}
+				electrum: electrumBody(electrum)
 			};
 			if (fforAvailable) {
 				body.ffor = onchainOnly
@@ -728,7 +726,12 @@ export function EditWalletModal({
 					({rec.network}) and seed stay the same.
 				</Help>
 			</div>
-			<ElectrumFields presets={presets} value={electrum} onChange={setElectrum} />
+			<ElectrumFields
+				presets={presets}
+				value={electrum}
+				onChange={setElectrum}
+				verifyAvailable={electrumTlsVerifyAvailable}
+			/>
 			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 				Lightning
 			</div>
