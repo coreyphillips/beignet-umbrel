@@ -196,7 +196,30 @@ async function main() {
 	api.put(
 		'/settings',
 		asyncHandler(async (req, res) => {
-			res.json({ ok: true, result: manager.updateSettings(req.body || {}) });
+			res.json({ ok: true, result: await manager.updateSettings(req.body || {}) });
+		})
+	);
+
+	// The Electrum servers an Umbrel may run, each probed for whether it is
+	// there, what software answers, which chain it serves and its tip. The
+	// presets are probed together with a short bound each and the answers
+	// stand for a few seconds, so the dashboard asks on every open of the
+	// Electrum fields; ?refresh=1 asks again now.
+	api.get(
+		'/electrum/discover',
+		asyncHandler(async (req, res) => {
+			res.setHeader('Cache-Control', 'no-store');
+			res.json({ ok: true, result: await manager.discoverElectrum({ refresh: req.query.refresh === '1' }) });
+		})
+	);
+
+	// A server the user typed (another Umbrel on the LAN, a public server),
+	// probed on request before it is saved anywhere.
+	api.post(
+		'/electrum/test',
+		asyncHandler(async (req, res) => {
+			res.setHeader('Cache-Control', 'no-store');
+			res.json({ ok: true, result: await manager.testElectrum(req.body || {}) });
 		})
 	);
 

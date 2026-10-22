@@ -10,6 +10,17 @@ A [community app store](https://github.com/getumbrel/umbrel-community-app-store)
 
 **No full node required.** Beignet depends on no other app. Point it at any Electrum server, or, if you run the **Electrs** or **Fulcrum** app on your Umbrel, use the one-click presets in **Settings**. Set an app-wide default Electrum server and network for new wallets, and override them per wallet.
 
+## Connecting to an Electrum server
+
+Every wallet talks to one Electrum server. The fields for it are in **Settings** (the default for new wallets), on the create and import form, and in each wallet's **Edit** dialog. Wherever they appear:
+
+- **On this Umbrel.** The preset buttons name the Electrum servers an Umbrel may run (Electrs, Fulcrum). When the fields open, each preset is probed and says what it found: reachable, on which chain and at what height, or *not found* when that app is not installed. **Refresh** asks again.
+- **On another Umbrel on your network.** Umbrel's Electrs app publishes port 50001 and Fulcrum port 50002 on that box, so one Electrum server can serve every Beignet install in the house. Enter the other Umbrel's LAN IP address (for example `192.168.1.20`), not `umbrel.local`: mDNS names do not resolve inside the app. Press **Test** to see what answers before saving.
+- **Anywhere else.** Any Electrum server works, by IP or host name. For a TLS server you can have the wallet verify its certificate, and pin a self-signed one by its fingerprint; **Test** reports the fingerprint it saw. Test also says when the TLS box is the wrong way round for the server, the commonest mistake with these fields (port 50002 is often TLS but not always: Umbrel's Fulcrum is plaintext on it).
+- **The chain check.** A server that is known to serve another chain than the wallet (a testnet server for a mainnet wallet, say) is refused when you save, with the reason and a **Save anyway** button if you mean it. A server that is down or does not say which chain it is on is accepted as before: the wallet waits for it and starts once it answers.
+
+Inside the app, the presets reach their servers by Umbrel's internal addresses or container names, which Docker resolves on the shared app network. Those are not reachable from outside the Umbrel; from another machine use the LAN IP and published port.
+
 ## Features
 
 Hover or tap the **?** beside a setting in the dashboard for what it does.

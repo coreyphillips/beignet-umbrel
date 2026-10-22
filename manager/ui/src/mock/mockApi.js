@@ -1575,12 +1575,84 @@ function normalizeRecovery(mode, existing, autoApply) {
 	return withAuto({ mode, guardians });
 }
 
+// The presets as the manager has them (server/config.js), so the demo's
+// badges read like the real ones.
 const ELECTRUM_PRESETS = [
-	{ id: 'electrs', label: 'Umbrel Electrs', host: 'umbrel.local', port: 50001, tls: false, note: 'Electrs app on this Umbrel' },
-	{ id: 'fulcrum', label: 'Umbrel Fulcrum', host: 'umbrel.local', port: 50002, tls: true, note: 'Fulcrum app on this Umbrel' }
+	{ id: 'umbrel-electrs', label: 'Umbrel Electrs', host: '10.21.21.10', port: 50001, tls: false, note: 'Use if the Electrs app is installed on this Umbrel' },
+	{ id: 'umbrel-fulcrum', label: 'Umbrel Fulcrum', host: '10.21.21.200', port: 50002, tls: false, note: 'Use if the Fulcrum app is installed on this Umbrel' }
 ];
 
+// What the demo's Electrum probe says about a server, from its address alone:
+// a host naming a chain is on it, a host with "down" in it (or the Fulcrum
+// preset, so one preset reads as not installed, or port 1) answers nothing,
+// and a TLS host with "selfsigned" in it is refused when verification is on.
+const GENESIS = {
+	mainnet: '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f',
+	testnet: '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943',
+	signet: '00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6',
+	regtest: '0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206'
+};
+const DEMO_FINGERPRINT = 'ac46dda716db709848ac80a84eba47a746736b4996d53d3bcff07c6e8d45c47f';
+function mockChain(host) {
+	const h = String(host || '').toLowerCase();
+	if (h.includes('testnet')) return 'testnet';
+	if (h.includes('signet')) return 'signet';
+	if (h.includes('regtest')) return 'regtest';
+	return 'mainnet';
+}
+function mockReachable(host, port) {
+	const h = String(host || '').toLowerCase();
+	return !(h.includes('down') || h === '10.21.21.200' || parseInt(port, 10) === 1);
+}
+function mockProbe({ host, port, tls, tlsVerify, tlsFingerprints }) {
+	const blank = { software: null, protocol: null, chain: 'unknown', genesisHash: null, height: null, certificate: null, probedAt: Date.now() };
+	if (!mockReachable(host, port)) return { ...blank, reachable: false, error: 'unreachable' };
+	const certificate = tls ? { accepted: true, authorized: false, fingerprint: DEMO_FINGERPRINT } : null;
+	if (tls && tlsVerify && String(host).toLowerCase().includes('selfsigned')) {
+		// Pins as typed: Test shows the fingerprint with colons and in capitals,
+		// the way openssl prints it, and the manager reads either form.
+		const pins = (Array.isArray(tlsFingerprints) ? tlsFingerprints : []).map((f) => String(f).replace(/[^0-9a-f]/gi, '').toLowerCase());
+		if (!pins.includes(DEMO_FINGERPRINT)) {
+			return { ...blank, reachable: true, certificate: { ...certificate, accepted: false }, error: 'tls-rejected' };
+		}
+	}
+	const chain = mockChain(host);
+	return {
+		...blank,
+		reachable: true,
+		software: 'electrs/0.10.9',
+		protocol: '1.4',
+		chain,
+		genesisHash: GENESIS[chain],
+		height: chain === 'mainnet' ? 908214 : chain === 'testnet' ? 4600000 : 1200,
+		certificate,
+		error: null
+	};
+}
+// The manager's refusal of a server on another chain than the wallet, with
+// its override, so the dialogs can be driven through it in demo mode.
+function wrongChain(electrum, network, body, subject = 'this wallet is on') {
+	if (!electrum || !electrum.host || (body && body.allowChainMismatch === true)) return;
+	const r = mockProbe(electrum);
+	if (!r.reachable || r.chain === 'unknown' || r.chain === network) return;
+	const e = err(
+		`The Electrum server at ${electrum.host}:${electrum.port} serves ${r.chain}, but ${subject} ${network}. Pick a ${network} server, or save anyway if you are sure.`,
+		'ELECTRUM_WRONG_CHAIN'
+	);
+	e.details = { host: electrum.host, port: electrum.port, chain: r.chain, network, software: r.software };
+	throw e;
+}
+
 function managerRequest(path, method, body) {
+	if (path.startsWith('/electrum/discover')) {
+		return { at: Date.now(), servers: ELECTRUM_PRESETS.map((p) => ({ ...p, ...mockProbe(p) })) };
+	}
+	if (path === '/electrum/test' && method === 'POST') {
+		if (!String((body && body.host) || '').trim()) throw err('Electrum host is required', 'BAD_ELECTRUM');
+		const r = mockProbe(body);
+		const network = body.network || null;
+		return { electrum: body, ...r, network, chainMatches: network && r.chain !== 'unknown' ? r.chain === network : null };
+	}
 	if (path === '/config') {
 		return {
 			defaultNetwork: store.settings.defaultNetwork,
@@ -1659,8 +1731,12 @@ function managerRequest(path, method, body) {
 	if (path === '/settings') {
 		if (method === 'PUT') {
 			const patch = { ...body };
+			delete patch.allowChainMismatch;
 			if (patch.recoveryGuardians !== undefined) {
 				patch.recoveryGuardians = validateGuardianDraft(patch.recoveryGuardians);
+			}
+			if (patch.defaultElectrum) {
+				wrongChain(patch.defaultElectrum, patch.defaultNetwork || store.settings.defaultNetwork, body, 'the default network is');
 			}
 			Object.assign(store.settings, patch);
 			return store.settings;
@@ -1669,6 +1745,7 @@ function managerRequest(path, method, body) {
 	}
 	if (path === '/wallets' && method === 'GET') return store.wallets.map(publicRecord);
 	if (path === '/wallets' && method === 'POST') {
+		wrongChain(body.electrum || store.settings.defaultElectrum, body.network || store.settings.defaultNetwork, body);
 		const id = 'demo-' + hex(6);
 		const w = {
 			id,
@@ -1702,6 +1779,7 @@ function managerRequest(path, method, body) {
 	if (path === '/wallets/import' && method === 'POST') {
 		const words = String(body.mnemonic || '').trim().split(/\s+/);
 		if (words.length !== 12 && words.length !== 24) throw err('Recovery phrase must be 12 or 24 words');
+		wrongChain(body.electrum || store.settings.defaultElectrum, body.network || store.settings.defaultNetwork, body);
 		const id = 'demo-' + hex(6);
 		const w = {
 			id,
@@ -1766,6 +1844,9 @@ function managerRequest(path, method, body) {
 
 			const nextLfbw = body.lfbw !== undefined ? normalizeLfbw(body.lfbw, w) : undefined;
 			const network = normalizeNetwork(body, w);
+			if (body.electrum && (body.electrum.host !== w.electrum.host || body.electrum.port !== w.electrum.port)) {
+				wrongChain(body.electrum, w.network, body);
+			}
 			if (body.name) w.name = body.name;
 			if (body.electrum) w.electrum = body.electrum;
 			Object.assign(w, network);

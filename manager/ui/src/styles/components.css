@@ -1193,6 +1193,99 @@ tbody tr:hover {
 	white-space: nowrap;
 }
 
+/* The third line of a preset: whether the server is there, on which chain and
+   how far along, from the probe the fields run when they appear. The dot takes
+   the tone; the text stays muted so the name above it keeps the eye. */
+.preset-btn .preset-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--muted);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.preset-status .dot {
+	flex: none;
+	color: var(--faint);
+	box-shadow: none;
+}
+
+.preset-status[data-tone='green'] .dot {
+	color: #5cd38b;
+	box-shadow: 0 0 6px currentColor;
+}
+
+.preset-status[data-tone='yellow'] .dot {
+	color: #f2c14e;
+	box-shadow: 0 0 6px currentColor;
+}
+
+.preset-status[data-tone='red'] .dot {
+	color: #ff5c61;
+}
+
+.preset-status[data-state='checking'] {
+	opacity: 0.7;
+}
+
+/* Refresh sits at the end of the preset row at the presets' height. */
+.preset-refresh {
+	align-self: stretch;
+}
+
+/* The Test button sits under the host and port with its answer beside it,
+   wrapping under the button when the answer is long. The answer keeps its
+   state for the tests and for anyone styling by outcome. */
+.electrum-test-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 12px;
+	margin: -4px 0 12px;
+}
+
+.electrum-test-row .btn {
+	flex: none;
+}
+
+.electrum-test-result {
+	color: var(--muted);
+	font-size: 12px;
+	flex: 1 1 240px;
+	line-height: 1.4;
+}
+
+.electrum-test-result[data-state='wrong-chain'],
+.electrum-test-result[data-state='tls-rejected'] {
+	color: #f2c14e;
+}
+
+.electrum-test-result[data-state='unreachable'],
+.electrum-test-result[data-state='error'] {
+	color: #ffb4b6;
+}
+
+/* The amber and red above are tuned for the dark glass; on the light theme
+   they wash out, so the answer and the dots take darker inks there. */
+:root[data-theme='light'] .electrum-test-result[data-state='wrong-chain'],
+:root[data-theme='light'] .electrum-test-result[data-state='tls-rejected'] {
+	color: #9a6700;
+}
+
+:root[data-theme='light'] .electrum-test-result[data-state='unreachable'],
+:root[data-theme='light'] .electrum-test-result[data-state='error'] {
+	color: #b42318;
+}
+
+:root[data-theme='light'] .preset-status[data-tone='yellow'] .dot {
+	color: #d99a00;
+}
+
 /* ---------- Round icon buttons (header) ---------- */
 .icon-btn,
 .theme-toggle {

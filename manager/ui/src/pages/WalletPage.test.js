@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createElement } from "react";
-import { click, render, type } from "../../test/render.mjs";
+import { click, render, settle, type } from "../../test/render.mjs";
 import { ToastProvider } from "../components/Toast.jsx";
 import { EditWalletModal } from "./WalletPage.jsx";
 import ffor from "../../../server/ffor.js";
@@ -153,6 +153,127 @@ test("automatic receive funding and limits survive save, reopen and unrelated ed
     assert.equal(rendered.$('[data-testid="ffor-concurrent"]').checked, true);
   } finally {
     await rendered?.unmount();
+    globalThis.fetch = fetchBefore;
+  }
+});
+
+test("a server on another chain is refused with a way through, and Save anyway sends the override", async () => {
+  const rec = initial();
+  const bodies = [];
+  let completed = 0;
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = async (path, options) => {
+    if (path.endsWith("/channels"))
+      return { ok: true, json: async () => ({ ok: true, result: [] }) };
+    assert.equal(path, "/api/wallets/wallet");
+    const body = JSON.parse(options.body);
+    bodies.push(body);
+    if (body.allowChainMismatch !== true) {
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({
+          ok: false,
+          error: {
+            code: "ELECTRUM_WRONG_CHAIN",
+            message:
+              "The Electrum server at testnet.example:50002 serves testnet, but this wallet is on mainnet. Pick a mainnet server, or save anyway if you are sure.",
+            details: { host: "testnet.example", port: 50002, chain: "testnet", network: "mainnet", software: "electrs/0.10.9" },
+          },
+        }),
+      };
+    }
+    return { ok: true, json: async () => ({ ok: true, result: { ...rec, ...body } }) };
+  };
+  const r = await render(wrapped, {
+    rec,
+    presets: [],
+    onClose() {},
+    onSaved() {
+      completed++;
+    },
+  });
+  try {
+    const host = r.$('input[placeholder^="192.168"]');
+    await type(host, "testnet.example");
+    await click(r.$$("button").find((b) => b.textContent === "Save changes"));
+    assert.equal(completed, 0, "the refusal keeps the dialog open");
+    const note = r.$('[data-testid="electrum-wrong-chain"]');
+    assert.ok(note, "the refusal is shown under the fields");
+    assert.match(note.textContent, /serves testnet, but this wallet is on mainnet/);
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].allowChainMismatch, undefined);
+    await click(r.$('[data-testid="electrum-save-anyway"]'));
+    assert.equal(completed, 1);
+    assert.equal(bodies[1].allowChainMismatch, true);
+    assert.equal(bodies[1].electrum.host, "testnet.example");
+  } finally {
+    await r.unmount();
+    globalThis.fetch = fetchBefore;
+  }
+});
+
+test("a refusal that lands after the server was changed again does not offer to save the new one anyway", async () => {
+  // The guard's probe takes up to a few seconds. Save old-wrong.example,
+  // type another host while that is pending, and let the refusal of the
+  // first arrive: it is about a server the fields no longer name, so no
+  // note, and nothing that would send the new host with the override.
+  const rec = initial();
+  const bodies = [];
+  const pending = [];
+  let completed = 0;
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = (path, options) => {
+    if (path.endsWith("/channels"))
+      return Promise.resolve({ ok: true, json: async () => ({ ok: true, result: [] }) });
+    assert.equal(path, "/api/wallets/wallet");
+    const body = JSON.parse(options.body);
+    bodies.push(body);
+    return new Promise((resolve) => pending.push({ body, resolve }));
+  };
+  const refusal = (host) => ({
+    ok: false,
+    status: 400,
+    json: async () => ({
+      ok: false,
+      error: {
+        code: "ELECTRUM_WRONG_CHAIN",
+        message: `The Electrum server at ${host}:50002 serves testnet, but this wallet is on mainnet. Pick a mainnet server, or save anyway if you are sure.`,
+        details: { host, port: 50002, chain: "testnet", network: "mainnet", software: "electrs/0.10.9" },
+      },
+    }),
+  });
+  const r = await render(wrapped, {
+    rec,
+    presets: [],
+    onClose() {},
+    onSaved() {
+      completed++;
+    },
+  });
+  try {
+    const host = r.$('input[placeholder^="192.168"]');
+    await type(host, "old-wrong.example");
+    await click(r.$$("button").find((b) => b.textContent === "Save changes"));
+    assert.equal(pending.length, 1);
+    assert.equal(bodies[0].electrum.host, "old-wrong.example");
+    await type(host, "new-unchecked.example");
+    pending[0].resolve(refusal("old-wrong.example"));
+    await settle(0);
+    assert.equal(completed, 0);
+    assert.equal(r.$('[data-testid="electrum-wrong-chain"]'), null, "the refusal was about a server the fields no longer name");
+    assert.equal(r.$('[data-testid="electrum-save-anyway"]'), null, "so nothing offers to save the new one unchecked");
+    // Saving the new host asks the manager about it, without the override.
+    await click(r.$$("button").find((b) => b.textContent === "Save changes"));
+    assert.equal(pending.length, 2);
+    assert.equal(bodies[1].electrum.host, "new-unchecked.example");
+    assert.equal(bodies[1].allowChainMismatch, undefined);
+    pending[1].resolve(refusal("new-unchecked.example"));
+    await settle(0);
+    assert.ok(r.$('[data-testid="electrum-wrong-chain"]'), "a refusal of the server the fields do name is shown");
+    assert.match(r.$('[data-testid="electrum-wrong-chain"]').textContent, /new-unchecked\.example/);
+  } finally {
+    await r.unmount();
     globalThis.fetch = fetchBefore;
   }
 });

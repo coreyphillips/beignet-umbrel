@@ -3,6 +3,7 @@ import { manager } from '../api.js';
 import { useToast } from './Toast.jsx';
 import { Button, Field, Help, Modal } from './ui.jsx';
 import ElectrumFields, { electrumBody } from './ElectrumFields.jsx';
+import { ChainMismatchNote, chainKey } from './ElectrumStatus.jsx';
 import BackupStatus from './BackupStatus.jsx';
 import { guardianEntryLabel, isNodeUri } from '../lib/recovery.js';
 import { openBackup } from '../lib/backup.js';
@@ -24,6 +25,12 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 		return list;
 	});
 	const [busy, setBusy] = useState(false);
+	// The default server is held to the default network by the manager; a
+	// refusal sits under the fields with a way through. It is filed under the
+	// server and network it was for and shown only while the dialog still
+	// says those, so a late refusal cannot wave a changed server through.
+	const [chainError, setChainError] = useState(null);
+	const electrumKey = chainKey(electrum.host.trim() ? electrum : null, network);
 	// A slot may hold a beignet node's Lightning URI rather than a finished
 	// entry (beignet #699): the daemon asks that node's guardian for its id
 	// and hands back the entry. Resolving happens on the Resolve button or
@@ -100,11 +107,13 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 		}
 	};
 
-	const save = async () => {
+	const save = async (allow = false) => {
+		const asked = electrumKey;
 		setBusy(true);
 		try {
 			const patch = { defaultNetwork: network };
 			patch.defaultElectrum = electrum.host.trim() ? electrumBody(electrum) : null;
+			if (allow) patch.allowChainMismatch = true;
 			if (config.recoveryAvailable) {
 				const entries = [];
 				for (let i = 0; i < guardians.length; i++) {
@@ -118,7 +127,8 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			const c = await manager.config();
 			onSaved(c);
 		} catch (e) {
-			toast(e.message, 'error');
+			if (e.code === 'ELECTRUM_WRONG_CHAIN') setChainError({ key: asked, error: e });
+			else toast(e.message, 'error');
 		} finally {
 			setBusy(false);
 		}
@@ -148,7 +158,9 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 				value={electrum}
 				onChange={setElectrum}
 				verifyAvailable={!!config.electrumTlsVerifyAvailable}
+				network={network}
 			/>
+			<ChainMismatchNote error={chainError && chainError.key === electrumKey ? chainError.error : null} busy={busy} onProceed={() => save(true)} />
 			{config.recoveryAvailable && (
 				<>
 					<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
@@ -243,7 +255,7 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 				</Button>
 			</div>
 			<div className="center-actions">
-				<Button variant="primary" busy={busy} onClick={save}>
+				<Button variant="primary" busy={busy} onClick={() => save()}>
 					Save settings
 				</Button>
 				<Button onClick={() => setElectrum({ host: '', port: 50001, tls: false })}>
