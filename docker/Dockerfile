@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1
 
-ARG NODE_IMAGE=node:20-bookworm-slim
+# The Node release every stage builds on, pinned to the multi-arch index digest.
+# tests.yml and build-image.yml read it from this line, so bump it here only.
+# 24.22.1 carries the October 21, 2026 Node.js security fixes; Node 20 is end
+# of life and gets none.
+ARG NODE_IMAGE=node:24.22.1-bookworm-slim@sha256:1681862882da07ee5476fee047bcf34138833f1df42633bb25bcb0f438d5bf3d
 
 # ---- UI build: compile the React/Vite dashboard to static assets ----
 FROM ${NODE_IMAGE} AS ui
@@ -27,7 +31,14 @@ RUN npm install --omit=dev --no-audit --no-fund
 # to build an image against unreleased engine work. Release builds never have
 # one, so they install exactly BEIGNET_VERSION from npm.
 COPY vendor/ /vendor/
+# better-sqlite3 needs its install script (a prebuilt binary, or node-gyp with
+# the toolchain above). The npm in node:24 runs dependency install scripts that
+# no `allowScripts` entry covers but warns about them, and skips them once
+# strict-allow-scripts is on, so approve it by name before installing.
+RUN mkdir -p /opt/beignet && echo '{"private":true,"allowScripts":{"better-sqlite3":true}}' > /opt/beignet/package.json
 RUN if [ -f /vendor/beignet-local.tgz ]; then       npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet /vendor/beignet-local.tgz;     else       npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet "beignet@${BEIGNET_VERSION}";     fi
+# Fail the build, not the first wallet start, if the native module is missing.
+RUN node -e "const D = require(require.resolve('better-sqlite3', { paths: ['/opt/beignet/node_modules/beignet'] })); new D(':memory:').prepare('select 1').get()"
 
 # ---- runtime ----
 FROM ${NODE_IMAGE}

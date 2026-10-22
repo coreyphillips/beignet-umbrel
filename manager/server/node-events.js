@@ -17,8 +17,9 @@ const RETRY_MAX_MS = 15000;
  * it and it is not part of any resource, so without a live subscription the
  * reason is lost and a failed open just looks like a channel that vanished.
  *
- * Node 20 has no global EventSource, so the stream is parsed here: SSE frames
- * are separated by a blank line and carry `event:` and `data:` fields.
+ * Node 24 has no global EventSource without a flag, so the stream is parsed
+ * here: SSE frames are separated by a blank line and carry `event:` and
+ * `data:` fields.
  *
  * Returns a handle with stop(). Reconnects until stopped.
  */

@@ -589,8 +589,17 @@ jobs:
             VERSION="dev"
           fi
           BEIGNET="${{ github.event.inputs.beignet_version || env.BEIGNET_VERSION }}"
+          # The base image comes from the Dockerfile's NODE_IMAGE line, the one
+          # place it is set (tests.yml reads the same line), and is passed
+          # explicitly so the build log names the Node every image runs.
+          NODE_IMAGE=$(sed -nE 's/^ARG NODE_IMAGE=(.+)$/\1/p' docker/Dockerfile)
+          case "$NODE_IMAGE" in
+            node:*@sha256:*) ;;
+            *) echo "::error::docker/Dockerfile must pin NODE_IMAGE to a tag and digest, got '$NODE_IMAGE'"; exit 1 ;;
+          esac
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "beignet_version=$BEIGNET" >> "$GITHUB_OUTPUT"
+          echo "node_image=$NODE_IMAGE" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -608,6 +617,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
+            NODE_IMAGE=${{ steps.meta.outputs.node_image }}
             BEIGNET_VERSION=${{ steps.meta.outputs.beignet_version }}
             APP_VERSION=${{ steps.meta.outputs.version }}
           tags: |
