@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.30.3"
+version: "0.31.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -16,9 +16,9 @@ description: >-
 
 
   No full node required. Point Beignet at any Electrum server you like, or, if
-  you run the Electrs or Fulcrum app on your Umbrel, connect to it with a single
-  click. You can set a default Electrum server for new wallets and override it
-  per wallet.
+  you run the Electrs or Fulcrum app on your Umbrel, or the rbitcoin app from
+  this store, connect to it with a single click. You can set a default Electrum
+  server for new wallets and override it per wallet.
 developer: Corey Phillips
 website: https://github.com/coreyphillips/beignet
 submitter: Corey Phillips
@@ -30,19 +30,26 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.30.2. On-chain fee quotes and Send max now match the
-  transaction the wallet actually builds. A small coin no longer blocks a
-  payment you can afford, and small transactions are no longer charged for
-  bytes they do not have. Speeding up a transaction keeps any message it
-  carries and refuses a replacement it cannot rebuild exactly.
+  Bundles beignet 0.31.1. The Electrum fields now show which servers are
+  actually there: each preset (Electrs, Fulcrum, and the rbitcoin app from
+  this store) is probed when the fields open and says whether it answered,
+  on which chain and at what height. A Test connection button does the same
+  for any server you type, such as another Umbrel on your network, and says
+  when the TLS box is the wrong way round. A server known to serve another
+  chain than the wallet is refused when you save, with a Save anyway button
+  if you mean it.
 
 
-  The first start after this update rebuilds each wallet's database file
-  once, to wipe unencrypted leftovers that an older version left in free
-  space. On a wallet with a long history, that start takes longer than usual.
-  The Raw API's payment list now returns at most 1000 payments per call,
-  newest first.
+  A wallet can now verify its Electrum server's TLS certificate, by a public
+  authority or by a pinned fingerprint. It is off unless you turn it on for a
+  TLS server; Test reports the fingerprint it saw so you can pin it.
 
+
+  From the engine: an idle block no longer rescans the wallet, and an address
+  asked for before the first refresh no longer fails. The storage schema moves
+  to 19 on the first start, so a wallet with channels must not go back to an
+  earlier version of this app. The engine now asks for Node 22.23.4, 24.22.1
+  or 26.12.1 and later; this image ships one it accepts.
 dependencies: []
 path: ""
 defaultUsername: ""
