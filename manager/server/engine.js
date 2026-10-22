@@ -93,6 +93,10 @@ const FFOR_ROLE_MARKERS = ['fforSettle'];
 // app's Tor for onion peers. The env name is a literal in the config module
 // that parses it.
 const TOR_PROXY_SCOPE_MARKERS = ['BEIGNET_TOR_PROXY_ONION_ONLY'];
+// Electrum TLS certificate verification (beignet #1776, engine 0.31.0). The
+// env names are literals in the module that parses them, and daemon-options
+// is where the parsed settings reach the node.
+const ELECTRUM_TLS_VERIFY_MARKERS = ['BEIGNET_ELECTRUM_TLS_VERIFY', 'BEIGNET_ELECTRUM_TLS_FINGERPRINTS'];
 
 /** The text of a module beside the daemon binary, or null when absent. */
 function siblingModule(bin, file) {
@@ -156,6 +160,11 @@ function torProxyScopeAvailable(bin = process.env.BEIGNET_BIN) {
 	return probe(bin, 'config.js', TOR_PROXY_SCOPE_MARKERS);
 }
 
+/** True when the engine behind `bin` verifies Electrum TLS certificates on request. */
+function electrumTlsVerifyAvailable(bin = process.env.BEIGNET_BIN) {
+	return probe(bin, 'electrum-tls-config.js', ELECTRUM_TLS_VERIFY_MARKERS) && probe(bin, 'daemon-options.js', ['electrumTlsVerify', 'electrumTlsFingerprints']);
+}
+
 function offlineReceiveAvailable(bin = process.env.BEIGNET_BIN) {
 	return (
 		probe(bin, 'openapi.js', ["'/receive/status'", "'/receive/quote'", "'/receive/invoice'"]) &&
@@ -175,6 +184,7 @@ module.exports = {
 
 	offlineReceiveAvailable,
 	torProxyScopeAvailable,
+	electrumTlsVerifyAvailable,
 	engineVersion,
 	fforAvailable,
 	recoveryAvailable,
@@ -192,5 +202,6 @@ module.exports = {
 	FFOR_ROUTE_MARKERS,
 
 	FFOR_ROLE_MARKERS,
-	TOR_PROXY_SCOPE_MARKERS
+	TOR_PROXY_SCOPE_MARKERS,
+	ELECTRUM_TLS_VERIFY_MARKERS
 };
