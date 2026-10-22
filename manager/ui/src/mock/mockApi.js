@@ -1579,7 +1579,8 @@ function normalizeRecovery(mode, existing, autoApply) {
 // badges read like the real ones.
 const ELECTRUM_PRESETS = [
 	{ id: 'umbrel-electrs', label: 'Umbrel Electrs', host: '10.21.21.10', port: 50001, tls: false, note: 'Use if the Electrs app is installed on this Umbrel' },
-	{ id: 'umbrel-fulcrum', label: 'Umbrel Fulcrum', host: '10.21.21.200', port: 50002, tls: false, note: 'Use if the Fulcrum app is installed on this Umbrel' }
+	{ id: 'umbrel-fulcrum', label: 'Umbrel Fulcrum', host: '10.21.21.200', port: 50002, tls: false, note: 'Use if the Fulcrum app is installed on this Umbrel' },
+	{ id: 'umbrel-rbitcoin', label: 'Umbrel rbitcoin', host: 'beignet-rbitcoin_node_1', port: 50001, tls: false, networks: ['mainnet'], note: 'Use if the rbitcoin app from this store is installed' }
 ];
 
 // What the demo's Electrum probe says about a server, from its address alone:

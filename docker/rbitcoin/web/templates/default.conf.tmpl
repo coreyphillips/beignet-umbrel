@@ -1,0 +1,35 @@
+# The status page's nginx. Rendered by the nginx image's envsubst at start
+# from /web/templates (NGINX_ENVSUBST_TEMPLATE_DIR in the compose file):
+# only the names in NGINX_ENVSUBST_FILTER (LAN_HOST, PUBLIC_PORT,
+# APP_VERSION, NODE_HOST) are substituted, so $uri and the other nginx
+# variables below are nginx's own. /web is filled by the node image's
+# entrypoint on every start (see docker/rbitcoin/Dockerfile for why the
+# page ships in that image rather than as app files).
+server {
+    listen 80;
+    root /web/html;
+    index index.html;
+
+    # What the page needs from the environment, as JSON, so index.html is
+    # one static file that works the same in the smoke test.
+    location = /config.json {
+        default_type application/json;
+        add_header Cache-Control no-store;
+        return 200 '{"lan":"${LAN_HOST}:${PUBLIC_PORT}","internal":"${NODE_HOST}:50001","appVersion":"${APP_VERSION}"}';
+    }
+
+    # The node's unauthenticated health listener, reachable only on the
+    # Docker network; the page polls /node/progress and /node/readyz. The
+    # name is resolved at request time with Docker's DNS, so nginx starts
+    # (and the page explains) while the node container is down or restarting.
+    location /node/ {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $upstream http://${NODE_HOST}:9332;
+        rewrite ^/node/(.*)$ /$1 break;
+        proxy_pass $upstream;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 6s;
+        proxy_intercept_errors off;
+        add_header Cache-Control no-store;
+    }
+}

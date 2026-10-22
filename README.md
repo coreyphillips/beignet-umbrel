@@ -10,11 +10,13 @@ A [community app store](https://github.com/getumbrel/umbrel-community-app-store)
 
 **No full node required.** Beignet depends on no other app. Point it at any Electrum server, or, if you run the **Electrs** or **Fulcrum** app on your Umbrel, use the one-click presets in **Settings**. Set an app-wide default Electrum server and network for new wallets, and override them per wallet.
 
+**Want a node of your own without Bitcoin Core?** The store also carries **rbitcoin**, a Rust full node that serves Electrum from the same process, as its own app with its own disk and lifecycle. Beignet gets a one-click preset for it. It is x86_64 only, needs hundreds of GiB and a day or more to sync, and is early software; read [beignet-rbitcoin/README.md](beignet-rbitcoin/README.md) before installing it.
+
 ## Connecting to an Electrum server
 
 Every wallet talks to one Electrum server. The fields for it are in **Settings** (the default for new wallets), on the create and import form, and in each wallet's **Edit** dialog. Wherever they appear:
 
-- **On this Umbrel.** The preset buttons name the Electrum servers an Umbrel may run (Electrs, Fulcrum). When the fields open, each preset is probed and says what it found: reachable, on which chain and at what height, or *not found* when that app is not installed. **Refresh** asks again.
+- **On this Umbrel.** The preset buttons name the Electrum servers an Umbrel may run (Electrs, Fulcrum, and the rbitcoin app from this store, offered to mainnet wallets). When the fields open, each preset is probed and says what it found: reachable, on which chain and at what height, or *not found* when that app is not installed. **Refresh** asks again.
 - **On another Umbrel on your network.** Umbrel's Electrs app publishes port 50001 and Fulcrum port 50002 on that box, so one Electrum server can serve every Beignet install in the house. Enter the other Umbrel's LAN IP address (for example `192.168.1.20`), not `umbrel.local`: mDNS names do not resolve inside the app. Press **Test** to see what answers before saving.
 - **Anywhere else.** Any Electrum server works, by IP or host name. For a TLS server you can have the wallet verify its certificate, and pin a self-signed one by its fingerprint; **Test** reports the fingerprint it saw. Test also says when the TLS box is the wrong way round for the server, the commonest mistake with these fields (port 50002 is often TLS but not always: Umbrel's Fulcrum is plaintext on it).
 - **The chain check.** A server that is known to serve another chain than the wallet (a testnet server for a mainnet wallet, say) is refused when you save, with the reason and a **Save anyway** button if you mean it. A server that is down or does not say which chain it is on is accepted as before: the wallet waits for it and starts once it answers.
@@ -97,11 +99,12 @@ Repository layout:
 
 - `umbrel-app-store.yml`: the community store manifest.
 - `beignet-wallet/`: the Umbrel app (manifest, compose, Tor config, icon and gallery).
+- `beignet-rbitcoin/`: the rbitcoin app (manifest, compose, exports, its own README).
 - `manager/`: the manager service (`server/`) and the dashboard UI source (`ui/`).
-- `docker/`: Dockerfile and entrypoint for the app image.
+- `docker/`: Dockerfile and entrypoint for the app image; `docker/rbitcoin/` the same for the rbitcoin image, plus that app's status page, which ships inside the image.
 - `docs/`: feature documentation.
 - `scripts/lfbw-regtest/`: end-to-end scenarios against real daemons on regtest.
-- `.github/workflows/`: `build-image.yml` (multi-arch image to GHCR), `tests.yml`, and `check-release.yml` (see Releasing).
+- `.github/workflows/`: `build-image.yml` (multi-arch image to GHCR), `tests.yml`, `check-release.yml` (see Releasing), and for the rbitcoin app `build-rbitcoin-image.yml` and `rbitcoin-smoke.yml`.
 
 ## Development
 
@@ -173,7 +176,11 @@ Release in three steps, so `main` never advertises an image that is not there:
 
 That last commit is the only one that changes what Umbrel is told to install, and by then the image is real.
 
-The `check-release` workflow enforces this: it requires the compose image to be pinned to a digest, requires the tag to match the app version, requires the digest to actually resolve in the registry, and requires the release notes to name the bundled beignet version. A digest cannot be known before the build, so a digest that resolves is proof the image exists. It blocks the merge, rather than reporting the breakage after users have already hit it.
+The `check-release` workflow enforces this: it requires every image in the compose file to be pinned to a digest, requires the app image's tag to match the app version, requires that digest to actually resolve in the registry, and requires the release notes to name the bundled beignet version. A digest cannot be known before the build, so a digest that resolves is proof the image exists. It blocks the merge, rather than reporting the breakage after users have already hit it.
+
+### The rbitcoin app
+
+The same three steps, with its own tag and image: `git tag rbitcoin-v0.8.0-1` publishes `ghcr.io/coreyphillips/rbitcoin:0.8.0-1`, and the release PR sets that version and digest in `beignet-rbitcoin/`. The rbitcoin release and its checksum are pinned once, in `docker/rbitcoin/Dockerfile`; the version string is `<rbitcoin version>-<app patch>` so a packaging fix can ship without an upstream release. Details and the first-release order are in [beignet-rbitcoin/README.md](beignet-rbitcoin/README.md).
 
 ## Security notes
 
