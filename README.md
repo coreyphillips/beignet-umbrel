@@ -10,6 +10,8 @@ A [community app store](https://github.com/getumbrel/umbrel-community-app-store)
 
 **No full node required.** Beignet depends on no other app. Point it at any Electrum server, or, if you run the **Electrs** or **Fulcrum** app on your Umbrel, use the one-click presets in **Settings**. Set an app-wide default Electrum server and network for new wallets, and override them per wallet.
 
+**Want a node of your own without Bitcoin Core?** The store also carries **rbitcoin**, a Rust full node that serves Electrum from the same process, as its own app with its own disk and lifecycle. Beignet gets a one-click preset for it. It is x86_64 only, needs hundreds of GiB and a day or more to sync, and is early software; read [beignet-rbitcoin/README.md](beignet-rbitcoin/README.md) before installing it.
+
 ## Features
 
 Hover or tap the **?** beside a setting in the dashboard for what it does.
@@ -86,11 +88,12 @@ Repository layout:
 
 - `umbrel-app-store.yml`: the community store manifest.
 - `beignet-wallet/`: the Umbrel app (manifest, compose, Tor config, icon and gallery).
+- `beignet-rbitcoin/`: the rbitcoin app (manifest, compose, status page, exports, its own README).
 - `manager/`: the manager service (`server/`) and the dashboard UI source (`ui/`).
-- `docker/`: Dockerfile and entrypoint for the app image.
+- `docker/`: Dockerfile and entrypoint for the app image; `docker/rbitcoin/` the same for the rbitcoin image.
 - `docs/`: feature documentation.
 - `scripts/lfbw-regtest/`: end-to-end scenarios against real daemons on regtest.
-- `.github/workflows/`: `build-image.yml` (multi-arch image to GHCR), `tests.yml`, and `check-release.yml` (see Releasing).
+- `.github/workflows/`: `build-image.yml` (multi-arch image to GHCR), `tests.yml`, `check-release.yml` (see Releasing), and for the rbitcoin app `build-rbitcoin-image.yml` and `rbitcoin-smoke.yml`.
 
 ## Development
 
@@ -162,7 +165,11 @@ Release in three steps, so `main` never advertises an image that is not there:
 
 That last commit is the only one that changes what Umbrel is told to install, and by then the image is real.
 
-The `check-release` workflow enforces this: it requires the compose image to be pinned to a digest, requires the tag to match the app version, requires the digest to actually resolve in the registry, and requires the release notes to name the bundled beignet version. A digest cannot be known before the build, so a digest that resolves is proof the image exists. It blocks the merge, rather than reporting the breakage after users have already hit it.
+The `check-release` workflow enforces this: it requires every image in the compose file to be pinned to a digest, requires the app image's tag to match the app version, requires that digest to actually resolve in the registry, and requires the release notes to name the bundled beignet version. A digest cannot be known before the build, so a digest that resolves is proof the image exists. It blocks the merge, rather than reporting the breakage after users have already hit it.
+
+### The rbitcoin app
+
+The same three steps, with its own tag and image: `git tag rbitcoin-v0.8.0-1` publishes `ghcr.io/coreyphillips/rbitcoin:0.8.0-1`, and the release PR sets that version and digest in `beignet-rbitcoin/`. The rbitcoin release and its checksum are pinned once, in `docker/rbitcoin/Dockerfile`; the version string is `<rbitcoin version>-<app patch>` so a packaging fix can ship without an upstream release. Details and the first-release order are in [beignet-rbitcoin/README.md](beignet-rbitcoin/README.md).
 
 ## Security notes
 

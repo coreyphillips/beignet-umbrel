@@ -70,6 +70,17 @@ const ELECTRUM_PRESETS = [
 		port: 50002,
 		tls: false,
 		note: 'Use if the Fulcrum app is installed on this Umbrel'
+	},
+	{
+		id: 'umbrel-rbitcoin',
+		label: 'Umbrel rbitcoin',
+		// The pinned container name from this store's beignet-rbitcoin app,
+		// resolved by Docker's DNS on the shared network. No fixed IP: that
+		// app pins names, not addresses (see its docker-compose.yml).
+		host: 'beignet-rbitcoin_node_1',
+		port: 50001,
+		tls: false,
+		note: 'Use if the rbitcoin app from this store is installed'
 	}
 ];
 

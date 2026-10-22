@@ -1577,7 +1577,8 @@ function normalizeRecovery(mode, existing, autoApply) {
 
 const ELECTRUM_PRESETS = [
 	{ id: 'electrs', label: 'Umbrel Electrs', host: 'umbrel.local', port: 50001, tls: false, note: 'Electrs app on this Umbrel' },
-	{ id: 'fulcrum', label: 'Umbrel Fulcrum', host: 'umbrel.local', port: 50002, tls: true, note: 'Fulcrum app on this Umbrel' }
+	{ id: 'fulcrum', label: 'Umbrel Fulcrum', host: 'umbrel.local', port: 50002, tls: true, note: 'Fulcrum app on this Umbrel' },
+	{ id: 'rbitcoin', label: 'Umbrel rbitcoin', host: 'beignet-rbitcoin_node_1', port: 50001, tls: false, note: 'rbitcoin app from this store' }
 ];
 
 function managerRequest(path, method, body) {

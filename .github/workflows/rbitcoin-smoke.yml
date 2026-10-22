@@ -1,0 +1,83 @@
+name: rbitcoin-smoke
+
+# Builds the beignet-rbitcoin image and runs it on regtest for a minute: the
+# node must come up, answer its health listener, speak Electrum with its own
+# name and the regtest genesis, serve the status page through nginx, and
+# stop cleanly on SIGTERM so the next start reopens the store.
+on:
+  pull_request:
+    paths:
+      - "docker/rbitcoin/**"
+      - "beignet-rbitcoin/**"
+      - ".github/workflows/rbitcoin-smoke.yml"
+  workflow_dispatch: {}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image for this runner
+        run: docker buildx build --load -f docker/rbitcoin/Dockerfile -t rbitcoin:smoke .
+
+      - name: Start the node on regtest
+        run: |
+          set -euo pipefail
+          docker network create smoke
+          docker run -d --name beignet-rbitcoin_node_1 --network smoke \
+            -p 50001:50001 -p 9332:9332 -e RBITCOIN_IO=pread rbitcoin:smoke \
+            --datadir /data --network regtest --no-seeds --sh-index \
+            --electrum-listen 0.0.0.0:50001 --health-listen 0.0.0.0:9332 --log-level info
+          for i in $(seq 1 90); do
+            if curl -fsS localhost:9332/healthz >/dev/null 2>&1; then echo "healthz after ${i}s"; break; fi
+            if [ "$i" = 90 ]; then echo "::error::no /healthz within 90 s"; docker logs beignet-rbitcoin_node_1; exit 1; fi
+            sleep 1
+          done
+          curl -fsS localhost:9332/progress | tee progress.json
+          grep -q '"phase"' progress.json
+
+      - name: Speak Electrum to it
+        run: |
+          set -euo pipefail
+          bash beignet-rbitcoin/scripts/electrum-check.sh 127.0.0.1 50001 regtest
+
+      - name: Serve the status page
+        run: |
+          set -euo pipefail
+          NGINX=$(sed -nE 's/^ *image: *(nginx:[^ ]+).*/\1/p' beignet-rbitcoin/docker-compose.yml 2>/dev/null || true)
+          [ -n "$NGINX" ] || NGINX=nginx:1.30-alpine
+          docker run -d --name web --network smoke -p 8080:80 \
+            -e LAN_HOST=umbrel.local -e PUBLIC_PORT=50011 -e APP_VERSION=smoke -e NODE_HOST=beignet-rbitcoin_node_1 \
+            -e NGINX_ENVSUBST_TEMPLATE_SUFFIX=.tmpl \
+            -e 'NGINX_ENVSUBST_FILTER=^(LAN_HOST|PUBLIC_PORT|APP_VERSION|NODE_HOST)$' \
+            -v "$PWD/beignet-rbitcoin/web/default.conf.tmpl:/etc/nginx/templates/default.conf.tmpl:ro" \
+            -v "$PWD/beignet-rbitcoin/web/index.html:/usr/share/nginx/html/index.html:ro" \
+            "$NGINX"
+          for i in $(seq 1 20); do curl -fsS localhost:8080/ >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS localhost:8080/ | grep -q 'x86_64'
+          curl -fsS localhost:8080/config.json | tee config.json
+          grep -q '"lan":"umbrel.local:50011"' config.json
+          curl -fsS localhost:8080/node/healthz
+          curl -fsS localhost:8080/node/progress | grep -q '"phase"'
+
+      - name: Stop cleanly and start again
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          docker stop -t 900 beignet-rbitcoin_node_1
+          echo "clean stop took $(( $(date +%s) - start )) s"
+          code=$(docker inspect -f '{{.State.ExitCode}}' beignet-rbitcoin_node_1)
+          echo "exit code $code"
+          [ "$code" = 0 ] || { docker logs --tail 50 beignet-rbitcoin_node_1; exit 1; }
+          docker start beignet-rbitcoin_node_1
+          for i in $(seq 1 90); do
+            curl -fsS localhost:9332/healthz >/dev/null 2>&1 && { echo "back after ${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "::error::the node did not come back after a clean stop"; docker logs --tail 50 beignet-rbitcoin_node_1; exit 1
+
+      - name: Node logs
+        if: failure()
+        run: docker logs beignet-rbitcoin_node_1 || true

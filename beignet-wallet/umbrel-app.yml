@@ -16,9 +16,9 @@ description: >-
 
 
   No full node required. Point Beignet at any Electrum server you like, or, if
-  you run the Electrs or Fulcrum app on your Umbrel, connect to it with a single
-  click. You can set a default Electrum server for new wallets and override it
-  per wallet.
+  you run the Electrs or Fulcrum app on your Umbrel, or the rbitcoin app from
+  this store, connect to it with a single click. You can set a default Electrum
+  server for new wallets and override it per wallet.
 developer: Corey Phillips
 website: https://github.com/coreyphillips/beignet
 submitter: Corey Phillips

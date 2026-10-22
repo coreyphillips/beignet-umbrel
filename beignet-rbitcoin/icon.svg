@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b1d12"/>
+      <stop offset="1" stop-color="#160f0a"/>
+    </linearGradient>
+    <linearGradient id="coin" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#F6C67A"/>
+      <stop offset="0.6" stop-color="#E09A40"/>
+      <stop offset="1" stop-color="#B96C26"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <!-- A block chain: three linked blocks, the last one the lit tip. -->
+  <g fill="none" stroke="#5a4330" stroke-width="10" stroke-linecap="round">
+    <line x1="58" y1="150" x2="92" y2="150"/>
+    <line x1="142" y1="150" x2="176" y2="150"/>
+  </g>
+  <rect x="24" y="118" width="40" height="64" rx="10" fill="#4a3627"/>
+  <rect x="96" y="118" width="40" height="64" rx="10" fill="#6b4c33"/>
+  <rect x="168" y="118" width="64" height="64" rx="12" fill="url(#coin)"/>
+  <!-- The R of rbitcoin, in the tip block. -->
+  <path d="M188 168 V132 h16 a11 11 0 0 1 0 22 h-16 m14 0 l14 14" fill="none" stroke="#2b1d12" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Headers arriving from the network. -->
+  <g fill="#E09A40" opacity="0.9">
+    <circle cx="200" cy="64" r="7"/>
+    <circle cx="170" cy="82" r="5"/>
+    <circle cx="224" cy="88" r="5"/>
+  </g>
+</svg>

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rbitcoin</title>
+<style>
+  :root {
+    --bg: #f4f1ec; --card: #ffffff; --text: #1f1a16; --muted: #6b625a; --line: #e4ddd3;
+    --ok: #1f8a4c; --warn: #9a6700; --bad: #b42318; --accent: #c7782b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16120f; --card: #211b16; --text: #f1e9df; --muted: #a79b8e; --line: #352b23; --ok: #5cd38b; --warn: #f2c14e; --bad: #ff7a7f; --accent: #e7a35a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  .state { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+  .state[data-tone="ok"] { color: var(--ok); }
+  .state[data-tone="warn"] { color: var(--warn); }
+  .state[data-tone="bad"] { color: var(--bad); }
+  progress { width: 100%; height: 10px; accent-color: var(--accent); margin: 8px 0 4px; }
+  .detail { color: var(--muted); font-size: 13px; margin: 2px 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+  dt { color: var(--muted); font-size: 13px; }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  ul { margin: 6px 0 0; padding-left: 18px; }
+  li { margin: 4px 0; }
+  .warn-card { border-color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>rbitcoin on this Umbrel</h1>
+  <p class="sub">A Bitcoin full node that serves the Electrum protocol, for Beignet and the wallets on your home network. App <span id="app-version">...</span>.</p>
+
+  <section class="card">
+    <h2>Status</h2>
+    <p class="state" id="state" data-tone="">Checking</p>
+    <progress id="bar" max="100" value="0" hidden></progress>
+    <p class="detail" id="stage"></p>
+    <p class="detail" id="eta"></p>
+    <p class="detail" id="note"></p>
+  </section>
+
+  <section class="card">
+    <h2>Connect a wallet</h2>
+    <dl>
+      <dt>From apps on this Umbrel</dt>
+      <dd><code id="internal">...</code> (in Beignet, pick the <strong>Umbrel rbitcoin</strong> preset in Settings or on a wallet)</dd>
+      <dt>From your home network</dt>
+      <dd><code id="lan">...</code>, or your Umbrel's IP address with the same port</dd>
+    </dl>
+    <ul>
+      <li>Plain TCP, no TLS: in Sparrow or Electrum choose the non-SSL option. Meant for your own network, not the internet.</li>
+      <li>Address histories are complete only once the sync has finished. Until then a wallet connects but sees nothing.</li>
+    </ul>
+  </section>
+
+  <section class="card warn-card">
+    <h2>Read before relying on it</h2>
+    <ul>
+      <li>rbitcoin is young software. Its author calls the mainnet release "early production / high-scrutiny" and "not a Core or Fulcrum replacement", and lists multi-tenant public Electrum service as a non-goal. Use it for your own wallets.</li>
+      <li>x86_64 only. rbitcoin publishes no Linux arm64 build, so a Raspberry Pi Umbrel cannot run it; this page then says the node is not answering.</li>
+      <li>Disk: about 750 GiB for the full store, about 200 GiB of it hot. The first sync takes a day or more. The data is excluded from Umbrel backups and rebuilt from the network.</li>
+      <li>It validates signatures from block 840000 onward (the upstream default milestone); earlier blocks are checked by header chain and transaction structure only.</li>
+      <li>Before 1.0 the on-disk format can change. When an update needs a fresh sync, the release notes say so.</li>
+    </ul>
+  </section>
+</main>
+<script>
+  (function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var set = function (id, text) { $(id).textContent = text; };
+    var state = function (text, tone) { set('state', text); $('state').dataset.tone = tone; };
+    var secs = function (s) {
+      if (typeof s !== 'number' || !isFinite(s)) return null;
+      var h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+      return h ? h + ' h ' + m + ' min' : m + ' min';
+    };
+    fetch('/config.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (c) {
+      set('internal', c.internal);
+      set('lan', c.lan);
+      set('app-version', c.appVersion);
+    }).catch(function () {});
+
+    function poll() {
+      fetch('/node/readyz', { cache: 'no-store' }).then(function (ready) {
+        return fetch('/node/progress', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (p) {
+          if (ready.ok) {
+            state('Ready: following the chain tip', 'ok');
+            $('bar').hidden = true;
+            set('stage', p && p.phase ? 'Phase: ' + p.phase : '');
+            set('eta', '');
+            set('note', 'Wallets can connect now.');
+            return;
+          }
+          state('Syncing', 'warn');
+          if (p && typeof p.percent === 'number') {
+            $('bar').hidden = false;
+            $('bar').value = p.percent;
+          } else {
+            $('bar').hidden = true;
+          }
+          var stage = p ? [p.phase, p.stage].filter(Boolean).join(': ') : '';
+          set('stage', stage ? stage + (typeof p.percent === 'number' ? ' (' + p.percent.toFixed(1) + '%)' : '') : 'Starting up');
+          var eta = p ? secs(p.eta_secs) : null;
+          var elapsed = p ? secs(p.elapsed_secs) : null;
+          set('eta', (elapsed ? 'This stage has run for ' + elapsed + '. ' : '') + (eta ? 'About ' + eta + ' to go.' : ''));
+          set('note', 'The first sync takes a day or more. Wallets can connect once this reads Ready.');
+        });
+      }).catch(function () {
+        state('Not answering', 'bad');
+        $('bar').hidden = true;
+        set('stage', 'The node is not running or is still starting.');
+        set('eta', '');
+        set('note', 'On an arm64 Umbrel (Raspberry Pi) it cannot run: rbitcoin publishes no Linux arm64 build. On an x86_64 Umbrel, give it a minute after an install or update; if this stays, check the app logs.');
+      });
+    }
+    poll();
+    setInterval(poll, 5000);
+  })();
+</script>
+</body>
+</html>

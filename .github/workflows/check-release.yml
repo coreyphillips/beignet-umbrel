@@ -1,27 +1,35 @@
 name: check-release
 
-# umbrelOS installs this app straight from `main`. The moment a commit lands
-# there, every Umbrel that syncs the store will try to pull the image named in
-# docker-compose.yml. If that image does not exist yet, the pull fails, the
-# manager container is never created, and app_proxy waits forever on a backend
-# that will never appear: the app hangs on "Starting" with no way to tell why.
+# umbrelOS installs the apps in this store straight from `main`. The moment a
+# commit lands there, every Umbrel that syncs the store will try to pull the
+# images named in each app's docker-compose.yml. If an image does not exist
+# yet, the pull fails, the container is never created, and app_proxy waits
+# forever on a backend that will never appear: the app hangs on "Starting"
+# with no way to tell why.
 #
 # That is not hypothetical. v0.6.0 advertised its image fourteen minutes before
 # the build published it, and anyone who updated inside that window was stranded.
 #
-# The image is built from a git tag, so it can only exist after the tag is
+# An image is built from a git tag, so it can only exist after the tag is
 # pushed. Requiring the compose file to name it by digest closes the gap: a
-# digest cannot be known until the image is published, so a digest that resolves
-# is proof the image is there. This check enforces that, and blocks the merge
-# rather than reporting the breakage after users have already hit it.
+# digest cannot be known until the image is published, so a digest that
+# resolves is proof the image is there. This check enforces that, and blocks
+# the merge rather than reporting the breakage after users have already hit it.
 #
-# The release order it implies:
+# The release order it implies, for each app:
 #   1. merge the code, leaving `version` and the image alone
 #   2. tag it, and let the build publish the image
 #   3. open a second PR bumping `version` plus the image tag and digest together
 #
 # Step 3 is the only commit that changes what Umbrel is told to install, and it
 # cannot pass this check until the thing it points at is real.
+#
+# Two apps live here. beignet-wallet releases on `v*` tags as
+# ghcr.io/coreyphillips/beignet-app; beignet-rbitcoin on `rbitcoin-v*` tags as
+# ghcr.io/coreyphillips/rbitcoin. The rules are the same for both: every
+# image in the compose file is digest-pinned, and the app's own image (the one
+# under ghcr.io/coreyphillips/) carries the app's version as its tag and
+# resolves in the registry.
 
 on:
   pull_request:
@@ -29,43 +37,63 @@ on:
     paths:
       - 'beignet-wallet/docker-compose.yml'
       - 'beignet-wallet/umbrel-app.yml'
+      - 'beignet-rbitcoin/docker-compose.yml'
+      - 'beignet-rbitcoin/umbrel-app.yml'
   push:
     branches: [main]
 
 jobs:
   image-exists:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [beignet-wallet, beignet-rbitcoin]
     steps:
       - uses: actions/checkout@v4
 
-      - name: The image Umbrel is told to install must already exist
+      - name: The images Umbrel is told to install must already exist
         run: |
           set -euo pipefail
 
-          COMPOSE=beignet-wallet/docker-compose.yml
-          MANIFEST=beignet-wallet/umbrel-app.yml
+          COMPOSE=${{ matrix.app }}/docker-compose.yml
+          MANIFEST=${{ matrix.app }}/umbrel-app.yml
 
-          IMAGE=$(grep -oE 'ghcr\.io/[^[:space:]]+' "$COMPOSE" | grep beignet-app | head -1)
+          # An app that is not published yet (its manifest and compose land
+          # in the release PR) has nothing to check.
+          if [ ! -f "$COMPOSE" ] || [ ! -f "$MANIFEST" ]; then
+            echo "${{ matrix.app }} has no manifest or compose on this branch; nothing to check."
+            exit 0
+          fi
+
           APP_VERSION=$(grep -oE '^version: *"[^"]+"' "$MANIFEST" | sed 's/.*"\(.*\)"/\1/')
-
           echo "app version : $APP_VERSION"
-          echo "image       : $IMAGE"
 
-          # 1. Digest-pinned. This is what makes the whole check meaningful: a
-          #    digest cannot be invented ahead of the build.
-          case "$IMAGE" in
-            *@sha256:*) ;;
-            *)
-              echo "::error::$COMPOSE names the image without an @sha256: digest."
-              echo "::error::Pin it to the digest the release build published, so main cannot advertise an image that does not exist yet."
-              exit 1
-              ;;
-          esac
+          # 1. Every image is digest-pinned, the app's own and the sidecars
+          #    (Tor, nginx) alike: a tag alone can move under the app.
+          grep -oE '^\s*image: *[^[:space:]]+' "$COMPOSE" | sed -E 's/^\s*image: *//' | while read -r IMAGE; do
+            echo "image       : $IMAGE"
+            case "$IMAGE" in
+              *@sha256:*) ;;
+              *)
+                echo "::error::$COMPOSE names $IMAGE without an @sha256: digest."
+                echo "::error::Pin every image to a digest, so main cannot advertise an image that does not exist yet or that has moved."
+                exit 1
+                ;;
+            esac
+          done
 
-          REPO=${IMAGE%@*}; REPO=${REPO%:*}
-          REPO=${REPO#ghcr.io/}
-          TAG=$(echo "$IMAGE" | sed -E 's|.*beignet-app:([^@]+)@.*|\1|')
+          # The app's own image, built by this repository's workflows.
+          IMAGE=$(grep -oE 'ghcr\.io/coreyphillips/[^[:space:]]+' "$COMPOSE" | head -1)
+          if [ -z "$IMAGE" ]; then
+            echo "::error::$COMPOSE names no ghcr.io/coreyphillips/ image."
+            exit 1
+          fi
+          REF=${IMAGE%@*}
           DIGEST=${IMAGE#*@}
+          TAG=${REF##*:}
+          REPO=${REF%:*}
+          REPO=${REPO#ghcr.io/}
 
           # 2. The tag must be the app version, or Umbrel shows one version and
           #    installs another.
@@ -75,11 +103,11 @@ jobs:
           fi
 
           # 3. The digest must actually resolve. This is the part that would have
-          #    caught v0.6.0.
+          #    caught v0.6.0. A multi-arch index or a single manifest both count.
           TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${REPO}:pull&service=ghcr.io" | sed -E 's/.*"token":"([^"]+)".*/\1/')
           CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $TOKEN" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
             "https://ghcr.io/v2/${REPO}/manifests/${DIGEST}")
 
           if [ "$CODE" != "200" ]; then
@@ -90,17 +118,22 @@ jobs:
 
           echo "ok: the image exists, and it is what the manifest says it is."
 
-      # The release notes are the one place a user learns which engine the
-      # app bundles, and they are written by hand while the version the
-      # image actually bundles lives in build-image.yml. The two drifted for
-      # 0.20.4, whose notes described an engine release the image never
-      # carried. The notes must name the bundled version.
-      # Only on the release PR (step 3): a bundle commit (step 1) legitimately
-      # names an engine the notes do not describe yet, and so does main between
-      # the two, so the check would be red exactly when the process is right.
-      # The release PR is the one commit that must line the two up.
+  # The release notes are the one place a user learns which engine the app
+  # bundles, and they are written by hand while the version the image
+  # actually bundles lives in build-image.yml. The two drifted for 0.20.4,
+  # whose notes described an engine release the image never carried. The
+  # notes must name the bundled version.
+  # Only on the release PR (step 3): a bundle commit (step 1) legitimately
+  # names an engine the notes do not describe yet, and so does main between
+  # the two, so the check would be red exactly when the process is right.
+  # The release PR is the one commit that must line the two up.
+  beignet-release-notes:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
       - name: The release notes must name the beignet version the image bundles
-        if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
 
@@ -130,3 +163,53 @@ jobs:
           fi
 
           echo "ok: the release notes name beignet $BEIGNET."
+
+  # The same drift guard for the rbitcoin app, whose one pin is the
+  # RBITCOIN_VERSION ARG in its Dockerfile: the app version must be that
+  # release plus an app patch (0.8.0-1), and the notes must name it.
+  rbitcoin-release-notes:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The app version and release notes must name the rbitcoin release the image carries
+        run: |
+          set -euo pipefail
+
+          DOCKERFILE=docker/rbitcoin/Dockerfile
+          MANIFEST=beignet-rbitcoin/umbrel-app.yml
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "beignet-rbitcoin has no manifest on this branch; nothing to check."
+            exit 0
+          fi
+
+          RB=$(sed -nE 's/^ARG RBITCOIN_VERSION=(.+)$/\1/p' "$DOCKERFILE")
+          if [ -z "$RB" ]; then
+            echo "::error::$DOCKERFILE pins no RBITCOIN_VERSION."
+            exit 1
+          fi
+          echo "bundled rbitcoin: $RB"
+
+          APP_VERSION=$(grep -oE '^version: *"[^"]+"' "$MANIFEST" | sed 's/.*"\(.*\)"/\1/')
+          case "$APP_VERSION" in
+            "$RB"-*) ;;
+            *)
+              echo "::error::$MANIFEST version ($APP_VERSION) must be \"$RB-<app patch>\", the rbitcoin release $DOCKERFILE pins plus a packaging number."
+              exit 1
+              ;;
+          esac
+
+          NOTES=$(awk '/^releaseNotes:/{on=1; next} on && /^[^[:space:]]/{exit} on{print}' "$MANIFEST" | tr '\n' ' ' | tr -s ' ')
+          if [ -z "$NOTES" ]; then
+            echo "::error::$MANIFEST has no releaseNotes."
+            exit 1
+          fi
+          ESCAPED=$(printf '%s' "$RB" | sed 's/\./\\./g')
+          if ! printf '%s\n' "$NOTES" | grep -qE "rbitcoin ${ESCAPED}([^0-9]|$)"; then
+            echo "::error::The release notes in $MANIFEST do not mention \"rbitcoin $RB\", the release $DOCKERFILE pins."
+            exit 1
+          fi
+
+          echo "ok: version $APP_VERSION and the release notes name rbitcoin $RB."
