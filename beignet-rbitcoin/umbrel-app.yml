@@ -1,0 +1,58 @@
+manifestVersion: 1.1
+id: beignet-rbitcoin
+name: rbitcoin
+tagline: A Rust Bitcoin full node that serves Electrum, for Beignet and LAN wallets
+icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-rbitcoin/icon.svg
+category: bitcoin
+version: "0.8.0-1"
+port: 2114
+description: >-
+  rbitcoin is a Bitcoin full node written in Rust that downloads and validates
+  the chain itself and serves the Electrum protocol from the same process. It
+  needs no Bitcoin Core and no separate indexer. Install it to give Beignet, and
+  any Electrum wallet on your home network, a server that runs on your own
+  Umbrel.
+
+
+  Read this before installing. rbitcoin is young software: its author calls the
+  mainnet release "early production / high-scrutiny" and "not a Core or Fulcrum
+  replacement", and lists multi-tenant public Electrum service as a non-goal.
+  Use it for your own wallets on this Umbrel and your LAN. It validates
+  signatures from block 840000 onward (the upstream default milestone); earlier
+  blocks are checked by header chain and transaction structure only.
+
+
+  Requirements. An x86_64 Umbrel such as Umbrel Home: rbitcoin publishes no
+  Linux arm64 build, so a Raspberry Pi Umbrel cannot run it. About 750 GiB of
+  free disk for the full store, around 200 GiB of it hot. The first sync takes
+  a day or more. The node's data is excluded from Umbrel backups: it is hundreds
+  of GiB and can always be rebuilt from the network.
+
+
+  Before 1.0 the on-disk format can change. When an update needs a fresh sync
+  the release notes say so, and you wipe the data and let it download again.
+
+
+  The app's page shows the sync progress and the addresses to connect to:
+  beignet-rbitcoin_node_1:50001 from apps on this Umbrel (Beignet has a
+  one-click preset), and umbrel.local:50011 from the rest of your home network.
+  Connections are plain TCP without TLS, meant for your own network only.
+developer: Brandon Black (rbitcoin), packaged by Corey Phillips
+website: https://github.com/reardencode/rbitcoin
+submitter: Corey Phillips
+submission: https://github.com/coreyphillips/beignet-umbrel
+repo: https://github.com/coreyphillips/beignet-umbrel
+support: https://github.com/coreyphillips/beignet-umbrel/issues
+gallery:
+  - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-rbitcoin/gallery/1.png
+releaseNotes: >-
+  First release. Bundles rbitcoin 0.8.0. Mainnet only, x86_64 only, plain TCP
+  Electrum on port 50011 of your Umbrel and at beignet-rbitcoin_node_1:50001
+  inside it. Nothing to migrate: this version starts a fresh sync.
+dependencies: []
+backupIgnore:
+  - data
+optimizedForUmbrelHome: true
+path: ""
+defaultUsername: ""
+defaultPassword: ""
