@@ -2856,7 +2856,10 @@ class WalletManager {
 		try {
 			res = await this._daemonCall(rec, 'POST', '/ffor/enforce', { channelId });
 		} catch (err) {
-			throw httpError(502, err.code || 'FFOR_ENFORCE_FAILED', err.message);
+			// Engines before 0.31.0 answer a refusal inside a 200; from 0.31.0
+			// it is a FORCE_CLOSE_FAILED error (beignet #1722). Both are a refusal.
+			if (err.code !== 'FORCE_CLOSE_FAILED') throw httpError(502, err.code || 'FFOR_ENFORCE_FAILED', err.message);
+			res = { ok: false, error: err.message };
 		}
 		if (!res || res.ok === false) {
 			const reason = (res && res.error) || 'the daemon refused the force close';

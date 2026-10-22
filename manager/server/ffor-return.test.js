@@ -199,6 +199,26 @@ test('enforce reads the refusal the daemon answers inside a 200, and a broadcast
 	await assert.rejects(m.fforEnforce('r1', {}), (err) => err.code === 'INVALID_PARAMS');
 });
 
+test('enforce reads the refusal 0.31.0 answers as FORCE_CLOSE_FAILED the same way', async () => {
+	const { m } = managerWith({ r1: receiver() });
+	const rt = m.runtimeState('r1');
+	rt.proc = {};
+	rt.fforEnforce = { at: 1, channelId: CH };
+	stubDaemon(m, { epochs: [activeEpoch()] });
+	m.enforceAnswer = Object.assign(new Error('channel restored from a capsule: pass acceptStaleStateRisk'), { code: 'FORCE_CLOSE_FAILED' });
+	await assert.rejects(m.fforEnforce('r1', { channelId: CH }), (err) => err.statusCode === 502 && err.code === 'FFOR_ENFORCE_REFUSED' && /capsule/.test(err.message));
+	assert.deepEqual(rt.fforEnforce, { at: 1, channelId: CH }, 'a refusal leaves the warning up');
+	assert.equal(m.publicRecord('r1').fforEnforced, null);
+	assert.match(m.logs.join('\n'), /refused, channel restored from a capsule/);
+	m.enforceAnswer = Object.assign(new Error('fetch failed'), { code: 'DAEMON_ERROR' });
+	await assert.rejects(m.fforEnforce('r1', { channelId: CH }), (err) => err.code === 'DAEMON_ERROR');
+	// A success without the in-band ok flag, as 0.31.0 answers it.
+	m.enforceAnswer = { commitmentTxid: 'cc'.repeat(32), preimagesKnown: 1 };
+	const done = await m.fforEnforce('r1', { channelId: CH });
+	assert.equal(done.commitmentTxid, 'cc'.repeat(32));
+	assert.equal(rt.fforEnforce, null);
+});
+
 test('a refused recover is kept on the record with its reason, and surfaces as a 502 to the caller', async () => {
 	const { m } = managerWith({ r1: receiver() });
 	m.runtimeState('r1').proc = {};

@@ -64,10 +64,10 @@ export default function FforReturnPanel({ id, api, rec, onChanged }) {
 			setBusy(false);
 		}
 	};
-	// Through the manager: the daemon answers a refusal inside a 200 (the
-	// force-close route's shape), and the manager reads it, records a real
-	// broadcast and answers the enforce warning. A refusal arrives here as
-	// an error with the daemon's reason.
+	// Through the manager: the daemon answers a refusal inside a 200, or
+	// from 0.31.0 as a FORCE_CLOSE_FAILED error, and the manager reads
+	// either, records a real broadcast and answers the enforce warning. A
+	// refusal arrives here as an error with the daemon's reason.
 	const doEnforce = async () => {
 		setBusy(true);
 		try {
