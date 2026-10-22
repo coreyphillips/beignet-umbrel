@@ -156,3 +156,59 @@ test("automatic receive funding and limits survive save, reopen and unrelated ed
     globalThis.fetch = fetchBefore;
   }
 });
+
+test("a server on another chain is refused with a way through, and Save anyway sends the override", async () => {
+  const rec = initial();
+  const bodies = [];
+  let completed = 0;
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = async (path, options) => {
+    if (path.endsWith("/channels"))
+      return { ok: true, json: async () => ({ ok: true, result: [] }) };
+    assert.equal(path, "/api/wallets/wallet");
+    const body = JSON.parse(options.body);
+    bodies.push(body);
+    if (body.allowChainMismatch !== true) {
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({
+          ok: false,
+          error: {
+            code: "ELECTRUM_WRONG_CHAIN",
+            message:
+              "The Electrum server at testnet.example:50002 serves testnet, but this wallet is on mainnet. Pick a mainnet server, or save anyway if you are sure.",
+            details: { host: "testnet.example", port: 50002, chain: "testnet", network: "mainnet", software: "electrs/0.10.9" },
+          },
+        }),
+      };
+    }
+    return { ok: true, json: async () => ({ ok: true, result: { ...rec, ...body } }) };
+  };
+  const r = await render(wrapped, {
+    rec,
+    presets: [],
+    onClose() {},
+    onSaved() {
+      completed++;
+    },
+  });
+  try {
+    const host = r.$('input[placeholder^="192.168"]');
+    await type(host, "testnet.example");
+    await click(r.$$("button").find((b) => b.textContent === "Save changes"));
+    assert.equal(completed, 0, "the refusal keeps the dialog open");
+    const note = r.$('[data-testid="electrum-wrong-chain"]');
+    assert.ok(note, "the refusal is shown under the fields");
+    assert.match(note.textContent, /serves testnet, but this wallet is on mainnet/);
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].allowChainMismatch, undefined);
+    await click(r.$('[data-testid="electrum-save-anyway"]'));
+    assert.equal(completed, 1);
+    assert.equal(bodies[1].allowChainMismatch, true);
+    assert.equal(bodies[1].electrum.host, "testnet.example");
+  } finally {
+    await r.unmount();
+    globalThis.fetch = fetchBefore;
+  }
+});

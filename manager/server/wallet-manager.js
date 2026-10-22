@@ -3,12 +3,11 @@
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
-const tls = require('tls');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const bip39 = require('bip39');
-const { config, SUPPORTED_NETWORKS } = require('./config');
+const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS } = require('./config');
 const { Registry } = require('./registry');
 const { Settings } = require('./settings');
 const { TorControl, pickLocalIp } = require('./tor-control');
@@ -61,7 +60,8 @@ const {
 	electrumTlsVerifyAvailable,
 	irohAvailable
 } = require('./engine');
-const { normalizeElectrumTls, electrumTlsEnv, certificateAccepted } = require('./electrum-tls');
+const { normalizeElectrumTls, electrumTlsEnv } = require('./electrum-tls');
+const { electrumRequests, cachedProbe, discoverServers } = require('./electrum-probe');
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
 const netmode = require('./network-mode');
@@ -493,57 +493,76 @@ class WalletManager {
 	}
 
 	// Queries an Electrum server for its current chain tip height. Resolves null
-	// if the tip cannot be determined. Honors TLS so it works with either preset.
-	_electrumTip(electrum) {
-		const { host, port, tls: useTls } = electrum;
-		return new Promise((resolve) => {
-			let done = false;
-			let buf = '';
-			let socket;
-			const finish = (val) => {
-				if (done) return;
-				done = true;
-				try {
-					socket.destroy();
-				} catch (_) {
-					/* already gone */
-				}
-				resolve(val);
-			};
-			try {
-				socket = useTls
-					? tls.connect({ host, port, servername: net.isIP(host) ? undefined : host, rejectUnauthorized: false })
-					: net.connect({ host, port });
-			} catch (_) {
-				return resolve(null);
-			}
-			socket.setTimeout(ELECTRUM_PROBE_TIMEOUT_MS);
-			socket.once(useTls ? 'secureConnect' : 'connect', () => {
-				// A wallet that verifies its server's certificate does not take
-				// the tip from one the daemon would refuse either.
-				if (useTls && !certificateAccepted(socket, electrum)) return finish(null);
-				socket.write(
-					`${JSON.stringify({ id: 1, method: 'blockchain.headers.subscribe', params: [] })}\n`
-				);
-			});
-			socket.on('data', (chunk) => {
-				buf += chunk.toString('utf8');
-				const nl = buf.indexOf('\n');
-				if (nl === -1) return;
-				try {
-					const msg = JSON.parse(buf.slice(0, nl));
-					const height =
-						msg && msg.result && typeof msg.result.height === 'number'
-							? msg.result.height
-							: null;
-					finish(height);
-				} catch (_) {
-					finish(null);
-				}
-			});
-			socket.once('timeout', () => finish(null));
-			socket.once('error', () => finish(null));
-		});
+	// if the tip cannot be determined. Honors TLS so it works with either preset,
+	// and applies the wallet's certificate rule: a wallet that verifies its
+	// server does not take the tip from one the daemon would refuse either.
+	async _electrumTip(electrum) {
+		try {
+			const { replies } = await electrumRequests(
+				electrum,
+				[{ id: 1, method: 'blockchain.headers.subscribe', params: [] }],
+				{ timeoutMs: ELECTRUM_PROBE_TIMEOUT_MS }
+			);
+			const msg = replies[1];
+			return msg && msg.result && typeof msg.result.height === 'number' ? msg.result.height : null;
+		} catch (_) {
+			return null;
+		}
+	}
+
+	// The Electrum servers an Umbrel may run, each asked whether it is there
+	// and what it serves (electrum-probe.js). Presets are probed together and
+	// the answers stand for a few seconds, so the dashboard may ask freely.
+	discoverElectrum({ refresh = false } = {}) {
+		return discoverServers(ELECTRUM_PRESETS, { refresh, timeoutMs: ELECTRUM_PROBE_TIMEOUT_MS });
+	}
+
+	// A server the user typed, probed on request. `network` is what the server
+	// is meant to serve; `chainMatches` is null when that is not known or the
+	// server did not say which chain it is on.
+	async testElectrum(body = {}) {
+		const electrum = this._normalizeElectrum(body);
+		const result = await cachedProbe(electrum, { refresh: true, timeoutMs: ELECTRUM_PROBE_TIMEOUT_MS });
+		const network = SUPPORTED_NETWORKS.includes(body.network) ? body.network : null;
+		const chainMatches = network && result.chain !== 'unknown' ? result.chain === network : null;
+		return { electrum, ...result, network, chainMatches };
+	}
+
+	// Whether two Electrum records name a different server, or the same one
+	// held to a different certificate rule.
+	_electrumChanged(a, b) {
+		if (!a || !b) return true;
+		const pins = (e) => (Array.isArray(e.tlsFingerprints) ? e.tlsFingerprints.join(',') : '');
+		return (
+			a.host !== b.host ||
+			a.port !== b.port ||
+			!!a.tls !== !!b.tls ||
+			(a.tlsVerify === true) !== (b.tlsVerify === true) ||
+			pins(a) !== pins(b)
+		);
+	}
+
+	// One line so a test can stand in a result for the probe.
+	_probeForGuard(electrum) {
+		return cachedProbe(electrum, { timeoutMs: ELECTRUM_PROBE_TIMEOUT_MS });
+	}
+
+	// Refuses a server that is known to serve another chain than the wallet
+	// is on. Only a confirmed mismatch is refused: a server that is down, slow,
+	// or refuses its certificate is saved as before and waited for, because a
+	// wallet whose server is briefly away must stay editable. The one probe
+	// this costs is answered from the cache when the dashboard just asked.
+	async _refuseWrongChain(electrum, network, { allow = false } = {}) {
+		if (allow === true) return;
+		const result = await this._probeForGuard(electrum);
+		if (!result || !result.reachable || result.chain === 'unknown' || result.chain === network) return;
+		const err = httpError(
+			400,
+			'ELECTRUM_WRONG_CHAIN',
+			`The Electrum server at ${electrum.host}:${electrum.port} serves ${result.chain}, but this wallet is on ${network}. Pick a ${network} server, or save anyway if you are sure.`
+		);
+		err.details = { host: electrum.host, port: electrum.port, chain: result.chain, network, software: result.software || null };
+		throw err;
 	}
 
 	// `at` stamps a line with when it happened rather than when it was heard,
@@ -715,7 +734,7 @@ class WalletManager {
 		};
 	}
 
-	updateSettings(patch = {}) {
+	async updateSettings(patch = {}) {
 		const next = {};
 		if (patch.defaultNetwork !== undefined) {
 			if (!SUPPORTED_NETWORKS.includes(patch.defaultNetwork)) {
@@ -732,6 +751,16 @@ class WalletManager {
 				patch.defaultElectrum === null
 					? null
 					: this._normalizeElectrum(patch.defaultElectrum);
+		}
+		// The default server is held to the default network the way a wallet's
+		// server is held to its network, when either of the two changes.
+		const defaultElectrum = next.defaultElectrum !== undefined ? next.defaultElectrum : this.defaultElectrum();
+		const defaultNetwork = next.defaultNetwork || this.defaultNetwork();
+		if (
+			defaultElectrum &&
+			(this._electrumChanged(defaultElectrum, this.defaultElectrum()) || defaultNetwork !== this.defaultNetwork())
+		) {
+			await this._refuseWrongChain(defaultElectrum, defaultNetwork, { allow: patch.allowChainMismatch });
 		}
 		if (patch.recoveryGuardians !== undefined) {
 			// A draft, not a set: settings hold however many guardians are
@@ -881,6 +910,7 @@ class WalletManager {
 		name,
 		network,
 		electrum,
+		allowChainMismatch,
 		wordCount,
 		tor,
 		networkMode,
@@ -900,6 +930,7 @@ class WalletManager {
 			name,
 			network,
 			electrum,
+			allowChainMismatch,
 			mnemonic,
 			tor,
 			networkMode,
@@ -919,6 +950,7 @@ class WalletManager {
 		name,
 		network,
 		electrum,
+		allowChainMismatch,
 		mnemonic,
 		tor,
 		networkMode,
@@ -943,6 +975,7 @@ class WalletManager {
 			name,
 			network,
 			electrum,
+			allowChainMismatch,
 			mnemonic: normalized,
 			tor,
 			networkMode,
@@ -962,6 +995,7 @@ class WalletManager {
 		name,
 		network,
 		electrum,
+		allowChainMismatch,
 		mnemonic,
 		tor,
 		networkMode,
@@ -977,6 +1011,8 @@ class WalletManager {
 	}) {
 		const net = this._validateNetwork(network);
 		const resolvedElectrum = this._resolveElectrum(electrum);
+		// Before a port is taken: a refused server leaves nothing behind.
+		await this._refuseWrongChain(resolvedElectrum, net, { allow: allowChainMismatch });
 		// Channel backup is a Lightning concern; an on-chain only wallet is
 		// created without it (the dashboard does not offer the choice there).
 		const recovery = this._normalizeRecovery(onchainOnly ? 'off' : recoveryMode, null, recoveryAutoApply);
@@ -1075,6 +1111,7 @@ class WalletManager {
 		{
 			name,
 			electrum,
+			allowChainMismatch,
 			tor,
 			networkMode,
 			iroh,
@@ -1134,8 +1171,15 @@ class WalletManager {
 		const nextHost = publicHost !== undefined ? netmode.normalizePublicHost(publicHost) : rec.publicHost || '';
 		netmode.validateNetworkChoice({ mode: nextMode, publicHost: nextHost, onchainOnly: nextOnchainOnly });
 		const nextIroh = netmode.normalizeIroh(iroh, { existing: rec.iroh, available: this.irohAvailable(), onchainOnly: nextOnchainOnly });
+		// The server is checked against the wallet's network only when it is
+		// actually being changed, so an edit to anything else goes through
+		// even if the server it already has is on the wrong chain or away.
+		const nextElectrum = electrum !== undefined ? this._normalizeElectrum(electrum) : undefined;
+		if (nextElectrum && this._electrumChanged(nextElectrum, rec.electrum)) {
+			await this._refuseWrongChain(nextElectrum, rec.network, { allow: allowChainMismatch });
+		}
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
-		if (electrum !== undefined) rec.electrum = this._normalizeElectrum(electrum);
+		if (nextElectrum) rec.electrum = nextElectrum;
 
 		rec.networkMode = nextMode;
 		rec.iroh = nextIroh;

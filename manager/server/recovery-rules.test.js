@@ -60,6 +60,17 @@ const rejects = (fn, code) => {
 	assert.fail(`expected ${code}`);
 };
 
+// updateSettings is async since the default server is probed for its chain.
+const rejectsAsync = async (promise, code) => {
+	try {
+		await promise;
+	} catch (err) {
+		assert.equal(err.code, code, err.message);
+		return err;
+	}
+	return assert.fail(`expected ${code}`);
+};
+
 test('guardian entries are pubkey@url with an http(s) or bolt8 URL', () => {
 	assert.equal(parseGuardianEntry(` ${K('A')}@http://127.0.0.1:8101 `).pubkey, K('a'));
 	assert.equal(parseGuardianEntry(`${K('a')}@http://127.0.0.1:8101`).bolt8, false);
@@ -167,25 +178,25 @@ test('recoveryEnv is empty for off and whole for a guardian mode', () => {
 	});
 });
 
-test('settings save a partial draft, refuse a malformed one, and clear on empty', () => {
+test('settings save a partial draft, refuse a malformed one, and clear on empty', async () => {
 	const m = managerWith();
-	assert.deepEqual(m.updateSettings({ recoveryGuardians: G }).recoveryGuardians, G);
+	assert.deepEqual((await m.updateSettings({ recoveryGuardians: G })).recoveryGuardians, G);
 	assert.deepEqual(
-		m.updateSettings({ recoveryGuardians: G.slice(0, 1) }).recoveryGuardians,
+		(await m.updateSettings({ recoveryGuardians: G.slice(0, 1) })).recoveryGuardians,
 		G.slice(0, 1),
 		'one guardian saves as one guardian, to be finished later'
 	);
-	assert.deepEqual(m.updateSettings({ recoveryGuardians: G.slice(0, 2) }).recoveryGuardians, G.slice(0, 2));
-	rejects(() => m.updateSettings({ recoveryGuardians: [G[0], G[1], 'junk'] }), 'BAD_GUARDIANS');
-	rejects(() => m.updateSettings({ recoveryGuardians: [G[0], G[0]] }), 'BAD_GUARDIANS');
-	rejects(() => m.updateSettings({ recoveryGuardians: [...G, OTHER[0]] }), 'BAD_GUARDIANS');
+	assert.deepEqual((await m.updateSettings({ recoveryGuardians: G.slice(0, 2) })).recoveryGuardians, G.slice(0, 2));
+	await rejectsAsync(m.updateSettings({ recoveryGuardians: [G[0], G[1], 'junk'] }), 'BAD_GUARDIANS');
+	await rejectsAsync(m.updateSettings({ recoveryGuardians: [G[0], G[0]] }), 'BAD_GUARDIANS');
+	await rejectsAsync(m.updateSettings({ recoveryGuardians: [...G, OTHER[0]] }), 'BAD_GUARDIANS');
 	assert.deepEqual(
 		m.getSettings().recoveryGuardians,
 		G.slice(0, 2),
 		'a refused patch leaves the draft alone'
 	);
-	assert.deepEqual(m.updateSettings({ recoveryGuardians: [] }).recoveryGuardians, []);
-	assert.deepEqual(m.updateSettings({ recoveryGuardians: null }).recoveryGuardians, []);
+	assert.deepEqual((await m.updateSettings({ recoveryGuardians: [] })).recoveryGuardians, []);
+	assert.deepEqual((await m.updateSettings({ recoveryGuardians: null })).recoveryGuardians, []);
 });
 
 test('a guardian mode needs the draft finished', () => {
@@ -219,7 +230,7 @@ test('a wallet pins the set it first enables with and keeps it afterwards', asyn
 	let rec = await m.updateWallet('w1', { recoveryMode: 'async-remote' });
 	assert.deepEqual(rec.recovery, { mode: 'async-remote', guardians: G, autoApply: false });
 	// Settings move on; the wallet does not.
-	m.updateSettings({ recoveryGuardians: OTHER });
+	await m.updateSettings({ recoveryGuardians: OTHER });
 	rec = await m.updateWallet('w1', { recoveryMode: 'quorum' });
 	assert.deepEqual(rec.recovery, { mode: 'quorum', guardians: G, autoApply: false }, 'the pinned set rides into quorum');
 	rec = await m.updateWallet('w1', { name: 'renamed' });
@@ -285,15 +296,15 @@ test('an engine that cannot apply a checkpoint by itself refuses the answer rath
 	);
 });
 
-test('a bolt8 guardian in the settings draft needs an engine with the transport', () => {
+test('a bolt8 guardian in the settings draft needs an engine with the transport', async () => {
 	const node = '02' + K('d');
 	const entry = `${K('a')}@bolt8://${node}@h:9735`;
 	const m = managerWith({});
 	m.guardianHostingSupported = false;
-	rejects(() => m.updateSettings({ recoveryGuardians: [entry] }), 'GUARDIAN_HOSTING_UNSUPPORTED');
-	assert.deepEqual(m.updateSettings({ recoveryGuardians: [G[0]] }).recoveryGuardians, [G[0]], 'http entries are unaffected');
+	await rejectsAsync(m.updateSettings({ recoveryGuardians: [entry] }), 'GUARDIAN_HOSTING_UNSUPPORTED');
+	assert.deepEqual((await m.updateSettings({ recoveryGuardians: [G[0]] })).recoveryGuardians, [G[0]], 'http entries are unaffected');
 	m.guardianHostingSupported = true;
-	assert.deepEqual(m.updateSettings({ recoveryGuardians: [entry] }).recoveryGuardians, [entry]);
+	assert.deepEqual((await m.updateSettings({ recoveryGuardians: [entry] })).recoveryGuardians, [entry]);
 });
 
 test('rotating a guardian set asks the daemon and moves the record with it (beignet #701)', async () => {
