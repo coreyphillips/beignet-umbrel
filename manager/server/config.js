@@ -53,7 +53,10 @@ const config = {
 
 // One-click Electrum presets. The Umbrel Electrs/Fulcrum apps use fixed
 // internal IPs and are reachable over Umbrel's shared app network even though
-// this app declares no dependency on them.
+// this app declares no dependency on them. A preset host may also be a
+// container name, which Docker's DNS resolves on that network. The dashboard
+// probes every preset (electrum-probe.js) and shows one that is not installed
+// as not found, so a preset costs nothing when its app is absent.
 const ELECTRUM_PRESETS = [
 	{
 		id: 'umbrel-electrs',

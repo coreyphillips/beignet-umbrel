@@ -78,6 +78,13 @@ export const manager = {
 	config: () => request('/api/config'),
 	getSettings: () => request('/api/settings'),
 	updateSettings: (body) => request('/api/settings', { method: 'PUT', body }),
+	// The Electrum presets, each probed for whether it is there and what it
+	// serves, and a server the user typed, probed before it is saved. Both
+	// talk to real servers with a bound of a few seconds each, so they carry
+	// a timeout like the daemon reads do.
+	discoverElectrum: (refresh) =>
+		request(`/api/electrum/discover${refresh ? '?refresh=1' : ''}`, { timeoutMs: 8000 }),
+	testElectrum: (body) => request('/api/electrum/test', { method: 'POST', body, timeoutMs: 8000 }),
 	listWallets: () => request('/api/wallets'),
 	getWallet: (id) => request(`/api/wallets/${id}`),
 	createWallet: (body) => request('/api/wallets', { method: 'POST', body }),

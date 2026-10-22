@@ -12,6 +12,17 @@ A [community app store](https://github.com/getumbrel/umbrel-community-app-store)
 
 **Want a node of your own without Bitcoin Core?** The store also carries **rbitcoin**, a Rust full node that serves Electrum from the same process, as its own app with its own disk and lifecycle. Beignet gets a one-click preset for it. It is x86_64 only, needs hundreds of GiB and a day or more to sync, and is early software; read [beignet-rbitcoin/README.md](beignet-rbitcoin/README.md) before installing it.
 
+## Connecting to an Electrum server
+
+Every wallet talks to one Electrum server. The fields for it are in **Settings** (the default for new wallets), on the create and import form, and in each wallet's **Edit** dialog. Wherever they appear:
+
+- **On this Umbrel.** The preset buttons name the Electrum servers an Umbrel may run (Electrs, Fulcrum, and the rbitcoin app from this store, offered to mainnet wallets). When the fields open, each preset is probed and says what it found: reachable, on which chain and at what height, or *not found* when that app is not installed. **Refresh** asks again.
+- **On another Umbrel on your network.** Umbrel's Electrs app publishes port 50001 and Fulcrum port 50002 on that box, so one Electrum server can serve every Beignet install in the house. Enter the other Umbrel's LAN IP address (for example `192.168.1.20`), not `umbrel.local`: mDNS names do not resolve inside the app. Press **Test** to see what answers before saving.
+- **Anywhere else.** Any Electrum server works, by IP or host name. For a TLS server you can have the wallet verify its certificate, and pin a self-signed one by its fingerprint; **Test** reports the fingerprint it saw. Test also says when the TLS box is the wrong way round for the server, the commonest mistake with these fields (port 50002 is often TLS but not always: Umbrel's Fulcrum is plaintext on it).
+- **The chain check.** A server that is known to serve another chain than the wallet (a testnet server for a mainnet wallet, say) is refused when you save, with the reason and a **Save anyway** button if you mean it. A server that is down or does not say which chain it is on is accepted as before: the wallet waits for it and starts once it answers.
+
+Inside the app, the presets reach their servers by Umbrel's internal addresses or container names, which Docker resolves on the shared app network. Those are not reachable from outside the Umbrel; from another machine use the LAN IP and published port.
+
 ## Features
 
 Hover or tap the **?** beside a setting in the dashboard for what it does.
