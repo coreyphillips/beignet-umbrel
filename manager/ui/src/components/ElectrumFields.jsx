@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { manager } from '../api.js';
 import { Button, Field, Help } from './ui.jsx';
-import { ServerStatus, describeTest } from './ElectrumStatus.jsx';
+import { ServerStatus, chainKey, describeTest } from './ElectrumStatus.jsx';
 
 /** Pinned fingerprints as typed (one string) or as stored (an array), as a list. */
 function pinList(pins) {
@@ -36,39 +36,38 @@ function testable(value) {
 /**
  * The Test button under the host and port: asks the manager to probe the
  * server as typed and says what answered, on the same line. The answer is
- * for the server as it was typed, so it goes away when any field changes.
+ * filed under the server, certificate rule and network it was asked for,
+ * and shown only while the fields still say that, so an answer that lands
+ * after the user has moved on (a probe takes up to a few seconds) is never
+ * read as being about the new server.
  */
 function TestConnection({ value, network }) {
 	const [busy, setBusy] = useState(false);
 	const [outcome, setOutcome] = useState(null);
-	const key = JSON.stringify(testable(value) ? electrumBody(value) : null);
-	const shown = useRef(key);
-	useEffect(() => {
-		if (shown.current !== key) {
-			shown.current = key;
-			setOutcome(null);
-		}
-	}, [key]);
+	const key = testable(value) ? JSON.stringify([electrumBody(value), network || null]) : null;
+	const latest = useRef(key);
+	latest.current = key;
 	const run = async () => {
+		const asked = key;
 		setBusy(true);
 		try {
 			const result = await manager.testElectrum({ ...electrumBody(value), ...(network ? { network } : {}) });
-			shown.current = key;
-			setOutcome(describeTest(result));
+			if (latest.current === asked) setOutcome({ key: asked, ...describeTest(result) });
 		} catch (e) {
-			setOutcome({ state: 'error', text: e.message });
+			if (latest.current === asked) setOutcome({ key: asked, state: 'error', text: e.message });
 		} finally {
 			setBusy(false);
 		}
 	};
+	const shown = outcome && outcome.key === key ? outcome : null;
 	return (
 		<div className="electrum-test-row">
 			<Button className="sm" data-testid="electrum-test" busy={busy} disabled={!testable(value)} onClick={run}>
 				Test connection
 			</Button>
-			{outcome && (
-				<span className="electrum-test-result" data-testid="electrum-test-result" data-state={outcome.state} role="status">
-					{outcome.text}
+			{shown && (
+				<span className="electrum-test-result" data-testid="electrum-test-result" data-state={shown.state} role="status">
+					{shown.text}
 				</span>
 			)}
 		</div>
@@ -85,9 +84,12 @@ function TestConnection({ value, network }) {
  * along, instead of leaving the user to try each one. `network` is the chain
  * the server is meant for; a preset known to be on another chain says so.
  */
-export default function ElectrumFields({ presets = [], value, onChange, verifyAvailable = false, network = null, discover = true }) {
+export default function ElectrumFields({ presets: allPresets = [], value, onChange, verifyAvailable = false, network = null, discover = true }) {
 	const set = (patch) => onChange({ ...value, ...patch });
 	const pins = Array.isArray(value.tlsFingerprints) ? value.tlsFingerprints.join(', ') : value.tlsFingerprints || '';
+	// A preset that names the networks it serves (the rbitcoin app runs
+	// mainnet only) is offered for those alone; one without serves any.
+	const presets = allPresets.filter((p) => !Array.isArray(p.networks) || !network || p.networks.includes(network));
 	const [status, setStatus] = useState({ loading: false, servers: {} });
 	const alive = useRef(true);
 	useEffect(() => {
@@ -154,8 +156,9 @@ export default function ElectrumFields({ presets = [], value, onChange, verifyAv
 						<>
 							An IP address on this network, or the name of a container on this Umbrel (the presets
 							use those). A <span className="mono">.local</span> name does not resolve inside the
-							app, so for another Umbrel enter its LAN IP address. Port 50001 is usually plaintext,
-							50002 is TLS.
+							app, so for another Umbrel enter its LAN IP address. Port 50001 is usually plaintext
+							and 50002 often TLS, though not always (Umbrel's Fulcrum is plaintext on 50002); Test
+							says when the TLS box does not match the server.
 						</>
 					}
 				>

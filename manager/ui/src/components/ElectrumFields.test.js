@@ -182,3 +182,79 @@ test('Test probes the server as typed and the answer goes away when the fields c
 		restore();
 	}
 });
+
+test('a preset that names its networks is offered for those alone', async () => {
+	const restore = stub('discoverElectrum', async () => discovered());
+	const presets = [...PRESETS, { id: 'umbrel-rbitcoin', label: 'Umbrel rbitcoin', host: 'beignet-rbitcoin_node_1', port: 50001, tls: false, networks: ['mainnet'], note: 'n' }];
+	const main = await render(Harness, { initial: { host: '', port: 50001, tls: false }, seen: {}, presets, network: 'mainnet' });
+	try {
+		assert.equal(main.$$('.preset-btn').length, 3);
+	} finally {
+		await main.unmount();
+	}
+	const test = await render(Harness, { initial: { host: '', port: 50001, tls: false }, seen: {}, presets, network: 'testnet' });
+	try {
+		assert.deepEqual(test.$$('.preset-btn .preset-name').map((n) => n.textContent), ['Umbrel Electrs', 'Umbrel Fulcrum'], 'a mainnet-only node is no use to a testnet wallet');
+	} finally {
+		await test.unmount();
+	}
+	const any = await render(Harness, { initial: { host: '', port: 50001, tls: false }, seen: {}, presets });
+	try {
+		assert.equal(any.$$('.preset-btn').length, 3, 'with no network to hold it to, every preset is offered');
+	} finally {
+		await any.unmount();
+		restore();
+	}
+});
+
+test('a Test answer that lands after the fields changed is not shown under the new server', async () => {
+	// The probe takes up to a few seconds; the user may have typed another
+	// host meanwhile. The late answer is about the old one and must not be
+	// read as the new one's.
+	const pending = [];
+	const restore = stub('testElectrum', (body) => new Promise((resolve) => pending.push({ body, resolve })));
+	const seen = {};
+	const r = await render(Harness, { initial: { host: 'old.example', port: 50001, tls: false }, seen, network: 'mainnet' });
+	try {
+		await click(r.$('[data-testid="electrum-test"]'));
+		assert.equal(pending.length, 1);
+		await type(r.$('input[placeholder^="192.168"]'), 'new.example');
+		pending[0].resolve({ electrum: pending[0].body, ...probe(), network: 'mainnet', chainMatches: true });
+		await settle(0);
+		assert.equal(r.$('[data-testid="electrum-test-result"]'), null, 'the answer was for old.example');
+		await click(r.$('[data-testid="electrum-test"]'));
+		assert.equal(pending.length, 2);
+		assert.equal(pending[1].body.host, 'new.example');
+		pending[1].resolve({ electrum: pending[1].body, ...probe({ chain: 'testnet' }), network: 'mainnet', chainMatches: false });
+		await settle(0);
+		assert.equal(r.$('[data-testid="electrum-test-result"]').dataset.state, 'wrong-chain');
+	} finally {
+		await r.unmount();
+		restore();
+	}
+});
+
+test('a Test answer is for the network it was asked about', async () => {
+	// The same server is a right answer for one network and a wrong one for
+	// another, so the result is filed under the network too and a parent that
+	// changes the network makes it go away.
+	const restore = stub('testElectrum', async (body) => ({ electrum: body, ...probe(), network: body.network, chainMatches: body.network === 'mainnet' }));
+	function Parent() {
+		const [value, setValue] = useState({ host: 'a.example', port: 50001, tls: false });
+		const [network, setNetwork] = useState('mainnet');
+		return createElement('div', null,
+			createElement('button', { 'data-testid': 'to-testnet', onClick: () => setNetwork('testnet') }, 'testnet'),
+			createElement(ElectrumFields, { value, onChange: setValue, network }));
+	}
+	const r = await render(Parent, {});
+	try {
+		await click(r.$('[data-testid="electrum-test"]'));
+		await settle(0);
+		assert.equal(r.$('[data-testid="electrum-test-result"]').dataset.state, 'reachable');
+		await click(r.$('[data-testid="to-testnet"]'));
+		assert.equal(r.$('[data-testid="electrum-test-result"]'), null, 'mainnet was the answer; testnet is now the question');
+	} finally {
+		await r.unmount();
+		restore();
+	}
+});

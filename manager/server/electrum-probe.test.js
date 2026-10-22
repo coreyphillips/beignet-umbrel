@@ -19,7 +19,9 @@ const {
 	probeElectrum,
 	cachedProbe,
 	clearProbeCache,
-	discoverServers
+	probeCacheSize,
+	discoverServers,
+	MAX_REPLY_BYTES
 } = require('./electrum-probe');
 
 const MAINNET = '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f';
@@ -33,7 +35,9 @@ const OTHER = 'ff'.repeat(32);
  * A fake Electrum server on loopback. `mode` shapes how it answers:
  * normal (one reply per request, in order), batched (every reply in one
  * write, out of order), split (a reply cut across two writes), silent
- * (connects, never answers), no-features (server.features is an error).
+ * (connects, never answers), no-features (server.features is an error),
+ * flood (bytes without end and never a newline), hangup (answers the first
+ * two requests and closes before the third).
  */
 async function fakeElectrum(t, { tls: useTls = false, genesis = MAINNET, software = 'electrs/0.10.9', height = 840000, mode = 'normal' } = {}) {
 	const state = { connections: 0, lines: [] };
@@ -50,7 +54,17 @@ async function fakeElectrum(t, { tls: useTls = false, genesis = MAINNET, softwar
 		state.connections += 1;
 		socket.on('error', () => {});
 		let buf = '';
+		// hangup: what is owed so far, since the client's requests may arrive
+		// in more than one chunk; the server hangs up once it owes two.
+		const owed = [];
 		socket.on('data', (chunk) => {
+			// Bytes that cannot start JSON (a TLS ClientHello from a client
+			// that ticked TLS) get the parse error a real server sends back
+			// in plaintext, which is what fails that client's handshake.
+			if (!buf && chunk.length && chunk[0] !== 0x7b) {
+				if (mode !== 'silent') socket.write('{"id":null,"error":{"code":-32700,"message":"parse error"}}\n');
+				return;
+			}
 			buf += chunk.toString('utf8');
 			let nl;
 			const replies = [];
@@ -61,8 +75,19 @@ async function fakeElectrum(t, { tls: useTls = false, genesis = MAINNET, softwar
 				replies.push(answer(JSON.parse(line)));
 			}
 			if (mode === 'silent') return;
+			if (mode === 'flood') {
+				// Twice the bound, in one go, so the client must stop reading
+				// long before any deadline.
+				socket.write(Buffer.alloc(2 * MAX_REPLY_BYTES, 0x61));
+				return;
+			}
 			if (!replies.length) return;
 			const text = replies.map((r) => `${JSON.stringify(r)}\n`);
+			if (mode === 'hangup') {
+				owed.push(...text);
+				if (owed.length >= 2) socket.end(owed.slice(0, 2).join(''));
+				return;
+			}
 			if (mode === 'batched') {
 				socket.write(text.reverse().join(''));
 				return;
@@ -159,6 +184,71 @@ test('a server that connects but never answers times out within the bound', asyn
 	assert.ok(Date.now() - started < 1000);
 });
 
+test('an address where the connection never completes is not reachable, even on timeout', async () => {
+	// A socket that is never connected stands in for a LAN address that is
+	// off, firewalled or wrong: no refusal, no answer, nothing until the
+	// deadline. That is "not found", not a server that kept quiet.
+	let made = 0;
+	const transport = {
+		net: {
+			connect() {
+				made += 1;
+				return new net.Socket();
+			}
+		},
+		tls: {
+			connect() {
+				made += 1;
+				return new tls.TLSSocket(new net.Socket());
+			}
+		}
+	};
+	const plain = await probeElectrum({ host: '192.0.2.1', port: 50001, tls: false }, { timeoutMs: 150, transport });
+	assert.equal(plain.reachable, false, 'nothing accepted the connection');
+	assert.equal(plain.error, 'timeout');
+	const secure = await probeElectrum({ host: '192.0.2.1', port: 50002, tls: true }, { timeoutMs: 150, transport });
+	assert.equal(secure.reachable, false);
+	assert.equal(secure.error, 'timeout');
+	assert.equal(made, 2);
+});
+
+test('a peer that sends without end is cut off at the bound, not read until the deadline', async (t) => {
+	const s = await fakeElectrum(t, { mode: 'flood' });
+	const started = Date.now();
+	const r = await probeElectrum({ host: s.host, port: s.port, tls: false }, { timeoutMs: 5000 });
+	assert.equal(r.reachable, true);
+	assert.equal(r.error, 'bad-reply');
+	assert.ok(Date.now() - started < 2000, 'stopped at the byte bound, well before the deadline');
+});
+
+test('a server that hangs up after saying which chain it is on is still on that chain', async (t) => {
+	const s = await fakeElectrum(t, { mode: 'hangup', genesis: TESTNET });
+	const r = await probeElectrum({ host: s.host, port: s.port, tls: false });
+	assert.equal(r.reachable, true);
+	assert.equal(r.error, null);
+	assert.equal(r.software, 'electrs/0.10.9');
+	assert.equal(r.chain, 'testnet', 'the chain guard must still see the mismatch');
+	assert.equal(r.height, null, 'the reply that never came is simply absent');
+});
+
+test('the TLS box the wrong way round is reported as that, both ways', async (t) => {
+	const plain = await fakeElectrum(t);
+	const overTls = await probeElectrum({ host: plain.host, port: plain.port, tls: true }, { timeoutMs: 1000 });
+	assert.equal(overTls.reachable, true, 'the server is there');
+	assert.equal(overTls.error, 'tls-mismatch', 'a plaintext server cannot complete a TLS handshake');
+	const secure = await fakeElectrum(t, { tls: true });
+	const inPlain = await probeElectrum({ host: secure.host, port: secure.port, tls: false }, { timeoutMs: 1000 });
+	assert.equal(inPlain.reachable, true);
+	assert.equal(inPlain.error, 'tls-mismatch', 'a TLS server drops a plaintext client, with an alert or without a word');
+	// A plaintext server that waits for a newline (electrs) never answers
+	// the handshake at all: that stays a timeout, and the dashboard adds the
+	// TLS hint to it.
+	const quiet = await fakeElectrum(t, { mode: 'silent' });
+	const quietOverTls = await probeElectrum({ host: quiet.host, port: quiet.port, tls: true }, { timeoutMs: 200 });
+	assert.equal(quietOverTls.reachable, true);
+	assert.equal(quietOverTls.error, 'timeout');
+});
+
 test('a TLS server is described with its certificate, by the wallet rule', async (t) => {
 	const s = await fakeElectrum(t, { tls: true });
 	const base = { host: s.host, port: s.port, tls: true };
@@ -213,6 +303,20 @@ test('a result stands for a few seconds, and refresh asks again', async (t) => {
 	clearProbeCache();
 	await cachedProbe(electrum);
 	assert.equal(s.state.connections, 4);
+});
+
+test('results past their time are dropped when a new one is filed', async (t) => {
+	const s = await fakeElectrum(t);
+	// Twenty different questions, each answer good for no time at all: every
+	// new one sweeps the ones before it, so only the newest is ever held.
+	for (let i = 0; i < 20; i++) {
+		await cachedProbe({ host: s.host, port: s.port, tls: false, tlsFingerprints: [`pin${i}`] }, { ttlMs: 0 });
+	}
+	assert.equal(probeCacheSize(), 1, 'expired entries are swept as new ones arrive');
+	await cachedProbe({ host: s.host, port: s.port, tls: false }, { ttlMs: 60000 });
+	assert.equal(probeCacheSize(), 1, 'only the live entry remains');
+	await cachedProbe({ host: s.host, port: s.port, tls: true }, { ttlMs: 60000 });
+	assert.equal(probeCacheSize(), 2, 'a live entry is kept');
 });
 
 test("the manager's tip probe still reads a height through the shared socket code", async (t) => {

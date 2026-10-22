@@ -9,7 +9,7 @@ import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
 import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal } from '../components/ui.jsx';
 import ElectrumFields, { electrumBody } from '../components/ElectrumFields.jsx';
-import { ChainMismatchNote } from '../components/ElectrumStatus.jsx';
+import { ChainMismatchNote, chainKey } from '../components/ElectrumStatus.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 
@@ -619,9 +619,12 @@ export function EditWalletModal({
 			: rec.lfbw?.primaryUri || null;
 	const [electrum, setElectrum] = useState({ ...rec.electrum });
 	// A server on another chain than this wallet is refused by the manager;
-	// the refusal sits under the fields with a way through until they change.
+	// the refusal sits under the fields with a way through. It is filed under
+	// the server it was for and shown only while the fields still name that
+	// server, so a refusal that lands after an edit cannot wave the new
+	// server through with Save anyway.
 	const [chainError, setChainError] = useState(null);
-	useEffect(() => setChainError(null), [electrum]);
+	const electrumKey = chainKey(electrum);
 
 	// The network mode (umbrel #193) and the public address it may announce.
 	const [networkMode, setNetworkMode] = useState(modeOf(rec));
@@ -676,9 +679,9 @@ export function EditWalletModal({
 		onchainOnly && !rec.onchainOnly && ((openChannels ?? 0) > 0 || channelsUnknown);
 
 	const save = async (allow = false) => {
+		const asked = electrumKey;
 		setBusy(true);
 		try {
-
 			const body = {
 				name,
 				...(allow ? { allowChainMismatch: true } : {}),
@@ -715,7 +718,7 @@ export function EditWalletModal({
 			await manager.updateWallet(rec.id, body);
 			onSaved();
 		} catch (e) {
-			if (e.code === 'ELECTRUM_WRONG_CHAIN') setChainError(e);
+			if (e.code === 'ELECTRUM_WRONG_CHAIN') setChainError({ key: asked, error: e });
 			else toast(e.message, 'error');
 			setBusy(false);
 		}
@@ -740,7 +743,7 @@ export function EditWalletModal({
 				verifyAvailable={electrumTlsVerifyAvailable}
 				network={rec.network}
 			/>
-			<ChainMismatchNote error={chainError} busy={busy} onProceed={() => save(true)} />
+			<ChainMismatchNote error={chainError && chainError.key === electrumKey ? chainError.error : null} busy={busy} onProceed={() => save(true)} />
 			<div className="field-label" style={{ marginTop: 4, marginBottom: 8 }}>
 				Lightning
 			</div>

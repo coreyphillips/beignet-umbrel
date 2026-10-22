@@ -552,14 +552,16 @@ class WalletManager {
 	// or refuses its certificate is saved as before and waited for, because a
 	// wallet whose server is briefly away must stay editable. The one probe
 	// this costs is answered from the cache when the dashboard just asked.
-	async _refuseWrongChain(electrum, network, { allow = false } = {}) {
+	// `subject` is what the network belongs to in the message: a wallet, or
+	// the app's default when called for the Settings dialog.
+	async _refuseWrongChain(electrum, network, { allow = false, subject = 'this wallet is on' } = {}) {
 		if (allow === true) return;
 		const result = await this._probeForGuard(electrum);
 		if (!result || !result.reachable || result.chain === 'unknown' || result.chain === network) return;
 		const err = httpError(
 			400,
 			'ELECTRUM_WRONG_CHAIN',
-			`The Electrum server at ${electrum.host}:${electrum.port} serves ${result.chain}, but this wallet is on ${network}. Pick a ${network} server, or save anyway if you are sure.`
+			`The Electrum server at ${electrum.host}:${electrum.port} serves ${result.chain}, but ${subject} ${network}. Pick a ${network} server, or save anyway if you are sure.`
 		);
 		err.details = { host: electrum.host, port: electrum.port, chain: result.chain, network, software: result.software || null };
 		throw err;
@@ -760,7 +762,10 @@ class WalletManager {
 			defaultElectrum &&
 			(this._electrumChanged(defaultElectrum, this.defaultElectrum()) || defaultNetwork !== this.defaultNetwork())
 		) {
-			await this._refuseWrongChain(defaultElectrum, defaultNetwork, { allow: patch.allowChainMismatch });
+			await this._refuseWrongChain(defaultElectrum, defaultNetwork, {
+				allow: patch.allowChainMismatch,
+				subject: 'the default network is'
+			});
 		}
 		if (patch.recoveryGuardians !== undefined) {
 			// A draft, not a set: settings hold however many guardians are

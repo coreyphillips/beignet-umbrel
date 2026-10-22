@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { click, render } from '../../test/render.mjs';
-import { ChainMismatchNote, colonFingerprint, describeProbe, describeTest } from './ElectrumStatus.jsx';
+import { ChainMismatchNote, chainKey, colonFingerprint, describeProbe, describeTest } from './ElectrumStatus.jsx';
 
 const up = (extra = {}) => ({
 	reachable: true,
@@ -35,6 +35,9 @@ test('a preset badge reads the probe in a few words', () => {
 	assert.deepEqual(describeProbe(up({ error: 'timeout', software: null, chain: 'unknown', height: null })), { state: 'unreachable', tone: 'muted', text: 'no answer' });
 	assert.equal(describeProbe(up({ error: 'timeout', height: null })).text, 'mainnet', 'a slow server that said enough is reported on what it said');
 	assert.deepEqual(describeProbe(up({ error: 'bad-reply', software: null, chain: 'unknown', height: null })), { state: 'unreachable', tone: 'muted', text: 'not an Electrum server' });
+	const mismatch = { error: 'tls-mismatch', software: null, chain: 'unknown', height: null };
+	assert.deepEqual(describeProbe(up({ ...mismatch, tls: true })), { state: 'tls-mismatch', tone: 'yellow', text: 'not a TLS server' }, 'a preset asked over TLS');
+	assert.deepEqual(describeProbe(up({ ...mismatch, tls: false })), { state: 'tls-mismatch', tone: 'yellow', text: 'TLS only' }, 'a preset asked in plaintext');
 });
 
 test('the Test button speaks in sentences, with the certificate and the chain', () => {
@@ -54,11 +57,34 @@ test('the Test button speaks in sentences, with the certificate and the chain', 
 	const refused = describeTest({ electrum: e, ...up({ error: 'tls-rejected', software: null, chain: 'unknown', height: null, certificate: { accepted: false, authorized: false, fingerprint: fp } }) });
 	assert.equal(refused.state, 'tls-rejected');
 	assert.match(refused.text, /AC:46:DD:A7/, 'the fingerprint is there to be pinned');
-	const self = describeTest({ electrum: e, ...up({ certificate: { accepted: true, authorized: false, fingerprint: fp } }) });
-	assert.match(self.text, /self-signed \(AC:46/);
-	const ca = describeTest({ electrum: e, ...up({ certificate: { accepted: true, authorized: true, fingerprint: fp } }) });
-	assert.match(ca.text, /signed by a public authority/);
+	const cert = { accepted: true, authorized: false, fingerprint: fp };
+	const loose = describeTest({ electrum: { ...e, tls: true }, ...up({ certificate: cert }) });
+	assert.match(loose.text, /No public authority signed the certificate for this host \(AC:46/, 'not called self-signed: it may be expired or for another name');
+	assert.match(loose.text, /with verification on, pin it/);
+	const pinned = describeTest({ electrum: { ...e, tls: true, tlsVerify: true, tlsFingerprints: [fp] }, ...up({ certificate: cert }) });
+	assert.match(pinned.text, /matches a pinned fingerprint \(AC:46/, 'with verification on, an accepted unauthorized certificate is the pinned one');
+	assert.doesNotMatch(pinned.text, /turn verification on|pin it/);
+	const ca = describeTest({ electrum: { ...e, tls: true }, ...up({ certificate: { ...cert, authorized: true } }) });
+	assert.match(ca.text, /signed by a public authority \(AC:46/, 'the fingerprint is shown either way');
 	assert.equal(describeTest({ electrum: e, ...up({ software: null, chain: 'unknown', height: null }) }).text, 'An Electrum server answered.');
+	// The TLS box the wrong way round, the likeliest mistake with these fields.
+	const mismatch = up({ error: 'tls-mismatch', software: null, chain: 'unknown', height: null });
+	const overTls = describeTest({ electrum: { ...e, tls: true }, ...mismatch });
+	assert.equal(overTls.state, 'tls-mismatch');
+	assert.match(overTls.text, /did not complete a TLS handshake.*untick TLS/);
+	const inPlain = describeTest({ electrum: { ...e, tls: false }, ...mismatch });
+	assert.match(inPlain.text, /did not answer plaintext.*Tick TLS/);
+	const quiet = up({ error: 'timeout', software: null, chain: 'unknown', height: null });
+	assert.match(describeTest({ electrum: { ...e, tls: true }, ...quiet }).text, /no Electrum answer in time\. If the server is plaintext, untick TLS/);
+	assert.doesNotMatch(describeTest({ electrum: { ...e, tls: false }, ...quiet }).text, /untick TLS/);
+});
+
+test('a refusal is filed under the server and network it was for', () => {
+	assert.equal(chainKey({ host: ' a.example ', port: '50001', tls: false }, 'mainnet'), chainKey({ host: 'a.example', port: 50001 }, 'mainnet'), 'as the manager would read it');
+	assert.notEqual(chainKey({ host: 'a.example', port: 50001 }, 'mainnet'), chainKey({ host: 'b.example', port: 50001 }, 'mainnet'));
+	assert.notEqual(chainKey({ host: 'a.example', port: 50001 }, 'mainnet'), chainKey({ host: 'a.example', port: 50001 }, 'testnet'));
+	assert.notEqual(chainKey({ host: 'a.example', port: 50001, tls: true }), chainKey({ host: 'a.example', port: 50001 }));
+	assert.equal(chainKey(null, 'mainnet'), chainKey(undefined, 'mainnet'), 'the app default, whatever it is');
 });
 
 test('the wrong-chain note shows the refusal and offers to save anyway', async () => {

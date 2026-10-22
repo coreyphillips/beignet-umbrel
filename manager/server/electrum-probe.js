@@ -26,6 +26,11 @@ const PROBE_TIMEOUT_MS = 3000;
 // connection answers all three, and a wallet saved right after the dashboard
 // probed its server does not wait for the probe again.
 const CACHE_TTL_MS = 10000;
+// The most a server may send in one conversation. Three replies are a few
+// kilobytes; a peer that keeps sending without a newline is not answering,
+// and the buffer must not grow until the deadline, which an untrusted
+// address could otherwise use to tie up the manager's memory.
+const MAX_REPLY_BYTES = 1 << 20;
 
 // Genesis block hashes, as `server.features.genesis_hash` reports them
 // (display order), to the network name the manager uses. testnet4 is listed
@@ -58,17 +63,33 @@ function codedError(code, message) {
  * Rejects with code TLS_REJECTED when the wallet's verification rule
  * (electrum-tls.js) would refuse the certificate, carrying what was seen so
  * the user can pin it; with code TIMEOUT when the deadline passes, carrying
- * the replies that did arrive; and with the socket's own error otherwise.
+ * the replies that did arrive; with code TLS_HANDSHAKE when the TCP
+ * connection was made but TLS never came up (what a plaintext server looks
+ * like to a TLS client); with code TLS_WANTED when a plaintext request was
+ * answered with a TLS record, or with nothing at all before the connection
+ * was closed or reset, which is how a TLS server treats a plaintext client
+ * (Node's own TLS server closes without sending the alert); with
+ * BAD_REPLY for anything else that is not Electrum; with CLOSED, carrying
+ * the replies so far, when the server hung up early; and with the socket's
+ * own error otherwise. Every error says in `connected` whether the TCP
+ * connection was ever made, which is what separates a server that is there
+ * from an address where nothing is.
  *
  * The deadline is a timer of its own and not only `socket.setTimeout`, which
  * measures idleness: a server that trickles one byte every second would
  * otherwise never time out.
+ *
+ * `transport` is the pair of modules that open sockets, so a test can hand
+ * in one whose connection never completes.
  */
-function electrumRequests(electrum, requests, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+function electrumRequests(electrum, requests, { timeoutMs = PROBE_TIMEOUT_MS, transport = { net, tls } } = {}) {
 	const { host, port, tls: useTls } = electrum;
 	return new Promise((resolve, reject) => {
 		let done = false;
 		let buf = '';
+		let received = 0;
+		let connected = false;
+		let secured = !useTls;
 		let socket;
 		let timer = null;
 		const replies = {};
@@ -83,24 +104,42 @@ function electrumRequests(electrum, requests, { timeoutMs = PROBE_TIMEOUT_MS } =
 			} catch (_) {
 				/* already gone */
 			}
-			if (err) reject(err);
-			else resolve(value);
+			if (err) {
+				err.connected = connected;
+				reject(err);
+			} else resolve(value);
 		};
-		try {
-			socket = useTls
-				? tls.connect({ host, port, servername: net.isIP(host) ? undefined : host, rejectUnauthorized: false })
-				: net.connect({ host, port });
-		} catch (err) {
-			return reject(err);
-		}
-		timer = setTimeout(() => {
+		const timedOut = () => {
 			const err = codedError('TIMEOUT', `No answer from ${host}:${port} within ${timeoutMs} ms`);
 			err.replies = replies;
 			err.certificate = certificate;
 			finish(err);
-		}, timeoutMs);
+		};
+		// A TLS client that connected and then failed before the handshake
+		// finished met something that does not speak TLS, in all likelihood a
+		// plaintext Electrum server: the wrong-version and unexpected-message
+		// errors, a reset, or a plain close all land here.
+		const handshakeFailed = (cause) => {
+			const err = codedError('TLS_HANDSHAKE', `${host}:${port} accepted the connection but did not complete a TLS handshake`);
+			err.cause = cause;
+			finish(err);
+		};
+		try {
+			socket = useTls
+				? transport.tls.connect({ host, port, servername: net.isIP(host) ? undefined : host, rejectUnauthorized: false })
+				: transport.net.connect({ host, port });
+		} catch (err) {
+			return reject(err);
+		}
+		timer = setTimeout(timedOut, timeoutMs);
 		socket.setTimeout(timeoutMs);
+		// A TLS socket raises 'connect' for the TCP connection and
+		// 'secureConnect' once the handshake is done; a plain one only the first.
+		socket.once('connect', () => {
+			connected = true;
+		});
 		socket.once(useTls ? 'secureConnect' : 'connect', () => {
+			secured = true;
 			if (useTls) {
 				const cert = socket.getPeerCertificate();
 				certificate = {
@@ -122,6 +161,16 @@ function electrumRequests(electrum, requests, { timeoutMs = PROBE_TIMEOUT_MS } =
 			}
 		});
 		socket.on('data', (chunk) => {
+			// A TLS record (handshake 0x16 or alert 0x15) as the first byte of
+			// a plaintext conversation is a TLS server answering a client that
+			// did not tick TLS; no JSON starts that way.
+			if (received === 0 && !useTls && chunk.length && (chunk[0] === 0x16 || chunk[0] === 0x15)) {
+				return finish(codedError('TLS_WANTED', `${host}:${port} answered with TLS, not plaintext`));
+			}
+			received += chunk.length;
+			if (received > MAX_REPLY_BYTES) {
+				return finish(codedError('BAD_REPLY', `${host}:${port} sent more than ${MAX_REPLY_BYTES} bytes without finishing an answer`));
+			}
 			buf += chunk.toString('utf8');
 			// Replies are newline-delimited JSON, possibly several per chunk and
 			// possibly one across two chunks, in any order.
@@ -143,15 +192,24 @@ function electrumRequests(electrum, requests, { timeoutMs = PROBE_TIMEOUT_MS } =
 			}
 			if (!pending.size) finish(null, { replies, certificate });
 		});
-		socket.once('timeout', () => {
-			const err = codedError('TIMEOUT', `No answer from ${host}:${port} within ${timeoutMs} ms`);
+		socket.once('timeout', timedOut);
+		// A plaintext client whose requests were met with a close or a reset
+		// and not one byte met a server that was waiting for a TLS handshake.
+		const silentlyDropped = () => !useTls && connected && received === 0;
+		const tlsWanted = () => finish(codedError('TLS_WANTED', `${host}:${port} dropped a plaintext request without a word, as a TLS server does`));
+		socket.once('error', (err) => {
+			if (useTls && connected && !secured) return handshakeFailed(err);
+			if (silentlyDropped() && err && err.code === 'ECONNRESET') return tlsWanted();
+			finish(err);
+		});
+		socket.once('close', () => {
+			if (!pending.size) return;
+			if (useTls && connected && !secured) return handshakeFailed(null);
+			if (silentlyDropped()) return tlsWanted();
+			const err = codedError('CLOSED', `${host}:${port} closed the connection`);
 			err.replies = replies;
 			err.certificate = certificate;
 			finish(err);
-		});
-		socket.once('error', (err) => finish(err));
-		socket.once('close', () => {
-			if (pending.size) finish(codedError('CLOSED', `${host}:${port} closed the connection`));
 		});
 	});
 }
@@ -189,14 +247,21 @@ function readReplies(replies) {
  *
  *   { reachable, software, protocol, chain, genesisHash, height,
  *     certificate: null | { accepted, authorized, fingerprint },
- *     error: null | 'unreachable' | 'timeout' | 'tls-rejected' | 'bad-reply',
+ *     error: null | 'unreachable' | 'timeout' | 'tls-rejected' | 'tls-mismatch'
+ *          | 'bad-reply',
  *     probedAt }
+ *
+ * `reachable` means the TCP connection was made: something is listening at
+ * that address, whatever it turned out to be. 'tls-mismatch' is a server
+ * that is there but on the other side of the TLS switch from what was asked
+ * (a plaintext server asked over TLS, or a TLS server asked in plaintext),
+ * the likeliest mistake with these fields.
  *
  * `server.version` goes first because some servers refuse every other
  * method until the client has introduced itself. Never throws: a server
  * that cannot be reached is a result, not a failure.
  */
-async function probeElectrum(electrum, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+async function probeElectrum(electrum, { timeoutMs = PROBE_TIMEOUT_MS, transport } = {}) {
 	const requests = [
 		{ id: 1, method: 'server.version', params: ['beignet-umbrel', '1.4'] },
 		{ id: 2, method: 'server.features', params: [] },
@@ -204,22 +269,35 @@ async function probeElectrum(electrum, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
 	];
 	const probedAt = Date.now();
 	try {
-		const { replies, certificate } = await electrumRequests(electrum, requests, { timeoutMs });
+		const { replies, certificate } = await electrumRequests(electrum, requests, { timeoutMs, transport });
 		return { ...EMPTY, reachable: true, certificate, ...readReplies(replies), probedAt };
 	} catch (err) {
+		const partial = err.replies ? readReplies(err.replies) : {};
 		if (err.code === 'TLS_REJECTED') {
 			return { ...EMPTY, reachable: true, certificate: err.certificate, error: 'tls-rejected', probedAt };
 		}
 		if (err.code === 'TIMEOUT') {
-			// A slow server may have answered some of it; keep what arrived.
-			const partial = err.replies ? readReplies(err.replies) : {};
-			const reachable = !!err.certificate || Object.keys(partial).length > 0 || err.replies !== undefined;
-			return { ...EMPTY, reachable: reachable && !!err.replies, certificate: err.certificate || null, ...partial, error: 'timeout', probedAt };
+			// A slow server may have answered some of it; keep what arrived. A
+			// connection that never completed is nothing at that address, not a
+			// server that kept quiet.
+			return { ...EMPTY, reachable: !!err.connected, certificate: err.certificate || null, ...partial, error: 'timeout', probedAt };
 		}
-		if (err.code === 'BAD_REPLY' || err.code === 'CLOSED') {
+		if (err.code === 'TLS_HANDSHAKE' || err.code === 'TLS_WANTED') {
+			return { ...EMPTY, reachable: true, error: 'tls-mismatch', probedAt };
+		}
+		if (err.code === 'CLOSED') {
+			// A server that answered and then hung up before the last reply has
+			// still said what it is; what it said stands. One that said nothing
+			// before closing did not speak Electrum.
+			if (Object.keys(partial).length) {
+				return { ...EMPTY, reachable: true, certificate: err.certificate || null, ...partial, probedAt };
+			}
 			return { ...EMPTY, reachable: true, error: 'bad-reply', probedAt };
 		}
-		return { ...EMPTY, error: 'unreachable', probedAt };
+		if (err.code === 'BAD_REPLY') {
+			return { ...EMPTY, reachable: true, error: 'bad-reply', probedAt };
+		}
+		return { ...EMPTY, reachable: !!err.connected, error: 'unreachable', probedAt };
 	}
 }
 
@@ -233,13 +311,20 @@ function cacheKey(electrum) {
 /**
  * `probeElectrum` behind a short cache. A probe in flight is shared with
  * every caller that asks meanwhile; `refresh` throws the cached one away.
+ * Entries past their time are dropped whenever a new one is filed, so a
+ * run of Test requests against ever-different addresses does not leave a
+ * result behind for each of them.
  */
 function cachedProbe(electrum, { ttlMs = CACHE_TTL_MS, refresh = false, timeoutMs } = {}) {
 	const key = cacheKey(electrum);
+	const now = Date.now();
 	const hit = cache.get(key);
-	if (hit && !refresh && Date.now() - hit.at < ttlMs) return hit.promise;
+	if (hit && !refresh && now - hit.at < ttlMs) return hit.promise;
 	if (hit && refresh && hit.inflight) return hit.promise;
-	const entry = { at: Date.now(), inflight: true, promise: null };
+	for (const [k, e] of cache) {
+		if (!e.inflight && now - e.at >= e.ttlMs) cache.delete(k);
+	}
+	const entry = { at: now, ttlMs, inflight: true, promise: null };
 	entry.promise = probeElectrum(electrum, { timeoutMs }).then((result) => {
 		entry.inflight = false;
 		return result;
@@ -250,6 +335,11 @@ function cachedProbe(electrum, { ttlMs = CACHE_TTL_MS, refresh = false, timeoutM
 
 function clearProbeCache() {
 	cache.clear();
+}
+
+/** How many results the cache holds, for tests. */
+function probeCacheSize() {
+	return cache.size;
 }
 
 /**
@@ -265,11 +355,13 @@ async function discoverServers(presets, opts = {}) {
 module.exports = {
 	PROBE_TIMEOUT_MS,
 	CACHE_TTL_MS,
+	MAX_REPLY_BYTES,
 	GENESIS_CHAINS,
 	chainOfGenesis,
 	electrumRequests,
 	probeElectrum,
 	cachedProbe,
 	clearProbeCache,
+	probeCacheSize,
 	discoverServers
 };

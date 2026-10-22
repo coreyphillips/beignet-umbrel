@@ -1609,7 +1609,9 @@ function mockProbe({ host, port, tls, tlsVerify, tlsFingerprints }) {
 	if (!mockReachable(host, port)) return { ...blank, reachable: false, error: 'unreachable' };
 	const certificate = tls ? { accepted: true, authorized: false, fingerprint: DEMO_FINGERPRINT } : null;
 	if (tls && tlsVerify && String(host).toLowerCase().includes('selfsigned')) {
-		const pins = Array.isArray(tlsFingerprints) ? tlsFingerprints : [];
+		// Pins as typed: Test shows the fingerprint with colons and in capitals,
+		// the way openssl prints it, and the manager reads either form.
+		const pins = (Array.isArray(tlsFingerprints) ? tlsFingerprints : []).map((f) => String(f).replace(/[^0-9a-f]/gi, '').toLowerCase());
 		if (!pins.includes(DEMO_FINGERPRINT)) {
 			return { ...blank, reachable: true, certificate: { ...certificate, accepted: false }, error: 'tls-rejected' };
 		}
@@ -1629,12 +1631,12 @@ function mockProbe({ host, port, tls, tlsVerify, tlsFingerprints }) {
 }
 // The manager's refusal of a server on another chain than the wallet, with
 // its override, so the dialogs can be driven through it in demo mode.
-function wrongChain(electrum, network, body) {
+function wrongChain(electrum, network, body, subject = 'this wallet is on') {
 	if (!electrum || !electrum.host || (body && body.allowChainMismatch === true)) return;
 	const r = mockProbe(electrum);
 	if (!r.reachable || r.chain === 'unknown' || r.chain === network) return;
 	const e = err(
-		`The Electrum server at ${electrum.host}:${electrum.port} serves ${r.chain}, but this wallet is on ${network}. Pick a ${network} server, or save anyway if you are sure.`,
+		`The Electrum server at ${electrum.host}:${electrum.port} serves ${r.chain}, but ${subject} ${network}. Pick a ${network} server, or save anyway if you are sure.`,
 		'ELECTRUM_WRONG_CHAIN'
 	);
 	e.details = { host: electrum.host, port: electrum.port, chain: r.chain, network, software: r.software };
@@ -1734,7 +1736,7 @@ function managerRequest(path, method, body) {
 				patch.recoveryGuardians = validateGuardianDraft(patch.recoveryGuardians);
 			}
 			if (patch.defaultElectrum) {
-				wrongChain(patch.defaultElectrum, patch.defaultNetwork || store.settings.defaultNetwork, body);
+				wrongChain(patch.defaultElectrum, patch.defaultNetwork || store.settings.defaultNetwork, body, 'the default network is');
 			}
 			Object.assign(store.settings, patch);
 			return store.settings;

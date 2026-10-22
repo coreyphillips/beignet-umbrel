@@ -91,7 +91,11 @@ test('the default server is held to the default network when either changes', as
 	m.settings = new Settings(path.join(dir, 'settings.json'), { defaultNetwork: 'mainnet', defaultElectrum: null });
 	m.settings.load();
 	const testnetServer = { host: 'testnet.example', port: 50001, tls: false };
-	await assert.rejects(m.updateSettings({ defaultElectrum: testnetServer }), wrongChain);
+	await assert.rejects(m.updateSettings({ defaultElectrum: testnetServer }), (err) => {
+		assert.ok(wrongChain(err));
+		assert.match(err.message, /serves testnet, but the default network is mainnet/, 'Settings has no wallet to speak of');
+		return true;
+	});
 	assert.equal(m.defaultElectrum(), null, 'a refused server is not saved');
 	const saved = await m.updateSettings({ defaultElectrum: testnetServer, allowChainMismatch: true });
 	assert.equal(saved.defaultElectrum.host, 'testnet.example');

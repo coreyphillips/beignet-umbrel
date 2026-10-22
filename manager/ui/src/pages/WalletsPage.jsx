@@ -19,7 +19,7 @@ import {
 	staggerItem
 } from '../components/ui.jsx';
 import ElectrumFields, { electrumBody } from '../components/ElectrumFields.jsx';
-import { ChainMismatchNote } from '../components/ElectrumStatus.jsx';
+import { ChainMismatchNote, chainKey } from '../components/ElectrumStatus.jsx';
 import LfbwFields, { EMPTY_LFBW, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 
 import GuardianServeField from '../components/GuardianServeField.jsx';
@@ -327,14 +327,17 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	const [busy, setBusy] = useState(false);
 	// The manager refuses a server on another chain than the wallet (even the
 	// app default, against the network chosen here); the refusal is shown
-	// under the fields with a way through, and goes away once they change.
+	// under the fields with a way through. It is filed under the server and
+	// network it was for and shown only while the form still says those, so
+	// a refusal that lands after an edit cannot wave the new server through.
 	const [chainError, setChainError] = useState(null);
-	useEffect(() => setChainError(null), [electrum, network, custom]);
+	const electrumKey = chainKey(custom ? electrum : null, network);
 	const guardiansConfigured = (config.recoveryGuardians || []).length === 3;
 	const asksAutoApply =
 		tab === 'import' && !onchainOnly && recoveryMode === 'peer-storage' && !!config.recoveryAutoApplyAvailable;
 
 	const submit = async (allow = false) => {
+		const asked = electrumKey;
 		setBusy(true);
 		try {
 			const elec = custom ? electrumBody(electrum) : undefined;
@@ -392,7 +395,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 			setLfbw({ ...EMPTY_LFBW });
 			onDone();
 		} catch (e) {
-			if (e.code === 'ELECTRUM_WRONG_CHAIN') setChainError(e);
+			if (e.code === 'ELECTRUM_WRONG_CHAIN') setChainError({ key: asked, error: e });
 			else toast(e.message, 'error');
 		} finally {
 			setBusy(false);
@@ -461,7 +464,7 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 					network={network}
 				/>
 			)}
-			<ChainMismatchNote error={chainError} busy={busy} onProceed={() => submit(true)} />
+			<ChainMismatchNote error={chainError && chainError.key === electrumKey ? chainError.error : null} busy={busy} onProceed={() => submit(true)} />
 
 			<label className="checkbox field">
 				<input
