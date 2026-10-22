@@ -94,7 +94,7 @@ Repository layout:
 
 ## Development
 
-Run the manager against a local beignet daemon and a regtest Electrum server. The manager needs Node 22 or newer.
+Run the manager against a local beignet daemon and a regtest Electrum server. The manager needs a Node release with the October 21, 2026 security fixes, as its `engines` range says: 22.23.4 or later on 22.x, 24.22.1 or later on 24.x, or 26.12.1 and later. The app image and CI run 24.22.1.
 
 ```sh
 # 1. Build beignet locally
