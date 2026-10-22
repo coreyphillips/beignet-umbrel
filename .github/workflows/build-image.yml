@@ -572,8 +572,9 @@ env:
   # 0.31.0 asks for Node 22.23.4, 24.22.1 or 26.12.1 and later (engines) and
   # logs a warning at startup on an older release, and it can verify Electrum
   # TLS certificates (BEIGNET_ELECTRUM_TLS_VERIFY and
-  # BEIGNET_ELECTRUM_TLS_FINGERPRINTS, off unless set; the manager sets
-  # neither). A wallet refresh asks the server about each script hash and
+  # BEIGNET_ELECTRUM_TLS_FINGERPRINTS, off unless set; the manager sets them
+  # only for a wallet whose TLS Electrum server has "Verify the server's
+  # certificate" on). A wallet refresh asks the server about each script hash and
   # transaction once, sends, sweeps and fee bumps all wait for the wallet's
   # send lock, a refused storage write is logged at error level, and one
   # public address can hold at most 8 inbound peer connections (loopback and
