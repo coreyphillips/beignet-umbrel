@@ -586,7 +586,16 @@ env:
   # the result without seeing that history, so a wallet with channels must
   # not go back to it. Stored transaction records drop their input scripts
   # once on load. The npm dependency set is unchanged.
-  BEIGNET_VERSION: "0.31.0"
+  # 0.31.1 adds two wallet fixes to 0.31.0. An idle block no longer runs a
+  # full wallet refresh: the change gap window is now subscribed beside the
+  # receive window, so each wallet holds more script hash subscriptions on
+  # its Electrum server, and a block that changes none of them costs a
+  # header write, a throttled fee check and a look at any unconfirmed
+  # transactions. An address asked for before the wallet's first refresh no
+  # longer fails. Only dist/electrum and dist/wallet differ from 0.31.0:
+  # routes, environment settings, storage and the dependency set are
+  # unchanged.
+  BEIGNET_VERSION: "0.31.1"
 
 jobs:
   build:
