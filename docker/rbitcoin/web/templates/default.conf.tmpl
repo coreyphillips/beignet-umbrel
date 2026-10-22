@@ -1,12 +1,13 @@
-# The status page's nginx. Rendered by the nginx image's envsubst at start:
+# The status page's nginx. Rendered by the nginx image's envsubst at start
+# from /web/templates (NGINX_ENVSUBST_TEMPLATE_DIR in the compose file):
 # only the names in NGINX_ENVSUBST_FILTER (LAN_HOST, PUBLIC_PORT,
 # APP_VERSION, NODE_HOST) are substituted, so $uri and the other nginx
-# variables below are nginx's own. The suffix is .tmpl rather than .template
-# so umbrelOS's own unfiltered envsubst pass over *.template never touches
-# this file (it would blank those variables).
+# variables below are nginx's own. /web is filled by the node image's
+# entrypoint on every start (see docker/rbitcoin/Dockerfile for why the
+# page ships in that image rather than as app files).
 server {
     listen 80;
-    root /usr/share/nginx/html;
+    root /web/html;
     index index.html;
 
     # What the page needs from the environment, as JSON, so index.html is

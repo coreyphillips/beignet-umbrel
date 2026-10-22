@@ -88,9 +88,9 @@ Repository layout:
 
 - `umbrel-app-store.yml`: the community store manifest.
 - `beignet-wallet/`: the Umbrel app (manifest, compose, Tor config, icon and gallery).
-- `beignet-rbitcoin/`: the rbitcoin app (manifest, compose, status page, exports, its own README).
+- `beignet-rbitcoin/`: the rbitcoin app (manifest, compose, exports, its own README).
 - `manager/`: the manager service (`server/`) and the dashboard UI source (`ui/`).
-- `docker/`: Dockerfile and entrypoint for the app image; `docker/rbitcoin/` the same for the rbitcoin image.
+- `docker/`: Dockerfile and entrypoint for the app image; `docker/rbitcoin/` the same for the rbitcoin image, plus that app's status page, which ships inside the image.
 - `docs/`: feature documentation.
 - `scripts/lfbw-regtest/`: end-to-end scenarios against real daemons on regtest.
 - `.github/workflows/`: `build-image.yml` (multi-arch image to GHCR), `tests.yml`, `check-release.yml` (see Releasing), and for the rbitcoin app `build-rbitcoin-image.yml` and `rbitcoin-smoke.yml`.

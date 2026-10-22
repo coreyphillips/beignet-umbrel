@@ -10,8 +10,8 @@ rbitcoin is young software. In its author's words the mainnet release is "early 
 
 - **x86_64 only.** rbitcoin publishes release binaries for Linux x86_64 (and Windows and macOS arm64), not Linux arm64. An Umbrel Home runs it; a Raspberry Pi Umbrel cannot. On a Pi the app installs and its page says the node is not answering and why.
 - **Disk.** About 200 GiB for the hot store, about 750 GiB with the cold append-only files. The data lives under the app's data directory and is excluded from Umbrel backups (`backupIgnore` in the manifest): it is hundreds of GiB and can always be rebuilt from the network.
-- **Time.** Upstream quotes "under ~30 h" for the first sync on laptop-class hardware. Expect a day or more on a home box. Address histories are complete only once the sync has finished; a wallet connects before that but sees nothing.
-- **Validation.** The app runs mainnet with upstream's defaults, which means the default `--milestone` of block 840000: script and signature checks apply from that block onward, and earlier blocks are checked by header chain and transaction structure only. Full validation from genesis is `--milestone 0` in the compose file's `command:`, at the cost of a longer sync.
+- **Time.** Upstream quotes "under ~30 h" for the first sync on laptop-class hardware. Expect a day or more on a home box. rbitcoin opens its Electrum port only after the first sync (its [interfaces guide](https://github.com/reardencode/rbitcoin/blob/v0.8.0/docs/operator/interfaces.md) says the listeners bind "only after initial catch-up"), so until then a wallet is refused the connection. Beignet keeps a wallet in its waiting state and starts it when the port opens.
+- **Validation.** The app runs mainnet with upstream's defaults, which means the default `--milestone` of block 840000. As with Bitcoin Core's assumevalid, script and signature checks are skipped for blocks up to and including that one ([architecture notes](https://github.com/reardencode/rbitcoin/blob/v0.8.0/docs/architecture.md)); the chain of headers and each block's transactions and spends are still checked, and every block after it is fully validated. Full validation from genesis is `--milestone 0` in the compose file's `command:`, at the cost of a longer sync.
 - **Format changes before 1.0.** Some rbitcoin releases refuse an older data directory and need a wipe and a fresh sync. When an update of this app needs that, its release notes in the app store say so.
 
 ## Connecting
@@ -34,9 +34,11 @@ The health listener (`/healthz`, `/readyz`, `/progress` on port 9332) is unauthe
 | `umbrel-app.yml` | The manifest: id `beignet-rbitcoin`, version `<rbitcoin version>-<app patch>`, `backupIgnore: [data]`, the warnings above in the description |
 | `docker-compose.yml` | `node` (the rbitcoin image, pinned by digest, with every flag in its `command:`) and `web` (the official nginx image serving the status page), both with pinned container names |
 | `exports.sh` | `APP_RBITCOIN_NODE_HOST`, `APP_RBITCOIN_NODE_PORT`, `APP_RBITCOIN_PUBLIC_PORT` for apps that declare this one as a dependency |
-| `web/index.html`, `web/default.conf.tmpl` | The status page: static HTML polling the node's health listener through nginx |
 | `scripts/electrum-check.sh` | One Electrum conversation in bash, used by the smoke test and handy against a live box |
-| `../docker/rbitcoin/Dockerfile` | The image: the upstream static musl binary, checksum-verified, on Alpine. The one place the rbitcoin version and checksum are pinned |
+| `../docker/rbitcoin/Dockerfile` | The image: the upstream static musl binary, checksum-verified, on Alpine, plus the status page. The one place the rbitcoin version and checksum are pinned |
+| `../docker/rbitcoin/web/` | The status page: static HTML polling the node's health listener through nginx, and the nginx template that proxies to it |
+
+The status page ships inside the node image rather than as app files. umbrelOS copies an app's directory into its data directory at install, but on update it copies only `docker-compose.yml`, `*.template`, `exports.sh`, `torrc` and `hooks`, so files shipped beside the compose file would stay at their install version for the life of the app. Instead the node's entrypoint copies the page into `${APP_DATA_DIR}/web` on every start and stamps it with the app version; the nginx container mounts the same directory, waits for the stamp to name its own version, and only then renders the template. A page fix is therefore an image rebuild (a new app patch) and reaches existing installs like any other update.
 
 The node runs with `RBITCOIN_IO=pread`. Docker's default seccomp profile blocks `io_uring`, which rbitcoin would otherwise pick and then fall back from; saying so makes every box behave the same.
 
@@ -49,7 +51,7 @@ An update that keeps the data directory is an ordinary app update. An update who
 The version string is `<rbitcoin version>-<app patch>` and is also the image tag. A packaging fix is a new app patch (`0.8.0-2`); a new upstream release starts the patch over (`0.8.1-1`).
 
 1. Bump `RBITCOIN_VERSION` and `RBITCOIN_NODE_SHA256` in `docker/rbitcoin/Dockerfile` (the checksum is the `rbitcoin-node` line of the release's `SHA256SUMS.linux-musl`), merge. The `rbitcoin-smoke` workflow builds the image and runs it on regtest on every PR touching it.
-2. Tag `rbitcoin-v<version>` (for example `rbitcoin-v0.8.0-1`) and let `build-rbitcoin-image` publish `ghcr.io/coreyphillips/rbitcoin:<version>`.
+2. Tag `rbitcoin-v<version>` (for example `rbitcoin-v0.8.0-1`; the build refuses a tag that is not the pinned release plus a number) and let `build-rbitcoin-image` publish `ghcr.io/coreyphillips/rbitcoin:<version>`. The first time only: a package first published under a personal GitHub account is private, whatever the repository's visibility, so after the first build open the package's settings (github.com/coreyphillips?tab=packages, then the package, then Package settings) and change its visibility to public. Until then every Umbrel's pull fails and so does `check-release`'s anonymous fetch of the digest.
 3. In one PR, set `version` and `releaseNotes` in `umbrel-app.yml` and the image tag and digest in `docker-compose.yml`:
 
    ```sh

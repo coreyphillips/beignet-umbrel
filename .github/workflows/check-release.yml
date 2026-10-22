@@ -60,10 +60,17 @@ jobs:
           MANIFEST=${{ matrix.app }}/umbrel-app.yml
 
           # An app that is not published yet (its manifest and compose land
-          # in the release PR) has nothing to check.
-          if [ ! -f "$COMPOSE" ] || [ ! -f "$MANIFEST" ]; then
-            echo "${{ matrix.app }} has no manifest or compose on this branch; nothing to check."
+          # together in the release PR) has nothing to check. One file
+          # without the other is a half-published app: a manifest alone
+          # lists an app that cannot be installed, a compose alone is
+          # invisible, so neither passes.
+          if [ ! -f "$COMPOSE" ] && [ ! -f "$MANIFEST" ]; then
+            echo "${{ matrix.app }} has no manifest and no compose on this branch; nothing to check."
             exit 0
+          fi
+          if [ ! -f "$COMPOSE" ] || [ ! -f "$MANIFEST" ]; then
+            echo "::error::${{ matrix.app }} has one of umbrel-app.yml and docker-compose.yml but not the other; an app ships both or neither."
+            exit 1
           fi
 
           APP_VERSION=$(grep -oE '^version: *"[^"]+"' "$MANIFEST" | sed 's/.*"\(.*\)"/\1/')
@@ -126,14 +133,31 @@ jobs:
   # Only on the release PR (step 3): a bundle commit (step 1) legitimately
   # names an engine the notes do not describe yet, and so does main between
   # the two, so the check would be red exactly when the process is right.
-  # The release PR is the one commit that must line the two up.
+  # The release PR is the one commit that must line the two up. It is
+  # recognised by what it touches: a PR that leaves this app's manifest
+  # alone (the other app's release, say, while this one sits between its
+  # step 1 and step 3) is not this app's release PR and is not held to it.
   beignet-release-notes:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
+      - name: Only a PR that changes this app's manifest is its release PR
+        id: touched
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh pr diff "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --name-only | grep -qx 'beignet-wallet/umbrel-app.yml'; then
+            echo "manifest=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "This PR does not change beignet-wallet/umbrel-app.yml; it is not a Beignet release PR, nothing to check."
+            echo "manifest=no" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: The release notes must name the beignet version the image bundles
+        if: steps.touched.outputs.manifest == 'yes'
         run: |
           set -euo pipefail
 
@@ -173,7 +197,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Only a PR that changes this app's manifest is its release PR
+        id: touched
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh pr diff "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --name-only | grep -qx 'beignet-rbitcoin/umbrel-app.yml'; then
+            echo "manifest=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "This PR does not change beignet-rbitcoin/umbrel-app.yml; it is not an rbitcoin release PR, nothing to check."
+            echo "manifest=no" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: The app version and release notes must name the rbitcoin release the image carries
+        if: steps.touched.outputs.manifest == 'yes'
         run: |
           set -euo pipefail
 
@@ -181,8 +219,8 @@ jobs:
           MANIFEST=beignet-rbitcoin/umbrel-app.yml
 
           if [ ! -f "$MANIFEST" ]; then
-            echo "beignet-rbitcoin has no manifest on this branch; nothing to check."
-            exit 0
+            echo "::error::this PR touches $MANIFEST but leaves no manifest behind; removing the app is not a release."
+            exit 1
           fi
 
           RB=$(sed -nE 's/^ARG RBITCOIN_VERSION=(.+)$/\1/p' "$DOCKERFILE")

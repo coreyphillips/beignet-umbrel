@@ -55,6 +55,14 @@ ENV RBITCOIN_VERSION=${RBITCOIN_VERSION} APP_VERSION=${APP_VERSION}
 RUN apk add --no-cache su-exec
 COPY --from=fetch /fetch/rbitcoin-node /usr/local/bin/rbitcoin-node
 COPY docker/rbitcoin/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 755 /usr/local/bin/entrypoint.sh
+# The status page (nginx template and HTML) travels in this image, not in
+# the app directory: umbrelOS copies an app's files into APP_DATA_DIR at
+# install and on update copies only docker-compose.yml, *.template,
+# exports.sh, torrc and hooks (legacy-compat/app-script), so a page shipped
+# as app files would stay at its install version for the life of the app.
+# The entrypoint puts a copy in /web on every start, which the compose file
+# shares with the nginx container, so the page moves with the image digest.
+COPY docker/rbitcoin/web /usr/share/beignet-rbitcoin/web
+RUN chmod 755 /usr/local/bin/entrypoint.sh && chmod -R a+rX /usr/share/beignet-rbitcoin
 EXPOSE 50001 9332
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

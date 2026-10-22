@@ -48,8 +48,11 @@ jobs:
             alpine:*@sha256:*) ;;
             *) echo "::error::docker/rbitcoin/Dockerfile must pin ALPINE_IMAGE to a tag and digest, got '$ALPINE'"; exit 1 ;;
           esac
-          if [ "$VERSION" != "dev" ] && [ "${VERSION%-*}" != "$RB" ]; then
-            echo "::error::tag $GITHUB_REF_NAME names rbitcoin ${VERSION%-*} but the Dockerfile pins $RB"; exit 1
+          # The tag must be exactly the pinned release plus a numeric app
+          # patch: rbitcoin-v0.8.0 or rbitcoin-v0.8.0-beta would publish a
+          # version the release-notes check later refuses, and :latest with it.
+          if [ "$VERSION" != "dev" ] && ! printf '%s\n' "$VERSION" | grep -qE "^$(printf '%s' "$RB" | sed 's/\./\\./g')-[0-9]+$"; then
+            echo "::error::tag $GITHUB_REF_NAME must be rbitcoin-v$RB-<app patch>, the release the Dockerfile pins plus a number (for example rbitcoin-v$RB-1); got $VERSION"; exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "rbitcoin=$RB" >> "$GITHUB_OUTPUT"
@@ -66,6 +69,11 @@ jobs:
       # linux/arm64 carries a stub, not the node (see the Dockerfile): the
       # app then installs on a Raspberry Pi Umbrel and its page says why the
       # node is not running, instead of the pull failing with no explanation.
+      # The source label links the package to this repository on GHCR, so the
+      # package shows up under it and takes its access permissions. It does
+      # not make the package public: a package first published under a
+      # personal account is private until its visibility is changed by hand
+      # (beignet-rbitcoin/README.md, Releasing).
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -74,6 +82,10 @@ jobs:
           push: true
           build-args: |
             APP_VERSION=${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/coreyphillips/beignet-umbrel
+            org.opencontainers.image.description=rbitcoin ${{ steps.meta.outputs.rbitcoin }} for the beignet-rbitcoin Umbrel app
+            org.opencontainers.image.licenses=MIT OR Apache-2.0
           tags: |
             ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
             ${{ env.IMAGE }}:latest

@@ -80,6 +80,10 @@ const ELECTRUM_PRESETS = [
 		host: 'beignet-rbitcoin_node_1',
 		port: 50001,
 		tls: false,
+		// That app runs mainnet and nothing else, so the dashboard offers
+		// this preset only when the wallet (or the default) is on mainnet.
+		// A preset without `networks` is offered for every network.
+		networks: ['mainnet'],
 		note: 'Use if the rbitcoin app from this store is installed'
 	}
 ];

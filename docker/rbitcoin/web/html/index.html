@@ -58,7 +58,7 @@
     </dl>
     <ul>
       <li>Plain TCP, no TLS: in Sparrow or Electrum choose the non-SSL option. Meant for your own network, not the internet.</li>
-      <li>Address histories are complete only once the sync has finished. Until then a wallet connects but sees nothing.</li>
+      <li>The Electrum port opens only once the first sync has finished. Until then a wallet is refused the connection; Beignet keeps trying and starts when the port opens.</li>
     </ul>
   </section>
 
@@ -68,7 +68,7 @@
       <li>rbitcoin is young software. Its author calls the mainnet release "early production / high-scrutiny" and "not a Core or Fulcrum replacement", and lists multi-tenant public Electrum service as a non-goal. Use it for your own wallets.</li>
       <li>x86_64 only. rbitcoin publishes no Linux arm64 build, so a Raspberry Pi Umbrel cannot run it; this page then says the node is not answering.</li>
       <li>Disk: about 750 GiB for the full store, about 200 GiB of it hot. The first sync takes a day or more. The data is excluded from Umbrel backups and rebuilt from the network.</li>
-      <li>It validates signatures from block 840000 onward (the upstream default milestone); earlier blocks are checked by header chain and transaction structure only.</li>
+      <li>With the upstream default milestone, script and signature checks are skipped for blocks up to and including block 840000, the way Bitcoin Core's assumevalid does; the chain of headers and each block's transactions and spends are still checked, and every block after it is fully validated.</li>
       <li>Before 1.0 the on-disk format can change. When an update needs a fresh sync, the release notes say so.</li>
     </ul>
   </section>
@@ -80,8 +80,17 @@
     var state = function (text, tone) { set('state', text); $('state').dataset.tone = tone; };
     var secs = function (s) {
       if (typeof s !== 'number' || !isFinite(s)) return null;
-      var h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+      // Whole minutes first, then hours out of those, so 3599 s is "1 h 0 min"
+      // and never "60 min".
+      var mins = Math.round(s / 60), h = Math.floor(mins / 60), m = mins % 60;
       return h ? h + ' h ' + m + ' min' : m + ' min';
+    };
+    var notAnswering = function () {
+      state('Not answering', 'bad');
+      $('bar').hidden = true;
+      set('stage', 'The node is not running or is still starting.');
+      set('eta', '');
+      set('note', 'On an arm64 Umbrel (Raspberry Pi) it cannot run: rbitcoin publishes no Linux arm64 build. On an x86_64 Umbrel, give it a minute after an install or update; if this stays, check the app logs.');
     };
     fetch('/config.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (c) {
       set('internal', c.internal);
@@ -91,7 +100,12 @@
 
     function poll() {
       fetch('/node/readyz', { cache: 'no-store' }).then(function (ready) {
-        return fetch('/node/progress', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (p) {
+        // nginx answers for a node it cannot reach with 502 (or 504 when it
+        // hangs), and fetch resolves on those like any other status. The
+        // node itself answers 503 while it is syncing: that is the node
+        // talking, and the progress call says how far along it is.
+        if (ready.status === 502 || ready.status === 504) return notAnswering();
+        return fetch('/node/progress', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }).then(function (p) {
           if (ready.ok) {
             state('Ready: following the chain tip', 'ok');
             $('bar').hidden = true;
@@ -114,13 +128,7 @@
           set('eta', (elapsed ? 'This stage has run for ' + elapsed + '. ' : '') + (eta ? 'About ' + eta + ' to go.' : ''));
           set('note', 'The first sync takes a day or more. Wallets can connect once this reads Ready.');
         });
-      }).catch(function () {
-        state('Not answering', 'bad');
-        $('bar').hidden = true;
-        set('stage', 'The node is not running or is still starting.');
-        set('eta', '');
-        set('note', 'On an arm64 Umbrel (Raspberry Pi) it cannot run: rbitcoin publishes no Linux arm64 build. On an x86_64 Umbrel, give it a minute after an install or update; if this stays, check the app logs.');
-      });
+      }).catch(notAnswering);
     }
     poll();
     setInterval(poll, 5000);
