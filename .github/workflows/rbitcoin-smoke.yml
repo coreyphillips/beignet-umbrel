@@ -42,8 +42,13 @@ jobs:
           curl -fsS localhost:9332/progress | tee progress.json
           grep -q '"phase"' progress.json
           # The page reads the two heights from the metrics text during the
-          # first sync; on an empty regtest both are 0.
-          curl -fsS localhost:9332/metrics | grep -E '^rbitcoin_(blocks|headers) '
+          # first sync. The chain gauges join the scrape once P2P has started,
+          # a few seconds after /healthz; on an empty regtest both are 0.
+          for i in $(seq 1 60); do
+            if curl -fsS localhost:9332/metrics | grep -E '^rbitcoin_(blocks|headers) '; then echo "chain gauges after ${i}s"; break; fi
+            if [ "$i" = 60 ]; then echo "::error::no chain gauges on /metrics within 60 s"; curl -sS localhost:9332/metrics; docker logs beignet-rbitcoin_node_1; exit 1; fi
+            sleep 1
+          done
 
       - name: Speak Electrum to it
         run: |

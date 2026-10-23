@@ -104,9 +104,10 @@
     // and nothing else: its stages are the index builds and repairs. The
     // block and header heights are on /metrics, the Prometheus text the node
     // serves because the compose file starts it with --metrics, one
-    // "name value" line per gauge. Only the two heights are read; a node
-    // started without the flag answers 404 and the page falls back to the
-    // phase name.
+    // "name value" line per gauge. Only the two heights are read. A node
+    // started without the flag answers 404, and one that has not started
+    // P2P yet serves the text without them; either way the page falls back
+    // to the phase name.
     var gauge = function (text, name) {
       var m = new RegExp('^' + name + ' (\\S+)$', 'm').exec(text);
       return m ? Number(m[1]) : null;
