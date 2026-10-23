@@ -16,7 +16,7 @@ rbitcoin is young software. In its author's words the mainnet release is "early 
 
 ## Connecting
 
-The app's page (open it from the Umbrel home screen) shows the sync progress and the two addresses. During the first sync it shows the block height against the header height as a percentage, with a rough time to go measured from the pace it has seen while open; the node's own estimate is on the `ibd: progress` line in the app's logs (Settings, Troubleshoot). The percentage comes from the node's `/metrics` endpoint, which the compose file turns on with `--metrics`; the index builds that follow report their own progress on `/progress`.
+The app's page (open it from the Umbrel home screen) shows the sync progress and the two addresses. During the first sync it shows the block height, the date the blocks have reached, and a percentage of an estimated total, with a rough time to go measured from the pace it has seen while open; the node's own estimate is on the `ibd: progress` line in the app's logs (Settings, Troubleshoot). The height and the tip block's time come from the node's `/metrics` endpoint, which the compose file turns on with `--metrics`. The total is estimated from block times, because during the first sync the node's header height reads the same as its block height; the index builds that follow report their own progress on `/progress`.
 
 | From | Address | Notes |
 |---|---|---|

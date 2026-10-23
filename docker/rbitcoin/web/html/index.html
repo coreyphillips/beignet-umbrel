@@ -102,12 +102,23 @@
 
     // During the first sync (the catch-up phase) /progress names the phase
     // and nothing else: its stages are the index builds and repairs. The
-    // block and header heights are on /metrics, the Prometheus text the node
-    // serves because the compose file starts it with --metrics, one
-    // "name value" line per gauge. Only the two heights are read. A node
-    // started without the flag answers 404, and one that has not started
-    // P2P yet serves the text without them; either way the page falls back
-    // to the phase name.
+    // heights are on /metrics, the Prometheus text the node serves because
+    // the compose file starts it with --metrics, one "name value" line per
+    // gauge. A node started without the flag answers 404, and one that has
+    // not started P2P yet serves the text without them; either way the page
+    // falls back to the phase name.
+    //
+    // The header height is no total during the first sync: rbitcoin keeps
+    // the headers it is working on out of that count, so it reads the same
+    // as the block height until the node follows the tip, and its peer
+    // horizon is only on its log line. The total is estimated from the tip
+    // block's time instead: one block per ten minutes (the target interval,
+    // which the chain's long-run average sits within a few percent of; its
+    // own average so far runs faster early on and overshoots) for the time
+    // between that block and now. The text says "about". A header height
+    // that is really ahead (a node catching up after a stop) is used as it
+    // is.
+    var GENESIS = 1231006505;
     var gauge = function (text, name) {
       var m = new RegExp('^' + name + ' (\\S+)$', 'm').exec(text);
       return m ? Number(m[1]) : null;
@@ -115,8 +126,12 @@
     var heights = function () {
       return fetch('/node/metrics', { cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : null; }).catch(function () { return null; }).then(function (text) {
         if (!text) return null;
-        var blocks = gauge(text, 'rbitcoin_blocks'), headers = gauge(text, 'rbitcoin_headers');
-        return blocks !== null && headers !== null && headers > 0 ? { blocks: blocks, headers: headers } : null;
+        var blocks = gauge(text, 'rbitcoin_blocks'), headers = gauge(text, 'rbitcoin_headers'), tipTime = gauge(text, 'rbitcoin_tip_time_seconds');
+        if (!blocks) return null;
+        if (headers !== null && headers > blocks + 6) return { blocks: blocks, total: headers, tipTime: tipTime, estimated: false };
+        if (tipTime === null || tipTime <= GENESIS) return null;
+        var remaining = Math.max(0, (Date.now() / 1000 - tipTime) / 600);
+        return { blocks: blocks, total: blocks + Math.round(remaining), tipTime: tipTime, estimated: true };
       });
     };
     // The node's own sync estimate is on its "ibd: progress" log line and
@@ -124,25 +139,26 @@
     // has seen over the last quarter hour, and says nothing for the first
     // minute. Blocks grow heavier along the chain, so a pace measured early
     // in the sync overstates it; the text says so.
-    var seen = [], lastHeaders = null;
+    var seen = [];
     var pace = function (h) {
       var now = Date.now();
       seen.push({ t: now, blocks: h.blocks });
       while (seen.length > 1 && now - seen[0].t > 15 * 60 * 1000) seen.shift();
       var first = seen[0];
       if (now - first.t < 60 * 1000 || h.blocks <= first.blocks) return null;
-      return (h.headers - h.blocks) / ((h.blocks - first.blocks) / ((now - first.t) / 1000));
+      return (h.total - h.blocks) / ((h.blocks - first.blocks) / ((now - first.t) / 1000));
     };
+    var day = function (t) { return new Date(t * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }); };
     var showHeights = function (h) {
-      var pct = Math.floor(h.blocks / h.headers * 1000) / 10;
+      var pct = Math.floor(h.blocks / h.total * 1000) / 10;
+      if (h.estimated) pct = Math.min(pct, 99.9);
       $('bar').hidden = false;
       $('bar').value = pct;
-      set('stage', 'Block ' + count(h.blocks) + ' of ' + count(h.headers) + ' (' + pct.toFixed(1) + '%)');
+      var total = h.estimated ? 'about ' + count(Math.round(h.total / 1000) * 1000) : count(h.total);
+      set('stage', 'Block ' + count(h.blocks) + ' of ' + total + ' (' + pct.toFixed(1) + '%)' + (h.tipTime ? ', blocks up to ' + day(h.tipTime) : ''));
       var left = secs(pace(h));
-      var headersGrowing = lastHeaders !== null && h.headers - lastHeaders > 50;
-      lastHeaders = h.headers;
       set('eta', (left ? 'About ' + left + ' to go at the current pace; blocks get heavier along the chain, so early in the sync this is optimistic.' : 'Measuring the pace.')
-        + (headersGrowing ? ' Headers are still arriving, so the total is still growing.' : ''));
+        + (h.estimated ? ' The total is estimated from block times; the node learns the real height as it goes.' : ''));
     };
     var showStage = function (p) {
       if (p && typeof p.percent === 'number') {
