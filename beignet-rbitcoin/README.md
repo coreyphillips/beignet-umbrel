@@ -16,7 +16,7 @@ rbitcoin is young software. In its author's words the mainnet release is "early 
 
 ## Connecting
 
-The app's page (open it from the Umbrel home screen) shows the sync progress and the two addresses:
+The app's page (open it from the Umbrel home screen) shows the sync progress and the two addresses. During the first sync it shows the block height against the header height as a percentage, with a rough time to go measured from the pace it has seen while open; the node's own estimate is on the `ibd: progress` line in the app's logs (Settings, Troubleshoot). The percentage comes from the node's `/metrics` endpoint, which the compose file turns on with `--metrics`; the index builds that follow report their own progress on `/progress`.
 
 | From | Address | Notes |
 |---|---|---|
@@ -25,7 +25,7 @@ The app's page (open it from the Umbrel home screen) shows the sync progress and
 
 Connections are plain TCP without TLS. rbitcoin does not terminate TLS itself (upstream puts that at a reverse proxy), and this app does not add one: it is meant for your own network. Do not forward port 50011 to the internet.
 
-The health listener (`/healthz`, `/readyz`, `/progress` on port 9332) is unauthenticated, so it stays unpublished; the status page reaches it over the Docker network.
+The health listener (`/healthz`, `/readyz`, `/progress`, `/metrics` on port 9332) is unauthenticated, so it stays unpublished; the status page reaches it over the Docker network.
 
 ## What is in the app
 

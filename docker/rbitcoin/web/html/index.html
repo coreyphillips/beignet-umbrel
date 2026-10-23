@@ -78,11 +78,13 @@
     var $ = function (id) { return document.getElementById(id); };
     var set = function (id, text) { $(id).textContent = text; };
     var state = function (text, tone) { set('state', text); $('state').dataset.tone = tone; };
+    var count = function (n) { return n.toLocaleString('en-US'); };
     var secs = function (s) {
       if (typeof s !== 'number' || !isFinite(s)) return null;
       // Whole minutes first, then hours out of those, so 3599 s is "1 h 0 min"
-      // and never "60 min".
+      // and never "60 min"; a day or more is given in days and hours.
       var mins = Math.round(s / 60), h = Math.floor(mins / 60), m = mins % 60;
+      if (h >= 24) return Math.floor(h / 24) + ' d ' + (h % 24) + ' h';
       return h ? h + ' h ' + m + ' min' : m + ' min';
     };
     var notAnswering = function () {
@@ -97,6 +99,64 @@
       set('lan', c.lan);
       set('app-version', c.appVersion);
     }).catch(function () {});
+
+    // During the first sync (the catch-up phase) /progress names the phase
+    // and nothing else: its stages are the index builds and repairs. The
+    // block and header heights are on /metrics, the Prometheus text the node
+    // serves because the compose file starts it with --metrics, one
+    // "name value" line per gauge. Only the two heights are read. A node
+    // started without the flag answers 404, and one that has not started
+    // P2P yet serves the text without them; either way the page falls back
+    // to the phase name.
+    var gauge = function (text, name) {
+      var m = new RegExp('^' + name + ' (\\S+)$', 'm').exec(text);
+      return m ? Number(m[1]) : null;
+    };
+    var heights = function () {
+      return fetch('/node/metrics', { cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : null; }).catch(function () { return null; }).then(function (text) {
+        if (!text) return null;
+        var blocks = gauge(text, 'rbitcoin_blocks'), headers = gauge(text, 'rbitcoin_headers');
+        return blocks !== null && headers !== null && headers > 0 ? { blocks: blocks, headers: headers } : null;
+      });
+    };
+    // The node's own sync estimate is on its "ibd: progress" log line and
+    // not on HTTP, so the page measures the pace itself from the heights it
+    // has seen over the last quarter hour, and says nothing for the first
+    // minute. Blocks grow heavier along the chain, so a pace measured early
+    // in the sync overstates it; the text says so.
+    var seen = [], lastHeaders = null;
+    var pace = function (h) {
+      var now = Date.now();
+      seen.push({ t: now, blocks: h.blocks });
+      while (seen.length > 1 && now - seen[0].t > 15 * 60 * 1000) seen.shift();
+      var first = seen[0];
+      if (now - first.t < 60 * 1000 || h.blocks <= first.blocks) return null;
+      return (h.headers - h.blocks) / ((h.blocks - first.blocks) / ((now - first.t) / 1000));
+    };
+    var showHeights = function (h) {
+      var pct = Math.floor(h.blocks / h.headers * 1000) / 10;
+      $('bar').hidden = false;
+      $('bar').value = pct;
+      set('stage', 'Block ' + count(h.blocks) + ' of ' + count(h.headers) + ' (' + pct.toFixed(1) + '%)');
+      var left = secs(pace(h));
+      var headersGrowing = lastHeaders !== null && h.headers - lastHeaders > 50;
+      lastHeaders = h.headers;
+      set('eta', (left ? 'About ' + left + ' to go at the current pace; blocks get heavier along the chain, so early in the sync this is optimistic.' : 'Measuring the pace.')
+        + (headersGrowing ? ' Headers are still arriving, so the total is still growing.' : ''));
+    };
+    var showStage = function (p) {
+      if (p && typeof p.percent === 'number') {
+        $('bar').hidden = false;
+        $('bar').value = p.percent;
+      } else {
+        $('bar').hidden = true;
+      }
+      var stage = p ? [p.phase, p.stage].filter(Boolean).join(': ') : '';
+      set('stage', stage ? stage + (typeof p.percent === 'number' ? ' (' + p.percent.toFixed(1) + '%)' : '') : 'Starting up');
+      var eta = p ? secs(p.eta_secs) : null;
+      var elapsed = p ? secs(p.elapsed_secs) : null;
+      set('eta', (elapsed ? 'This stage has run for ' + elapsed + '. ' : '') + (eta ? 'About ' + eta + ' to go.' : ''));
+    };
 
     function poll() {
       fetch('/node/readyz', { cache: 'no-store' }).then(function (ready) {
@@ -115,18 +175,11 @@
             return;
           }
           state('Syncing', 'warn');
-          if (p && typeof p.percent === 'number') {
-            $('bar').hidden = false;
-            $('bar').value = p.percent;
-          } else {
-            $('bar').hidden = true;
-          }
-          var stage = p ? [p.phase, p.stage].filter(Boolean).join(': ') : '';
-          set('stage', stage ? stage + (typeof p.percent === 'number' ? ' (' + p.percent.toFixed(1) + '%)' : '') : 'Starting up');
-          var eta = p ? secs(p.eta_secs) : null;
-          var elapsed = p ? secs(p.elapsed_secs) : null;
-          set('eta', (elapsed ? 'This stage has run for ' + elapsed + '. ' : '') + (eta ? 'About ' + eta + ' to go.' : ''));
           set('note', 'The first sync takes a day or more. Wallets can connect once this reads Ready.');
+          // A running stage (an index build) has its own percent; the block
+          // download has none, so its heights are read instead.
+          if (p && typeof p.percent === 'number') return showStage(p);
+          return heights().then(function (h) { return h ? showHeights(h) : showStage(p); });
         });
       }).catch(notAnswering);
     }
