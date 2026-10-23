@@ -33,7 +33,7 @@ jobs:
             -p 50001:50001 -p 9332:9332 -e RBITCOIN_IO=pread -e APP_VERSION=smoke \
             -v "$PWD/smoke-web:/web" rbitcoin:smoke \
             --datadir /data --network regtest --no-seeds --sh-index \
-            --electrum-listen 0.0.0.0:50001 --health-listen 0.0.0.0:9332 --log-level info
+            --electrum-listen 0.0.0.0:50001 --health-listen 0.0.0.0:9332 --metrics --log-level info
           for i in $(seq 1 90); do
             if curl -fsS localhost:9332/healthz >/dev/null 2>&1; then echo "healthz after ${i}s"; break; fi
             if [ "$i" = 90 ]; then echo "::error::no /healthz within 90 s"; docker logs beignet-rbitcoin_node_1; exit 1; fi
@@ -41,6 +41,9 @@ jobs:
           done
           curl -fsS localhost:9332/progress | tee progress.json
           grep -q '"phase"' progress.json
+          # The page reads the two heights from the metrics text during the
+          # first sync; on an empty regtest both are 0.
+          curl -fsS localhost:9332/metrics | grep -E '^rbitcoin_(blocks|headers) '
 
       - name: Speak Electrum to it
         run: |
@@ -77,6 +80,7 @@ jobs:
           grep -q '"appVersion":"smoke"' config.json
           curl -fsS localhost:8080/node/healthz
           curl -fsS localhost:8080/node/progress | grep -q '"phase"'
+          curl -fsS localhost:8080/node/metrics | grep -q '^rbitcoin_blocks '
           # Nothing but the page is served from /web.
           [ "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/.version)" = 404 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/templates/default.conf.tmpl)" = 404 ]

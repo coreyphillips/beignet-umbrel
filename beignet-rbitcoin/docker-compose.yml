@@ -69,6 +69,10 @@ services:
     #                          mapping above decides who reaches it
     #   --health-listen        all interfaces inside the container, for the
     #                          status page; never published
+    #   --metrics              block and header heights on /metrics of that
+    #                          listener, which the status page reads for the
+    #                          percentage during the first sync (/progress
+    #                          names only the phase then)
     # --max-outbound and --mempool-size-mb are left at upstream defaults:
     # the operator docs say to add limits only from a host-specific plan.
     command:
@@ -81,6 +85,7 @@ services:
       - "0.0.0.0:50001"
       - --health-listen
       - "0.0.0.0:9332"
+      - --metrics
       - --log-level
       - info
 
