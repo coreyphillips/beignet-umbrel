@@ -20,7 +20,7 @@ services:
     # umbrel-app.yml, so a packaging fix can ship without a new upstream
     # release (0.8.0-2) and check-release's tag-equals-version rule holds. The
     # digest proves the build exists (see check-release).
-    image: ghcr.io/coreyphillips/rbitcoin:0.8.0-1@sha256:a93efec7088d47c83513fc646f6a9fb1462b6337629117dc238c8f8081f07b49
+    image: ghcr.io/coreyphillips/rbitcoin:0.8.0-2@sha256:b713d1b1a139c570bbce84bd3d7ea8c6f6cb86a9c74ec627549cb19b7297d4da
     restart: on-failure
     init: true
     # rbitcoin flushes its store on SIGTERM and its docs say a kill is "not a
