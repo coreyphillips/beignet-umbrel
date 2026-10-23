@@ -4,7 +4,7 @@ name: rbitcoin
 tagline: A Rust Bitcoin full node that serves Electrum, for Beignet and LAN wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-rbitcoin/icon.svg
 category: bitcoin
-version: "0.8.0-2"
+version: "0.8.0-3"
 port: 2114
 description: >-
   rbitcoin is a Bitcoin full node written in Rust that downloads and validates
@@ -46,10 +46,11 @@ support: https://github.com/coreyphillips/beignet-umbrel/issues
 gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-rbitcoin/gallery/1.png
 releaseNotes: >-
-  The app page now shows how far the first sync has come: the block height
-  against the header height as a percentage, and a rough time to go measured
-  from the pace it sees. Bundles rbitcoin 0.8.0, unchanged. Nothing to
-  migrate: the sync carries on where it was.
+  The app page's sync percentage is fixed: it read 100% while still syncing,
+  because the node's header count equals its block height during the first
+  sync. The total is now estimated from the tip block's time, and the page
+  names the date the blocks have reached. Bundles rbitcoin 0.8.0, unchanged.
+  Nothing to migrate: the sync carries on where it was.
 dependencies: []
 backupIgnore:
   - data
