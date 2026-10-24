@@ -100,12 +100,33 @@ class Settings:
         return generated + list(args)
 
 
+def host_gateways(route_file=Path("/proc/net/route")):
+    """Umbrel 2's native app gateway connects from the Docker bridge host."""
+    addresses = set()
+    try:
+        lines = route_file.read_text().splitlines()[1:]
+    except OSError:
+        return addresses
+    for line in lines:
+        fields = line.split()
+        try:
+            if (len(fields) >= 8 and fields[1] == "00000000" and fields[7] == "00000000"
+                    and int(fields[3], 16) & 3 == 3 and len(fields[2]) == 8):
+                address = socket.inet_ntoa(bytes.fromhex(fields[2])[::-1])
+                if address != "0.0.0.0":
+                    addresses.add(address)
+        except (ValueError, OSError):
+            continue
+    return addresses
+
+
 class SourceGuard:
     """Trust the TCP peer and nginx's overwritten source header, not user headers."""
-    def __init__(self, web_host, proxy_hosts, resolve=None):
+    def __init__(self, web_host, proxy_hosts, resolve=None, host_sources=lambda: set()):
         self.web_host = web_host
         self.proxy_hosts = proxy_hosts
         self.resolve = resolve or (lambda host: {row[4][0] for row in socket.getaddrinfo(host, None, socket.AF_INET)})
+        self.host_sources = host_sources
         self.expires = 0
         self.web = set()
         self.proxies = set()
@@ -118,9 +139,9 @@ class SourceGuard:
                 except OSError:
                     return set()
             self.web = addresses(self.web_host)
-            self.proxies = set().union(*(addresses(host) for host in self.proxy_hosts))
+            self.proxies = self.host_sources().union(*(addresses(host) for host in self.proxy_hosts))
             self.expires = time.monotonic() + 5
-        # Fail closed until both services resolve. No trust-all fallback.
+        # Require the web peer and a known container proxy or native host gateway.
         return peer in self.web and forwarded in self.proxies
 
 
@@ -188,7 +209,8 @@ if __name__ == "__main__":
     if sys.argv[1:2] == ["serve"]:
         # One writer serializes revision checks and atomic saves.
         proxy_hosts = os.environ.get("APP_PROXY_HOSTS", "app_proxy_beignet-rbitcoin,beignet-rbitcoin_app_proxy_1,beignet-rbitcoin-app_proxy-1").split(",")
-        guard = SourceGuard(os.environ.get("WEB_HOST", "beignet-rbitcoin_web_1"), proxy_hosts)
+        guard = SourceGuard(os.environ.get("WEB_HOST", "beignet-rbitcoin_web_1"), proxy_hosts,
+                            host_sources=host_gateways)
         HTTPServer(("0.0.0.0", 9333), handler_for(settings, guard)).serve_forever()
     else:
         args = settings.launch_args(sys.argv[1:])

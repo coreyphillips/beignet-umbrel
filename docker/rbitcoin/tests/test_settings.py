@@ -112,10 +112,26 @@ class SettingsTest(unittest.TestCase):
         addresses.clear()
         guard.expires = 0
         self.assertFalse(guard.allows('10.0.0.2', '10.0.0.3'))
+
         addresses.update(web={'10.0.0.8'}, proxy={'10.0.0.9'})
         guard.expires = 0
         self.assertTrue(guard.allows('10.0.0.8', '10.0.0.9'))
         self.assertFalse(guard.allows('10.0.0.2', '10.0.0.3'))
+
+    def test_native_gateway_works_without_a_legacy_proxy_container(self):
+        route_file = Path(self.directory.name) / 'route'
+        route_file.write_text('Iface Destination Gateway Flags RefCnt Use Metric Mask\n'
+                              'eth0 00000000 0100150A 0003 0 0 0 00000000\n'
+                              'eth0 0000150A 00000000 0001 0 0 0 0000FFFF\n'
+                              'eth1 00000000 0100160A 0000 0 0 0 00000000\n')
+        self.assertEqual(module.host_gateways(route_file), {'10.21.0.1'})
+        self.assertEqual(module.host_gateways(route_file.parent / 'missing'), set())
+        guard = module.SourceGuard('web', ['absent-proxy'],
+                                   lambda host: {'10.21.0.2'} if host == 'web' else set(),
+                                   lambda: module.host_gateways(route_file))
+        self.assertTrue(guard.allows('10.21.0.2', '10.21.0.1'))
+        self.assertFalse(guard.allows('10.21.0.2', '10.21.0.3'))
+        self.assertFalse(guard.allows('10.21.0.3', '10.21.0.1'))
 
 
 if __name__ == '__main__':

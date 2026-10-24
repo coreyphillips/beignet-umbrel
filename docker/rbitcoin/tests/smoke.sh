@@ -29,7 +29,7 @@ docker run -d --platform linux/amd64 --name "$name-node" --network "$name" \
 docker run -d --platform linux/amd64 --name "$name-settings" --network "$name" \
   -e WEB_HOST="$name-web" -e APP_PROXY_HOSTS="$name-proxy" \
   -v "$name-settings:/settings" "$image" settings-server >/dev/null
-docker run -d --name "$name-web" --network "$name" \
+docker run -d --name "$name-web" --network "$name" -p 127.0.0.1::80 \
   -e LAN_HOST=umbrel.local -e PUBLIC_PORT=50011 -e APP_VERSION=dashboard-test \
   -e NODE_HOST="$name-node" -e SETTINGS_HOST="$name-settings" \
   -e NGINX_ENVSUBST_TEMPLATE_DIR=/web/templates -e NGINX_ENVSUBST_TEMPLATE_SUFFIX=.tmpl \
@@ -54,6 +54,11 @@ curl -fsS "$origin/" > "$work/index.html"
 grep -q 'Your node, at a glance' "$work/index.html"
 curl -fsSI "$origin/dashboard.mjs" | grep -qi 'content-type: application/javascript'
 curl -fsS "$origin/api/settings" > "$work/settings.json"
+# Umbrel 2's native gateway originates on the bridge host, without a proxy
+# container. A localhost-published port reproduces that path on Linux.
+native_port=$(docker port "$name-web" 80/tcp | sed 's/.*://')
+native_origin="http://127.0.0.1:$native_port"
+curl -fsS "$native_origin/api/settings" > "$work/native-settings.json"
 # An unrelated container cannot bypass the app proxy through nginx.
 docker exec "$name-node" python3 -c '
 import sys, urllib.error, urllib.request
@@ -81,6 +86,16 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: applicati
 curl -fsS -X PUT -H 'Content-Type: application/json' -H "Origin: $origin" \
   -H 'X-Requested-With: rbitcoin-dashboard' --data-binary "@$work/request.json" \
   "$origin/api/settings" > "$work/saved.json"
+# The native gateway can save as well, using the new revision.
+python3 - "$work" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+saved = json.loads((path / 'saved.json').read_text())
+(path / 'native-request.json').write_text(json.dumps({'settings': saved['saved'], 'revision': saved['revision']}))
+PY
+curl -fsS -X PUT -H 'Content-Type: application/json' -H "Origin: $native_origin" \
+  -H 'X-Requested-With: rbitcoin-dashboard' --data-binary "@$work/native-request.json" \
+  "$native_origin/api/settings" >/dev/null
 python3 - "$work/saved.json" <<'PY'
 import json, sys
 saved = json.load(open(sys.argv[1]))
