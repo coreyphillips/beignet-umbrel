@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.31.0"
+version: "0.32.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,26 +30,20 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.31.1. The Electrum fields now show which servers are
-  actually there: each preset (Electrs, Fulcrum, and the rbitcoin app from
-  this store) is probed when the fields open and says whether it answered,
-  on which chain and at what height. A Test connection button does the same
-  for any server you type, such as another Umbrel on your network, and says
-  when the TLS box is the wrong way round. A server known to serve another
-  chain than the wallet is refused when you save, with a Save anyway button
-  if you mean it.
+  Bundles beignet 0.32.1. A mining reward that cannot be spent yet now stays
+  out of a wallet's balance until it matures 100 blocks later, so a send no
+  longer picks a coin the network would refuse; the reward still shows in
+  Activity. Asking for a new address no longer hands back one that was
+  already used when a refresh runs at the same moment, or when the Electrum
+  server answers only part of the check; in that second case the wallet now
+  reports an error instead.
 
 
-  A wallet can now verify its Electrum server's TLS certificate, by a public
-  authority or by a pinned fingerprint. It is off unless you turn it on for a
-  TLS server; Test reports the fingerprint it saw so you can pin it.
-
-
-  From the engine: an idle block no longer rescans the wallet, and an address
-  asked for before the first refresh no longer fails. The storage schema moves
-  to 19 on the first start, so a wallet with channels must not go back to an
-  earlier version of this app. The engine now asks for Node 22.23.4, 24.22.1
-  or 26.12.1 and later; this image ships one it accepts.
+  For Lightning, a channel's short id is no longer recorded wrongly when the
+  Electrum server fails a lookup, a channel that fails while its state cannot
+  be saved is still force closed, and routes the wallet has learned to avoid
+  no longer stall a payment search. Going back to 0.31.0 is safe: the wallet
+  storage is unchanged.
 dependencies: []
 path: ""
 defaultUsername: ""
