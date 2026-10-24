@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.32.0"
+version: "0.32.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,19 +30,16 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.32.1. A mining reward that cannot be spent yet now stays
-  out of a wallet's balance until it matures 100 blocks later, so a send no
-  longer picks a coin the network would refuse; the reward still shows in
-  Activity. Asking for a new address no longer hands back one that was
-  already used when a refresh runs at the same moment, or when the Electrum
-  server answers only part of the check; in that second case the wallet now
-  reports an error instead.
+  The form for creating or importing a wallet is shorter. Its Lightning
+  options (channel backup, guardian serving, offline receive, lightning-first,
+  and the Tor, Clearnet or Hybrid choice with Iroh) now sit under one Advanced
+  section that starts collapsed. The name, network, seed length, recovery
+  phrase and Electrum server stay in view, and leaving Advanced closed makes
+  the same wallet as before. When the Create or Import button is disabled by a
+  choice under Advanced, a note above the button now says why.
 
 
-  For Lightning, a channel's short id is no longer recorded wrongly when the
-  Electrum server fails a lookup, a channel that fails while its state cannot
-  be saved is still force closed, and routes the wallet has learned to avoid
-  no longer stall a payment search. Going back to 0.31.0 is safe: the wallet
+  Still bundles beignet 0.32.1, so going back to 0.32.0 is safe: the wallet
   storage is unchanged.
 dependencies: []
 path: ""
