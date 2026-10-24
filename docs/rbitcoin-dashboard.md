@@ -1,12 +1,12 @@
 # rbitcoin dashboard and saved defaults
 
-The next rbitcoin app image includes a responsive dashboard with three views:
+The rbitcoin app includes a responsive dashboard with three views:
 
 - **Overview:** sync or indexing progress, block height history, measured download traffic, peer transports, mempool capacity, minimum fee rate, uptime, and process memory.
 - **Connect a wallet:** separate home-network and internal addresses, copy controls, connection readiness, and setup instructions.
 - **Settings:** persistent node defaults, the values used at the last node launch, pending restart status, and browser display preferences.
 
-The currently published app manifest and image pin are unchanged. The new dashboard is available in a locally built image until the next app image is published and the release configuration is updated.
+The dashboard and settings service ship in app version 0.8.99-2. Both app services use the same published image digest; the upstream node binary is unchanged from 0.8.99-1.
 
 ## What is measured
 
@@ -65,18 +65,10 @@ sh docker/rbitcoin/tests/smoke.sh
 
 The runtime smoke uses unique temporary containers, private volumes, an isolated regtest node, and a localhost-only web port. It checks the actual nginx module MIME type, legacy proxy chain, and native host gateway path, rejects cross-origin and direct-app writes, saves settings, checks a clean stop, restarts the node, and verifies that the reported mempool cap changed. It cleans up its containers, network, and volumes. It never mounts an installed app or mainnet data. The existing Electrum and node lifecycle smoke remains in CI alongside these checks.
 
-## Preview wiring and release
+## Development and release
 
-`docker/rbitcoin/compose.dashboard.yml` is an override for the next image, intended to be combined with the base app compose file in an Umbrel development environment. It changes both app services to the local `rbitcoin:dashboard` image, adds the persistent settings volume and the settings API service, removes the fixed log-level flag, and supplies `SETTINGS_HOST` to nginx. It assumes Umbrel supplies its normal authenticated app gateway and shared app network. For an isolated local verification, use the regtest smoke above instead of starting mainnet with this override.
+`docker/rbitcoin/compose.dashboard.yml` selects the local `rbitcoin:dashboard` image for both app services. Combine it with the base app compose file in an Umbrel development environment, where Umbrel supplies its authenticated gateway and shared app network. For isolated local verification, use the regtest smoke above instead of starting mainnet.
 
-The published compose file deliberately keeps its existing image digest. Adding a `settings-server` command to that old image would break installed apps because that image does not contain the settings service.
+Release the image before updating the app store configuration. After publishing a new app tag, pin both `node` and `settings` to its verified digest and update the app manifest version and release notes together. Keep the settings volume on both services and the `SETTINGS_HOST` environment and nginx substitution filter in place. Explicit node command flags override saved settings, so the normal release command leaves the editable settings out.
 
-When releasing:
-
-1. Publish the next app patch using the existing rbitcoin image release workflow. The upstream binary pins are unchanged by this dashboard work.
-2. Fold the service changes from `compose.dashboard.yml` into `beignet-rbitcoin/docker-compose.yml`.
-3. Pin **both** `node` and `settings` to the newly published image tag and digest. Keep the official nginx digest pinned.
-4. Keep `${APP_DATA_DIR}/settings:/settings` on both app services; keep the node's existing data and web mounts. Remove `--log-level info` from the node command so the dashboard choice can take effect. Explicit compose flags otherwise take precedence.
-5. Keep `SETTINGS_HOST=beignet-rbitcoin_settings_1`, include `SETTINGS_HOST` in `NGINX_ENVSUBST_FILTER`, and add the settings service to the web service's dependencies.
-6. Bump `umbrel-app.yml` and describe the dashboard, persistent settings, and restart requirement in the release notes. No chain-data migration or fresh sync is needed for these packaging changes.
-7. Run the release checks and the runtime smoke against the published image before updating installed apps.
+Run the release checks and the runtime smoke against the published image before merging the release configuration. No chain-data migration or fresh sync is needed for the 0.8.99-2 dashboard update.

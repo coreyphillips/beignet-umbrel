@@ -20,7 +20,7 @@ services:
     # umbrel-app.yml, so a packaging fix can ship without a new upstream
     # release (0.8.0-2) and check-release's tag-equals-version rule holds. The
     # digest proves the build exists (see check-release).
-    image: ghcr.io/coreyphillips/rbitcoin:0.8.99-1@sha256:d62802c4ad544a739f0452a10fe36308807797c441dbe0d3537a5b7b5a0aeb71
+    image: ghcr.io/coreyphillips/rbitcoin:0.8.99-2@sha256:7e38f04c385efa86df0985bfb90f72b2e0a882e2468b9b5d94ebbf12fbe13659
     restart: on-failure
     init: true
     # rbitcoin flushes its store on SIGTERM and its docs say a kill is "not a
@@ -33,6 +33,8 @@ services:
       # Hundreds of GiB. Excluded from Umbrel backups by backupIgnore in the
       # manifest; it rebuilds from the network.
       - ${APP_DATA_DIR}/data:/data
+      # Saved defaults survive updates and stay separate from chain data.
+      - ${APP_DATA_DIR}/settings:/settings
       # The status page, written here by this image's entrypoint on every
       # start and read by the web container below. It lives in the image
       # (docker/rbitcoin/web) because umbrelOS copies app files into
@@ -58,9 +60,9 @@ services:
       # container waits for its own version to appear there, so a start
       # right after an update never renders the previous version's page.
       APP_VERSION: "${APP_VERSION:-dev}"
-    # Every flag in one place. CLI beats a conf file, and umbrelOS re-renders
-    # *.template files on every start, so a conf template would not be a
-    # user edit surface anyway.
+    # Network, data paths, indexing and bindings stay fixed here. The dashboard
+    # saves peer, mempool and logging defaults in /settings. The launcher adds
+    # them before these arguments, so explicit compose flags take precedence.
     #   --network mainnet      the upstream default --milestone (840000)
     #                          applies: script checks start at that block;
     #                          add "--milestone", "0" for full validation
@@ -73,8 +75,8 @@ services:
     #                          listener, which the status page reads for the
     #                          percentage during the first sync (/progress
     #                          names only the phase then)
-    # --max-outbound and --mempool-size-mb are left at upstream defaults:
-    # the operator docs say to add limits only from a host-specific plan.
+    # Saved limits initially match upstream defaults. Dashboard changes take
+    # effect after restarting the app in Umbrel.
     command:
       - --datadir
       - /data
@@ -86,21 +88,30 @@ services:
       - --health-listen
       - "0.0.0.0:9332"
       - --metrics
-      - --log-level
-      - info
+
+  settings:
+    container_name: beignet-rbitcoin_settings_1
+    # The same release image runs only the settings API as uid 1000.
+    image: ghcr.io/coreyphillips/rbitcoin:0.8.99-2@sha256:7e38f04c385efa86df0985bfb90f72b2e0a882e2468b9b5d94ebbf12fbe13659
+    restart: on-failure
+    init: true
+    command: ["settings-server"]
+    volumes:
+      - ${APP_DATA_DIR}/settings:/settings
+    # No published port, Docker socket, chain data, or restart access.
 
   web:
     # Pinned because app_proxy addresses it by name.
     container_name: beignet-rbitcoin_web_1
     # The official nginx image renders the template directory's *.tmpl files
     # with envsubst at start, which is all the templating the status page
-    # needs: the page is static HTML plus a few lines of JS that poll the
-    # node's health listener through the /node/ location in the template.
-    # No build, no Node, nothing of our own to publish beyond the node image.
+    # needs: static assets poll node health through /node/ and save defaults
+    # through /api/settings. No frontend build or external assets are needed.
     image: nginx:1.30-alpine@sha256:c59d1f8b1e0e42da75be973424cd72e23f7f8adfb54e982f4d1cd0216a5a5576
     restart: on-failure
     depends_on:
       - node
+      - settings
     volumes:
       # The directory the node fills on every start (see its volumes). The
       # template keeps the .tmpl suffix rather than .template so umbrelOS's
@@ -122,10 +133,11 @@ services:
       NGINX_ENVSUBST_TEMPLATE_DIR: /web/templates
       NGINX_ENVSUBST_TEMPLATE_SUFFIX: .tmpl
       # Only these names are substituted; nginx's own variables survive.
-      NGINX_ENVSUBST_FILTER: "^(LAN_HOST|PUBLIC_PORT|APP_VERSION|NODE_HOST)$$"
+      NGINX_ENVSUBST_FILTER: "^(LAN_HOST|PUBLIC_PORT|APP_VERSION|NODE_HOST|SETTINGS_HOST)$$"
       # umbrelOS exports DEVICE_DOMAIN_NAME (hostname.local). There is no LAN
       # IP variable, so the page also says "or your Umbrel's IP address".
       LAN_HOST: "${DEVICE_DOMAIN_NAME:-umbrel.local}"
       PUBLIC_PORT: "${APP_RBITCOIN_PUBLIC_PORT:-50011}"
       APP_VERSION: "${APP_VERSION:-dev}"
       NODE_HOST: beignet-rbitcoin_node_1
+      SETTINGS_HOST: beignet-rbitcoin_settings_1
