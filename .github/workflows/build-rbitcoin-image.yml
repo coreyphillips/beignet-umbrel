@@ -3,12 +3,14 @@ name: build-rbitcoin-image
 # The image for the beignet-rbitcoin app: rbitcoin-node built from a pinned
 # upstream commit as a static musl binary, on Alpine
 # (docker/rbitcoin/Dockerfile). Published on a tag of the
-# form rbitcoin-v<rbitcoin version>-<app patch>, such as rbitcoin-v0.8.0-1,
-# as ghcr.io/coreyphillips/rbitcoin:0.8.0-1. The app patch lets a packaging
-# fix ship without a new upstream release (0.8.0-2); a new upstream release
-# starts the patch over (0.8.1-1). The tag's version is also the app's
-# `version` in umbrel-app.yml, so check-release's tag-equals-version rule
-# holds for this app as it does for beignet-wallet.
+# form rbitcoin-v<rbitcoin version>-<app patch>, such as rbitcoin-v0.8.99-1,
+# as ghcr.io/coreyphillips/rbitcoin:0.8.99-1. The rbitcoin version is the
+# workspace version in the pinned commit's Cargo.toml. The app patch lets a
+# packaging fix, or a later commit with the same workspace version, ship as
+# 0.8.99-2; a new workspace version starts the patch over (0.9.0-1). The
+# tag's version is also the app's `version` in umbrel-app.yml, so
+# check-release's tag-equals-version rule holds for this app as it does for
+# beignet-wallet.
 on:
   push:
     tags:

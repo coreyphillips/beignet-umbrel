@@ -40,8 +40,10 @@ left() {
 # balance asked for is not checked.
 scripthash=9623df75239b5daa7f5f03042d325b51498c4bb7059c7748b17049bf96f73888
 
-# Prints the three replies, one per line; fails if any does not arrive
-# before the deadline.
+# Prints the three replies, one per line; fails if server.version or
+# server.features does not arrive before the deadline. Once both have, the
+# server is up, so a batch that gets no reply is not retried: its line is
+# left empty, and the checks below say so.
 converse() {
   local version features batch
   exec 3<>"/dev/tcp/$host/$port" || return 1
@@ -49,8 +51,8 @@ converse() {
   read -r -t "$(left)" version <&3 || return 1
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server.features","params":[]}' >&3 || return 1
   read -r -t "$(left)" features <&3 || return 1
-  printf '%s\n' '[{"jsonrpc":"2.0","id":2,"method":"server.ping","params":[]},{"jsonrpc":"2.0","id":3,"method":"blockchain.scripthash.get_balance","params":["'"$scripthash"'"]}]' >&3 || return 1
-  read -r -t "$(left)" batch <&3 || return 1
+  printf '%s\n' '[{"jsonrpc":"2.0","id":2,"method":"server.ping","params":[]},{"jsonrpc":"2.0","id":3,"method":"blockchain.scripthash.get_balance","params":["'"$scripthash"'"]}]' >&3 || true
+  read -r -t "$(left)" batch <&3 || batch=""
   exec 3>&-
   printf '%s\n%s\n%s\n' "$version" "$features" "$batch"
 }
@@ -80,6 +82,7 @@ echo "batch: $batch"
 echo "$version" | grep -q 'rbitcoin' || { echo "server.version does not name rbitcoin" >&2; exit 1; }
 echo "$features" | grep -q "$genesis" || { echo "server.features does not carry the $chain genesis" >&2; exit 1; }
 case "$batch" in
+  "") echo "server.version and server.features answered, but a JSON-RPC batch got no reply" >&2; exit 1 ;;
   \[*\]) ;;
   *) echo "a JSON-RPC batch did not come back as an array" >&2; exit 1 ;;
 esac
