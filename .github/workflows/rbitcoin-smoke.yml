@@ -15,6 +15,24 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test settings and telemetry transformations
+        run: |
+          python3 -m unittest discover -s docker/rbitcoin/tests -p 'test_*.py'
+          node --test docker/rbitcoin/tests/model.test.mjs
+      - name: Install browser test tooling outside the source tree
+        run: |
+          npm install --prefix "$RUNNER_TEMP/rbitcoin-browser" playwright@1.62.1
+          "$RUNNER_TEMP/rbitcoin-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verify dashboard interactions and responsive layouts
+        run: PLAYWRIGHT_MODULE="$RUNNER_TEMP/rbitcoin-browser/node_modules/playwright" node docker/rbitcoin/tests/browser.test.mjs
+
   smoke:
     runs-on: ubuntu-latest
     steps:
@@ -23,6 +41,9 @@ jobs:
 
       - name: Build the image for this runner
         run: docker buildx build --load -f docker/rbitcoin/Dockerfile -t rbitcoin:smoke .
+
+      - name: Dashboard settings persist and apply after a clean restart
+        run: sh docker/rbitcoin/tests/smoke.sh rbitcoin:smoke
 
       - name: Start the node on regtest
         run: |
@@ -73,10 +94,10 @@ jobs:
           # file's web service: nginx waits until the stamp in /web names its
           # own version, then renders the template from /web/templates.
           docker run -d --name web --network smoke -p 8080:80 \
-            -e LAN_HOST=umbrel.local -e PUBLIC_PORT=50011 -e APP_VERSION=smoke -e NODE_HOST=beignet-rbitcoin_node_1 \
+            -e LAN_HOST=umbrel.local -e PUBLIC_PORT=50011 -e APP_VERSION=smoke -e NODE_HOST=beignet-rbitcoin_node_1 -e SETTINGS_HOST=beignet-rbitcoin_settings_1 \
             -e NGINX_ENVSUBST_TEMPLATE_DIR=/web/templates \
             -e NGINX_ENVSUBST_TEMPLATE_SUFFIX=.tmpl \
-            -e 'NGINX_ENVSUBST_FILTER=^(LAN_HOST|PUBLIC_PORT|APP_VERSION|NODE_HOST)$' \
+            -e 'NGINX_ENVSUBST_FILTER=^(LAN_HOST|PUBLIC_PORT|APP_VERSION|NODE_HOST|SETTINGS_HOST)$' \
             -v "$PWD/smoke-web:/web:ro" \
             "$NGINX" /bin/sh -c 'until [ "$(cat /web/.version 2>/dev/null)" = "$APP_VERSION" ]; do sleep 1; done; exec /docker-entrypoint.sh nginx -g "daemon off;"'
           for i in $(seq 1 20); do curl -fsS localhost:8080/ >/dev/null 2>&1 && break; sleep 1; done
@@ -109,7 +130,7 @@ jobs:
             echo "/node/$path while the node is down: HTTP $code"
             [ "$code" = 502 ] || [ "$code" = 504 ] || exit 1
           done
-          curl -fsS localhost:8080/ | grep -q 'Not answering'
+          curl -fsS localhost:8080/dashboard.mjs | grep -q 'Not answering'
           docker start beignet-rbitcoin_node_1
           for i in $(seq 1 90); do
             curl -fsS localhost:9332/healthz >/dev/null 2>&1 && { echo "back after ${i}s"; exit 0; }

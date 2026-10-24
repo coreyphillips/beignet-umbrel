@@ -1,0 +1,38 @@
+# Local preview of the next app image. Use with beignet-rbitcoin/docker-compose.yml.
+# At release, fold these service changes into that file and pin BOTH app images
+# to the published tag and digest. Do not point installed apps at an unbuilt tag.
+services:
+  node:
+    image: rbitcoin:dashboard
+    volumes:
+      - ${APP_DATA_DIR}/settings:/settings
+    # These fixed settings stay outside the user editor. Saved peer, mempool
+    # and logging defaults are added by the launcher before these arguments.
+    command:
+      - --datadir
+      - /data
+      - --network
+      - mainnet
+      - --sh-index
+      - --electrum-listen
+      - "0.0.0.0:50001"
+      - --health-listen
+      - "0.0.0.0:9332"
+      - --metrics
+
+  settings:
+    container_name: beignet-rbitcoin_settings_1
+    image: rbitcoin:dashboard
+    restart: on-failure
+    init: true
+    command: ["settings-server"]
+    volumes:
+      - ${APP_DATA_DIR}/settings:/settings
+    # No published port, Docker socket, node data, or ability to restart it.
+
+  web:
+    depends_on:
+      - settings
+    environment:
+      NGINX_ENVSUBST_FILTER: "^(LAN_HOST|PUBLIC_PORT|APP_VERSION|NODE_HOST|SETTINGS_HOST)$$"
+      SETTINGS_HOST: beignet-rbitcoin_settings_1

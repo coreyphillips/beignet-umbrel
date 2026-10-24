@@ -1,207 +1,90 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rbitcoin</title>
-<style>
-  :root {
-    --bg: #f4f1ec; --card: #ffffff; --text: #1f1a16; --muted: #6b625a; --line: #e4ddd3;
-    --ok: #1f8a4c; --warn: #9a6700; --bad: #b42318; --accent: #c7782b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #16120f; --card: #211b16; --text: #f1e9df; --muted: #a79b8e; --line: #352b23; --ok: #5cd38b; --warn: #f2c14e; --bad: #ff7a7f; --accent: #e7a35a; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
-  .card h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
-  .state { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
-  .state[data-tone="ok"] { color: var(--ok); }
-  .state[data-tone="warn"] { color: var(--warn); }
-  .state[data-tone="bad"] { color: var(--bad); }
-  progress { width: 100%; height: 10px; accent-color: var(--accent); margin: 8px 0 4px; }
-  .detail { color: var(--muted); font-size: 13px; margin: 2px 0; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
-  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
-  dt { color: var(--muted); font-size: 13px; }
-  dd { margin: 0; overflow-wrap: anywhere; }
-  ul { margin: 6px 0 0; padding-left: 18px; }
-  li { margin: 4px 0; }
-  .warn-card { border-color: var(--warn); }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>rbitcoin | Your Bitcoin node</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script type="module" src="/dashboard.mjs"></script>
 </head>
 <body>
-<main>
-  <h1>rbitcoin on this Umbrel</h1>
-  <p class="sub">A Bitcoin full node that serves the Electrum protocol, for Beignet and the wallets on your home network. App <span id="app-version">...</span>.</p>
+<a class="skip" href="#content">Skip to dashboard</a>
+<div class="app-shell">
+  <header class="app-header">
+    <a class="brand" href="#overview" aria-label="rbitcoin overview"><span class="brand-mark" aria-hidden="true">r<span>₿</span></span><span>rbitcoin<small>YOUR BITCOIN NODE</small></span></a>
+    <div class="header-meta"><span class="pill">Mainnet</span><span class="umbrel-label">on Umbrel <span class="umbrel-dot" aria-hidden="true"></span></span></div>
+  </header>
+  <nav class="navigation" aria-label="Dashboard">
+    <a href="#overview" aria-current="page">Overview</a><a href="#connections">Connect a wallet</a><a href="#settings">Settings <span id="settings-dot" hidden aria-label="Restart needed">•</span></a>
+    <span class="refresh-meta"><span id="freshness">Connecting...</span><button class="icon-button" id="refresh" aria-label="Refresh node status" title="Refresh node status">↻</button></span>
+  </nav>
+  <main id="content">
+    <div id="connection-alert" class="notice warning" role="status" hidden></div>
+    <section id="overview" class="page" aria-labelledby="overview-title">
+      <div class="page-heading"><div><p class="eyebrow">THE BIG PICTURE</p><h1 id="overview-title">Your node, at a glance.</h1><p class="muted">An independent view of the Bitcoin network. Right here on your Umbrel.</p></div><span class="status-pill" id="health-badge" data-tone="neutral">Connecting</span></div>
+      <section class="hero card" aria-labelledby="sync-title">
+        <div class="hero-copy"><p class="eyebrow">CHAIN STATUS</p><h2 id="sync-title">Connecting to your node</h2><p id="sync-detail" class="muted">Checking readiness and gathering the latest metrics.</p><p id="sync-eta" class="hero-note">Live charts begin collecting when this page opens.</p>
+          <ol class="stages" aria-label="Node startup progress"><li id="step-chain">Download &amp; validate</li><li id="step-index">Build indexes</li><li id="step-ready">Serve wallets</li></ol>
+        </div>
+        <div class="sync-visual"><svg viewBox="0 0 180 180" aria-hidden="true"><circle class="ring-track" cx="90" cy="90" r="76"/><circle id="sync-ring" class="ring-value" cx="90" cy="90" r="76" pathLength="100" stroke-dasharray="0 100"/></svg><div><strong id="sync-percent">...</strong><span id="sync-label">checking status</span></div></div>
+      </section>
+      <div class="stat-grid">
+        <article class="card stat"><p class="eyebrow">BLOCK HEIGHT <span aria-hidden="true">▤</span></p><strong id="block-height">Unavailable</strong><p id="tip-date">Waiting for chain data</p></article>
+        <article class="card stat"><p class="eyebrow">CONNECTED PEERS <span aria-hidden="true">⌘</span></p><strong id="peer-count">Unavailable</strong><p id="peer-detail">Inbound + outbound</p></article>
+        <article class="card stat"><p class="eyebrow">MEMPOOL <span aria-hidden="true">▦</span></p><strong id="mempool-count">Unavailable</strong><p>transactions waiting for a block</p></article>
+        <article class="card stat"><p class="eyebrow">NODE UPTIME <span aria-hidden="true">◷</span></p><strong id="uptime">Unavailable</strong><p id="memory">Memory usage unavailable</p></article>
+      </div>
+      <div class="section-heading"><div><h2>Network activity</h2><p class="muted small">Measured in this tab. Gaps mean a sample was unavailable.</p></div><label class="inline-select">History <select id="history-window" aria-label="Chart history window"><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="60">1 hour</option></select></label></div>
+      <div class="chart-grid">
+        <article class="card chart-card"><div class="chart-heading"><h3>Block height</h3><span class="chart-label" id="chain-pace">Measuring pace</span></div><div id="height-chart" class="chart"></div><div class="chart-footer"><span id="height-range">Collecting samples</span><span>now</span></div></article>
+        <article class="card chart-card"><div class="chart-heading"><h3>Download traffic</h3><span class="chart-label" id="download-rate">Unavailable</span></div><div id="traffic-chart" class="chart"></div><div class="chart-footer"><span id="traffic-total">P2P data received</span><span id="upload-rate">Upload unavailable</span></div></article>
+        <article class="card"><div class="chart-heading"><h3>Peer networks</h3><span class="small muted">Live connections</span></div><div id="peer-networks" class="peer-networks"></div><p class="small muted">Connections reported by your node, grouped by transport.</p></article>
+        <article class="card"><div class="chart-heading"><h3>Mempool capacity</h3><span class="chart-label" id="mempool-percent">Unavailable</span></div><div class="capacity-blocks" id="capacity-blocks" aria-hidden="true"></div><p id="mempool-capacity" class="small muted">Waiting for mempool data</p><div class="mempool-footer"><span>Minimum fee rate</span><strong id="min-fee">Unavailable</strong></div></article>
+      </div>
+      <div class="bottom-note"><span class="small muted">Your node validates the chain and serves wallets through Electrum.</span><a class="text-link" href="#connections">Connect a wallet <span aria-hidden="true">↗</span></a></div>
+    </section>
 
-  <section class="card">
-    <h2>Status</h2>
-    <p class="state" id="state" data-tone="">Checking</p>
-    <progress id="bar" max="100" value="0" hidden></progress>
-    <p class="detail" id="stage"></p>
-    <p class="detail" id="eta"></p>
-    <p class="detail" id="note"></p>
-  </section>
+    <section id="connections" class="page" aria-labelledby="connections-title" hidden>
+      <div class="page-heading"><div><p class="eyebrow">YOUR NODE. YOUR WALLETS.</p><h1 id="connections-title">Make the connection.</h1><p class="muted">Use your own Electrum server in Beignet, Sparrow, Electrum, or BlueWallet.</p></div></div>
+      <div class="notice" id="wallet-readiness">Checking whether wallets can connect.</div>
+      <div class="chart-grid connections-grid">
+        <article class="card connection-card"><span class="connection-icon" aria-hidden="true">⌂</span><h2>On your home network</h2><p class="muted">For wallets on another device connected to the same network as your Umbrel.</p><label for="lan">Electrum server address</label><div class="copy-field"><input id="lan" readonly value="Loading..." spellcheck="false"><button type="button" data-copy="lan" disabled>Copy</button></div><p class="small muted">You can also use your Umbrel's IP address with the same port.</p><dl class="connection-facts"><dt>Protocol</dt><dd>TCP</dd><dt>SSL / TLS</dt><dd>Off</dd></dl></article>
+        <article class="card connection-card"><span class="connection-icon" aria-hidden="true">▧</span><h2>Apps on this Umbrel</h2><p class="muted">For Beignet and other apps running on your Umbrel's shared app network.</p><label for="internal">Internal Electrum server address</label><div class="copy-field"><input id="internal" readonly value="Loading..." spellcheck="false"><button type="button" data-copy="internal" disabled>Copy</button></div><p class="small muted">In Beignet, select <strong>Umbrel rbitcoin</strong> in Settings or on a wallet.</p><dl class="connection-facts"><dt>Protocol</dt><dd>TCP</dd><dt>SSL / TLS</dt><dd>Off</dd></dl></article>
+      </div>
+      <div class="notice warning"><strong>Keep it on your own network.</strong> Connections are plain TCP without TLS. Do not forward the Electrum port to the internet.</div>
+      <article class="card steps-card"><h2>Connect in three steps</h2><ol><li><strong>Choose a custom Electrum server.</strong><span>Open your wallet's server or network settings.</span></li><li><strong>Enter the address above and turn SSL off.</strong><span>If your wallet asks separately, the port is the number after the colon.</span></li><li><strong>Wait for your wallet to connect.</strong><span>The node opens Electrum after initial sync and indexing finish.</span></li></ol></article>
+    </section>
 
-  <section class="card">
-    <h2>Connect a wallet</h2>
-    <dl>
-      <dt>From apps on this Umbrel</dt>
-      <dd><code id="internal">...</code> (in Beignet, pick the <strong>Umbrel rbitcoin</strong> preset in Settings or on a wallet)</dd>
-      <dt>From your home network</dt>
-      <dd><code id="lan">...</code>, or your Umbrel's IP address with the same port</dd>
-    </dl>
-    <ul>
-      <li>Plain TCP, no TLS: in Sparrow or Electrum choose the non-SSL option. Meant for your own network, not the internet.</li>
-      <li>The Electrum port opens only once the first sync has finished. Until then a wallet is refused the connection; Beignet keeps trying and starts when the port opens.</li>
-    </ul>
-  </section>
-
-  <section class="card warn-card">
-    <h2>Read before relying on it</h2>
-    <ul>
-      <li>rbitcoin is young software. Its author calls the mainnet release "early production / high-scrutiny" and "not a Core or Fulcrum replacement", and lists multi-tenant public Electrum service as a non-goal. Use it for your own wallets.</li>
-      <li>x86_64 only. rbitcoin publishes no Linux arm64 build, so a Raspberry Pi Umbrel cannot run it; this page then says the node is not answering.</li>
-      <li>Disk: about 750 GiB for the full store, about 200 GiB of it hot. The first sync takes a day or more. The data is excluded from Umbrel backups and rebuilt from the network.</li>
-      <li>With the upstream default milestone, script and signature checks are skipped for blocks up to and including block 840000, the way Bitcoin Core's assumevalid does; the chain of headers and each block's transactions and spends are still checked, and every block after it is fully validated.</li>
-      <li>Before 1.0 the on-disk format can change. When an update needs a fresh sync, the release notes say so.</li>
-    </ul>
-  </section>
-</main>
-<script>
-  (function () {
-    var $ = function (id) { return document.getElementById(id); };
-    var set = function (id, text) { $(id).textContent = text; };
-    var state = function (text, tone) { set('state', text); $('state').dataset.tone = tone; };
-    var count = function (n) { return n.toLocaleString('en-US'); };
-    var secs = function (s) {
-      if (typeof s !== 'number' || !isFinite(s)) return null;
-      // Whole minutes first, then hours out of those, so 3599 s is "1 h 0 min"
-      // and never "60 min"; a day or more is given in days and hours.
-      var mins = Math.round(s / 60), h = Math.floor(mins / 60), m = mins % 60;
-      if (h >= 24) return Math.floor(h / 24) + ' d ' + (h % 24) + ' h';
-      return h ? h + ' h ' + m + ' min' : m + ' min';
-    };
-    var notAnswering = function () {
-      state('Not answering', 'bad');
-      $('bar').hidden = true;
-      set('stage', 'The node is not running or is still starting.');
-      set('eta', '');
-      set('note', 'On an arm64 Umbrel (Raspberry Pi) it cannot run: rbitcoin publishes no Linux arm64 build. On an x86_64 Umbrel, give it a minute after an install or update; if this stays, check the app logs.');
-    };
-    fetch('/config.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (c) {
-      set('internal', c.internal);
-      set('lan', c.lan);
-      set('app-version', c.appVersion);
-    }).catch(function () {});
-
-    // During the first sync (the catch-up phase) /progress names the phase
-    // and nothing else: its stages are the index builds and repairs. The
-    // heights are on /metrics, the Prometheus text the node serves because
-    // the compose file starts it with --metrics, one "name value" line per
-    // gauge. A node started without the flag answers 404, and one that has
-    // not started P2P yet serves the text without them; either way the page
-    // falls back to the phase name.
-    //
-    // The header height is no total during the first sync: rbitcoin keeps
-    // the headers it is working on out of that count, so it reads the same
-    // as the block height until the node follows the tip, and its peer
-    // horizon is only on its log line. The total is estimated from the tip
-    // block's time instead: one block per ten minutes (the target interval,
-    // which the chain's long-run average sits within a few percent of; its
-    // own average so far runs faster early on and overshoots) for the time
-    // between that block and now. The text says "about". A header height
-    // that is really ahead (a node catching up after a stop) is used as it
-    // is.
-    var GENESIS = 1231006505;
-    var gauge = function (text, name) {
-      var m = new RegExp('^' + name + ' (\\S+)$', 'm').exec(text);
-      return m ? Number(m[1]) : null;
-    };
-    var heights = function () {
-      return fetch('/node/metrics', { cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : null; }).catch(function () { return null; }).then(function (text) {
-        if (!text) return null;
-        var blocks = gauge(text, 'rbitcoin_blocks'), headers = gauge(text, 'rbitcoin_headers'), tipTime = gauge(text, 'rbitcoin_tip_time_seconds');
-        if (!blocks) return null;
-        if (headers !== null && headers > blocks + 6) return { blocks: blocks, total: headers, tipTime: tipTime, estimated: false };
-        if (tipTime === null || tipTime <= GENESIS) return null;
-        var remaining = Math.max(0, (Date.now() / 1000 - tipTime) / 600);
-        return { blocks: blocks, total: blocks + Math.round(remaining), tipTime: tipTime, estimated: true };
-      });
-    };
-    // The node's own sync estimate is on its "ibd: progress" log line and
-    // not on HTTP, so the page measures the pace itself from the heights it
-    // has seen over the last quarter hour, and says nothing for the first
-    // minute. Blocks grow heavier along the chain, so a pace measured early
-    // in the sync overstates it; the text says so.
-    var seen = [];
-    var pace = function (h) {
-      var now = Date.now();
-      seen.push({ t: now, blocks: h.blocks });
-      while (seen.length > 1 && now - seen[0].t > 15 * 60 * 1000) seen.shift();
-      var first = seen[0];
-      if (now - first.t < 60 * 1000 || h.blocks <= first.blocks) return null;
-      return (h.total - h.blocks) / ((h.blocks - first.blocks) / ((now - first.t) / 1000));
-    };
-    var day = function (t) { return new Date(t * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }); };
-    var showHeights = function (h) {
-      var pct = Math.floor(h.blocks / h.total * 1000) / 10;
-      if (h.estimated) pct = Math.min(pct, 99.9);
-      $('bar').hidden = false;
-      $('bar').value = pct;
-      var total = h.estimated ? 'about ' + count(Math.round(h.total / 1000) * 1000) : count(h.total);
-      set('stage', 'Block ' + count(h.blocks) + ' of ' + total + ' (' + pct.toFixed(1) + '%)' + (h.tipTime ? ', blocks up to ' + day(h.tipTime) : ''));
-      var left = secs(pace(h));
-      set('eta', (left ? 'About ' + left + ' to go at the current pace; blocks get heavier along the chain, so early in the sync this is optimistic.' : 'Measuring the pace.')
-        + (h.estimated ? ' The total is estimated from block times; the node learns the real height as it goes.' : ''));
-    };
-    var showStage = function (p) {
-      if (p && typeof p.percent === 'number') {
-        $('bar').hidden = false;
-        $('bar').value = p.percent;
-      } else {
-        $('bar').hidden = true;
-      }
-      var stage = p ? [p.phase, p.stage].filter(Boolean).join(': ') : '';
-      set('stage', stage ? stage + (typeof p.percent === 'number' ? ' (' + p.percent.toFixed(1) + '%)' : '') : 'Starting up');
-      var eta = p ? secs(p.eta_secs) : null;
-      var elapsed = p ? secs(p.elapsed_secs) : null;
-      set('eta', (elapsed ? 'This stage has run for ' + elapsed + '. ' : '') + (eta ? 'About ' + eta + ' to go.' : ''));
-    };
-
-    function poll() {
-      fetch('/node/readyz', { cache: 'no-store' }).then(function (ready) {
-        // nginx answers for a node it cannot reach with 502 (or 504 when it
-        // hangs), and fetch resolves on those like any other status. The
-        // node itself answers 503 while it is syncing: that is the node
-        // talking, and the progress call says how far along it is.
-        if (ready.status === 502 || ready.status === 504) return notAnswering();
-        return fetch('/node/progress', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }).then(function (p) {
-          if (ready.ok) {
-            state('Ready: following the chain tip', 'ok');
-            $('bar').hidden = true;
-            set('stage', p && p.phase ? 'Phase: ' + p.phase : '');
-            set('eta', '');
-            set('note', 'Wallets can connect now.');
-            return;
-          }
-          state('Syncing', 'warn');
-          set('note', 'The first sync takes a day or more. Wallets can connect once this reads Ready.');
-          // A running stage (an index build) has its own percent; the block
-          // download has none, so its heights are read instead.
-          if (p && typeof p.percent === 'number') return showStage(p);
-          return heights().then(function (h) { return h ? showHeights(h) : showStage(p); });
-        });
-      }).catch(notAnswering);
-    }
-    poll();
-    setInterval(poll, 5000);
-  })();
-</script>
+    <section id="settings" class="page" aria-labelledby="settings-title" hidden>
+      <div class="page-heading"><div><p class="eyebrow">MAKE IT YOURS</p><h1 id="settings-title">A little more control.</h1><p class="muted">Adjust your node's defaults and how you follow its progress.</p></div></div>
+      <div class="settings-layout"><div><h2>Node settings</h2><p class="muted small">Saved on this Umbrel and kept across app updates.</p><div class="notice small">After saving, restart rbitcoin from Umbrel to apply changes. The node may take time to stop while it flushes its store.</div></div>
+      <form class="card" id="node-settings"><div class="section-heading"><h3>Connections &amp; resources</h3><span class="pill" id="settings-state">Loading</span></div><div id="settings-message" class="notice" role="status" hidden></div>
+        <fieldset id="node-fields" disabled><div class="form-grid">
+          <div class="field"><label for="max-outbound">Outbound peer limit</label><input id="max-outbound" name="maxOutbound" type="number" min="1" max="128" step="1" required><p>Peers your node connects to. Default: 16. Range: 1 to 128.</p><small id="active-maxOutbound"></small></div>
+          <div class="field"><label for="max-inbound">Inbound peer limit</label><input id="max-inbound" name="maxInbound" type="number" min="0" max="1000" step="1" required><p>Connections accepted by the node. Use 0 to disable. Default: 125. This does not publish a port.</p><small id="active-maxInbound"></small></div>
+          <div class="field"><label for="mempool-size">Mempool capacity (million WU)</label><input id="mempool-size" name="mempoolSize" type="number" min="1" max="16384" step="1" required><p>Transaction weight limit, not RAM in MB. Default: 300 million weight units, about 75 million vbytes.</p><small id="active-mempoolSize"></small></div>
+          <div class="field"><label for="log-level">Log detail</label><select id="log-level" name="logLevel"><option value="error">Error</option><option value="warn">Warning</option><option value="info">Info (default)</option><option value="debug">Debug</option><option value="trace">Trace</option><option value="off">Off</option></select><p>Debug and Trace can produce large logs. Info is suitable for everyday use.</p><small id="active-logLevel"></small></div>
+        </div><div class="form-actions"><button type="button" id="restore-node">Restore defaults</button><div><span id="dirty-state" class="small muted">No unsaved changes</span><button class="primary" id="save-node" type="submit" disabled>Save changes</button></div></div></fieldset>
+        <button id="reload-settings" class="text-button" type="button">Reload saved settings</button>
+      </form></div>
+      <div class="settings-layout"><div><h2>Dashboard preferences</h2><p class="muted small">Saved in this browser. Changes apply immediately.</p></div><div class="card"><div class="form-grid">
+        <div class="field"><label for="theme">Appearance</label><select id="theme"><option value="system">Match device</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+        <div class="field"><label for="refresh-interval">Refresh every</label><select id="refresh-interval"><option value="5">5 seconds</option><option value="10">10 seconds</option><option value="30">30 seconds</option></select></div>
+        <div class="field"><label for="settings-window">Chart history</label><select id="settings-window"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="60">1 hour</option></select><p>History collects while this page is open and resets on reload.</p></div>
+      </div><div class="form-actions"><button type="button" id="restore-display">Reset display preferences</button><span class="small muted" id="display-message" role="status">Stored on this device</span></div></div></div>
+      <details class="card about"><summary>About this node &amp; operating notes</summary><ul>
+        <li>rbitcoin is early production software intended for your own wallets. Public multi-tenant Electrum service is not a goal.</li>
+        <li>This app requires x86_64 hardware such as Umbrel Home. A Raspberry Pi Umbrel cannot run this build.</li>
+        <li>Allow roughly 750 GiB for the full store, including about 200 GiB for the hot store. Initial sync can take a day or more. Chain data is excluded from Umbrel backups.</li>
+        <li>The upstream mainnet milestone is block 840000. Script and signature checks are skipped up to that milestone on the anchored chain. Later blocks are fully validated. Changing validation policy requires an operator-managed configuration.</li>
+        <li>Before version 1.0, an update may require a fresh sync when the storage format changes. Check the app's release notes.</li>
+      </ul></details>
+    </section>
+  </main>
+  <footer><span>rbitcoin <span class="footer-dot">/</span> App <span id="app-version">unavailable</span></span><span>Independent by design.</span></footer>
+</div>
+<div id="toast" role="status" class="toast" hidden></div>
+<noscript><p class="notice warning">Enable JavaScript to view live node status and edit settings.</p></noscript>
 </body>
 </html>

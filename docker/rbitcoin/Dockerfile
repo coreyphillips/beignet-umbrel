@@ -107,10 +107,12 @@ ARG APP_VERSION=dev
 ENV RBITCOIN_VERSION=${RBITCOIN_VERSION} APP_VERSION=${APP_VERSION}
 # su-exec drops to uid 1000 after the entrypoint has made the data directory
 # writable, the same job gosu does in docker/entrypoint.sh for the manager.
-# The binary is static musl, so nothing else is needed from the base.
-RUN apk add --no-cache su-exec
+# Python serves the allowlisted settings API in a separate container and
+# validates saved defaults before execing the static node binary.
+RUN apk add --no-cache su-exec python3
 COPY --from=node /rbitcoin-node /usr/local/bin/rbitcoin-node
 COPY docker/rbitcoin/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/rbitcoin/settings.py /usr/local/lib/rbitcoin/settings.py
 # The status page (nginx template and HTML) travels in this image, not in
 # the app directory: umbrelOS copies an app's files into APP_DATA_DIR at
 # install and on update copies only docker-compose.yml, *.template,
@@ -120,5 +122,5 @@ COPY docker/rbitcoin/entrypoint.sh /usr/local/bin/entrypoint.sh
 # shares with the nginx container, so the page moves with the image digest.
 COPY docker/rbitcoin/web /usr/share/beignet-rbitcoin/web
 RUN chmod 755 /usr/local/bin/entrypoint.sh && chmod -R a+rX /usr/share/beignet-rbitcoin
-EXPOSE 50001 9332
+EXPOSE 50001 9332 9333
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

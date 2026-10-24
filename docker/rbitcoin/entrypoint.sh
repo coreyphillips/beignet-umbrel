@@ -1,6 +1,13 @@
 #!/bin/sh
 set -eu
 
+# Node defaults live outside the chain data and the replaceable web assets.
+mkdir -p /settings
+chown 1000:1000 /settings
+if [ "${1:-}" = "settings-server" ]; then
+  exec su-exec 1000:1000 python3 /usr/local/lib/rbitcoin/settings.py serve
+fi
+
 # The status page for the nginx container. /web is a directory the compose
 # file mounts into both containers; it is refreshed from this image on every
 # start so that an update of the image updates the page (umbrelOS does not
@@ -27,6 +34,7 @@ fi
 mkdir -p /data
 chown 1000:1000 /data || echo "warning: could not chown /data; continuing" >&2
 
-# Every flag comes from the compose command: line, so the whole
-# configuration is in one reviewed file.
-exec su-exec 1000:1000 rbitcoin-node "$@"
+# The launcher validates saved defaults, records the launch settings, then
+# execs the node. No supervisor sits between Docker's SIGTERM and the node.
+# Explicit compose flags override saved defaults.
+exec su-exec 1000:1000 python3 /usr/local/lib/rbitcoin/settings.py "$@"
