@@ -613,7 +613,12 @@ env:
   # better-sqlite3 (^12.11.1) moves to optionalDependencies. npm still
   # installs it here (nothing passes --omit=optional), and the Dockerfile
   # fails the build if it does not load.
-  BEIGNET_VERSION: "0.32.0"
+  # 0.32.1 changes no source: it pins @noble/hashes 1.8.0 and
+  # @noble/secp256k1 1.7.2, the newest 1.x, so the image installs the
+  # versions 0.31.1 resolved again instead of 0.32.0's older pins. Routes,
+  # environment settings, storage and the rest of the dependency set are
+  # as in 0.32.0.
+  BEIGNET_VERSION: "0.32.1"
 
 jobs:
   build:
