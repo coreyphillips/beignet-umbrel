@@ -1,13 +1,16 @@
 name: build-rbitcoin-image
 
-# The image for the beignet-rbitcoin app: rbitcoin's own static release
-# binary on Alpine (docker/rbitcoin/Dockerfile). Published on a tag of the
-# form rbitcoin-v<rbitcoin version>-<app patch>, such as rbitcoin-v0.8.0-1,
-# as ghcr.io/coreyphillips/rbitcoin:0.8.0-1. The app patch lets a packaging
-# fix ship without a new upstream release (0.8.0-2); a new upstream release
-# starts the patch over (0.8.1-1). The tag's version is also the app's
-# `version` in umbrel-app.yml, so check-release's tag-equals-version rule
-# holds for this app as it does for beignet-wallet.
+# The image for the beignet-rbitcoin app: rbitcoin-node built from a pinned
+# upstream commit as a static musl binary, on Alpine
+# (docker/rbitcoin/Dockerfile). Published on a tag of the
+# form rbitcoin-v<rbitcoin version>-<app patch>, such as rbitcoin-v0.8.99-1,
+# as ghcr.io/coreyphillips/rbitcoin:0.8.99-1. The rbitcoin version is the
+# workspace version in the pinned commit's Cargo.toml. The app patch lets a
+# packaging fix, or a later commit with the same workspace version, ship as
+# 0.8.99-2; a new workspace version starts the patch over (0.9.0-1). The
+# tag's version is also the app's `version` in umbrel-app.yml, so
+# check-release's tag-equals-version rule holds for this app as it does for
+# beignet-wallet.
 on:
   push:
     tags:
@@ -35,15 +38,22 @@ jobs:
           else
             VERSION="dev"
           fi
-          # The Dockerfile is the one place the rbitcoin release, its
-          # checksum and the base image are pinned; read them from there so
-          # the tag cannot claim a release the binary is not.
+          # The Dockerfile is the one place the rbitcoin version, the commit
+          # it is built from, the binary's checksum and the base images are
+          # pinned; read them from there so the tag cannot claim a version
+          # the binary is not.
           RB=$(sed -nE 's/^ARG RBITCOIN_VERSION=(.+)$/\1/p' docker/rbitcoin/Dockerfile)
+          COMMIT=$(sed -nE 's/^ARG RBITCOIN_COMMIT=([0-9a-f]{40})$/\1/p' docker/rbitcoin/Dockerfile)
           SHA=$(sed -nE 's/^ARG RBITCOIN_NODE_SHA256=([0-9a-f]{64})$/\1/p' docker/rbitcoin/Dockerfile)
+          RUST=$(sed -nE 's/^ARG RUST_IMAGE=(.+)$/\1/p' docker/rbitcoin/Dockerfile)
           ALPINE=$(sed -nE 's/^ARG ALPINE_IMAGE=(.+)$/\1/p' docker/rbitcoin/Dockerfile)
-          if [ -z "$RB" ] || [ -z "$SHA" ]; then
-            echo "::error::docker/rbitcoin/Dockerfile must pin RBITCOIN_VERSION and a 64-hex RBITCOIN_NODE_SHA256"; exit 1
+          if [ -z "$RB" ] || [ -z "$COMMIT" ] || [ -z "$SHA" ]; then
+            echo "::error::docker/rbitcoin/Dockerfile must pin RBITCOIN_VERSION, a 40-hex RBITCOIN_COMMIT and a 64-hex RBITCOIN_NODE_SHA256"; exit 1
           fi
+          case "$RUST" in
+            rust:*@sha256:*) ;;
+            *) echo "::error::docker/rbitcoin/Dockerfile must pin RUST_IMAGE to a tag and digest, got '$RUST'"; exit 1 ;;
+          esac
           case "$ALPINE" in
             alpine:*@sha256:*) ;;
             *) echo "::error::docker/rbitcoin/Dockerfile must pin ALPINE_IMAGE to a tag and digest, got '$ALPINE'"; exit 1 ;;
@@ -56,6 +66,7 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "rbitcoin=$RB" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -84,7 +95,7 @@ jobs:
             APP_VERSION=${{ steps.meta.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/coreyphillips/beignet-umbrel
-            org.opencontainers.image.description=rbitcoin ${{ steps.meta.outputs.rbitcoin }} for the beignet-rbitcoin Umbrel app
+            org.opencontainers.image.description=rbitcoin ${{ steps.meta.outputs.rbitcoin }} (reardencode/rbitcoin@${{ steps.meta.outputs.commit }}) for the beignet-rbitcoin Umbrel app
             org.opencontainers.image.licenses=MIT OR Apache-2.0
           tags: |
             ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
