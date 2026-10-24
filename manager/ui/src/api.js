@@ -81,9 +81,16 @@ export const manager = {
 	// The Electrum presets, each probed for whether it is there and what it
 	// serves, and a server the user typed, probed before it is saved. Both
 	// talk to real servers with a bound of a few seconds each, so they carry
-	// a timeout like the daemon reads do.
-	discoverElectrum: (refresh) =>
-		request(`/api/electrum/discover${refresh ? '?refresh=1' : ''}`, { timeoutMs: 8000 }),
+	// a timeout like the daemon reads do. `scope: 'public'` asks the public
+	// servers for `network` instead of the presets.
+	discoverElectrum: (refresh, { scope, network } = {}) => {
+		const q = new URLSearchParams();
+		if (refresh) q.set('refresh', '1');
+		if (scope) q.set('scope', scope);
+		if (network) q.set('network', network);
+		const qs = q.toString();
+		return request(`/api/electrum/discover${qs ? `?${qs}` : ''}`, { timeoutMs: 8000 });
+	},
 	testElectrum: (body) => request('/api/electrum/test', { method: 'POST', body, timeoutMs: 8000 }),
 	listWallets: () => request('/api/wallets'),
 	getWallet: (id) => request(`/api/wallets/${id}`),

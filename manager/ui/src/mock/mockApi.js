@@ -1582,11 +1582,21 @@ const ELECTRUM_PRESETS = [
 	{ id: 'umbrel-fulcrum', label: 'Umbrel Fulcrum', host: '10.21.21.200', port: 50002, tls: false, note: 'Use if the Fulcrum app is installed on this Umbrel' },
 	{ id: 'umbrel-rbitcoin', label: 'Umbrel rbitcoin', host: 'beignet-rbitcoin_node_1', port: 50001, tls: false, networks: ['mainnet'], note: 'Use if the rbitcoin app from this store is installed' }
 ];
+const PUBLIC_ELECTRUM_SERVERS = [
+	{ id: 'public-bitkit', label: 'Bitkit', host: 'bitkit.to', port: 9999, tls: true, tlsVerify: true, networks: ['mainnet'], note: "Synonym's server, the one the Bitkit wallet uses" },
+	{ id: 'public-bluewallet', label: 'BlueWallet', host: 'electrum2.bluewallet.io', port: 443, tls: true, tlsVerify: true, networks: ['mainnet'], note: "BlueWallet's server" },
+	{ id: 'public-blockstream', label: 'Blockstream', host: 'electrum.blockstream.info', port: 50002, tls: true, tlsVerify: true, networks: ['mainnet'], note: "Blockstream's server" },
+	{ id: 'public-acinq', label: 'ACINQ', host: 'electrum.acinq.co', port: 50002, tls: true, tlsVerify: true, networks: ['mainnet'], note: "ACINQ's server, one of BlueWallet's defaults" },
+	{ id: 'public-blockstream-testnet', label: 'Blockstream testnet', host: 'electrum.blockstream.info', port: 60002, tls: true, tlsVerify: true, networks: ['testnet'], note: "Blockstream's testnet server, the one Bitkit uses for testnet" },
+	{ id: 'public-bitkit-regtest', label: 'Bitkit regtest', host: 'electrs.bitkit.stag0.blocktank.to', port: 9999, tls: true, tlsVerify: true, networks: ['regtest'], note: "Synonym's staging regtest server, the one Bitkit's regtest builds use" }
+];
 
 // What the demo's Electrum probe says about a server, from its address alone:
-// a host naming a chain is on it, a host with "down" in it (or the Fulcrum
-// preset, so one preset reads as not installed, or port 1) answers nothing,
-// and a TLS host with "selfsigned" in it is refused when verification is on.
+// a public server is on the chain it is listed for, a host naming a chain is
+// on it, a host with "down" in it (or the Fulcrum preset, so one preset reads
+// as not installed, or port 1) answers nothing, a public server's
+// certificate is signed by a public authority as the real ones are, and a TLS
+// host with "selfsigned" in it is refused when verification is on.
 const GENESIS = {
 	mainnet: '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f',
 	testnet: '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943',
@@ -1594,7 +1604,12 @@ const GENESIS = {
 	regtest: '0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206'
 };
 const DEMO_FINGERPRINT = 'ac46dda716db709848ac80a84eba47a746736b4996d53d3bcff07c6e8d45c47f';
-function mockChain(host) {
+function listedPublic(host, port) {
+	return PUBLIC_ELECTRUM_SERVERS.find((s) => s.host === host && s.port === parseInt(port, 10)) || null;
+}
+function mockChain(host, port) {
+	const listed = listedPublic(host, port);
+	if (listed) return listed.networks[0];
 	const h = String(host || '').toLowerCase();
 	if (h.includes('testnet')) return 'testnet';
 	if (h.includes('signet')) return 'signet';
@@ -1608,7 +1623,7 @@ function mockReachable(host, port) {
 function mockProbe({ host, port, tls, tlsVerify, tlsFingerprints }) {
 	const blank = { software: null, protocol: null, chain: 'unknown', genesisHash: null, height: null, certificate: null, probedAt: Date.now() };
 	if (!mockReachable(host, port)) return { ...blank, reachable: false, error: 'unreachable' };
-	const certificate = tls ? { accepted: true, authorized: false, fingerprint: DEMO_FINGERPRINT } : null;
+	const certificate = tls ? { accepted: true, authorized: !!listedPublic(host, port), fingerprint: DEMO_FINGERPRINT } : null;
 	if (tls && tlsVerify && String(host).toLowerCase().includes('selfsigned')) {
 		// Pins as typed: Test shows the fingerprint with colons and in capitals,
 		// the way openssl prints it, and the manager reads either form.
@@ -1617,7 +1632,7 @@ function mockProbe({ host, port, tls, tlsVerify, tlsFingerprints }) {
 			return { ...blank, reachable: true, certificate: { ...certificate, accepted: false }, error: 'tls-rejected' };
 		}
 	}
-	const chain = mockChain(host);
+	const chain = mockChain(host, port);
 	return {
 		...blank,
 		reachable: true,
@@ -1646,7 +1661,13 @@ function wrongChain(electrum, network, body, subject = 'this wallet is on') {
 
 function managerRequest(path, method, body) {
 	if (path.startsWith('/electrum/discover')) {
-		return { at: Date.now(), servers: ELECTRUM_PRESETS.map((p) => ({ ...p, ...mockProbe(p) })) };
+		const q = new URLSearchParams(path.split('?')[1] || '');
+		const network = q.get('network');
+		const servers =
+			q.get('scope') === 'public'
+				? PUBLIC_ELECTRUM_SERVERS.filter((s) => !network || s.networks.includes(network))
+				: ELECTRUM_PRESETS;
+		return { at: Date.now(), servers: servers.map((p) => ({ ...p, ...mockProbe(p) })) };
 	}
 	if (path === '/electrum/test' && method === 'POST') {
 		if (!String((body && body.host) || '').trim()) throw err('Electrum host is required', 'BAD_ELECTRUM');
@@ -1661,6 +1682,7 @@ function managerRequest(path, method, body) {
 			hasDefaultElectrum: !!store.settings.defaultElectrum,
 			supportedNetworks: ['mainnet', 'testnet', 'regtest'],
 			electrumPresets: ELECTRUM_PRESETS,
+			electrumPublicServers: PUBLIC_ELECTRUM_SERVERS,
 
 			torAvailable: true,
 			onionAvailable: true,

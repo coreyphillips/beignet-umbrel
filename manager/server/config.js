@@ -91,4 +91,89 @@ const ELECTRUM_PRESETS = [
 	}
 ];
 
-module.exports = { config, toBool, SUPPORTED_NETWORKS, ELECTRUM_PRESETS };
+// Public Electrum servers, offered in place of the presets when none of them
+// answers on the wallet's chain. Each runs on someone else's machine, which
+// learns the wallet's addresses and this Umbrel's IP address, so the dashboard
+// says so and offers them only then. Every one is TLS with a certificate a
+// public authority signed for its name, so a pick turns verification on
+// (`tlsVerify`) where the engine supports it. The dashboard probes them only
+// while it shows them, for the wallet's chain alone.
+const PUBLIC_ELECTRUM_SERVERS = [
+	{
+		id: 'public-bitkit',
+		label: 'Bitkit',
+		// What bitkit-android uses for mainnet (Env.kt). It does not offer
+		// server.features and hangs up when asked; electrum-probe.js reads the
+		// chain from block 0 instead.
+		host: 'bitkit.to',
+		port: 9999,
+		tls: true,
+		tlsVerify: true,
+		networks: ['mainnet'],
+		note: "Synonym's server, the one the Bitkit wallet uses"
+	},
+	{
+		id: 'public-bluewallet',
+		label: 'BlueWallet',
+		// BlueWallet's default is electrum1.bluewallet.io, which presents
+		// electrum2's certificate and so fails verification. electrum2 is the
+		// same operator under the name its certificate carries.
+		host: 'electrum2.bluewallet.io',
+		port: 443,
+		tls: true,
+		tlsVerify: true,
+		networks: ['mainnet'],
+		note: "BlueWallet's server"
+	},
+	{
+		id: 'public-blockstream',
+		label: 'Blockstream',
+		host: 'electrum.blockstream.info',
+		port: 50002,
+		tls: true,
+		tlsVerify: true,
+		networks: ['mainnet'],
+		note: "Blockstream's server"
+	},
+	{
+		id: 'public-acinq',
+		label: 'ACINQ',
+		host: 'electrum.acinq.co',
+		port: 50002,
+		tls: true,
+		tlsVerify: true,
+		networks: ['mainnet'],
+		note: "ACINQ's server, one of BlueWallet's defaults"
+	},
+	{
+		id: 'public-blockstream-testnet',
+		label: 'Blockstream testnet',
+		// Also what bitkit-android uses for testnet.
+		host: 'electrum.blockstream.info',
+		port: 60002,
+		tls: true,
+		tlsVerify: true,
+		networks: ['testnet'],
+		note: "Blockstream's testnet server, the one Bitkit uses for testnet"
+	},
+	{
+		id: 'public-bitkit-regtest',
+		label: 'Bitkit regtest',
+		// bitkit-android's staging regtest (Env.kt). The same chain as the
+		// engine's own regtest default, 34.65.252.32:18483, over TLS.
+		host: 'electrs.bitkit.stag0.blocktank.to',
+		port: 9999,
+		tls: true,
+		tlsVerify: true,
+		networks: ['regtest'],
+		note: "Synonym's staging regtest server, the one Bitkit's regtest builds use"
+	}
+];
+
+/** The public servers for `network`, or every one for a network this app does not know. */
+function publicElectrumServers(network) {
+	if (!SUPPORTED_NETWORKS.includes(network)) return PUBLIC_ELECTRUM_SERVERS;
+	return PUBLIC_ELECTRUM_SERVERS.filter((s) => s.networks.includes(network));
+}
+
+module.exports = { config, toBool, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, PUBLIC_ELECTRUM_SERVERS, publicElectrumServers };

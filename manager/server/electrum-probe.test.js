@@ -16,6 +16,7 @@ const { WalletManager } = require('./wallet-manager');
 const { KEY, CERT, PIN } = require('./fixtures/electrum-test-cert');
 const {
 	chainOfGenesis,
+	headerHash,
 	probeElectrum,
 	cachedProbe,
 	clearProbeCache,
@@ -31,24 +32,42 @@ const SIGNET = '00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6
 const REGTEST = '0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206';
 const OTHER = 'ff'.repeat(32);
 
+// Each chain's block 0 header, which hashes to its genesis hash.
+const GENESIS_TAIL = '0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a';
+const GENESIS_HEADERS = {
+	[MAINNET]: `${GENESIS_TAIL}29ab5f49ffff001d1dac2b7c`,
+	[TESTNET]: `${GENESIS_TAIL}dae5494dffff001d1aa4ae18`,
+	[SIGNET]: `${GENESIS_TAIL}008f4d5fae77031e8ad22203`,
+	[REGTEST]: `${GENESIS_TAIL}dae5494dffff7f2002000000`
+};
+
 /**
  * A fake Electrum server on loopback. `mode` shapes how it answers:
  * normal (one reply per request, in order), batched (every reply in one
  * write, out of order), split (a reply cut across two writes), silent
  * (connects, never answers), no-features (server.features is an error),
- * flood (bytes without end and never a newline), hangup (answers the first
- * two requests and closes before the third).
+ * drop-features (closes the connection when asked server.features, as
+ * Bitkit's server does), no-chain (neither server.features nor block 0's
+ * header is answered), flood (bytes without end and never a newline),
+ * hangup (answers the first two requests and closes before the third).
  */
 async function fakeElectrum(t, { tls: useTls = false, genesis = MAINNET, software = 'electrs/0.10.9', height = 840000, mode = 'normal' } = {}) {
 	const state = { connections: 0, lines: [] };
+	const unknown = (msg) => ({ id: msg.id, error: { code: -32601, message: 'unknown method' } });
 	const answer = (msg) => {
 		if (msg.method === 'server.version') return { id: msg.id, result: [software, '1.4'] };
 		if (msg.method === 'server.features') {
-			if (mode === 'no-features') return { id: msg.id, error: { code: -32601, message: 'unknown method' } };
+			if (mode === 'no-features' || mode === 'no-chain') return unknown(msg);
 			return { id: msg.id, result: { genesis_hash: genesis, protocol_min: '1.4', protocol_max: '1.4.2', server_version: software } };
 		}
+		if (msg.method === 'blockchain.block.header' && msg.params[0] === 0) {
+			if (mode === 'no-chain') return unknown(msg);
+			// A genesis this file has no header for gets one that hashes to
+			// no known chain, as a server on some other chain would send.
+			return { id: msg.id, result: GENESIS_HEADERS[genesis] || '00'.repeat(80) };
+		}
 		if (msg.method === 'blockchain.headers.subscribe') return { id: msg.id, result: { height, hex: '' } };
-		return { id: msg.id, error: { code: -32601, message: 'unknown method' } };
+		return unknown(msg);
 	};
 	const onConnection = (socket) => {
 		state.connections += 1;
@@ -68,11 +87,21 @@ async function fakeElectrum(t, { tls: useTls = false, genesis = MAINNET, softwar
 			buf += chunk.toString('utf8');
 			let nl;
 			const replies = [];
+			let dropped = false;
 			while ((nl = buf.indexOf('\n')) !== -1) {
 				const line = buf.slice(0, nl);
 				buf = buf.slice(nl + 1);
 				state.lines.push(line);
-				replies.push(answer(JSON.parse(line)));
+				const msg = JSON.parse(line);
+				if (mode === 'drop-features' && msg.method === 'server.features') {
+					dropped = true;
+					break;
+				}
+				replies.push(answer(msg));
+			}
+			if (dropped) {
+				socket.end(replies.map((r) => `${JSON.stringify(r)}\n`).join(''));
+				return;
 			}
 			if (mode === 'silent') return;
 			if (mode === 'flood') {
@@ -151,14 +180,52 @@ test('replies are matched by id, however the server frames them', async (t) => {
 	}
 });
 
-test('a server without server.features is reachable with an unknown chain', async (t) => {
-	const s = await fakeElectrum(t, { mode: 'no-features' });
+test("a block header's hash is the one the chain names it by", () => {
+	for (const [genesis, header] of Object.entries(GENESIS_HEADERS)) assert.equal(headerHash(header), genesis);
+	assert.equal(headerHash(GENESIS_HEADERS[MAINNET].toUpperCase()), MAINNET, 'hex in either case');
+	assert.equal(headerHash(GENESIS_HEADERS[MAINNET].slice(2)), null, 'not 80 bytes');
+	assert.equal(headerHash('zz'.repeat(80)), null, 'not hex');
+	assert.equal(headerHash({ hex: GENESIS_HEADERS[MAINNET] }), null, 'not a string');
+});
+
+test('a server without server.features is placed on its chain by block 0', async (t) => {
+	const s = await fakeElectrum(t, { mode: 'no-features', genesis: TESTNET });
+	const r = await probeElectrum({ host: s.host, port: s.port, tls: false });
+	assert.equal(r.reachable, true);
+	assert.equal(r.chain, 'testnet');
+	assert.equal(r.genesisHash, TESTNET);
+	assert.equal(r.height, 840000);
+	assert.equal(r.error, null);
+});
+
+test('a server that hangs up when asked server.features has answered everything else first', async (t) => {
+	const s = await fakeElectrum(t, { mode: 'drop-features' });
+	const r = await probeElectrum({ host: s.host, port: s.port, tls: false });
+	assert.equal(r.reachable, true);
+	assert.equal(r.error, null);
+	assert.equal(r.software, 'electrs/0.10.9');
+	assert.equal(r.chain, 'mainnet');
+	assert.equal(r.height, 840000);
+	assert.match(s.state.lines[s.state.lines.length - 1], /server\.features/, 'asked last, so nothing else is lost when it hangs up');
+});
+
+test('a server that names its chain neither way is reachable with an unknown chain', async (t) => {
+	const s = await fakeElectrum(t, { mode: 'no-chain' });
 	const r = await probeElectrum({ host: s.host, port: s.port, tls: false });
 	assert.equal(r.reachable, true);
 	assert.equal(r.chain, 'unknown');
 	assert.equal(r.genesisHash, null);
 	assert.equal(r.height, 840000);
 	assert.equal(r.error, null);
+});
+
+test('server.features names the chain when it and block 0 disagree', async (t) => {
+	// server.features names one genesis and block 0 hashes to another: the
+	// claim stands, as it did before block 0 was asked for.
+	const s = await fakeElectrum(t, { genesis: OTHER });
+	const r = await probeElectrum({ host: s.host, port: s.port, tls: false });
+	assert.equal(r.genesisHash, OTHER);
+	assert.equal(r.chain, 'unknown');
 });
 
 test('a closed port is unreachable, quickly', async () => {

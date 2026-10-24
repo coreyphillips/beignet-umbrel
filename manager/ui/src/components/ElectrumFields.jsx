@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { manager } from '../api.js';
 import { Button, Field, Help } from './ui.jsx';
-import { ServerStatus, chainKey, describeTest } from './ElectrumStatus.jsx';
+import { ServerStatus, chainKey, describeProbe, describeTest } from './ElectrumStatus.jsx';
 
 /** Pinned fingerprints as typed (one string) or as stored (an array), as a list. */
 function pinList(pins) {
@@ -74,6 +74,33 @@ function TestConnection({ value, network }) {
 	);
 }
 
+/** The probe results of a discovery answer, by server id. */
+function byId(r) {
+	const servers = {};
+	for (const s of (r && r.servers) || []) servers[s.id] = s;
+	return servers;
+}
+
+/** One server as a button that fills the fields, with what its probe said. */
+function PresetButton({ preset: p, onPick, status, network, showStatus }) {
+	return (
+		<button type="button" className="btn sm preset-btn" data-testid={`preset-${p.id}`} onClick={() => onPick(p)} title={p.note}>
+			<span className="preset-name">{p.label}</span>
+			<span className="preset-host">
+				{p.host}:{p.port}
+			</span>
+			{showStatus && (
+				<ServerStatus
+					result={status.servers[p.id]}
+					network={network}
+					loading={status.loading}
+					data-testid={`preset-status-${p.id}`}
+				/>
+			)}
+		</button>
+	);
+}
+
 /**
  * Host / port / TLS inputs plus one-click presets. Controlled via `value`/`onChange`.
  * With `verifyAvailable` (an engine that verifies Electrum certificates), a TLS
@@ -83,15 +110,27 @@ function TestConnection({ value, network }) {
  * row says which servers are actually there, on which chain and how far
  * along, instead of leaving the user to try each one. `network` is the chain
  * the server is meant for; a preset known to be on another chain says so.
+ *
+ * When no preset answers on that chain, `publicServers` (the manager's
+ * public list) are offered under them instead, probed the same way. They are
+ * asked about only then, so a box with its own Electrum server never
+ * contacts them.
  */
-export default function ElectrumFields({ presets: allPresets = [], value, onChange, verifyAvailable = false, network = null, discover = true }) {
+export default function ElectrumFields({ presets: allPresets = [], publicServers: allPublic = [], value, onChange, verifyAvailable = false, network = null, discover = true }) {
 	const set = (patch) => onChange({ ...value, ...patch });
 	const pins = Array.isArray(value.tlsFingerprints) ? value.tlsFingerprints.join(', ') : value.tlsFingerprints || '';
-	// A preset that names the networks it serves (the rbitcoin app runs
-	// mainnet only) is offered for those alone; one without serves any.
-	const presets = allPresets.filter((p) => !Array.isArray(p.networks) || !network || p.networks.includes(network));
-	const [status, setStatus] = useState({ loading: false, servers: {} });
+	// A server that names the networks it serves (the rbitcoin app runs
+	// mainnet only, each public server one chain) is offered for those
+	// alone; one without serves any.
+	const forNetwork = (p) => !Array.isArray(p.networks) || !network || p.networks.includes(network);
+	const presets = allPresets.filter(forNetwork);
+	const publicServers = allPublic.filter(forNetwork);
+	const [status, setStatus] = useState({ loading: false, loaded: false, servers: {} });
+	const [publicStatus, setPublicStatus] = useState({ loading: false, servers: {} });
 	const alive = useRef(true);
+	// Which public discovery is the latest, so an answer for the network the
+	// fields were on before does not land after the one they are on now.
+	const publicAsk = useRef(0);
 	useEffect(() => {
 		alive.current = true;
 		return () => {
@@ -102,13 +141,17 @@ export default function ElectrumFields({ presets: allPresets = [], value, onChan
 		setStatus((s) => ({ ...s, loading: true }));
 		manager
 			.discoverElectrum(refresh)
-			.then((r) => {
-				if (!alive.current) return;
-				const servers = {};
-				for (const s of (r && r.servers) || []) servers[s.id] = s;
-				setStatus({ loading: false, servers });
-			})
-			.catch(() => alive.current && setStatus((s) => ({ ...s, loading: false })));
+			.then((r) => alive.current && setStatus({ loading: false, loaded: true, servers: byId(r) }))
+			.catch(() => alive.current && setStatus((s) => ({ ...s, loading: false, loaded: true })));
+	};
+	const loadPublic = (refresh) => {
+		const ask = ++publicAsk.current;
+		const current = () => alive.current && ask === publicAsk.current;
+		setPublicStatus((s) => ({ ...s, loading: true }));
+		manager
+			.discoverElectrum(refresh, { scope: 'public', network })
+			.then((r) => current() && setPublicStatus({ loading: false, servers: byId(r) }))
+			.catch(() => current() && setPublicStatus((s) => ({ ...s, loading: false })));
 	};
 	const wanted = discover && presets.length > 0;
 	useEffect(() => {
@@ -116,37 +159,60 @@ export default function ElectrumFields({ presets: allPresets = [], value, onChan
 		// Once per appearance of the preset row; Refresh asks again by hand.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [wanted]);
+	// Usable is what the preset badge shows green: there, and on this chain
+	// as far as it said. Until the presets have answered once nothing is
+	// known, so the public row waits for that; during a Refresh it keeps to
+	// the last answer rather than flickering away.
+	const localFound = presets.some((p) => describeProbe(status.servers[p.id], network).state === 'reachable');
+	const offerPublic = discover && publicServers.length > 0 && (presets.length === 0 || status.loaded) && !localFound;
+	const publicFor = offerPublic ? network || '' : null;
+	useEffect(() => {
+		if (publicFor !== null) loadPublic(false);
+		// Once each time the row appears or the chain it is for changes.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [publicFor]);
+	const refresh = () => {
+		load(true);
+		if (offerPublic) loadPublic(true);
+	};
+	// A public server is reached over the internet with a certificate a
+	// public authority signed, so picking one holds the wallet to it where
+	// the engine can.
+	const pick = (p) => onChange({ host: p.host, port: p.port, tls: !!p.tls, ...(verifyAvailable && p.tls && p.tlsVerify ? { tlsVerify: true } : {}) });
 	return (
 		<div>
 			{presets.length > 0 && (
 				<div className="row preset-row" style={{ marginBottom: 12 }}>
 					{presets.map((p) => (
-						<button
-							type="button"
-							key={p.id}
-							className="btn sm preset-btn"
-							onClick={() => onChange({ host: p.host, port: p.port, tls: !!p.tls })}
-							title={p.note}
-						>
-							<span className="preset-name">{p.label}</span>
-							<span className="preset-host">
-								{p.host}:{p.port}
-							</span>
-							{wanted && (
-								<ServerStatus
-									result={status.servers[p.id]}
-									network={network}
-									loading={status.loading}
-									data-testid={`preset-status-${p.id}`}
-								/>
-							)}
-						</button>
+						<PresetButton key={p.id} preset={p} onPick={pick} status={status} network={network} showStatus={wanted} />
 					))}
 					{wanted && (
-						<Button className="sm preset-refresh" data-testid="electrum-refresh" busy={status.loading} onClick={() => load(true)} title="Ask each preset again">
+						<Button className="sm preset-refresh" data-testid="electrum-refresh" busy={status.loading} onClick={refresh} title="Ask each server again">
 							Refresh
 						</Button>
 					)}
+				</div>
+			)}
+			{offerPublic && (
+				<div data-testid="electrum-public">
+					<div className="field-label" style={{ marginBottom: 4 }}>
+						Public servers
+						<Help>
+							Someone else runs each of these. The server sees this wallet&apos;s addresses and balance and
+							this Umbrel&apos;s IP address, and a dishonest one could hide transactions from it. To keep
+							that on this Umbrel, install an Electrum server app such as Electrs or Fulcrum; once it
+							answers above, these go away.
+						</Help>
+					</div>
+					<div className="field-hint" style={{ marginBottom: 8 }}>
+						No Electrum server on this Umbrel answered{network ? ` on ${network}` : ''}, so here are public ones. Each is
+						run by someone else, who can see this wallet&apos;s addresses.
+					</div>
+					<div className="row preset-row" style={{ marginBottom: 12 }}>
+						{publicServers.map((p) => (
+							<PresetButton key={p.id} preset={p} onPick={pick} status={publicStatus} network={network} showStatus />
+						))}
+					</div>
 				</div>
 			)}
 			<div className="row">

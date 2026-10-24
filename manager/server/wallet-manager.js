@@ -7,7 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const bip39 = require('bip39');
-const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS } = require('./config');
+const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, publicElectrumServers } = require('./config');
 const { Registry } = require('./registry');
 const { Settings } = require('./settings');
 const { TorControl, pickLocalIp } = require('./tor-control');
@@ -513,8 +513,13 @@ class WalletManager {
 	// The Electrum servers an Umbrel may run, each asked whether it is there
 	// and what it serves (electrum-probe.js). Presets are probed together and
 	// the answers stand for a few seconds, so the dashboard may ask freely.
-	discoverElectrum({ refresh = false } = {}) {
-		return discoverServers(ELECTRUM_PRESETS, { refresh, timeoutMs: ELECTRUM_PROBE_TIMEOUT_MS });
+	// `scope: 'public'` asks the public servers instead, only those for
+	// `network` when it names one: the dashboard asks for them only when no
+	// preset answers on the wallet's chain, so their operators are not
+	// contacted every time the fields open.
+	discoverElectrum({ refresh = false, scope = 'presets', network = null } = {}) {
+		const servers = scope === 'public' ? publicElectrumServers(network) : ELECTRUM_PRESETS;
+		return discoverServers(servers, { refresh, timeoutMs: ELECTRUM_PROBE_TIMEOUT_MS });
 	}
 
 	// A server the user typed, probed on request. `network` is what the server

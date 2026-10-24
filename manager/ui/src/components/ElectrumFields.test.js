@@ -258,3 +258,179 @@ test('a Test answer is for the network it was asked about', async () => {
 		restore();
 	}
 });
+
+// Public servers stand in for the presets when none of them answers on the
+// wallet's chain: asked about only then, for that chain, and picked with the
+// certificate held to where the engine can.
+const PUBLIC = [
+	{ id: 'public-bitkit', label: 'Bitkit', host: 'bitkit.to', port: 9999, tls: true, tlsVerify: true, networks: ['mainnet'], note: 'n' },
+	{ id: 'public-blockstream', label: 'Blockstream', host: 'electrum.blockstream.info', port: 50002, tls: true, tlsVerify: true, networks: ['mainnet'], note: 'n' },
+	{ id: 'public-blockstream-testnet', label: 'Blockstream testnet', host: 'electrum.blockstream.info', port: 60002, tls: true, tlsVerify: true, networks: ['testnet'], note: 'n' },
+	{ id: 'public-bitkit-regtest', label: 'Bitkit regtest', host: 'electrs.bitkit.stag0.blocktank.to', port: 9999, tls: true, tlsVerify: true, networks: ['regtest'], note: 'n' }
+];
+const gone = probe({ reachable: false, error: 'unreachable', software: null, chain: 'unknown', height: null });
+const nothingLocal = () => ({ at: Date.now(), servers: PRESETS.map((p) => ({ ...p, ...gone })) });
+const publicAnswer = (network) => ({
+	at: Date.now(),
+	servers: PUBLIC.filter((p) => p.networks.includes(network)).map((p) => ({ ...p, ...probe({ chain: network }) }))
+});
+
+/** A discoverElectrum stub: presets from `local()`, public servers by network, every call recorded. */
+function discovery(local) {
+	const calls = { presets: [], public: [] };
+	const restore = stub('discoverElectrum', async (refresh, opts = {}) => {
+		if (opts.scope === 'public') {
+			calls.public.push({ refresh: !!refresh, network: opts.network });
+			return publicAnswer(opts.network);
+		}
+		calls.presets.push(!!refresh);
+		return local();
+	});
+	return { calls, restore };
+}
+
+const blank = { host: '', port: 50001, tls: false };
+
+test('a preset that answers on the chain keeps the public servers out of sight and unasked', async () => {
+	const { calls, restore } = discovery(discovered);
+	const r = await render(Harness, { initial: blank, seen: {}, presets: PRESETS, publicServers: PUBLIC, network: 'mainnet' });
+	try {
+		await settle(0);
+		assert.equal(r.$('[data-testid="preset-status-umbrel-electrs"]').dataset.state, 'reachable');
+		assert.equal(r.$('[data-testid="electrum-public"]'), null);
+		assert.deepEqual(calls.public, [], 'no public server is contacted when this Umbrel has one');
+	} finally {
+		await r.unmount();
+		restore();
+	}
+});
+
+test("with no preset on the wallet's chain, that chain's public servers are offered and probed", async () => {
+	// Electrs answers, but on mainnet: no use to a testnet wallet.
+	const { calls, restore } = discovery(discovered);
+	const r = await render(Harness, { initial: blank, seen: {}, presets: PRESETS, publicServers: PUBLIC, network: 'testnet' });
+	try {
+		await settle(0);
+		assert.ok(r.$('[data-testid="electrum-public"]'));
+		assert.match(r.$('[data-testid="electrum-public"]').textContent, /No Electrum server on this Umbrel answered on testnet/);
+		assert.deepEqual(calls.public, [{ refresh: false, network: 'testnet' }]);
+		const names = r.$$('[data-testid="electrum-public"] .preset-name').map((n) => n.textContent);
+		assert.deepEqual(names, ['Blockstream testnet']);
+		const status = r.$('[data-testid="preset-status-public-blockstream-testnet"]');
+		assert.equal(status.dataset.state, 'reachable');
+		assert.match(status.textContent, /testnet/);
+	} finally {
+		await r.unmount();
+		restore();
+	}
+});
+
+test('picking a public server fills the fields, holding it to its certificate where the engine can', async () => {
+	const { restore } = discovery(nothingLocal);
+	try {
+		const seen = {};
+		const r = await render(Harness, { initial: blank, seen, presets: PRESETS, publicServers: PUBLIC, network: 'mainnet', verifyAvailable: true });
+		try {
+			await settle(0);
+			assert.deepEqual(r.$$('[data-testid="electrum-public"] .preset-name').map((n) => n.textContent), ['Bitkit', 'Blockstream']);
+			await click(r.$('[data-testid="preset-public-bitkit"]'));
+			assert.deepEqual(seen.value, { host: 'bitkit.to', port: 9999, tls: true, tlsVerify: true });
+			assert.equal(r.$('[data-testid="electrum-tls-verify"]').checked, true);
+			assert.deepEqual(electrumBody(seen.value), { host: 'bitkit.to', port: 9999, tls: true, tlsVerify: true });
+			await click(r.$$('.preset-btn')[0]);
+			assert.deepEqual(seen.value, { host: '10.21.21.10', port: 50001, tls: false }, 'a preset after it leaves no verification behind');
+		} finally {
+			await r.unmount();
+		}
+		const old = {};
+		const o = await render(Harness, { initial: blank, seen: old, presets: PRESETS, publicServers: PUBLIC, network: 'mainnet' });
+		try {
+			await settle(0);
+			await click(o.$('[data-testid="preset-public-bitkit"]'));
+			assert.deepEqual(old.value, { host: 'bitkit.to', port: 9999, tls: true }, 'an engine without verification is sent none');
+		} finally {
+			await o.unmount();
+		}
+	} finally {
+		restore();
+	}
+});
+
+test('the public row waits for the presets to answer', async () => {
+	let answer;
+	const asked = [];
+	const restore = stub('discoverElectrum', (refresh, opts = {}) => {
+		if (opts.scope === 'public') {
+			asked.push(opts.network);
+			return Promise.resolve(publicAnswer(opts.network));
+		}
+		return new Promise((resolve) => (answer = resolve));
+	});
+	const r = await render(Harness, { initial: blank, seen: {}, presets: PRESETS, publicServers: PUBLIC, network: 'mainnet' });
+	try {
+		await settle(0);
+		assert.equal(r.$('[data-testid="electrum-public"]'), null, 'nothing is known yet');
+		assert.deepEqual(asked, []);
+		answer(nothingLocal());
+		await settle(0);
+		assert.ok(r.$('[data-testid="electrum-public"]'));
+		assert.deepEqual(asked, ['mainnet']);
+	} finally {
+		await r.unmount();
+		restore();
+	}
+});
+
+test('Refresh asks the public servers again, and they go away once a preset answers', async () => {
+	let local = nothingLocal;
+	const { calls, restore } = discovery(() => local());
+	const r = await render(Harness, { initial: blank, seen: {}, presets: PRESETS, publicServers: PUBLIC, network: 'mainnet' });
+	try {
+		await settle(0);
+		assert.ok(r.$('[data-testid="electrum-public"]'));
+		await click(r.$('[data-testid="electrum-refresh"]'));
+		await settle(0);
+		assert.deepEqual(calls.presets, [false, true]);
+		assert.deepEqual(calls.public, [{ refresh: false, network: 'mainnet' }, { refresh: true, network: 'mainnet' }]);
+		assert.ok(r.$('[data-testid="electrum-public"]'), 'still nothing local');
+		local = discovered;
+		await click(r.$('[data-testid="electrum-refresh"]'));
+		await settle(0);
+		assert.equal(r.$('[data-testid="electrum-public"]'), null, 'Electrs is there now');
+	} finally {
+		await r.unmount();
+		restore();
+	}
+});
+
+test('a public answer for the chain the fields have left does not land on the new one', async () => {
+	const pending = [];
+	const restore = stub('discoverElectrum', (refresh, opts = {}) => {
+		if (opts.scope === 'public') return new Promise((resolve) => pending.push({ network: opts.network, resolve }));
+		return Promise.resolve(nothingLocal());
+	});
+	function Parent() {
+		const [value, setValue] = useState(blank);
+		const [network, setNetwork] = useState('testnet');
+		return createElement('div', null,
+			createElement('button', { 'data-testid': 'to-regtest', onClick: () => setNetwork('regtest') }, 'regtest'),
+			createElement(ElectrumFields, { value, onChange: setValue, presets: PRESETS, publicServers: PUBLIC, network }));
+	}
+	const r = await render(Parent, {});
+	try {
+		await settle(0);
+		await click(r.$('[data-testid="to-regtest"]'));
+		await settle(0);
+		assert.deepEqual(pending.map((p) => p.network), ['testnet', 'regtest']);
+		pending[1].resolve(publicAnswer('regtest'));
+		await settle(0);
+		pending[0].resolve(publicAnswer('testnet'));
+		await settle(0);
+		const status = r.$('[data-testid="preset-status-public-bitkit-regtest"]');
+		assert.equal(status.dataset.state, 'reachable', 'the regtest answer stands');
+		assert.match(status.textContent, /regtest/);
+	} finally {
+		await r.unmount();
+		restore();
+	}
+});
