@@ -14,6 +14,7 @@
  * through the same socket code.
  */
 
+const crypto = require('crypto');
 const net = require('net');
 const tls = require('tls');
 const { certificateAccepted } = require('./electrum-tls');
@@ -48,6 +49,17 @@ const GENESIS_CHAINS = {
 function chainOfGenesis(hash) {
 	if (typeof hash !== 'string') return 'unknown';
 	return GENESIS_CHAINS[hash.trim().toLowerCase()] || 'unknown';
+}
+
+/**
+ * A block header's hash as the chain names it: double SHA-256 of its 80
+ * bytes, in display (reversed) order. Null for anything that is not one
+ * header in hex.
+ */
+function headerHash(hex) {
+	if (typeof hex !== 'string' || !/^[0-9a-f]{160}$/i.test(hex)) return null;
+	const once = crypto.createHash('sha256').update(Buffer.from(hex, 'hex')).digest();
+	return Buffer.from(crypto.createHash('sha256').update(once).digest()).reverse().toString('hex');
 }
 
 function codedError(code, message) {
@@ -232,10 +244,15 @@ function readReplies(replies) {
 		out.software = typeof version[0] === 'string' ? version[0] : null;
 		out.protocol = typeof version[1] === 'string' ? version[1] : null;
 	}
-	const features = replies[2] && replies[2].result && typeof replies[2].result === 'object' ? replies[2].result : null;
-	if (features) {
-		out.genesisHash = typeof features.genesis_hash === 'string' ? features.genesis_hash.toLowerCase() : null;
-		out.chain = chainOfGenesis(features.genesis_hash);
+	// The chain is the one server.features names, or failing that the one
+	// block 0's header hashes to. Not every server answers server.features
+	// (Bitkit's closes the connection over it), but every one serves headers.
+	const features = replies[4] && replies[4].result && typeof replies[4].result === 'object' ? replies[4].result : null;
+	const claimed = features && typeof features.genesis_hash === 'string' ? features.genesis_hash.toLowerCase() : null;
+	const genesisHash = claimed || headerHash(replies[2] && replies[2].result);
+	if (genesisHash) {
+		out.genesisHash = genesisHash;
+		out.chain = chainOfGenesis(genesisHash);
 	}
 	const tip = replies[3] && replies[3].result;
 	if (tip && typeof tip.height === 'number') out.height = tip.height;
@@ -258,14 +275,17 @@ function readReplies(replies) {
  * the likeliest mistake with these fields.
  *
  * `server.version` goes first because some servers refuse every other
- * method until the client has introduced itself. Never throws: a server
- * that cannot be reached is a result, not a failure.
+ * method until the client has introduced itself, and `server.features`
+ * last because a server that does not offer it may hang up when asked,
+ * and by then the rest has been answered. Never throws: a server that
+ * cannot be reached is a result, not a failure.
  */
 async function probeElectrum(electrum, { timeoutMs = PROBE_TIMEOUT_MS, transport } = {}) {
 	const requests = [
 		{ id: 1, method: 'server.version', params: ['beignet-umbrel', '1.4'] },
-		{ id: 2, method: 'server.features', params: [] },
-		{ id: 3, method: 'blockchain.headers.subscribe', params: [] }
+		{ id: 2, method: 'blockchain.block.header', params: [0] },
+		{ id: 3, method: 'blockchain.headers.subscribe', params: [] },
+		{ id: 4, method: 'server.features', params: [] }
 	];
 	const probedAt = Date.now();
 	try {
@@ -358,6 +378,7 @@ module.exports = {
 	MAX_REPLY_BYTES,
 	GENESIS_CHAINS,
 	chainOfGenesis,
+	headerHash,
 	electrumRequests,
 	probeElectrum,
 	cachedProbe,

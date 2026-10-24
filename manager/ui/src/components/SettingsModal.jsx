@@ -155,6 +155,7 @@ export default function SettingsModal({ config, origin, onClose, onSaved }) {
 			</div>
 			<ElectrumFields
 				presets={config.electrumPresets}
+				publicServers={config.electrumPublicServers}
 				value={electrum}
 				onChange={setElectrum}
 				verifyAvailable={!!config.electrumTlsVerifyAvailable}

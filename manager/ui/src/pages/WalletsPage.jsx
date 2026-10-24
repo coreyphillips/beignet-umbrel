@@ -467,6 +467,7 @@ export function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 			{custom && (
 				<ElectrumFields
 					presets={config.electrumPresets}
+					publicServers={config.electrumPublicServers}
 					value={electrum}
 					onChange={setElectrum}
 					verifyAvailable={!!config.electrumTlsVerifyAvailable}

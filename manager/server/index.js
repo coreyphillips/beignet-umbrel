@@ -3,7 +3,7 @@
 const path = require('path');
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
-const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS } = require('./config');
+const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, PUBLIC_ELECTRUM_SERVERS } = require('./config');
 const { WalletManager } = require('./wallet-manager');
 const { createAccessGuard } = require('./access-control');
 const { releaseUpstreamOnClose } = require('./proxy-release');
@@ -148,6 +148,7 @@ async function main() {
 				hasDefaultElectrum: !!settings.defaultElectrum,
 				supportedNetworks: SUPPORTED_NETWORKS,
 				electrumPresets: ELECTRUM_PRESETS,
+				electrumPublicServers: PUBLIC_ELECTRUM_SERVERS,
 
 				torAvailable: !!config.torProxy,
 				onionAvailable: manager.onionAvailable(),
@@ -204,12 +205,20 @@ async function main() {
 	// there, what software answers, which chain it serves and its tip. The
 	// presets are probed together with a short bound each and the answers
 	// stand for a few seconds, so the dashboard asks on every open of the
-	// Electrum fields; ?refresh=1 asks again now.
+	// Electrum fields; ?refresh=1 asks again now. ?scope=public asks the
+	// public servers instead, those for ?network= when it names one.
 	api.get(
 		'/electrum/discover',
 		asyncHandler(async (req, res) => {
 			res.setHeader('Cache-Control', 'no-store');
-			res.json({ ok: true, result: await manager.discoverElectrum({ refresh: req.query.refresh === '1' }) });
+			res.json({
+				ok: true,
+				result: await manager.discoverElectrum({
+					refresh: req.query.refresh === '1',
+					scope: req.query.scope === 'public' ? 'public' : 'presets',
+					network: typeof req.query.network === 'string' ? req.query.network : null
+				})
+			});
 		})
 	);
 

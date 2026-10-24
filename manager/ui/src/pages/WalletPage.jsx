@@ -504,6 +504,7 @@ export default function WalletPage() {
 					rec={rec}
 					origin={editing}
 					presets={config?.electrumPresets || []}
+					publicServers={config?.electrumPublicServers || []}
 
 					torAvailable={!!config?.torAvailable}
 					torProxyScopeAvailable={config?.torProxyScopeAvailable !== false}
@@ -562,6 +563,7 @@ export function EditWalletModal({
 	rec,
 	origin,
 	presets,
+	publicServers = [],
 
 	torAvailable,
 	torProxyScopeAvailable = true,
@@ -738,6 +740,7 @@ export function EditWalletModal({
 			</div>
 			<ElectrumFields
 				presets={presets}
+				publicServers={publicServers}
 				value={electrum}
 				onChange={setElectrum}
 				verifyAvailable={electrumTlsVerifyAvailable}

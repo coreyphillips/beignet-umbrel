@@ -1168,14 +1168,17 @@ tbody tr:hover {
 	flex-wrap: wrap;
 }
 
-/* Electrum preset buttons: two fixed lines, left-aligned, equal heights */
+/* Electrum preset buttons: two fixed lines, left-aligned, equal heights. The
+   minimum is the row's own, a fixed width rather than the text's, so a long
+   host still ends in an ellipsis and a narrow screen wraps the row instead of
+   squeezing four servers onto one line. */
 .preset-btn {
 	display: flex;
 	flex-direction: column;
 	align-items: flex-start;
 	gap: 2px;
 	text-align: left;
-	min-width: 0;
+	min-width: 140px;
 }
 
 .preset-btn .preset-name {
