@@ -46,6 +46,10 @@ The node runs with `RBITCOIN_IO=pread`. Docker's default seccomp profile blocks 
 
 An update that keeps the data directory is an ordinary app update. An update whose release notes say the store needs a fresh sync: stop the app, remove its data from the umbrelOS terminal (`sudo rm -rf ~/umbrel/app-data/beignet-rbitcoin/data`, or uninstall and reinstall the app), start it, and let it sync again.
 
+## Dashboard development
+
+The next app image adds live charts, wallet connection guides, persistent node defaults, and browser display preferences. See [dashboard behavior, verification, and release wiring](../docs/rbitcoin-dashboard.md). The published compose file remains pinned to the existing release until the new image is available.
+
 ## Releasing this app
 
 The version string is `<rbitcoin version>-<app patch>` and is also the image tag. `<rbitcoin version>` is the workspace version in the pinned commit's `Cargo.toml`, which is also what the binary reports: `0.8.0` for the 0.8.0 release, `0.8.99` for master on its way to 0.9.0. A packaging fix or a later commit with the same workspace version is a new app patch (`0.8.99-2`); a new workspace version starts the patch over (`0.9.0-1`).

@@ -1,7 +1,7 @@
 # The status page's nginx. Rendered by the nginx image's envsubst at start
 # from /web/templates (NGINX_ENVSUBST_TEMPLATE_DIR in the compose file):
 # only the names in NGINX_ENVSUBST_FILTER (LAN_HOST, PUBLIC_PORT,
-# APP_VERSION, NODE_HOST) are substituted, so $uri and the other nginx
+# APP_VERSION, NODE_HOST, SETTINGS_HOST) are substituted, so $uri and the other nginx
 # variables below are nginx's own. /web is filled by the node image's
 # entrypoint on every start (see docker/rbitcoin/Dockerfile for why the
 # page ships in that image rather than as app files).
@@ -9,6 +9,32 @@ server {
     listen 80;
     root /web/html;
     index index.html;
+    add_header X-Content-Type-Options nosniff;
+    add_header Referrer-Policy same-origin;
+    add_header Cache-Control no-cache;
+
+    # nginx's default MIME map does not include ES module files.
+    location ~ \.mjs$ {
+        default_type application/javascript;
+        try_files $uri =404;
+    }
+
+    # Writes are only available behind Umbrel's authenticated app proxy.
+    # The settings service checks Origin, Host and a custom request header.
+    # Neither this service nor the node health listener has a published port.
+    location = /api/settings {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $settings_upstream http://${SETTINGS_HOST}:9333;
+        rewrite ^ /settings break;
+        proxy_pass $settings_upstream;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Dashboard-Client $remote_addr;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 10s;
+        client_max_body_size 4k;
+        limit_except GET PUT { deny all; }
+        add_header Cache-Control no-store;
+    }
 
     # What the page needs from the environment, as JSON, so index.html is
     # one static file that works the same in the smoke test.
