@@ -286,7 +286,7 @@ function emptyElectrum(config) {
 		: { host: '', port: 50001, tls: false };
 }
 
-function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
+export function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	const toast = useToast();
 	const [tab, setTab] = useState('create');
 	const [lfbw, setLfbw] = useState({ ...EMPTY_LFBW });
@@ -335,6 +335,15 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 	const guardiansConfigured = (config.recoveryGuardians || []).length === 3;
 	const asksAutoApply =
 		tab === 'import' && !onchainOnly && recoveryMode === 'peer-storage' && !!config.recoveryAutoApplyAvailable;
+	// Both of these live under Advanced, which may be collapsed, so the button
+	// says why it is disabled rather than leaving the reason out of sight.
+	const blocked = onchainOnly
+		? null
+		: !lfbwComplete(lfbw)
+		? 'Lightning-first needs a primary node. Choose one under Advanced.'
+		: networkMode === 'clearnet' && !publicHost.trim()
+		? 'Clearnet needs a public address. Enter one under Advanced.'
+		: null;
 
 	const submit = async (allow = false) => {
 		const asked = electrumKey;
@@ -483,48 +492,58 @@ function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 				</Help>
 			</label>
 
-			{config.recoveryAvailable && !onchainOnly && (
-				<RecoveryModeField
-					value={recoveryMode}
-					onChange={setRecoveryMode}
-					guardiansConfigured={guardiansConfigured}
-					settingsGuardians={config.recoveryGuardians || []}
-					importing={tab === 'import'}
-				/>
-			)}
-			{asksAutoApply && <RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} />}
-
-			{asksGuardianServe && <GuardianServeField value={guardianServe} onChange={setGuardianServe} announced={announced} />}
-			{asksFfor && <FforSettleField value={fforBlock} onChange={setFforBlock} />}
-
-			{config.lfbwAvailable && !onchainOnly && (
-				<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />
-			)}
-
-
+			{/* Lightning only, and most wallets want the defaults. A native
+			    disclosure keeps its children mounted while collapsed, so the
+			    fields' own local state (the FFOR limits toggle) survives it. */}
 			{!onchainOnly && (
-				<NetworkModeField
-					mode={networkMode}
-					onMode={setNetworkMode}
-					publicHost={publicHost}
-					onPublicHost={setPublicHost}
-					announce={announce}
-					onAnnounce={setAnnounce}
-					torAvailable={!!config.torAvailable}
-					torProxyScopeAvailable={config.torProxyScopeAvailable !== false}
-					irohAvailable={!!config.irohAvailable}
-					iroh={iroh}
-					onIroh={setIroh}
-					irohRelays={irohRelays}
-					onIrohRelays={setIrohRelays}
-				/>
+				<details className="field" data-testid="new-wallet-advanced">
+					<summary>Advanced</summary>
+					{config.recoveryAvailable && (
+						<RecoveryModeField
+							value={recoveryMode}
+							onChange={setRecoveryMode}
+							guardiansConfigured={guardiansConfigured}
+							settingsGuardians={config.recoveryGuardians || []}
+							importing={tab === 'import'}
+						/>
+					)}
+					{asksAutoApply && <RecoveryAutoApplyField value={recoveryAutoApply} onChange={setRecoveryAutoApply} />}
+
+					{asksGuardianServe && <GuardianServeField value={guardianServe} onChange={setGuardianServe} announced={announced} />}
+					{asksFfor && <FforSettleField value={fforBlock} onChange={setFforBlock} />}
+
+					{config.lfbwAvailable && (
+						<LfbwFields value={lfbw} onChange={setLfbw} candidates={primaryCandidates(wallets, { network })} />
+					)}
+
+					<NetworkModeField
+						mode={networkMode}
+						onMode={setNetworkMode}
+						publicHost={publicHost}
+						onPublicHost={setPublicHost}
+						announce={announce}
+						onAnnounce={setAnnounce}
+						torAvailable={!!config.torAvailable}
+						torProxyScopeAvailable={config.torProxyScopeAvailable !== false}
+						irohAvailable={!!config.irohAvailable}
+						iroh={iroh}
+						onIroh={setIroh}
+						irohRelays={irohRelays}
+						onIrohRelays={setIrohRelays}
+					/>
+				</details>
 			)}
 
+			{blocked && (
+				<div className="field-hint" data-testid="new-wallet-blocked" style={{ marginBottom: 10 }}>
+					{blocked}
+				</div>
+			)}
 			<Button
 				variant="primary"
 				busy={busy}
 				onClick={() => submit()}
-				disabled={!onchainOnly && (!lfbwComplete(lfbw) || (networkMode === 'clearnet' && !publicHost.trim()))}
+				disabled={!!blocked}
 			>
 				{tab === 'create' ? 'Create wallet' : 'Import wallet'}
 			</Button>
