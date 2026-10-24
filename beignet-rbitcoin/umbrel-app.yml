@@ -4,7 +4,7 @@ name: rbitcoin
 tagline: A Rust Bitcoin full node that serves Electrum, for Beignet and LAN wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-rbitcoin/icon.svg
 category: bitcoin
-version: "0.8.99-1"
+version: "0.8.99-2"
 port: 2114
 description: >-
   rbitcoin is a Bitcoin full node written in Rust that downloads and validates
@@ -33,7 +33,13 @@ description: >-
   the release notes say so, and you wipe the data and let it download again.
 
 
-  The app's page shows the sync progress and the addresses to connect to:
+  The dashboard shows sync progress, block history, network traffic, peer
+  connections, mempool capacity, uptime, and memory. Save peer limits, mempool
+  capacity, and logging defaults in Settings, then restart the app to apply
+  them. Light and dark themes and refresh preferences are saved in your browser.
+
+
+  Connect using the addresses shown in the dashboard:
   beignet-rbitcoin_node_1:50001 from apps on this Umbrel (Beignet has a
   one-click preset), and umbrel.local:50011 from the rest of your home network.
   Connections are plain TCP without TLS, meant for your own network only.
@@ -46,12 +52,14 @@ support: https://github.com/coreyphillips/beignet-umbrel/issues
 gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-rbitcoin/gallery/1.png
 releaseNotes: >-
-  Beignet can now sync a wallet from this node. Beignet sends batched Electrum
-  requests, which rbitcoin 0.8.0 refused. Upstream added batch support after
-  that release, so this update bundles rbitcoin 0.8.99, built from upstream's
-  development branch (commit 8e62e4c) until a release carries it. No resync
-  and nothing to wipe: on its first start the node fills in a new part of its
-  transaction index once, then the sync carries on where it was.
+  A redesigned dashboard for rbitcoin 0.8.99, with sync and block history,
+  network traffic, peer and mempool visualizations, clearer wallet connection
+  instructions, and light and dark themes. New persistent settings let you
+  adjust peer limits, mempool capacity, and log detail, restore defaults, and
+  see which changes need an app restart. Settings support both legacy Umbrel
+  proxy containers and the native Umbrel 2 app gateway. The bundled node is
+  unchanged from the previous app release. No fresh sync or data wipe is
+  needed. Restart the app after saving node settings to apply them.
 dependencies: []
 backupIgnore:
   - data
