@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # One Electrum conversation with a server, in bash alone: server.version must
-# name rbitcoin, and server.features must carry the genesis hash of the chain
-# asked for. Used by the smoke workflow and handy against a live box:
+# name rbitcoin, server.features must carry the genesis hash of the chain
+# asked for, and a JSON-RPC batch must come back as one array with an answer
+# for each request. Beignet's Electrum client syncs a wallet with batched
+# requests (address histories, unspent outputs, transactions), so a server
+# that takes single requests but not batches looks healthy here and still
+# cannot serve a Beignet wallet. Used by the smoke workflow and handy against
+# a live box:
 #
 #   bash beignet-rbitcoin/scripts/electrum-check.sh umbrel.local 50011 mainnet
 #
@@ -31,17 +36,23 @@ left() {
   [ "$l" -ge 1 ] && echo "$l" || echo 1
 }
 
-# Prints the two replies, one per line; fails if either does not arrive
+# The script hash of an output nobody pays; any 64 hex digits will do, the
+# balance asked for is not checked.
+scripthash=9623df75239b5daa7f5f03042d325b51498c4bb7059c7748b17049bf96f73888
+
+# Prints the three replies, one per line; fails if any does not arrive
 # before the deadline.
 converse() {
-  local version features
+  local version features batch
   exec 3<>"/dev/tcp/$host/$port" || return 1
   printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"server.version","params":["beignet-rbitcoin-smoke","1.4"]}' >&3 || return 1
   read -r -t "$(left)" version <&3 || return 1
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server.features","params":[]}' >&3 || return 1
   read -r -t "$(left)" features <&3 || return 1
+  printf '%s\n' '[{"jsonrpc":"2.0","id":2,"method":"server.ping","params":[]},{"jsonrpc":"2.0","id":3,"method":"blockchain.scripthash.get_balance","params":["'"$scripthash"'"]}]' >&3 || return 1
+  read -r -t "$(left)" batch <&3 || return 1
   exec 3>&-
-  printf '%s\n%s\n' "$version" "$features"
+  printf '%s\n%s\n%s\n' "$version" "$features" "$batch"
 }
 
 replies=""
@@ -62,8 +73,18 @@ if [ -z "$replies" ]; then
 fi
 version=$(printf '%s\n' "$replies" | sed -n 1p)
 features=$(printf '%s\n' "$replies" | sed -n 2p)
+batch=$(printf '%s\n' "$replies" | sed -n 3p)
 echo "server.version: $version"
 echo "server.features: $features"
+echo "batch: $batch"
 echo "$version" | grep -q 'rbitcoin' || { echo "server.version does not name rbitcoin" >&2; exit 1; }
 echo "$features" | grep -q "$genesis" || { echo "server.features does not carry the $chain genesis" >&2; exit 1; }
+case "$batch" in
+  \[*\]) ;;
+  *) echo "a JSON-RPC batch did not come back as an array" >&2; exit 1 ;;
+esac
+for id in 2 3; do
+  echo "$batch" | grep -qE "\"id\": *$id[,}]" || { echo "the batch reply has no answer for id $id" >&2; exit 1; }
+done
+echo "$batch" | grep -q '"error"' && { echo "the batch reply carries an error" >&2; exit 1; }
 echo "ok: rbitcoin on $chain at $host:$port"
