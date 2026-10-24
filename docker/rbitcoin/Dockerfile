@@ -74,12 +74,13 @@ RUN set -eu; \
     RUSTUP_AUTO_INSTALL=0 \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="--remap-path-prefix /build/=/source/ -C debuginfo=0 -C strip=symbols -C target-feature=+crt-static" \
       cargo build --release --locked --target x86_64-unknown-linux-musl -p rbitcoin-node; \
-    cp target/x86_64-unknown-linux-musl/release/rbitcoin-node /build/rbitcoin-node; \
-    sha256sum /build/rbitcoin-node
+    cp target/x86_64-unknown-linux-musl/release/rbitcoin-node /build/rbitcoin-node
 # A step of its own, declared after the compile, so that changing the pin
-# reruns only this check.
+# reruns only this check. It prints the binary's checksum first, so a
+# failing build shows the value to pin in its error summary.
 ARG RBITCOIN_NODE_SHA256
-RUN echo "${RBITCOIN_NODE_SHA256}  /build/rbitcoin-node" | sha256sum -c -
+RUN sha256sum /build/rbitcoin-node; \
+    echo "${RBITCOIN_NODE_SHA256}  /build/rbitcoin-node" | sha256sum -c -
 
 # ---- the node binary for each platform ----
 FROM ${ALPINE_IMAGE} AS node-amd64
