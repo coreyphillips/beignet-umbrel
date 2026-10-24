@@ -607,11 +607,12 @@ env:
   # 409 instead of 500, and a malformed payment hash on the payment, invoice
   # and proof routes answers 400 INVALID_PARAMS; the manager reads none of
   # them. Routes, environment settings and the storage schema (19) are
-  # unchanged. The npm dependency set changes: @noble/hashes 1.7.0 and
-  # @noble/secp256k1 1.7.1 become direct dependencies, and better-sqlite3
-  # (^12.11.1) moves to optionalDependencies. npm still installs it here
-  # (nothing passes --omit=optional), and the Dockerfile fails the build if
-  # it does not load.
+  # unchanged. The npm dependency set changes: @noble/hashes and
+  # @noble/secp256k1 become direct dependencies pinned at 1.7.0 and 1.7.1, so
+  # the image now installs those where 0.31.1 resolved 1.8.0 and 1.7.2, and
+  # better-sqlite3 (^12.11.1) moves to optionalDependencies. npm still
+  # installs it here (nothing passes --omit=optional), and the Dockerfile
+  # fails the build if it does not load.
   BEIGNET_VERSION: "0.32.0"
 
 jobs:
