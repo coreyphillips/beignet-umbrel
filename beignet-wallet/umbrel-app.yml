@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.32.5"
+version: "0.32.6"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,15 +30,15 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  A wallet's recovery phrase is now shown from its Edit dialog instead of a
-  button beside Edit on the wallet's page. Open Edit and press Show recovery
-  phrase at the bottom. The warning still comes first, and the words appear
-  only when you press Show phrase.
+  On umbrelOS 2, Show recovery phrase and backup export no longer fail with
+  Forbidden. umbrelOS 2 opens apps through its own gateway instead of a proxy
+  container, and Beignet now recognizes it. It also keeps other apps on your
+  Umbrel from calling the wallet directly, which on umbrelOS 2 it had not been
+  doing. Nothing changes on older Umbrel versions.
 
 
-  Closing the phrase takes you back to Edit with your changes still there,
-  and Escape now closes only the dialog in front. Still bundles beignet
-  0.32.1, so going back to 0.32.4 is safe: the wallet storage is unchanged.
+  Still bundles beignet 0.32.1, so going back to 0.32.5 is safe: the wallet
+  storage is unchanged.
 dependencies: []
 path: ""
 defaultUsername: ""
