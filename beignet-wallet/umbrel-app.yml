@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.32.6"
+version: "0.33.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,15 +30,25 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  On umbrelOS 2, Show recovery phrase and backup export no longer fail with
-  Forbidden. umbrelOS 2 opens apps through its own gateway instead of a proxy
-  container, and Beignet now recognizes it. It also keeps other apps on your
-  Umbrel from calling the wallet directly, which on umbrelOS 2 it had not been
-  doing. Nothing changes on older Umbrel versions.
+  Bundles beignet 0.33.0. Beignet's own Lightning feature bits move to a range
+  no other implementation uses: the old ones sat on bits that eclair and the
+  bLIP-2 registry had taken, so a connection to an ACINQ node dropped right
+  after the handshake. Offline receiving and async receive grants now need
+  both sides on this release, so update a Chicory phone paired with this
+  Umbrel to 0.7.5 at the same time; a wallet still talking to an older peer
+  keeps its channels and payments working but cannot set up new offline
+  receive epochs with it until both are current.
 
 
-  Still bundles beignet 0.32.1, so going back to 0.32.5 is safe: the wallet
-  storage is unchanged.
+  A payment that arrived through a JIT channel open now shows what the wallet
+  was credited, with the opening fee as its fee. A coin spent from an old
+  address now shows in Activity without a rescan, a received payment on a
+  closing channel is claimed on time even after a restart, and background
+  wallet refreshes and node startup use less memory.
+
+
+  Going back to 0.32.6 keeps the wallet storage, which is unchanged, but
+  brings back the old feature bits.
 dependencies: []
 path: ""
 defaultUsername: ""
