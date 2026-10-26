@@ -81,7 +81,7 @@ Controls for a feature stay hidden until the bundled engine has the routes behin
 ## Architecture
 
 ```
-Umbrel app_proxy (SSO)
+Umbrel app_proxy, or umbrelOS 2's app gateway (SSO)
         |
         v
    manager (this app)                 one beignet daemon per wallet
@@ -186,9 +186,9 @@ The same three steps, with its own tag and image: `git tag rbitcoin-v0.8.0-1` pu
 
 ## Security notes
 
-- Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase: it is shown at creation, and again on request with **Show recovery phrase** in the wallet's **Edit** dialog. That route answers only Umbrel's app_proxy and loopback, like the backup routes, and each read is noted in the wallet's log.
+- Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase: it is shown at creation, and again on request with **Show recovery phrase** in the wallet's **Edit** dialog. That route answers only what fronts the app with Umbrel's sign-in and loopback, like the backup routes, and each read is noted in the wallet's log.
 - The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered.
-- The manager's API is restricted to Umbrel's `app_proxy`, which enforces Umbrel's single sign-on, and to loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. While `app_proxy` cannot be resolved the rest of the API allows every source, but the backup routes never do: they answer loopback only until it resolves. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
+- The manager's API is restricted to what enforces Umbrel's single sign-on and to loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. On legacy Umbrel and umbrelOS 1.x that is the app's `app_proxy` container. umbrelOS 2 has no such container: its app gateway runs in umbreld on the host, so the manager trusts the Docker bridge host, found from its container's default route. The host is trusted on the older versions too, where it is Umbrel itself. Apps that share the host's network (`network_mode: host`) connect from that same address, so they are not kept out. Until the manager knows which of the two fronts it, the rest of the API allows every source, but the backup and recovery phrase routes never do: they answer loopback and the host only. It knows once `app_proxy` resolves, or once Docker DNS answers for the manager's own container but not for `app_proxy`. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
 - The wallet daemons' HTTP APIs bind only to `127.0.0.1` inside the container and are never exposed to your network. Their Lightning listen ports are published on the host (19101 to 19130) so peers can dial them; that transport is authenticated and encrypted end to end (BOLT 8), and a port answers nothing to anyone without the node's public key. Behind a home router nothing reaches them from the internet unless you forward a port; an Umbrel with a public IPv6 address is reachable on them directly, as it is on the LND app's port.
 
 ## License
