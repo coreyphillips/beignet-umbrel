@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.32.4"
+version: "0.32.5"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,16 +30,15 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  You can now show a wallet's recovery phrase again. Press Recovery phrase
-  next to Edit on the wallet's page. A warning comes first, and the words
-  appear only when you press Show phrase. Each time the phrase is shown, the
-  wallet's log says so, without the words.
+  A wallet's recovery phrase is now shown from its Edit dialog instead of a
+  button beside Edit on the wallet's page. Open Edit and press Show recovery
+  phrase at the bottom. The warning still comes first, and the words appear
+  only when you press Show phrase.
 
 
-  On a phone, the Overview no longer scrolls sideways. The channel backup
-  badge and long ids wrap to fit the screen, and recovery phrase words show
-  two to a row. Still bundles beignet 0.32.1, so going back to 0.32.3 is
-  safe: the wallet storage is unchanged.
+  Closing the phrase takes you back to Edit with your changes still there,
+  and Escape now closes only the dialog in front. Still bundles beignet
+  0.32.1, so going back to 0.32.4 is safe: the wallet storage is unchanged.
 dependencies: []
 path: ""
 defaultUsername: ""
