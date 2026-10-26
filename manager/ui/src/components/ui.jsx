@@ -573,3 +573,18 @@ export const staggerItem = {
 	hidden: { opacity: 0, y: 10 },
 	show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 380, damping: 34 } }
 };
+
+/** A recovery phrase as numbered words, in the order they are written down. */
+export function SeedWords({ mnemonic }) {
+	const words = String(mnemonic || '').split(' ').filter(Boolean);
+	return (
+		<m.div className="seed-grid" variants={staggerContainer} initial="hidden" animate="show" data-testid="seed-words">
+			{words.map((w, i) => (
+				<m.div key={i} variants={staggerItem} className="seed-word">
+					<span>{i + 1}</span>
+					{w}
+				</m.div>
+			))}
+		</m.div>
+	);
+}

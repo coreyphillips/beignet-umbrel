@@ -601,6 +601,28 @@ class WalletManager {
 		return fs.readFileSync(this.paths(id).tokenFile, 'utf8').trim();
 	}
 
+	/**
+	 * A wallet's recovery phrase, read back so its owner can write it down
+	 * again after the create dialog has closed. The route that serves it gets
+	 * the strict guard, like the backup routes, and every read leaves a line
+	 * in the wallet's log (never the words themselves) so a reveal is on
+	 * record.
+	 */
+	recoveryPhrase(id) {
+		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		let mnemonic = '';
+		try {
+			mnemonic = fs.readFileSync(this.paths(id).mnemonicFile, 'utf8').trim();
+		} catch (e) {
+			if (e.code !== 'ENOENT') throw e;
+		}
+		if (!mnemonic) {
+			throw httpError(404, 'NO_SEED', "This wallet's recovery phrase is not on this Umbrel.");
+		}
+		this._log(id, 'recovery phrase shown in the dashboard');
+		return { mnemonic };
+	}
+
 	target(id) {
 		const rec = this.registry.get(id);
 		if (!rec) return null;

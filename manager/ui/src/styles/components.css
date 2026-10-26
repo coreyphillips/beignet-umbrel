@@ -190,11 +190,14 @@
 	grid-column: 1 / -1;
 }
 
+/* One column on a phone, at most as wide as the screen: a bare 1fr column
+   grows to its widest card's content, which carried every card on the page
+   off the right edge with it. */
 @media (max-width: 760px) {
 	.grid.cols-2,
 	.grid.cols-3,
 	.grid.cols-4 {
-		grid-template-columns: 1fr;
+		grid-template-columns: minmax(0, 1fr);
 	}
 }
 
@@ -509,6 +512,13 @@ td {
 
 tr:last-child td {
 	border-bottom: none;
+}
+
+/* A key and value table, such as Node status. A long value badge (the
+   backup tier) wraps inside its cell instead of widening the card past a
+   phone's screen. */
+.kv .badge {
+	white-space: normal;
 }
 
 tbody tr {
@@ -1057,6 +1067,12 @@ tbody tr:hover {
 	word-break: break-all;
 }
 
+/* An id in a card's meta line, such as the guardian id, is one unbroken hex
+   string wider than a phone's screen. */
+.wallet-meta code {
+	word-break: break-all;
+}
+
 /* A wallet's pinned guardian set, shown under the channel backup choice. */
 .guardian-list {
 	margin: 8px 0 0;
@@ -1103,9 +1119,16 @@ tbody tr:hover {
 
 .seed-grid {
 	display: grid;
-	grid-template-columns: repeat(3, 1fr);
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 8px;
 	margin: 14px 0;
+}
+
+/* Three numbered words abreast are wider than a phone's dialog. */
+@media (max-width: 480px) {
+	.seed-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
 }
 
 .seed-word {

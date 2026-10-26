@@ -97,6 +97,8 @@ export const manager = {
 	createWallet: (body) => request('/api/wallets', { method: 'POST', body }),
 	importWallet: (body) => request('/api/wallets/import', { method: 'POST', body }),
 	updateWallet: (id, body) => request(`/api/wallets/${id}`, { method: 'PATCH', body }),
+	// The wallet's seed, read back for its owner to write down again.
+	recoveryPhrase: (id) => request(`/api/wallets/${id}/recovery-phrase`, { method: 'POST' }),
 	startWallet: (id) => request(`/api/wallets/${id}/start`, { method: 'POST' }),
 	stopWallet: (id) => request(`/api/wallets/${id}/stop`, { method: 'POST' }),
 	deleteWallet: (id, purge) =>

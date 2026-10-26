@@ -121,6 +121,9 @@ async function main() {
 	// guard's fail-open window: while app_proxy is unresolved they answer
 	// loopback only, rather than any app on the shared network.
 	app.use('/api/backup', accessGuard.strict);
+	// One wallet's seed, read back for its owner: the same stakes as an
+	// export, so the same guard.
+	app.use('/api/wallets/:id/recovery-phrase', accessGuard.strict);
 
 	// A restore carries the whole archive in its body (base64), which on a box
 	// with many wallets is larger than any other request here. Mounted first so
@@ -315,6 +318,16 @@ async function main() {
 		'/wallets/:id',
 		asyncHandler(async (req, res) => {
 			res.json({ ok: true, result: await manager.updateWallet(req.params.id, req.body || {}) });
+		})
+	);
+
+	// The wallet's recovery phrase, shown again on request. A POST, so no
+	// link, prefetch or cache ever fetches it, and never stored by one.
+	api.post(
+		'/wallets/:id/recovery-phrase',
+		asyncHandler(async (req, res) => {
+			res.setHeader('Cache-Control', 'no-store');
+			res.json({ ok: true, result: manager.recoveryPhrase(req.params.id) });
 		})
 	);
 

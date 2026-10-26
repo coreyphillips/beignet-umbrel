@@ -209,6 +209,15 @@ function mnemonic(count = 24) {
 	return Array.from({ length: count }, () => pick(WORDS)).join(' ');
 }
 
+// Each wallet's seed, kept off its record the way the manager keeps it in a
+// file of its own: the one a wallet was created or imported with, or one
+// made up on first ask for the wallets the demo starts with.
+const seeds = new Map();
+function seedOf(id) {
+	if (!seeds.has(id)) seeds.set(id, mnemonic(24));
+	return seeds.get(id);
+}
+
 const now = Date.now();
 const DAY = 86400000;
 
@@ -1797,11 +1806,13 @@ function managerRequest(path, method, body) {
 			peers: []
 		});
 		runDemoLfbwSetup(w);
-		return { record: publicRecord(w), mnemonic: mnemonic(body.wordCount || 24) };
+		seeds.set(id, mnemonic(body.wordCount || 24));
+		return { record: publicRecord(w), mnemonic: seeds.get(id) };
 	}
 	if (path === '/wallets/import' && method === 'POST') {
 		const words = String(body.mnemonic || '').trim().split(/\s+/);
 		if (words.length !== 12 && words.length !== 24) throw err('Recovery phrase must be 12 or 24 words');
+		const importedSeed = words.join(' ').toLowerCase();
 		wrongChain(body.electrum || store.settings.defaultElectrum, body.network || store.settings.defaultNetwork, body);
 		const id = 'demo-' + hex(6);
 		const w = {
@@ -1837,6 +1848,7 @@ function managerRequest(path, method, body) {
 			offers: [],
 			peers: []
 		});
+		seeds.set(id, importedSeed);
 		// The real route answers { record }, with no seed echoed back.
 		return { record: publicRecord(w) };
 	}
@@ -1847,6 +1859,8 @@ function managerRequest(path, method, body) {
 	if (!w) throw err('Wallet not found', 'NOT_FOUND');
 	// m[2] still carries any query string (e.g. "errors?since=123").
 	const [sub, subQuery] = (m[2] || '').split('?');
+
+	if (sub === 'recovery-phrase' && method === 'POST') return { mnemonic: seedOf(w.id) };
 
 	if (!sub) {
 		if (method === 'GET') return publicRecord(w);

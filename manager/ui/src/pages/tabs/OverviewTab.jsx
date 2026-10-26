@@ -172,7 +172,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 
 			<div className="grid cols-2">
 				<Card title="Node status">
-					<table>
+					<table className="kv">
 						<tbody>
 							<Row k="Sync" v={<Badge tone={health?.status === 'ready' ? 'green' : 'yellow'}>{health?.status || '-'}</Badge>} />
 							<Row k="Block height" v={info?.blockHeight ?? '-'} />
