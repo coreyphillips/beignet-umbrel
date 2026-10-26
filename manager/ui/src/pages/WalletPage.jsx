@@ -20,6 +20,7 @@ import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx'
 import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
 import FforReturnPanel from '../components/FforReturnPanel.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
+import RecoveryPhraseModal from '../components/RecoveryPhraseModal.jsx';
 import { currentEpoch, describeEpoch } from '../lib/ffor.js';
 import { shortId } from '../lib/format.js';
 import { isOwnPayment } from '../lib/own-payments.js';
@@ -184,6 +185,7 @@ export default function WalletPage() {
 	const showRestore = restoreHold || (running && restoreMarker);
 	const [config, setConfig] = useState(null);
 	const [editing, setEditing] = useState(null); // click origin or null
+	const [showingPhrase, setShowingPhrase] = useState(null); // click origin or null
 	useEffect(() => {
 		manager.config().then(setConfig).catch(() => {});
 	}, []);
@@ -326,6 +328,15 @@ export default function WalletPage() {
 					<Button className="sm" onClick={(e) => setEditing({ x: e.clientX, y: e.clientY })}>
 						Edit
 					</Button>
+					{rec && (
+						<Button
+							className="sm"
+							data-testid="recovery-phrase"
+							onClick={(e) => setShowingPhrase({ x: e.clientX, y: e.clientY })}
+						>
+							Recovery phrase
+						</Button>
+					)}
 				</div>
 				<div className="wallet-meta">
 					{info ? (
@@ -499,6 +510,9 @@ export default function WalletPage() {
 				</div>
 			)}
 
+			{showingPhrase && rec && (
+				<RecoveryPhraseModal wallet={rec} origin={showingPhrase} onClose={() => setShowingPhrase(null)} />
+			)}
 			{editing && rec && (
 				<EditWalletModal
 					rec={rec}

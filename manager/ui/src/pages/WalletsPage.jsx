@@ -14,6 +14,7 @@ import {
 	Help,
 	Badge,
 	Segmented,
+	SeedWords,
 	Skeleton,
 	staggerContainer,
 	staggerItem
@@ -554,26 +555,13 @@ export function NewWallet({ config, onDone, onSeed, onOpen, wallets }) {
 
 function SeedModal({ name, mnemonic, onClose }) {
 	const toast = useToast();
-	const words = useMemo(() => mnemonic.split(' '), [mnemonic]);
 	return (
 		<Modal title={`Backup seed for "${name}"`} onClose={onClose}>
 			<div className="error-note">
 				Write these words down in order and keep them offline. Anyone with this phrase can spend
-				your funds. This is the only time it is shown here.
+				your funds. You can show it again later with Recovery phrase on the wallet's page.
 			</div>
-			<m.div
-				className="seed-grid"
-				variants={staggerContainer}
-				initial="hidden"
-				animate="show"
-			>
-				{words.map((w, i) => (
-					<m.div key={i} variants={staggerItem} className="seed-word">
-						<span>{i + 1}</span>
-						{w}
-					</m.div>
-				))}
-			</m.div>
+			<SeedWords mnemonic={mnemonic} />
 			<div className="center-actions">
 				<Button
 					onClick={async () => {
