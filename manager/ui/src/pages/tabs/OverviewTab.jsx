@@ -282,6 +282,8 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
  * which every wallet has because the app publishes the wallet ports on this
  * Umbrel. The ports are the record's, so they are the host ports peers dial.
  * The first way that has an address is shown until the reader picks another.
+ * Every way with an address comes with a QR code of it, so a phone wallet can
+ * scan the node URI instead of having it typed or pasted across.
  */
 function ConnectCard({ info, rec }) {
 	const [picked, setPicked] = useState(null);
@@ -308,7 +310,16 @@ function ConnectCard({ info, rec }) {
 					</Button>
 				))}
 			</div>
-			{way.uri ? <><CopyText value={way.uri} />{way.key === 'iroh' && <QR value={way.uri} />}</> : <div className="empty">Not available yet.</div>}
+			{way.uri ? (
+				<>
+					<CopyText value={way.uri} />
+					<div style={{ marginTop: 12, textAlign: 'center' }}>
+						<QR value={way.uri} />
+					</div>
+				</>
+			) : (
+				<div className="empty">Not available yet.</div>
+			)}
 			<span className="field-hint" style={{ display: 'block', marginTop: 8 }} data-testid="connect-hint">
 				{way.hint}
 			</span>

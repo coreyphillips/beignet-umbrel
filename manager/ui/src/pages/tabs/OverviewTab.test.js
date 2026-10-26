@@ -470,6 +470,47 @@ test('a tor wallet offers Tor and the home network; a wallet that does not annou
 	}
 });
 
+test('every way in with an address shows a QR of it, and a way without one shows none', async () => {
+	const r = await render(
+		wrapped,
+		connectProps({
+			networkMode: 'hybrid',
+			announce: true,
+			publicHost: 'node.example.com',
+			publicAddress: 'node.example.com:19102',
+			publicPort: 19102,
+			listenPort: 9102,
+			onionAddress: ONION
+		})
+	);
+	try {
+		await settle(50);
+		const { click } = await import('../../../test/render.mjs');
+		const card = () => r.$('[data-testid="connect-ways"]').parentElement;
+		const button = (label) =>
+			Array.from(r.$('[data-testid="connect-ways"]').querySelectorAll('button')).find((b) => b.textContent.trim() === label);
+		const drawn = new Set();
+		for (const label of ['Clearnet', 'Tor', 'Local network']) {
+			await click(button(label));
+			const svg = card().querySelector('.qr svg');
+			assert.ok(svg, `${label} has a QR`);
+			drawn.add(svg.innerHTML);
+		}
+		// One code per address: picking another way redraws it.
+		assert.equal(drawn.size, 3);
+	} finally {
+		await r.unmount();
+	}
+	const tor = await render(wrapped, connectProps({ networkMode: 'tor', announce: true, listenPort: 9102 }));
+	try {
+		await settle(50);
+		assert.match(shown(tor), /Not available yet/);
+		assert.equal(tor.$('[data-testid="connect-ways"]').parentElement.querySelector('.qr'), null);
+	} finally {
+		await tor.unmount();
+	}
+});
+
 test('the Iroh phone link shows its pairing URI, QR and IP visibility help', async () => {
 	const value = `${NODE}@iroh:${'b'.repeat(64)}?relay=https%3A%2F%2Frelay.example%2F`;
 	const p = connectProps({ networkMode: 'tor', announce: false, iroh: { enabled: true } });
