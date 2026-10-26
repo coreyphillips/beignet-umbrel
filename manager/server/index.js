@@ -31,9 +31,10 @@ async function main() {
 	const app = express();
 	app.disable('x-powered-by');
 
-	// Restrict the API to Umbrel's app_proxy (which fronts the browser with SSO)
-	// and loopback, so other apps on the shared network cannot reach the wallet
-	// control plane directly. Mounted first so it covers every route below.
+	// Restrict the API to what fronts the browser with Umbrel's SSO (app_proxy,
+	// or umbrelOS 2's app gateway on the host) and loopback, so other apps on
+	// the shared network cannot reach the wallet control plane directly.
+	// Mounted first so it covers every route below.
 	const accessGuard = createAccessGuard({ log: (m) => console.log(m) });
 	app.use(accessGuard);
 
@@ -119,7 +120,7 @@ async function main() {
 
 	// An export hands out every seed on the box, so these routes do not get the
 	// guard's fail-open window: while app_proxy is unresolved they answer
-	// loopback only, rather than any app on the shared network.
+	// loopback and the host only, rather than any app on the shared network.
 	app.use('/api/backup', accessGuard.strict);
 	// One wallet's seed, read back for its owner: the same stakes as an
 	// export, so the same guard.
