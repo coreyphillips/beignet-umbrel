@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.32.2"
+version: "0.32.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,20 +30,15 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  When no Electrum server on your Umbrel answers on a wallet's network, the
-  Electrum fields now offer public servers for it instead: Bitkit, BlueWallet,
-  Blockstream and ACINQ on mainnet, Blockstream on testnet, and Bitkit's
-  staging server on regtest. They are checked only while that list shows, and
-  picking one turns certificate verification on. Someone else runs these
-  servers and can see the wallet's addresses, so installing Electrs or
-  Fulcrum keeps that on your Umbrel.
+  The "Connect to this node" card on a wallet's Overview now shows a QR code
+  for Clearnet, Tor and Local network, not only for the Iroh phone link. Pick
+  a way in and scan its code with a phone wallet to open a channel to this
+  node, instead of copying the address across. A way with no address yet
+  still shows none.
 
 
-  A server that does not answer the usual "which chain are you on" request,
-  such as Bitkit's, now shows its chain and height instead of "chain
-  unknown", and the wrong-chain check works on it. On a phone the server
-  buttons wrap two to a line. Still bundles beignet 0.32.1, so going back to
-  0.32.1 is safe: the wallet storage is unchanged.
+  Still bundles beignet 0.32.1, so going back to 0.32.2 is safe: the wallet
+  storage is unchanged.
 dependencies: []
 path: ""
 defaultUsername: ""
