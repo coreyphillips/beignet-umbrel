@@ -129,7 +129,7 @@ export default function RestorePanel({ id, api, rec, tick = 0, onStarted, onDone
 					follow the protocol; it cannot revoke keys on a device that does not.
 				</p>
 				{guardians.length > 0 && (
-					<div className="wallet-meta" style={{ marginBottom: 12 }}>
+					<div className="wallet-meta" style={{ marginBottom: 12, overflowWrap: 'anywhere' }}>
 						Guardians: {guardians.map((g) => g.url).join(', ')}
 					</div>
 				)}
