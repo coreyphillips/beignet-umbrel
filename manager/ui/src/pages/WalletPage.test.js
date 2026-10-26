@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createElement } from "react";
+import { act, createElement } from "react";
 import { click, render, settle, type } from "../../test/render.mjs";
+import { manager } from "../api.js";
 import { ToastProvider } from "../components/Toast.jsx";
 import { EditWalletModal } from "./WalletPage.jsx";
 import ffor from "../../../server/ffor.js";
@@ -274,6 +275,89 @@ test("a refusal that lands after the server was changed again does not offer to 
     assert.match(r.$('[data-testid="electrum-wrong-chain"]').textContent, /new-unchecked\.example/);
   } finally {
     await r.unmount();
+    globalThis.fetch = fetchBefore;
+  }
+});
+
+const escape = () =>
+  act(async () => {
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+
+test("the Edit dialog offers the recovery phrase to a Lightning and an on-chain only wallet, warning first", async () => {
+  const asked = [];
+  const phraseBefore = manager.recoveryPhrase;
+  manager.recoveryPhrase = async (id) => {
+    asked.push(id);
+    return { mnemonic: "abandon ".repeat(11) + "about" };
+  };
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, result: [] }) });
+  try {
+    for (const onchainOnly of [false, true]) {
+      // Channel backup is off for both: the section must not hang on it.
+      const r = await render(wrapped, {
+        rec: { ...initial(), onchainOnly },
+        presets: [],
+        onClose() {},
+        onSaved() {},
+      });
+      try {
+        const show = r.$('[data-testid="recovery-phrase"]');
+        assert.ok(show, `onchainOnly ${onchainOnly}`);
+        assert.equal(show.textContent, "Show recovery phrase");
+        assert.match(show.className, /\bghost\b/);
+        await click(show);
+        assert.match(r.text(), /Recovery phrase for "Primary"/);
+        assert.match(r.text(), /Anyone who sees these words can take every coin/);
+        assert.equal(r.$('[data-testid="seed-words"]'), null);
+        assert.deepEqual(asked, [], "nothing is asked for before Show phrase");
+      } finally {
+        await r.unmount();
+      }
+    }
+  } finally {
+    manager.recoveryPhrase = phraseBefore;
+    globalThis.fetch = fetchBefore;
+  }
+});
+
+test("closing the recovery phrase returns to the Edit dialog with its edits", async () => {
+  const phraseBefore = manager.recoveryPhrase;
+  manager.recoveryPhrase = async () => ({ mnemonic: "abandon ".repeat(11) + "about" });
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, result: [] }) });
+  let closed = 0;
+  const r = await render(wrapped, {
+    rec: initial(),
+    presets: [],
+    onClose() {
+      closed++;
+    },
+    onSaved() {},
+  });
+  try {
+    await type(r.$("input"), "Renamed primary");
+    await click(r.$('[data-testid="recovery-phrase"]'));
+    await click(r.$('[data-testid="reveal-phrase"]'));
+    await settle(20);
+    assert.ok(r.$('[data-testid="seed-words"]'));
+
+    await escape();
+    await settle(250);
+    assert.equal(r.$('[data-testid="seed-words"]'), null);
+    assert.doesNotMatch(r.text(), /Recovery phrase for/);
+    assert.equal(closed, 0, "Escape closed the phrase only");
+    assert.match(r.text(), /Edit wallet/);
+    assert.equal(r.$("input").value, "Renamed primary");
+
+    // With the phrase gone, Escape is the Edit dialog's again.
+    await escape();
+    await settle(250);
+    assert.equal(closed, 1);
+  } finally {
+    await r.unmount();
+    manager.recoveryPhrase = phraseBefore;
     globalThis.fetch = fetchBefore;
   }
 });

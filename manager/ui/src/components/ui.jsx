@@ -481,15 +481,23 @@ export function QR({ value, size = 180 }) {
 
 const CLOSE_MS = 160;
 
+// Open modals, oldest first. A dialog can open over another one, and every
+// open modal listens on window, so Escape is left to the newest.
+const openModals = [];
+
 /**
  * Glass modal that grows out of its trigger. Pass `origin` ({x, y} client
  * coords from the opening click) to make it fly in from that point; without
  * it, it scales from center. Closing plays a short exit before onClose fires,
  * so call sites can keep conditional rendering.
+ *
+ * A modal opened over another is rendered after it, as a sibling rather than
+ * a child: the box's transform would pin a nested overlay to the box.
  */
 export function Modal({ title, help, onClose, children, wide = false, origin = null }) {
 	const [closing, setClosing] = useState(false);
 	const closeTimer = useRef(null);
+	const self = useRef(null);
 	const reduced = useReducedMotion();
 
 	const close = () => {
@@ -501,7 +509,11 @@ export function Modal({ title, help, onClose, children, wide = false, origin = n
 
 	useEffect(() => () => clearTimeout(closeTimer.current), []);
 	useEffect(() => {
-		const onKey = (e) => e.key === 'Escape' && close();
+		openModals.push(self);
+		return () => openModals.splice(openModals.indexOf(self), 1);
+	}, []);
+	useEffect(() => {
+		const onKey = (e) => e.key === 'Escape' && openModals[openModals.length - 1] === self && close();
 		window.addEventListener('keydown', onKey);
 		return () => window.removeEventListener('keydown', onKey);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
