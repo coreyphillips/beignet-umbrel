@@ -621,30 +621,39 @@ env:
   # 0.33.0 moves beignet's own feature bits: option_ff_receive from 560/561
   # to 440/441, option_ff_concurrent from 562/563 to 442/443 and the async
   # receive service from 260/261 to 444/445, off eclair's on_the_fly_funding
-  # and funding_fee_credit bits and bLIP-2's htlc_endorsement (ACINQ dropped
-  # every connection right after init, and an LND node announcing 261 looked
-  # like an async receive LSP). A wallet on 0.33.0 and a peer on an older
-  # beignet refuse new offline receive setups and new async receive grants
-  # with each other, a live concurrent epoch pauses on reconnect without
-  # closing, and a peer that requires 560 or 562 is disconnected. Nothing in
-  # the manager or dashboard names a bit number, and the "does not advertise
+  # and funding_fee_credit bits and bLIP-2's htlc_endorsement (eclair sent its
+  # current_fee_credit message right after init and beignet disconnected on
+  # the unknown even type, and an LND node announcing 261 looked like an
+  # async receive LSP). A wallet on 0.33.0 and a peer on an older beignet
+  # refuse new offline receive setups and new async receive grants with each
+  # other, a live concurrent epoch pauses on reconnect without closing, and a
+  # peer that requires 560 or 562 is disconnected. Nothing in the manager or
+  # dashboard names a bit number, and the "does not advertise
   # option_ff_receive" message the dashboard matches is unchanged. An
   # incoming payment's amountSats is now what the node was credited and its
-  # feeSats a JIT LSP's skim, which the Activity tab shows as is. GET /queue
-  # lists active entries plus the 1000 most recently finished, GET
-  # /queue/history and GET /queue/entry page the rest, and webhook
-  # deliveries are capped per registration and in total; the manager calls
-  # none of these. The default Electrum servers are the ones the Bitkit app
-  # uses (bitkit.to:9999 on mainnet, electrs.bitkit.stag0.blocktank.to:9999
-  # on regtest); the manager names a server for every wallet, so only a
-  # record with an empty host would meet them. A spend of a coin below the
-  # gap window now reaches history, a fulfilled received HTLC on a closing
-  # channel is force closed at the usual 18-block margin, background
-  # refreshes no longer copy and freeze the whole wallet, and startup reads
-  # history tables 500 rows at a time. Routes gain the two queue reads only,
-  # environment settings, the storage schema (19) and the dependency set are
-  # unchanged, and the capability probes in server/engine.js answer as for
-  # 0.32.1.
+  # feeSats a JIT LSP's skim, which the Activity tab shows as is. A JIT
+  # forward carries that skim in the update_add_htlc TLV 65537, a private
+  # channel sends its signed channel_update to its peer when ready,
+  # reestablished and given a real short channel id, and a direct funding
+  # attestation can name the prior 2-of-2 when the peer rotated its funding
+  # key for the splice. GET /queue lists active entries plus the 1000 most
+  # recently finished, GET /queue/history and GET /queue/entry page the
+  # rest, and webhook deliveries are capped per registration and in total;
+  # the manager calls none of these. The default Electrum servers are the
+  # ones the Bitkit app uses (bitkit.to:9999 on mainnet,
+  # electrs.bitkit.stag0.blocktank.to:9999 on regtest). The manager names a
+  # server for every wallet, so the defaults themselves are reached only by
+  # a record with an empty host, but the mainnet fallback behind every named
+  # server moves too: a mainnet wallet whose own server stops answering now
+  # falls back to bitkit.to:9999 instead of 35.187.18.233:8900, the same
+  # operator's old server by IP. A spend of a coin below the gap window now
+  # reaches history, a fulfilled received HTLC on a closing channel is force
+  # closed at the usual 18-block margin, background refreshes no longer copy
+  # and freeze the whole wallet, startup reads history tables 500 rows at a
+  # time, and gossip intake is capped at 16 MiB. Routes gain the two queue
+  # reads only, environment settings, the storage schema (19) and the
+  # dependency set are unchanged, and the capability probes in
+  # server/engine.js answer as for 0.32.1.
   BEIGNET_VERSION: "0.33.0"
 
 jobs:
