@@ -67,7 +67,7 @@ Every role is off until you switch it on for a wallet, except that a wallet pick
 
 - **Channel backup** per wallet: seed only, checkpoints via peer storage, or three guardians (async or strict quorum), with guardian rotation and restore. See [docs/CHANNEL-BACKUP.md](docs/CHANNEL-BACKUP.md).
 - **One encrypted backup of the whole box** (every wallet's seed, API token, settings and roles), with a restore flow on a fresh install. Settings shows when it was last written and which wallets changed since. See [docs/BACKUP.md](docs/BACKUP.md).
-- **Recovery phrase** of any wallet, shown again on request from the wallet's page, behind a warning, so a lost note of it can be written out again.
+- **Recovery phrase** of any wallet, shown again on request from the wallet's Edit dialog, behind a warning, so a lost note of it can be written out again.
 
 ### Tools
 
@@ -186,7 +186,7 @@ The same three steps, with its own tag and image: `git tag rbitcoin-v0.8.0-1` pu
 
 ## Security notes
 
-- Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase: it is shown at creation, and again on request with **Recovery phrase** on the wallet's page. That route answers only Umbrel's app_proxy and loopback, like the backup routes, and each read is noted in the wallet's log.
+- Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase: it is shown at creation, and again on request with **Show recovery phrase** in the wallet's **Edit** dialog. That route answers only Umbrel's app_proxy and loopback, like the backup routes, and each read is noted in the wallet's log.
 - The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered.
 - The manager's API is restricted to Umbrel's `app_proxy`, which enforces Umbrel's single sign-on, and to loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. While `app_proxy` cannot be resolved the rest of the API allows every source, but the backup routes never do: they answer loopback only until it resolves. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
 - The wallet daemons' HTTP APIs bind only to `127.0.0.1` inside the container and are never exposed to your network. Their Lightning listen ports are published on the host (19101 to 19130) so peers can dial them; that transport is authenticated and encrypted end to end (BOLT 8), and a port answers nothing to anyone without the node's public key. Behind a home router nothing reaches them from the internet unless you forward a port; an Umbrel with a public IPv6 address is reachable on them directly, as it is on the LND app's port.

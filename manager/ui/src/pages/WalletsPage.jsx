@@ -559,7 +559,7 @@ function SeedModal({ name, mnemonic, onClose }) {
 		<Modal title={`Backup seed for "${name}"`} onClose={onClose}>
 			<div className="error-note">
 				Write these words down in order and keep them offline. Anyone with this phrase can spend
-				your funds. You can show it again later with Recovery phrase on the wallet's page.
+				your funds. You can show it again later from Edit on the wallet's page.
 			</div>
 			<SeedWords mnemonic={mnemonic} />
 			<div className="center-actions">
