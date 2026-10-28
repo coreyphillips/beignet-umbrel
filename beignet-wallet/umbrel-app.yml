@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.33.0"
+version: "0.35.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,25 +30,23 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.33.0. Beignet's own Lightning feature bits move to a range
-  no other implementation uses: the old ones sat on bits that eclair and the
-  bLIP-2 registry had taken, so a connection to an ACINQ node dropped right
-  after the handshake. Offline receiving and async receive grants now need
-  both sides on this release, so update a Chicory phone paired with this
-  Umbrel to 0.7.5 at the same time; a wallet still talking to an older peer
-  keeps its channels and payments working but cannot set up new offline
-  receive epochs with it until both are current.
+  Bundles beignet 0.35.1, which brings Beignet 0.34.0 and 0.35.0. A channel
+  force closed while its peer was offline is no longer force closed again on
+  every block, and a payment through it is no longer marked failed before
+  the chain has settled it.
 
 
-  A payment that arrived through a JIT channel open now shows what the wallet
-  was credited, with the opening fee as its fee. A coin spent from an old
-  address now shows in Activity without a rescan, a received payment on a
-  closing channel is claimed on time even after a restart, and background
-  wallet refreshes and node startup use less memory.
+  When a channel open fails because the connection dropped, the error now
+  says which side closed the connection and why, and a peer that aborts a
+  channel transaction with a reason has that reason shown in the channel's
+  history and the Logs tab. Peer connections, disconnections and channel
+  opens are now logged at the default level. The engine also keeps a record
+  of each direct-funding payment the wallet receives, which API clients can
+  read.
 
 
-  Going back to 0.32.6 keeps the wallet storage, which is unchanged, but
-  brings back the old feature bits.
+  Going back to 0.33.0 keeps the wallet storage, which is unchanged, but
+  direct-funding payments received after going back are not recorded.
 dependencies: []
 path: ""
 defaultUsername: ""
