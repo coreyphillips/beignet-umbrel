@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.35.1"
+version: "0.36.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,15 +30,16 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Still bundles beignet 0.35.1; this release changes only the dashboard. A
-  deposit request that a beignet wallet pays by direct funding, straight
-  into this wallet's Lightning balance, now turns into a paid receipt on the
-  Receive tab, and the wallet page announces the amount received. Until now
-  such a request stayed on screen as if nothing had happened, because it
-  settles no invoice and pays no address.
+  Bundles beignet 0.36.0. Each channel now keeps a lasting record of which
+  funding transactions it locked, and keeps it after the channel closes, so
+  wallets and apps reading this node can tell an open or a direct-funding
+  payment completed even after the channel is gone or while its peer is
+  away. A direct-funding payment received also records when its funding
+  locked. Channels from earlier versions are credited with what their saved
+  state proves.
 
 
-  Going back to 0.35.0 keeps everything: nothing stored changes.
+  Going back to 0.35.1 keeps the wallet storage, which is unchanged.
 dependencies: []
 path: ""
 defaultUsername: ""
