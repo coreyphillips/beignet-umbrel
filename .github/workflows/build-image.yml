@@ -656,20 +656,24 @@ env:
   # server/engine.js answer as for 0.32.1.
   # 0.34.0 keeps a record of each direct-funding payment a receiver took
   # (GET /direct-funding/received, readonly), reports preReestablishState
-  # on a channel whose peer is away, says who closed the connection and why
-  # when an open dies on a disconnect, and logs peer connects, disconnects
+  # on a channel whose peer is away, and logs peer connects, disconnects
   # and open progress at info instead of debug, so a daemon at the default
-  # level logs a few more lines. 0.35.0 puts that cause on the
+  # level logs a few more lines. An open that dies on a disconnect now ends
+  # its node:error message with who closed the connection and why, and a
+  # peer's tx_abort text arrives as a channel node:error ("Remote tx_abort:
+  # ..."), so the manager's channel history and Logs tab show those longer
+  # messages and the new entries. 0.35.0 puts the disconnect cause on the
   # peer:disconnect event (closedBy, reason, direction, uptimeMs), stops
   # the offered-HTLC backstop from failing a payment on, and force closing
   # again on every block, a channel that closed while its peer was away,
-  # and reports such a channel by its own state in GET /channel/diagnostics.
-  # The manager reads none of the new fields or routes. Environment
-  # settings, the storage schema (19) and the runtime dependencies are
-  # unchanged, and the capability probes in server/engine.js answer as for
-  # 0.33.0. The image takes 0.35.1, which republishes 0.35.0's code from a
-  # clean tree: the 0.35.0 tarball carried unreleased modules and is
-  # deprecated on npm.
+  # and makes GET /channel/diagnostics report such a channel as NOT_NORMAL
+  # with a null preReestablishState. The manager reads none of the new
+  # fields or routes. The one new environment setting is the opt-in
+  # BEIGNET_WIRE_TRACE, which the manager does not set. The storage schema
+  # (19) and the runtime dependencies are unchanged, and the capability
+  # probes in server/engine.js answer as for 0.33.0. The image takes
+  # 0.35.1, which republishes 0.35.0's code from a clean tree: the 0.35.0
+  # tarball carried unreleased modules and is deprecated on npm.
   BEIGNET_VERSION: "0.35.1"
 
 jobs:
