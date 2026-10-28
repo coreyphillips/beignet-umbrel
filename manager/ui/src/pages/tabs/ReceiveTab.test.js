@@ -316,6 +316,29 @@ test("the engine's record alone marks the request paid; a reverted one does not"
 	}
 });
 
+test('a receipt the watcher announced gives way when the engine records it reverted', async () => {
+	stubManager();
+	const received = [];
+	const api = stubLfbwApi({ received });
+	let mounted = await mountLfbwWatched(api, lfbwRec());
+	try {
+		await mounted.setLastReceive({ rail: 'direct-funding', amountSats: 25000, receiptHash: RECEIPT });
+		assert.ok(mounted.view.$('[data-testid="funding-paid"]'), 'announced, so shown as paid');
+		// The splice never confirmed. A remount reads the list at once, as the
+		// next poll would.
+		received.push(dfRecord('REVERTED'));
+		const first = mounted;
+		mounted = null;
+		await first.view.unmount();
+		mounted = await mountLfbwWatched(api, lfbwRec());
+		await mounted.setLastReceive({ rail: 'direct-funding', amountSats: 25000, receiptHash: RECEIPT });
+		assert.ok(!mounted.view.$('[data-testid="funding-paid"]'), 'the reverted record wins over the announcement');
+		assert.equal(mounted.view.$$('.qr').length, 1, 'and the request is back up');
+	} finally {
+		if (mounted) await mounted.view.unmount();
+	}
+});
+
 test('an engine without the receipts route leaves the request as it was', async () => {
 	stubManager();
 	const api = stubLfbwApi();

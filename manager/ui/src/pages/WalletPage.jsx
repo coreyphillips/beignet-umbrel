@@ -96,12 +96,12 @@ const EVENT_LABELS = {
 	// Lightning-first progress (beignet #669). On a liquidity provider: a
 	// channel it is funding for a payment to one of its wallets, and the
 	// delivery. On a lightning-first wallet: a beignet payer's direct funding
-	// accepted, landed, or lost.
+	// accepted or lost. One that lands is a receive, so the receive watcher
+	// announces it with its amount from the engine's record of it.
 	'jit:funding': 'Funding a channel for an incoming payment',
 	'jit:forwarded': 'Payment delivered through a just-in-time channel',
 	'jit:failed': 'A held payment could not be delivered',
 	'direct-funding:offer:accepted': 'A direct funding was accepted',
-	'direct-funding:offer:completed': 'Direct funding landed in your channel',
 	'direct-funding:offer:failed': 'A direct funding failed',
 	// FFOR offline receive (beignet #729). On the wallet being paid: the
 	// book's state changes. On the sibling settling for it: each settlement

@@ -344,25 +344,30 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 	// same two ways as the invoice below: the receive watcher hands the receipt
 	// down when it sees it, and this list is polled while a request is up in
 	// case it did not. An engine without the route never reads as paid.
+	// A failed read throws rather than answering null, so usePoll keeps the
+	// last list it had: one lost poll must not turn a receipt back into a QR.
 	const { data: fundingReceipts } = usePoll(
 		() =>
-			lfbwReady && funding?.paymentHash
-				? api.get('/direct-funding/received').catch(() => null)
-				: Promise.resolve(null),
+			lfbwReady && funding?.paymentHash ? api.get('/direct-funding/received') : Promise.resolve(null),
 		10000,
 		[id, tick, lfbwReady, funding?.paymentHash]
 	);
 	const fundingPaidInfo = useMemo(() => {
 		if (!funding?.paymentHash || funding.address !== address || funding.amountSats !== onchainSats) return null;
+		// The engine's record decides when it has one: a splice that never
+		// confirmed turns a receipt the watcher already announced to REVERTED.
+		const row = (Array.isArray(fundingReceipts) ? fundingReceipts : []).find(
+			(r) => r.receiptHash === funding.paymentHash
+		);
+		if (row) {
+			if (row.status !== 'PAID') return null;
+			const sats = Number(row.amountSat);
+			return { amountSats: Number.isFinite(sats) && sats > 0 ? sats : funding.amountSats || null };
+		}
 		if (lastReceive?.rail === 'direct-funding' && lastReceive.receiptHash === funding.paymentHash) {
 			return { amountSats: lastReceive.amountSats ?? (funding.amountSats || null) };
 		}
-		const row = (Array.isArray(fundingReceipts) ? fundingReceipts : []).find(
-			(r) => r.receiptHash === funding.paymentHash && r.status === 'PAID'
-		);
-		if (!row) return null;
-		const sats = Number(row.amountSat);
-		return { amountSats: Number.isFinite(sats) && sats > 0 ? sats : funding.amountSats || null };
+		return null;
 	}, [funding, address, onchainSats, fundingReceipts, lastReceive]);
 
 	// A request can carry the invoice from the card beside it, which makes it one
@@ -585,7 +590,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 							: ''}
 					</div>
 				)}
-				{invoice && !paid && (
+				{invoice && !paid && !fundingPaidInfo && (
 					<>
 						<label className="checkbox field" style={{ marginTop: 10 }}>
 							<input
