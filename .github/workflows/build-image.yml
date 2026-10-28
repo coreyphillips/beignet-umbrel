@@ -674,7 +674,16 @@ env:
   # probes in server/engine.js answer as for 0.33.0. The image takes
   # 0.35.1, which republishes 0.35.0's code from a clean tree: the 0.35.0
   # tarball carried unreleased modules and is deprecated on npm.
-  BEIGNET_VERSION: "0.35.1"
+  # 0.36.0 records which fundings a channel has locked (channel_ready for an
+  # open, splice_locked for a splice) and keeps the record through close:
+  # GET /channels and /channel gain lockedFundingTxids, and a direct-funding
+  # received record gains lockedAt. Rows from earlier versions are seeded on
+  # load with what they prove, and nothing new is written until a channel
+  # row is next saved. The manager reads neither field. Environment
+  # settings, the storage schema (19) and the runtime dependencies are
+  # unchanged, and the capability probes in server/engine.js answer as for
+  # 0.35.1.
+  BEIGNET_VERSION: "0.36.0"
 
 jobs:
   build:
