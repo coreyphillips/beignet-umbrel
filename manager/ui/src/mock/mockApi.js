@@ -3784,6 +3784,9 @@ function walletRequest(id, path, method, body) {
 			return st.txs;
 		case '/payments':
 			return st.payments;
+		case '/direct-funding/received':
+			// The engine's record of direct-funding payments this wallet took.
+			return st.dfReceived || [];
 		case '/utxos':
 			return st.utxos;
 		case '/offers':

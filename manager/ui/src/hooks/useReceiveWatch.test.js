@@ -19,7 +19,7 @@ const TICK = 60;
 
 /** A daemon whose payment and transaction lists the test mutates directly. */
 function stubApi() {
-	const state = { payments: [], txs: [], failPayments: false, failTxs: false };
+	const state = { payments: [], txs: [], received: null, failPayments: false, failTxs: false };
 	return {
 		state,
 		get: async (path) => {
@@ -30,6 +30,11 @@ function stubApi() {
 			if (path === '/transactions') {
 				if (state.failTxs) throw new Error('down');
 				return [...state.txs];
+			}
+			if (path === '/direct-funding/received') {
+				// null: an engine before 0.34.0, which has no such route.
+				if (!state.received) throw new Error('No route: GET /direct-funding/received');
+				return [...state.received];
 			}
 			throw new Error(`unexpected GET ${path}`);
 		}
@@ -192,7 +197,85 @@ test('a source that was down at the first look gets its own baseline', async () 
 	await view.unmount();
 });
 
+const receipt = (hash, status = 'PAID', amountSat = '30000') => ({
+	receiptHash: hash,
+	requestId: 'r'.repeat(32),
+	offerId: 'o'.repeat(64),
+	fundingTxid: 'f'.repeat(64),
+	splice: true,
+	amountSat,
+	status,
+	paidAt: 1,
+	updatedAt: 1
+});
+
+test('a direct-funding receipt is news once; the baseline and a reverted one are not', async () => {
+	const api = stubApi();
+	api.state.received = [receipt('a'.repeat(64))];
+	const { view, got } = await mountWatch(api);
+	assert.equal(got.length, 0, 'a receipt already on record is history');
+
+	api.state.received.push(receipt('b'.repeat(64), 'REVERTED'));
+	await settle(TICK * 2);
+	assert.equal(got.length, 0, 'a reverted splice paid nothing');
+
+	api.state.received.push(receipt('c'.repeat(64)));
+	await settle(TICK * 2);
+	await settle(TICK * 2);
+	assert.equal(got.length, 1, 'a new receipt is announced, and only once');
+	assert.deepEqual(got[0], {
+		rail: 'direct-funding',
+		amountSats: 30000,
+		receiptHash: 'c'.repeat(64),
+		txid: 'f'.repeat(64)
+	});
+	await view.unmount();
+});
+
+test('the completed offer event reads the receipts at once, without waiting for the poll', async () => {
+	const api = stubApi();
+	api.state.received = [];
+	const got = [];
+	const handle = { onEvent: () => {} };
+	// A poll too slow to be what finds it.
+	const SLOW = 60_000;
+	function SlowProbe() {
+		const { onEvent } = useReceiveWatch(api, true, (r) => got.push(r), SLOW);
+		useEffect(() => {
+			handle.onEvent = onEvent;
+		}, [onEvent]);
+		return null;
+	}
+	const view = await render(SlowProbe, {});
+	try {
+		await settle(TICK);
+		api.state.received.push(receipt('d'.repeat(64), 'PAID', null));
+		handle.onEvent('direct-funding:offer:completed', { offerId: 'o'.repeat(64) });
+		await settle(TICK);
+		assert.equal(got.length, 1);
+		assert.equal(got[0].rail, 'direct-funding');
+		assert.equal(got[0].amountSats, null, 'a record without an amount says so');
+	} finally {
+		// The slow poll's interval would otherwise keep the run alive.
+		await view.unmount();
+	}
+});
+
+test('an engine without the receipts route changes nothing on the other rails', async () => {
+	const api = stubApi();
+	const { view, got } = await mountWatch(api);
+	api.state.payments.push(payment('e'.repeat(64)));
+	await settle(TICK * 2);
+	assert.equal(got.length, 1);
+	assert.equal(got[0].rail, 'lightning');
+	await view.unmount();
+});
+
 test('a receive is described with its amount and its rail', () => {
+	assert.equal(
+		describeReceive({ rail: 'direct-funding', amountSats: 30000 }),
+		'Received 30,000 sats by direct funding, into the Lightning balance'
+	);
 	assert.equal(
 		describeReceive({ rail: 'lightning', amountSats: 25000 }),
 		'Received 25,000 sats over Lightning'

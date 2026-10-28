@@ -337,6 +337,34 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 		funding.amountSats === onchainSats &&
 		funding.expiresAt > Date.now();
 
+	// Whether the direct-funding request on screen has been paid. A payer that
+	// funds it grows the home channel: no invoice settles and the address is
+	// never paid, so only the engine's own record of the receipt (beignet
+	// 0.34.0+, keyed by the request's receipt hash) can say so. Learned the
+	// same two ways as the invoice below: the receive watcher hands the receipt
+	// down when it sees it, and this list is polled while a request is up in
+	// case it did not. An engine without the route never reads as paid.
+	const { data: fundingReceipts } = usePoll(
+		() =>
+			lfbwReady && funding?.paymentHash
+				? api.get('/direct-funding/received').catch(() => null)
+				: Promise.resolve(null),
+		10000,
+		[id, tick, lfbwReady, funding?.paymentHash]
+	);
+	const fundingPaidInfo = useMemo(() => {
+		if (!funding?.paymentHash || funding.address !== address || funding.amountSats !== onchainSats) return null;
+		if (lastReceive?.rail === 'direct-funding' && lastReceive.receiptHash === funding.paymentHash) {
+			return { amountSats: lastReceive.amountSats ?? (funding.amountSats || null) };
+		}
+		const row = (Array.isArray(fundingReceipts) ? fundingReceipts : []).find(
+			(r) => r.receiptHash === funding.paymentHash && r.status === 'PAID'
+		);
+		if (!row) return null;
+		const sats = Number(row.amountSat);
+		return { amountSats: Number.isFinite(sats) && sats > 0 ? sats : funding.amountSats || null };
+	}, [funding, address, onchainSats, fundingReceipts, lastReceive]);
+
 	// A request can carry the invoice from the card beside it, which makes it one
 	// thing to hand out that a payer can settle on either rail: the address for a
 	// wallet that only reads BIP21, the invoice for one that would rather use
@@ -504,37 +532,59 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 				<Field label="Message (optional)">
 					<input value={onchainMessage} onChange={(e) => setOnchainMessage(e.target.value)} placeholder="Coffee" />
 				</Field>
-				<div style={{ textAlign: 'center' }}>
-					<QR value={request} />
-				</div>
-				<div style={{ marginTop: 12, textAlign: 'center' }}>
-					<CopyText value={request} truncate={isRequest} />
-				</div>
+				{fundingPaidInfo ? (
+					// The receipt takes the request's place, as it does for a paid
+					// invoice: this request was paid, and handing it out again would
+					// only ask for the same payment twice.
+					<div className="paid-receipt" role="status" data-testid="funding-paid">
+						<div className="paid-check" aria-hidden="true">
+							✓
+						</div>
+						<div className="paid-title">Paid</div>
+						<div className="wallet-meta">
+							{fundingPaidInfo.amountSats != null
+								? `${fmtSats(fundingPaidInfo.amountSats)} received by direct funding, into your Lightning balance.`
+								: 'Received by direct funding, into your Lightning balance.'}{' '}
+							Press New address for another request.
+						</div>
+					</div>
+				) : (
+					<>
+						<div style={{ textAlign: 'center' }}>
+							<QR value={request} />
+						</div>
+						<div style={{ marginTop: 12, textAlign: 'center' }}>
+							<CopyText value={request} truncate={isRequest} />
+						</div>
+					</>
+				)}
 				{/* Built out of what is actually attached, sentence by sentence. Said
 				    as one fixed paragraph it described the message field whether or
 				    not anything had been typed into it, so an empty box showing its
 				    "Coffee" placeholder read as though the placeholder were being
 				    handed out, and the hint is the only thing explaining what is being
 				    shared. */}
-				<div className="field-hint" style={{ marginTop: 10 }}>
-					{!isRequest
-						? 'Nothing attached, so this is a plain address. Anyone can pay it any amount.'
-						: [
-								onchainSats > 0 ? `A wallet that scans this fills in ${fmtSats(onchainSats)} for the payer.` : null,
-								trimmedMessage ? 'The message travels with the request and is never written to the chain.' : null,
-								carriesInvoice
-									? 'It also carries the Lightning invoice below, so whoever scans it can settle on either rail.'
-									: null,
-								carriesFunding
-									? 'It also carries a direct-funding request: a beignet wallet paying it funds your Lightning balance in one transaction, with no deposit to move afterwards.'
-									: null
-						  ]
-								.filter(Boolean)
-								.join(' ')}
-					{isLfbw && !isRequest
-						? ' Whatever lands here moves into your Lightning balance by itself once it confirms.'
-						: ''}
-				</div>
+				{!fundingPaidInfo && (
+					<div className="field-hint" style={{ marginTop: 10 }}>
+						{!isRequest
+							? 'Nothing attached, so this is a plain address. Anyone can pay it any amount.'
+							: [
+									onchainSats > 0 ? `A wallet that scans this fills in ${fmtSats(onchainSats)} for the payer.` : null,
+									trimmedMessage ? 'The message travels with the request and is never written to the chain.' : null,
+									carriesInvoice
+										? 'It also carries the Lightning invoice below, so whoever scans it can settle on either rail.'
+										: null,
+									carriesFunding
+										? 'It also carries a direct-funding request: a beignet wallet paying it funds your Lightning balance in one transaction, with no deposit to move afterwards.'
+										: null
+							  ]
+									.filter(Boolean)
+									.join(' ')}
+						{isLfbw && !isRequest
+							? ' Whatever lands here moves into your Lightning balance by itself once it confirms.'
+							: ''}
+					</div>
+				)}
 				{invoice && !paid && (
 					<>
 						<label className="checkbox field" style={{ marginTop: 10 }}>

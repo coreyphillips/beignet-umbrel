@@ -143,13 +143,14 @@ function stubManager(status = 'running') {
 }
 
 /** A lightning-first wallet's daemon: mints requests, invoices, JIT invoices, and quotes. */
-function stubLfbwApi({ channels = [HOME], quote } = {}) {
+function stubLfbwApi({ channels = [HOME], quote, received } = {}) {
 	const calls = [];
 	return {
 		calls,
 		get: async (path) => {
 			calls.push(['GET', path]);
 			if (path === '/invoices') return [];
+			if (path === '/direct-funding/received' && received) return received;
 			if (path === '/channels') return channels;
 			if (path === '/peers') return [{ pubkey: PK, state: 'connected' }];
 			if (path.startsWith('/receive/quote?')) {
@@ -236,6 +237,92 @@ test("a lightning-first request carries a direct-funding request minted with the
 		assert.equal(again.length, 2);
 		assert.equal(again[1][2].amountSats, 25000);
 		assert.ok(uri.length > 0);
+	} finally {
+		await view.unmount();
+	}
+});
+
+/** A lightning-first ReceiveTab whose lastReceive the test hands down, as WalletPage does. */
+async function mountLfbwWatched(api, rec) {
+	let setLastReceive;
+	function Watched() {
+		const [lastReceive, set] = useState(null);
+		useEffect(() => {
+			setLastReceive = set;
+		}, []);
+		return createElement(ToastProvider, {
+			children: createElement(ReceiveTab, { id: 'w1', api, rec, tick: 0, lastReceive, config: {} })
+		});
+	}
+	const view = await render(Watched, {});
+	await settle(500);
+	return { view, setLastReceive: (r) => act(async () => setLastReceive(r)) };
+}
+
+const RECEIPT = 'e'.repeat(64);
+const dfRecord = (status = 'PAID', receiptHash = RECEIPT) => ({
+	receiptHash,
+	requestId: 'r'.repeat(32),
+	offerId: 'o'.repeat(64),
+	fundingTxid: 'f'.repeat(64),
+	splice: true,
+	amountSat: '25000',
+	status,
+	paidAt: 1,
+	updatedAt: 1
+});
+
+test("the receipt for the request on screen turns it into a paid receipt, instantly", async () => {
+	stubManager();
+	const api = stubLfbwApi();
+	const { view, setLastReceive } = await mountLfbwWatched(api, lfbwRec());
+	try {
+		assert.match(view.text(), /also carries a direct-funding request/);
+		assert.ok(!view.$('[data-testid="funding-paid"]'), 'nothing claims it is paid');
+
+		// A receipt for some other request says nothing about this one.
+		await setLastReceive({ rail: 'direct-funding', amountSats: 5, receiptHash: 'cd'.repeat(32) });
+		assert.ok(!view.$('[data-testid="funding-paid"]'), "another request's receipt does not flip it");
+
+		await setLastReceive({ rail: 'direct-funding', amountSats: 25000, receiptHash: RECEIPT });
+		const receipt = view.$('[data-testid="funding-paid"]');
+		assert.ok(receipt, 'the request becomes a receipt');
+		assert.match(receipt.textContent, /25,000 sats received by direct funding/);
+		assert.equal(view.$$('.qr').length, 0, 'and its code leaves the screen');
+		assert.doesNotMatch(view.text(), /also carries a direct-funding request/, 'with the hint that described it');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test("the engine's record alone marks the request paid; a reverted one does not", async () => {
+	stubManager();
+	const paid = stubLfbwApi({ received: [dfRecord()] });
+	const first = await mountLfbwWatched(paid, lfbwRec());
+	try {
+		assert.ok(paid.calls.some(([m, p]) => m === 'GET' && p === '/direct-funding/received'));
+		assert.ok(first.view.$('[data-testid="funding-paid"]'), 'a PAID record for its receipt hash is a receipt');
+	} finally {
+		await first.view.unmount();
+	}
+
+	const reverted = stubLfbwApi({ received: [dfRecord('REVERTED'), dfRecord('PAID', 'cd'.repeat(32))] });
+	const second = await mountLfbwWatched(reverted, lfbwRec());
+	try {
+		assert.ok(!second.view.$('[data-testid="funding-paid"]'), 'a reverted splice, or another request, is not');
+		assert.equal(second.view.$$('.qr').length, 1, 'the request stays up');
+	} finally {
+		await second.view.unmount();
+	}
+});
+
+test('an engine without the receipts route leaves the request as it was', async () => {
+	stubManager();
+	const api = stubLfbwApi();
+	const { view } = await mountLfbwWatched(api, lfbwRec());
+	try {
+		assert.ok(!view.$('[data-testid="funding-paid"]'));
+		assert.match(view.text(), /also carries a direct-funding request/);
 	} finally {
 		await view.unmount();
 	}

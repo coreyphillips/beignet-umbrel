@@ -25,8 +25,14 @@ const POLL_MS = 10000;
  * history, not news. A payment seen as PENDING is remembered as pending, so a
  * hold invoice settling while someone watches is still news when it completes.
  *
- * `onReceive` is handed { rail: 'lightning' | 'onchain', amountSats,
- * paymentHash?, txid?, pending? }.
+ * A third source, the engine's record of direct-funding payments it received
+ * (GET /direct-funding/received, beignet 0.34.0+), covers the rail neither
+ * list shows: a payer funding this wallet's request grows its channel, which
+ * settles no invoice and pays no address. An engine without the route answers
+ * an error every time, which is the same as a source that stays down.
+ *
+ * `onReceive` is handed { rail: 'lightning' | 'onchain' | 'direct-funding',
+ * amountSats, paymentHash?, txid?, receiptHash?, pending? }.
  */
 export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 	const onReceiveRef = useRef(onReceive);
@@ -44,17 +50,29 @@ export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 		// announced (or was already settled at baseline) and never speaks again.
 		const lnSeen = new Map();
 		const txSeen = new Set();
+		// Receipt hashes of direct-funding payments already announced or at
+		// baseline. A record that is REVERTED (its splice never confirmed) is
+		// not a receive and is never announced.
+		const dfSeen = new Set();
 		// Baseline is per source: /payments can answer while /transactions is
 		// still failing, and one shared flag would then report every historical
 		// transaction as news the moment the second source recovers.
 		let lnBaselined = false;
 		let txBaselined = false;
+		let dfBaselined = false;
 
 		const notify = (receive) => {
 			if (alive) onReceiveRef.current?.(receive);
 		};
 
 		handlerRef.current = (name, data) => {
+			// The receiver finished a direct-funding exchange. The event names
+			// only the offer, so the record that says which request it paid is
+			// read from the list now, rather than at the next sweep.
+			if (name === 'direct-funding:offer:completed') {
+				sweep();
+				return;
+			}
 			// An on-chain arrival off the stream (beignet 0.8.2+). The event
 			// fires for both directions, so the type gate matters: a send is not
 			// a receive, and an absent type is not evidence of one.
@@ -92,6 +110,7 @@ export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 			inFlight = true;
 			let payments = null;
 			let txs = null;
+			let received = null;
 			try {
 				payments = await api.get('/payments');
 			} catch (_) {
@@ -101,6 +120,11 @@ export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 				txs = await api.get('/transactions');
 			} catch (_) {
 				/* the next sweep asks again */
+			}
+			try {
+				received = await api.get('/direct-funding/received');
+			} catch (_) {
+				/* the next sweep asks again; an older engine never answers */
 			}
 			inFlight = false;
 			if (!alive) return;
@@ -137,6 +161,21 @@ export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 				}
 				txBaselined = true;
 			}
+			if (Array.isArray(received)) {
+				for (const r of received) {
+					if (r.status !== 'PAID' || !r.receiptHash || dfSeen.has(r.receiptHash)) continue;
+					dfSeen.add(r.receiptHash);
+					if (!dfBaselined) continue;
+					const sats = Number(r.amountSat);
+					fresh.push({
+						rail: 'direct-funding',
+						amountSats: Number.isFinite(sats) && sats > 0 ? sats : null,
+						receiptHash: r.receiptHash,
+						txid: r.fundingTxid
+					});
+				}
+				dfBaselined = true;
+			}
 			fresh.forEach(notify);
 		};
 
@@ -159,6 +198,9 @@ export function describeReceive(receive, walletName) {
 	const amount = receive.amountSats != null ? ` ${fmtSats(receive.amountSats)}` : ' a payment';
 	if (receive.rail === 'onchain') {
 		return `${who}${amount} on-chain${receive.pending ? ', waiting for a block' : ''}`;
+	}
+	if (receive.rail === 'direct-funding') {
+		return `${who}${amount} by direct funding, into the Lightning balance`;
 	}
 	return `${who}${amount} over Lightning`;
 }
