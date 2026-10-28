@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.35.0"
+version: "0.35.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,23 +30,15 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.35.1, which brings Beignet 0.34.0 and 0.35.0. A channel
-  force closed while its peer was offline is no longer force closed again on
-  every block, and a payment through it is no longer marked failed before
-  the chain has settled it.
+  Still bundles beignet 0.35.1; this release changes only the dashboard. A
+  deposit request that a beignet wallet pays by direct funding, straight
+  into this wallet's Lightning balance, now turns into a paid receipt on the
+  Receive tab, and the wallet page announces the amount received. Until now
+  such a request stayed on screen as if nothing had happened, because it
+  settles no invoice and pays no address.
 
 
-  When a channel open fails because the connection dropped, the error now
-  says which side closed the connection and why, and a peer that aborts a
-  channel transaction with a reason has that reason shown in the channel's
-  history and the Logs tab. Peer connections, disconnections and channel
-  opens are now logged at the default level. The engine also keeps a record
-  of each direct-funding payment the wallet receives, which API clients can
-  read.
-
-
-  Going back to 0.33.0 keeps the wallet storage, which is unchanged, but
-  direct-funding payments received after going back are not recorded.
+  Going back to 0.35.0 keeps everything: nothing stored changes.
 dependencies: []
 path: ""
 defaultUsername: ""
