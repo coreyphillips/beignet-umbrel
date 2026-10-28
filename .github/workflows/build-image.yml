@@ -683,7 +683,14 @@ env:
   # settings, the storage schema (19) and the runtime dependencies are
   # unchanged, and the capability probes in server/engine.js answer as for
   # 0.35.1.
-  BEIGNET_VERSION: "0.36.0"
+  # 0.36.1 is a patch: a voided channel (a zero-conf payer double-spending
+  # its funding, an open abandoned before funding) marks the direct-funding
+  # records it carried REVERTED instead of leaving them PAID, and the
+  # unbroadcastable v2 void retires its retained funding tx. The API, the
+  # environment settings, the storage schema (19) and the runtime
+  # dependencies are unchanged, and the capability probes in
+  # server/engine.js answer as for 0.36.0.
+  BEIGNET_VERSION: "0.36.1"
 
 jobs:
   build:
