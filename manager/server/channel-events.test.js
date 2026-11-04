@@ -50,6 +50,48 @@ test('records lifecycle events and channel-naming errors, ignores the rest', (t)
 	assert.equal(aa[2].code, 'REESTABLISH_TIMEOUT_FORCE_CLOSED');
 });
 
+test('peer warnings, the all-zero channel id and refused HTLC adds stay out of the history', (t) => {
+	const log = new ChannelEventLog(tmpdir(t));
+	const ZERO = '0'.repeat(64);
+	const CH = 'e1'.repeat(32);
+	// What a Core Lightning peer sends about gossip it discards (beignet #1955,
+	// #1956): connection-level, so the all-zero id, and no channel's story.
+	assert.equal(
+		log.record('node:error', {
+			channelId: ZERO,
+			code: 'CHANNEL_ERROR',
+			message: 'Remote warning: Unknown UTXO 504311x1993x0'
+		}),
+		null
+	);
+	// A warning that does name a channel is still only a warning.
+	assert.equal(
+		log.record('node:error', {
+			channelId: CH,
+			code: 'CHANNEL_ERROR',
+			message: 'Remote warning: Splice feerate_perkw is too low'
+		}),
+		null
+	);
+	// A forward turned away for balance, most days several times (beignet #1957).
+	for (const message of ['Insufficient balance for HTLC', 'Max pending HTLCs exceeded']) {
+		assert.equal(log.record('node:error', { channelId: CH, code: 'CHANNEL_ERROR', message }), null);
+	}
+	// Any other error on a channel is still its story, and so is a lifecycle event.
+	assert.ok(
+		log.record('node:error', {
+			channelId: CH,
+			code: 'CHANNEL_ERROR',
+			message: 'Remote error: invalid commitment signature'
+		})
+	);
+	assert.equal(log.record('channel:ready', { channelId: ZERO }), null);
+	assert.deepEqual(
+		log.list().map((e) => e.message),
+		['Remote error: invalid commitment signature']
+	);
+});
+
 test('history survives a new instance, i.e. a manager restart', (t) => {
 	const dir = tmpdir(t);
 	const first = new ChannelEventLog(dir);

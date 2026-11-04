@@ -956,6 +956,11 @@ tbody tr:hover {
 	margin-bottom: 12px;
 }
 
+/* A Logs tab warning: worth reading, not worth a coloured box. */
+.node-warning {
+	font-size: 13px;
+}
+
 .info-note {
 	background: rgba(110, 168, 255, 0.08);
 	border: 1px solid rgba(110, 168, 255, 0.3);

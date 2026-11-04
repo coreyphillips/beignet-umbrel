@@ -2543,12 +2543,29 @@ function demoNodeErrors() {
 			channelId: '3f72ef8ddbb7c08cb9d8b945855aba6b99ccf15b156c80d1c2c2e1e1a0e12c58',
 			timestamp: DEMO_ERROR_AT
 		},
-		{
-			// A payment that could not be sent because our side of the channel is
-			// below the amount plus the reserve. Not a channel rejection.
+		// Payments turned away because our side of a channel is below the amount
+		// plus the reserve. Not a channel rejection, and in the field mostly
+		// other people's forwards (beignet #1957), so they repeat; the Logs tab
+		// folds them into one Warnings entry.
+		...[2000, 5000, 7000].map((offset) => ({
 			code: 'CHANNEL_ERROR',
 			message: 'Insufficient balance for HTLC',
-			timestamp: DEMO_ERROR_AT + 5000
+			channelId: 'e1a1be904fae800d67a3546605eae48cdc8c84fc5a7e29a2ce7f4df31da1eccd',
+			timestamp: DEMO_ERROR_AT + offset
+		})),
+		// What a Core Lightning peer says about gossip it discards (beignet
+		// #1955): connection-level, so the all-zero channel id.
+		...[3000, 12000].map((offset) => ({
+			code: 'CHANNEL_ERROR',
+			message: 'Remote warning: Unknown UTXO 504311x1993x0',
+			channelId: '0'.repeat(64),
+			timestamp: DEMO_ERROR_AT + offset
+		})),
+		{
+			code: 'CHANNEL_ERROR',
+			message: 'Remote warning: Do not set DONT_FORWARD on public channel_updates (898237x1683x0)',
+			channelId: '0'.repeat(64),
+			timestamp: DEMO_ERROR_AT + 13000
 		},
 		{
 			// Purely local: we could not open a connection to the peer. Names no
@@ -2575,7 +2592,9 @@ function demoLogLines(w) {
 		`[${at(-50000)}] healthy`,
 		`[${at(-12000)}] Peer connected 03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f`,
 		`[${at(-8000)}] Opening channel 100000 sat`,
-		`[${at(0)}] node error [CHANNEL_ERROR] Remote error: invalid funding_amount=100000 sat (min=400000 sat)`
+		`[${at(0)}] node error [CHANNEL_ERROR] Remote error: invalid funding_amount=100000 sat (min=400000 sat)`,
+		`[${at(2000)}] node error [CHANNEL_ERROR] Insufficient balance for HTLC`,
+		`[${at(3000)}] node error [CHANNEL_ERROR] Remote warning: Unknown UTXO 504311x1993x0`
 	];
 }
 
