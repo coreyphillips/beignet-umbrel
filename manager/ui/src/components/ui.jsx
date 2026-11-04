@@ -604,29 +604,33 @@ export const staggerItem = {
 };
 
 /**
- * The balance tiles at the top of a wallet's Overview, four abreast while
- * their figures fit and two by two when they do not. A figure holds one line,
- * so the row goes by what its figures need rather than by the screen: the
- * wallet's sidebar and the size of a balance both change the room. The tiles
- * go in pairs, and a pair moves to its own line before its tiles would run
- * past the edge.
+ * A row of four Stat tiles, such as the balances at the top of a wallet's
+ * Overview: four abreast while their figures fit and two by two when they do
+ * not. A figure holds one line, so the row goes by what its figures need
+ * rather than by the screen: the wallet's sidebar and the size of a figure
+ * both change the room. The tiles go in pairs, and a pair moves to its own
+ * line before its tiles would run past the edge. `stagger` brings the tiles
+ * in one after another, as the balance rows do.
  */
-export function BalanceRow({ children, style }) {
+export function StatRow({ children, style, stagger = false }) {
 	const tiles = Children.toArray(children);
 	const pairs = [];
 	for (let i = 0; i < tiles.length; i += 2) pairs.push(tiles.slice(i, i + 2));
+	const Box = stagger ? m.div : 'div';
+	const rowMotion = stagger ? { variants: staggerContainer, initial: 'hidden', animate: 'show' } : {};
+	const tileMotion = stagger ? { variants: staggerItem } : {};
 	return (
-		<m.div className="balance-row" style={style} variants={staggerContainer} initial="hidden" animate="show">
+		<Box className="stat-row" style={style} {...rowMotion}>
 			{pairs.map((pair, i) => (
-				<div key={i} className="balance-pair">
+				<div key={i} className="stat-pair">
 					{pair.map((tile) => (
-						<m.div key={tile.key} variants={staggerItem}>
+						<Box key={tile.key} {...tileMotion}>
 							{tile}
-						</m.div>
+						</Box>
 					))}
 				</div>
 			))}
-		</m.div>
+		</Box>
 	);
 }
 

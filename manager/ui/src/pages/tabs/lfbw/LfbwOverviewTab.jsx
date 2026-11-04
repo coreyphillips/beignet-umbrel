@@ -4,12 +4,12 @@ import { useToast } from '../../../components/Toast.jsx';
 import {
 	Badge,
 	BalanceBar,
-	BalanceRow,
 	Button,
 	Card,
 	CopyText,
 	Modal,
-	Stat
+	Stat,
+	StatRow
 } from '../../../components/ui.jsx';
 import { fmtSats, shortId } from '../../../lib/format.js';
 import { lfbwStatus } from '../../../lib/lfbw.js';
@@ -172,12 +172,12 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 				</div>
 			)}
 
-			<BalanceRow style={{ marginBottom: 18 }}>
+			<StatRow stagger style={{ marginBottom: 18 }}>
 				<Stat key="total" label="Total balance" num={status.total} suffix=" sats" />
 				<Stat key="send" label="Can send" num={status.canSend} suffix=" sats" />
 				<Stat key="recv" label="Can receive" num={status.canReceive} suffix=" sats" sub={lf?.setup === 'ready' ? 'more is provisioned as needed' : undefined} />
 				<Stat key="pending" label="Pending" num={status.pending} suffix=" sats" sub={status.pending > 0 ? 'arriving' : undefined} />
-			</BalanceRow>
+			</StatRow>
 
 			{status.notes.map((note) => (
 				<div key={note} className="info-note" style={{ marginBottom: 14 }} role="status">

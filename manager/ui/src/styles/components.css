@@ -301,19 +301,20 @@
 	margin-top: 2px;
 }
 
-/* ---------- Balance row ---------- */
-/* Two pairs of tiles, side by side while all four figures fit and one above
-   the other when they do not. A pair's grid is never narrower than its two
-   figures, so the wrap comes before any tile reaches the edge. A grid of four
-   1fr columns held every figure on one line instead, and beside the wallet
-   sidebar it carried the row, and the page with it, past the right edge. */
-.balance-row {
+/* ---------- Stat row ---------- */
+/* Two pairs of tiles (the balances, the provider's figures), side by side
+   while all four figures fit and one above the other when they do not. A
+   pair's grid is never narrower than its two figures, so the wrap comes
+   before any tile reaches the edge. A grid of four 1fr columns held every
+   figure on one line instead, and beside the wallet sidebar it carried the
+   row, and the page with it, past the right edge. */
+.stat-row {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 14px;
 }
 
-.balance-pair {
+.stat-pair {
 	flex: 1 1 0;
 	display: grid;
 	grid-template-columns: 1fr 1fr;
@@ -322,7 +323,7 @@
 
 /* On a phone every tile has a line of its own, as every other grid does. */
 @media (max-width: 760px) {
-	.balance-pair {
+	.stat-pair {
 		flex-basis: 100%;
 		grid-template-columns: minmax(0, 1fr);
 	}

@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
 import {
 	Badge,
-	BalanceRow,
 	Button,
 	Card,
 	CopyText,
 	Help,
 	QR,
 	Stat,
-	StatAmount
+	StatAmount,
+	StatRow
 } from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
@@ -143,7 +143,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 					balance when it locks. Payments keep working in the meantime.
 				</div>
 			)}
-			<BalanceRow style={{ marginBottom: 18 }}>
+			<StatRow stagger style={{ marginBottom: 18 }}>
 				{onchainOnly
 					? [
 							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
@@ -166,7 +166,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 								sub={`${info?.peerCount ?? 0} peers`}
 							/>
 					  ]}
-			</BalanceRow>
+			</StatRow>
 
 			<div className="card-flow">
 				<Card title="Node status">
@@ -357,12 +357,12 @@ function ProviderCard({ jit, rec }) {
 				</div>
 			) : (
 				<>
-					<div className="grid cols-4">
+					<StatRow>
 						<Stat label="Fronted so far" num={lsp.frontedSats} suffix=" sats" sub="across restarts" />
 						<Stat label="Committed now" num={lsp.reservedSats} suffix=" sats" sub={`${lsp.fundingsInFlight} funding${lsp.fundingsInFlight === 1 ? '' : 's'} in flight`} />
 						<Stat label="Live intents" num={lsp.liveIntents} sub={`${lsp.heldParts} payment${lsp.heldParts === 1 ? '' : 's'} held`} />
 						<Stat label="Fee" value={feeValue(lsp.flatFeeSat, lsp.feePpm)} sub="taken from each delivery" />
-					</div>
+					</StatRow>
 					<div className="wallet-meta" style={{ marginTop: 10 }}>
 						Caps: {fmtSats(lsp.maxClientFundingSats)} per client · {lsp.maxConcurrentFundings} funding
 						{lsp.maxConcurrentFundings === 1 ? '' : 's'} at once ·{' '}

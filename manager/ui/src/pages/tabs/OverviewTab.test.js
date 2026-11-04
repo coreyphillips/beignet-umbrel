@@ -102,7 +102,7 @@ test('the balance tiles go in pairs and the cards in a flow that can stack', asy
 	const r = await render(wrapped, props([ch('NORMAL')]));
 	try {
 		await settle(50);
-		const pairs = r.$$('.balance-row > .balance-pair');
+		const pairs = r.$$('.stat-row > .stat-pair');
 		assert.deepEqual(
 			pairs.map((p) => [...p.querySelectorAll('.stat-label')].map((l) => l.textContent)),
 			[
@@ -308,6 +308,18 @@ test('a liquidity provider gets a card with its exposure, caps and dependents', 
 		assert.match(text, /1 payment held/);
 		assert.match(text, /1,000,000 sats per client/);
 		assert.match(text, /no lifetime budget/);
+		// Its four tiles go in pairs like the balances, so large lifetime
+		// figures break the row two by two instead of running past the card.
+		const card = r.$$('.card').find((c) => /^Liquidity provider/.test(c.querySelector('h3')?.textContent || ''));
+		assert.deepEqual(
+			[...card.querySelectorAll('.stat-row > .stat-pair')].map((p) =>
+				[...p.querySelectorAll('.stat-label')].map((l) => l.textContent)
+			),
+			[
+				['Fronted so far', 'Committed now'],
+				['Live intents', 'Fee']
+			]
+		);
 	} finally {
 		await r.unmount();
 	}
