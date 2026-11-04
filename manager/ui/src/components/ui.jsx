@@ -46,12 +46,29 @@ export function Stat({ label, value, num, suffix = '', sub }) {
 	return (
 		<div className="stat">
 			<div className="stat-label">{label}</div>
-			<div className="stat-value">
+			<div className={hasNum ? 'stat-value' : 'stat-value wraps'}>
 				{hasNum ? <AnimatedNumber value={num} /> : value ?? '-'}
 				{hasNum && suffix.trim() && <span className="stat-unit">{suffix.trim()}</span>}
 			</div>
 			{sub && <div className="stat-sub">{sub}</div>}
 		</div>
+	);
+}
+
+/**
+ * One amount in a Stat value made of several, such as a range or a fee: the
+ * figure with its unit small beside it, the way a lone number reads. The value
+ * breaks between amounts first, and inside one only when it alone is wider
+ * than the tile.
+ */
+export function StatAmount({ n, unit }) {
+	const v = Number(n);
+	if (n === null || n === undefined || !Number.isFinite(v)) return <span className="stat-amount">-</span>;
+	return (
+		<span className="stat-amount">
+			{v.toLocaleString('en-US')}
+			<span className="stat-unit">{unit}</span>
+		</span>
 	);
 }
 

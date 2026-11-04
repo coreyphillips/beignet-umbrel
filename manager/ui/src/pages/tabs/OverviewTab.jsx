@@ -1,7 +1,18 @@
 import { useState } from 'react';
 import { m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
-import { Badge, Button, Card, CopyText, Help, QR, Stat, staggerContainer, staggerItem } from '../../components/ui.jsx';
+import {
+	Badge,
+	Button,
+	Card,
+	CopyText,
+	Help,
+	QR,
+	Stat,
+	StatAmount,
+	staggerContainer,
+	staggerItem
+} from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
@@ -363,11 +374,7 @@ function ProviderCard({ jit, rec }) {
 						<Stat label="Fronted so far" num={lsp.frontedSats} suffix=" sats" sub="across restarts" />
 						<Stat label="Committed now" num={lsp.reservedSats} suffix=" sats" sub={`${lsp.fundingsInFlight} funding${lsp.fundingsInFlight === 1 ? '' : 's'} in flight`} />
 						<Stat label="Live intents" num={lsp.liveIntents} sub={`${lsp.heldParts} payment${lsp.heldParts === 1 ? '' : 's'} held`} />
-						<Stat
-							label="Fee"
-							value={`${fmtSats(lsp.flatFeeSat)}${lsp.feePpm > 0 ? ` + ${lsp.feePpm} ppm` : ''}`}
-							sub="taken from each delivery"
-						/>
+						<Stat label="Fee" value={feeValue(lsp.flatFeeSat, lsp.feePpm)} sub="taken from each delivery" />
 					</div>
 					<div className="wallet-meta" style={{ marginTop: 10 }}>
 						Caps: {fmtSats(lsp.maxClientFundingSats)} per client · {lsp.maxConcurrentFundings} funding
@@ -464,6 +471,20 @@ function SwapsCard({ swaps, rec }) {
 	);
 }
 
+// A fee as a Stat value: the flat part, and the proportional part when there is
+// one, each an amount of its own so a narrow tile breaks the line between them.
+const feeValue = (flatSat, ppm) => (
+	<>
+		<StatAmount n={flatSat} unit="sats" />
+		{Number(ppm) > 0 && (
+			<>
+				+
+				<StatAmount n={ppm} unit="ppm" />
+			</>
+		)}
+	</>
+);
+
 // A ledger state as a phrase: CLAIM_BROADCAST reads "claim broadcast".
 const swapStateWords = (state) => String(state).toLowerCase().replace(/_/g, ' ');
 
@@ -518,7 +539,7 @@ function SwapBudget({ reverse, submarine }) {
 				/>
 				<Stat
 					label="Caps"
-					value={fmtSats(maxSat)}
+					value={<StatAmount n={maxSat} unit="sats" />}
 					sub={`at once, ${limits.maxConcurrentSwaps ?? '-'} swap${maxCount === 1 ? '' : 's'} at most`}
 				/>
 				<Stat
@@ -563,18 +584,24 @@ function SwapDirection({ label, status, sharing }) {
 				{!sharing && (
 					<Stat
 						label="Caps"
-						value={fmtSats(Number(limits.maxTotalExposureSat || 0))}
+						value={<StatAmount n={Number(limits.maxTotalExposureSat || 0)} unit="sats" />}
 						sub={`at once, ${limits.maxConcurrentSwaps ?? '-'} swap${limits.maxConcurrentSwaps === 1 ? '' : 's'} at most`}
 					/>
 				)}
 				<Stat
 					label="Swap size"
-					value={`${fmtSats(Number(limits.minSwapSat || 0))} to ${fmtSats(Number(limits.maxSwapSat || 0))}`}
-					sub="sats per swap"
+					value={
+						<>
+							<StatAmount n={Number(limits.minSwapSat || 0)} unit="sats" />
+							to
+							<StatAmount n={Number(limits.maxSwapSat || 0)} unit="sats" />
+						</>
+					}
+					sub="per swap"
 				/>
 				<Stat
 					label="Fee"
-					value={`${fmtSats(Number(fee.flatFeeSat || 0))}${Number(fee.feePpm) > 0 ? ` + ${fee.feePpm} ppm` : ''}`}
+					value={feeValue(Number(fee.flatFeeSat || 0), fee.feePpm)}
 					sub="taken from each swap"
 				/>
 			</div>

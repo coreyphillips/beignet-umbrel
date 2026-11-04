@@ -243,6 +243,26 @@
 	min-width: 0;
 }
 
+/* A value made of words, such as a range or a fee, breaks between them. Held
+   on one line it set the least its grid column could be, and a long one pushed
+   the tiles to its right out past the edge of the card. */
+.stat-value.wraps {
+	flex-wrap: wrap;
+	white-space: normal;
+	row-gap: 0;
+	/* Tighter lines once it wraps, padded back to the height of one line at
+	   the inherited 1.5 so its figure sits level with a lone number beside it. */
+	line-height: 1.25;
+	padding-block: 0.125em;
+}
+
+.stat-amount {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 5px;
+}
+
 .stat-unit {
 	font-size: 13px;
 	font-weight: 500;

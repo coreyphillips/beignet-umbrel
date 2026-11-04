@@ -343,13 +343,28 @@ test('a provider serving swaps gets a card with each direction it serves', async
 		// over the sum of the two committed figures, and not under either.
 		assert.match(text, /Both directions together/);
 		assert.match(text, /470,000satsover 3 swaps, both directions/);
-		assert.match(text, /Caps5,000,000 satsat once, 8 swaps at most/);
+		assert.match(text, /Caps5,000,000satsat once, 8 swaps at most/);
 		// The slots go by the unresolved rows the daemon counts (3 reverse, 2
 		// submarine), not by the 3 that have principal at risk.
 		assert.match(text, /Room left4,530,000sats3 more swaps of the 8, either direction/);
 		assert.match(text, /One budget covers both directions, not one each/);
 		assert.match(text, /2 swaps in flight, of the shared budget/);
 		assert.match(text, /1 swap in flight, of the shared budget/);
+		// The range and the fee are amounts the tile breaks between, not one
+		// unbroken run of text that holds its column wider than the card.
+		const tiles = [...r.container.querySelectorAll('.stat')];
+		const size = tiles.find((t) => /^Swap size/.test(t.textContent));
+		assert.equal(size.querySelector('.stat-value').className, 'stat-value wraps');
+		assert.deepEqual(
+			[...size.querySelectorAll('.stat-amount')].map((a) => a.textContent),
+			['10,000sats', '1,000,000sats']
+		);
+		const fee = tiles.find((t) => /^Fee/.test(t.textContent));
+		assert.deepEqual(
+			[...fee.querySelectorAll('.stat-amount')].map((a) => a.textContent),
+			['100sats', '1,000ppm']
+		);
+		assert.match(fee.textContent, /^Fee100sats\+1,000ppmtaken from each swap$/);
 	} finally {
 		await r.unmount();
 	}
@@ -376,7 +391,7 @@ test('a reverse-only provider shows one direction, and swaps off shows no card',
 		assert.doesNotMatch(one.text(), /On-chain to Lightning/);
 		// Nothing to share with, so the one direction carries the caps itself.
 		assert.doesNotMatch(one.text(), /Both directions together/);
-		assert.match(one.text(), /Caps5,000,000 satsat once, 8 swaps at most/);
+		assert.match(one.text(), /Caps5,000,000satsat once, 8 swaps at most/);
 	} finally {
 		await one.unmount();
 	}
