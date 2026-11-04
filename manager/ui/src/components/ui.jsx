@@ -1,4 +1,4 @@
-import { Component, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Children, Component, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { m, useMotionValue, useMotionValueEvent, useReducedMotion, useSpring } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -602,6 +602,33 @@ export const staggerItem = {
 	hidden: { opacity: 0, y: 10 },
 	show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 380, damping: 34 } }
 };
+
+/**
+ * The balance tiles at the top of a wallet's Overview, four abreast while
+ * their figures fit and two by two when they do not. A figure holds one line,
+ * so the row goes by what its figures need rather than by the screen: the
+ * wallet's sidebar and the size of a balance both change the room. The tiles
+ * go in pairs, and a pair moves to its own line before its tiles would run
+ * past the edge.
+ */
+export function BalanceRow({ children, style }) {
+	const tiles = Children.toArray(children);
+	const pairs = [];
+	for (let i = 0; i < tiles.length; i += 2) pairs.push(tiles.slice(i, i + 2));
+	return (
+		<m.div className="balance-row" style={style} variants={staggerContainer} initial="hidden" animate="show">
+			{pairs.map((pair, i) => (
+				<div key={i} className="balance-pair">
+					{pair.map((tile) => (
+						<m.div key={tile.key} variants={staggerItem}>
+							{tile}
+						</m.div>
+					))}
+				</div>
+			))}
+		</m.div>
+	);
+}
 
 /** A recovery phrase as numbered words, in the order they are written down. */
 export function SeedWords({ mnemonic }) {

@@ -95,6 +95,28 @@ test('channel counts are of open channels, not every channel ever', async () => 
 	}
 });
 
+// The balance tiles go in two pairs, so a narrow column (beside the wallet
+// sidebar, or with large balances) breaks the row two by two, never three
+// and one, and the cards under it stack instead of running off the edge.
+test('the balance tiles go in pairs and the cards in a flow that can stack', async () => {
+	const r = await render(wrapped, props([ch('NORMAL')]));
+	try {
+		await settle(50);
+		const pairs = r.$$('.balance-row > .balance-pair');
+		assert.deepEqual(
+			pairs.map((p) => [...p.querySelectorAll('.stat-label')].map((l) => l.textContent)),
+			[
+				['On-chain', 'Lightning'],
+				['Total', 'Channels']
+			]
+		);
+		const flow = r.$$('.card-flow > .card').map((c) => c.querySelector('h3')?.firstChild?.textContent);
+		assert.deepEqual(flow.slice(0, 2), ['Node status', 'Liquidity']);
+	} finally {
+		await r.unmount();
+	}
+});
+
 test('a wallet whose channels all closed reads as having none', async () => {
 	const r = await render(wrapped, props([ch('CLOSED'), ch('FORCE_CLOSED')]));
 	try {
