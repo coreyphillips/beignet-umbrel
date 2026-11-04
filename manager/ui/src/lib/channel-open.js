@@ -1,4 +1,5 @@
 import { manager } from '../api.js';
+import { isGossipWarning, isPeerWarning, peerWarningText } from './node-errors.js';
 
 // Once the funding transaction is built and broadcast the channel moves into one
 // of these states, and the on-chain funds have left the wallet. Anything before
@@ -114,7 +115,7 @@ const FUNDING_CODES = new Set(['AUTO_FUNDING_FAILED', 'FUNDING_BROADCAST_FAILED'
 async function firstFailure({ id, tempChannelId, since, strict = true }) {
 	const errors = await manager.errors(id, since).catch(() => []);
 	const hit = (errors || []).find((e) => {
-		if (/^Remote warning:/i.test(String(e.message || ''))) return false;
+		if (isPeerWarning(e)) return false;
 		if (e.channelId) return e.channelId === tempChannelId;
 		return FUNDING_CODES.has(e.code) || !strict;
 	});
@@ -158,17 +159,32 @@ export function formatNodeError(err) {
 			"the peer's words, not ours."
 		);
 	}
+	// A warning leaves the connection and every channel alone, and the daemon
+	// passes it on without saying which peer sent it (beignet #1956), so say
+	// only what is known. Most are a peer discarding gossip we served it.
+	if (isPeerWarning(err)) {
+		const text = peerWarningText(err);
+		return isGossipWarning(err)
+			? `A peer sent a warning: "${text}". Those are the peer's words. It is about ` +
+					'the network map (gossip), not your channels or payments, and nothing ' +
+					'needs fixing.'
+			: `A peer sent a warning: "${text}". Those are the peer's words. A warning ` +
+					'does not close the connection or any channel.';
+	}
 	// "Insufficient balance for HTLC" is a payment failure, not a channel
 	// rejection: the HTLC cannot be added because our side of the channel is
-	// below the amount plus the reserve every channel keeps back. The generic
-	// wording below reads as a failed open, which this is not, so say what is
-	// actually wrong and what to do about it.
+	// below the amount plus the reserve every channel keeps back. The daemon
+	// reports a forward it turned away exactly like a send of the user's own
+	// (beignet #1957), and the forward is the usual case, so lead with that
+	// rather than telling someone who sent nothing to try a smaller amount.
 	if (/insufficient/i.test(msg) && /htlc/i.test(msg)) {
 		return (
-			'Not enough spendable balance in the channel to send this. Every channel ' +
-			'keeps a small reserve on your side that cannot be spent, so the most you ' +
-			'can send is a little below your channel balance. Try a smaller amount, or ' +
-			'add local balance to the channel (splice in, or receive a payment into it).'
+			"A payment over this channel was turned away because your side doesn't have " +
+			"enough spendable balance for it. If you weren't sending from this wallet at " +
+			"the time, it was a payment routing through your node, and there's nothing " +
+			'to fix. If you were, try a smaller amount (every channel keeps a small ' +
+			"reserve on your side that can't be spent), or add local balance by splicing " +
+			'in or receiving a payment into the channel.'
 		);
 	}
 	// Our own state guards, refusing to act on a channel that is no longer

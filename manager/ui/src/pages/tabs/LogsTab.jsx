@@ -3,8 +3,14 @@ import { manager } from '../../api.js';
 import { usePoll } from '../../hooks/usePoll.js';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, Card } from '../../components/ui.jsx';
-import { copy, fmtDate } from '../../lib/format.js';
+import { copy, fmtDate, shortId } from '../../lib/format.js';
 import { formatNodeError } from '../../lib/channel-open.js';
+import {
+	errorChannelId,
+	groupNodeErrors,
+	isWarningLogLine,
+	nodeErrorKind
+} from '../../lib/node-errors.js';
 
 const POLL_MS = 3000;
 
@@ -16,9 +22,30 @@ const ERROR_RE = /node error \[|\bERROR\b|\bfatal\b|\bfailed\b|exited code=/i;
 const WARN_RE = /\bwarn(ing)?\b|\bunreachable\b|\bretry(ing)?\b|\brestarting\b/i;
 
 function toneOf(line) {
+	// Checked first: the manager echoes a peer warning or a turned-away payment
+	// as "node error [...]", and neither is a failure of this wallet.
+	if (isWarningLogLine(line)) return 'warn';
 	if (ERROR_RE.test(line)) return 'error';
 	if (WARN_RE.test(line)) return 'warn';
 	return null;
+}
+
+// When it last happened, how often, and on which channel. Connection-level
+// messages carry the all-zero channel id, which names no channel.
+function ErrorMeta({ e }) {
+	const channel = errorChannelId(e);
+	return (
+		<div className="wallet-meta" style={{ marginTop: 4 }}>
+			{fmtDate(e.timestamp)} · <span className="mono">{e.code}</span>
+			{e.count > 1 && ` · ${e.count} times since ${fmtDate(e.firstTimestamp)}`}
+			{channel && (
+				<>
+					{' '}
+					· channel <span className="mono">{shortId(channel)}</span>
+				</>
+			)}
+		</div>
+	);
 }
 
 export default function LogsTab({ id, tick }) {
@@ -66,9 +93,22 @@ export default function LogsTab({ id, tick }) {
 		URL.revokeObjectURL(url);
 	};
 
-	// A node that is unhappy repeats itself, so a short window fills with the
-	// same two or three lines and pushes the one that explains why off the card.
-	const recentErrors = (errors || []).slice(-15).reverse();
+	// Real failures go in red at the top. Peer warnings and payments a channel
+	// turned away are not failures of this wallet, so they sit in a quiet card
+	// under the log instead. Repeats fold into one entry each either way.
+	const { recentErrors, recentWarnings } = useMemo(() => {
+		const all = errors || [];
+		return {
+			recentErrors: groupNodeErrors(
+				all.filter((e) => nodeErrorKind(e) === 'error'),
+				15
+			),
+			recentWarnings: groupNodeErrors(
+				all.filter((e) => nodeErrorKind(e) === 'warning'),
+				10
+			)
+		};
+	}, [errors]);
 
 	return (
 		<div>
@@ -81,9 +121,7 @@ export default function LogsTab({ id, tick }) {
 					{recentErrors.map((e, i) => (
 						<div className="error-note" key={`${e.timestamp}-${i}`} style={{ marginBottom: 8 }}>
 							<div>{formatNodeError(e)}</div>
-							<div className="wallet-meta" style={{ marginTop: 4 }}>
-								{fmtDate(e.timestamp)} · <span className="mono">{e.code}</span>
-							</div>
+							<ErrorMeta e={e} />
 						</div>
 					))}
 				</Card>
@@ -149,6 +187,29 @@ export default function LogsTab({ id, tick }) {
 					bug report if something is not working.
 				</div>
 			</Card>
+
+			{recentWarnings.length > 0 && (
+				<Card
+					title="Warnings"
+					help={
+						'Worth knowing, but not failures of this wallet: warnings a peer sent us, ' +
+						"and payments a channel turned away because they didn't fit. Most peer " +
+						'warnings are about the network map (gossip). Neither kind changes your ' +
+						'channels.'
+					}
+				>
+					{recentWarnings.map((e, i) => (
+						<div
+							className="node-warning"
+							key={`${e.timestamp}-${i}`}
+							style={{ marginBottom: i === recentWarnings.length - 1 ? 0 : 12 }}
+						>
+							<div>{formatNodeError(e)}</div>
+							<ErrorMeta e={e} />
+						</div>
+					))}
+				</Card>
+			)}
 		</div>
 	);
 }

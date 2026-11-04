@@ -30,6 +30,20 @@ const LIFECYCLE_EVENTS = new Set([
 	'ffor:enforce'
 ]);
 
+// node:error messages that tell no channel's story, kept in step with the
+// dashboard's split in manager/ui/src/lib/node-errors.js. A peer warning
+// leaves every channel alone and usually arrives on the all-zero channel id
+// (beignet #1956); a refused HTLC add is a payment that did not fit, most
+// often someone else's forward (beignet #1957). Both repeat daily, and the
+// log is capped at MAX_EVENTS across every channel, so recording them would
+// slowly push out the opens and closes this log exists to keep.
+const NOT_CHANNEL_HISTORY_RE =
+	/^(Remote warning:|(Insufficient balance for HTLC|Max pending HTLCs exceeded|Max HTLC value in flight exceeded|HTLC amount below remote minimum|Dust HTLC exposure limit exceeded)$)/i;
+
+function namesAChannel(channelId) {
+	return Boolean(channelId) && !/^0+$/.test(String(channelId));
+}
+
 class ChannelEventLog {
 	constructor(dir, { warn } = {}) {
 		this.log = new JsonlLog(path.join(dir, 'channel-events.jsonl'), {
@@ -42,7 +56,8 @@ class ChannelEventLog {
 	/**
 	 * Record a daemon event if it tells a channel's story: a lifecycle event,
 	 * or a node:error that names a channel (automatic force-close reasons like
-	 * REESTABLISH_TIMEOUT_FORCE_CLOSED arrive that way and nowhere else).
+	 * REESTABLISH_TIMEOUT_FORCE_CLOSED arrive that way and nowhere else), less
+	 * the warnings and refused adds in NOT_CHANNEL_HISTORY_RE.
 	 *
 	 * Returns null for events that are not channel-shaped, otherwise
 	 * { entry, persisted }: persisted is false when the entry lives only in
@@ -51,9 +66,12 @@ class ChannelEventLog {
 	 */
 	record(name, data) {
 		if (!data || typeof data !== 'object') return null;
-		const isError = name === 'node:error' && data.channelId;
+		if (!namesAChannel(data.channelId)) return null;
+		const isError = name === 'node:error';
 		if (!isError && !LIFECYCLE_EVENTS.has(name)) return null;
-		if (!data.channelId) return null;
+		if (isError && NOT_CHANNEL_HISTORY_RE.test(String(data.message || '').trim())) {
+			return null;
+		}
 		const entry = {
 			timestamp: data.timestamp || Date.now(),
 			event: name,
