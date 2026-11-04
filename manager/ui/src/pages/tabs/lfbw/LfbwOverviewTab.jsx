@@ -1,17 +1,15 @@
 import { useEffect, useState } from 'react';
-import { m } from 'motion/react';
 import { usePoll } from '../../../hooks/usePoll.js';
 import { useToast } from '../../../components/Toast.jsx';
 import {
 	Badge,
 	BalanceBar,
+	BalanceRow,
 	Button,
 	Card,
 	CopyText,
 	Modal,
-	Stat,
-	staggerContainer,
-	staggerItem
+	Stat
 } from '../../../components/ui.jsx';
 import { fmtSats, shortId } from '../../../lib/format.js';
 import { lfbwStatus } from '../../../lib/lfbw.js';
@@ -174,18 +172,12 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 				</div>
 			)}
 
-			<m.div className="grid cols-4" style={{ marginBottom: 18 }} variants={staggerContainer} initial="hidden" animate="show">
-				{[
-					<Stat key="total" label="Total balance" num={status.total} suffix=" sats" />,
-					<Stat key="send" label="Can send" num={status.canSend} suffix=" sats" />,
-					<Stat key="recv" label="Can receive" num={status.canReceive} suffix=" sats" sub={lf?.setup === 'ready' ? 'more is provisioned as needed' : undefined} />,
-					<Stat key="pending" label="Pending" num={status.pending} suffix=" sats" sub={status.pending > 0 ? 'arriving' : undefined} />
-				].map((stat, i) => (
-					<m.div key={i} variants={staggerItem}>
-						{stat}
-					</m.div>
-				))}
-			</m.div>
+			<BalanceRow style={{ marginBottom: 18 }}>
+				<Stat key="total" label="Total balance" num={status.total} suffix=" sats" />
+				<Stat key="send" label="Can send" num={status.canSend} suffix=" sats" />
+				<Stat key="recv" label="Can receive" num={status.canReceive} suffix=" sats" sub={lf?.setup === 'ready' ? 'more is provisioned as needed' : undefined} />
+				<Stat key="pending" label="Pending" num={status.pending} suffix=" sats" sub={status.pending > 0 ? 'arriving' : undefined} />
+			</BalanceRow>
 
 			{status.notes.map((note) => (
 				<div key={note} className="info-note" style={{ marginBottom: 14 }} role="status">

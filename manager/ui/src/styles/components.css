@@ -190,6 +190,24 @@
 	grid-column: 1 / -1;
 }
 
+/* Cards two abreast while both fit, one above the other when they do not.
+   A grid of two 1fr columns cannot be narrower than its two cards' contents,
+   so beside the wallet sidebar it ran past the right edge and took every
+   full-width card below it along. */
+.card-flow {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px;
+}
+
+.card-flow > * {
+	flex: 1 1 0;
+}
+
+.card-flow > .grid-full {
+	flex-basis: 100%;
+}
+
 /* One column on a phone, at most as wide as the screen: a bare 1fr column
    grows to its widest card's content, which carried every card on the page
    off the right edge with it. */
@@ -198,6 +216,13 @@
 	.grid.cols-3,
 	.grid.cols-4 {
 		grid-template-columns: minmax(0, 1fr);
+	}
+
+	/* Every card on a line of its own and held to the column, as the grid
+	   above does: a long address breaks inside its card instead of widening it. */
+	.card-flow > * {
+		flex-basis: 100%;
+		min-width: 0;
 	}
 }
 
@@ -274,6 +299,33 @@
 	color: var(--muted);
 	font-size: 12px;
 	margin-top: 2px;
+}
+
+/* ---------- Balance row ---------- */
+/* Two pairs of tiles, side by side while all four figures fit and one above
+   the other when they do not. A pair's grid is never narrower than its two
+   figures, so the wrap comes before any tile reaches the edge. A grid of four
+   1fr columns held every figure on one line instead, and beside the wallet
+   sidebar it carried the row, and the page with it, past the right edge. */
+.balance-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px;
+}
+
+.balance-pair {
+	flex: 1 1 0;
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 14px;
+}
+
+/* On a phone every tile has a line of its own, as every other grid does. */
+@media (max-width: 760px) {
+	.balance-pair {
+		flex-basis: 100%;
+		grid-template-columns: minmax(0, 1fr);
+	}
 }
 
 /* ---------- Buttons ---------- */

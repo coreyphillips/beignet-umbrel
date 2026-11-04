@@ -1,17 +1,15 @@
 import { useState } from 'react';
-import { m } from 'motion/react';
 import { usePoll } from '../../hooks/usePoll.js';
 import {
 	Badge,
+	BalanceRow,
 	Button,
 	Card,
 	CopyText,
 	Help,
 	QR,
 	Stat,
-	StatAmount,
-	staggerContainer,
-	staggerItem
+	StatAmount
 } from '../../components/ui.jsx';
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
@@ -145,14 +143,8 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 					balance when it locks. Payments keep working in the meantime.
 				</div>
 			)}
-			<m.div
-				className={onchainOnly ? 'grid cols-2' : 'grid cols-4'}
-				style={{ marginBottom: 18 }}
-				variants={staggerContainer}
-				initial="hidden"
-				animate="show"
-			>
-				{(onchainOnly
+			<BalanceRow style={{ marginBottom: 18 }}>
+				{onchainOnly
 					? [
 							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
 							<Stat key="height" label="Block height" num={info?.blockHeight} />
@@ -173,15 +165,10 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 								num={openCount ?? info?.channelCount}
 								sub={`${info?.peerCount ?? 0} peers`}
 							/>
-					  ]
-				).map((stat, i) => (
-					<m.div key={i} variants={staggerItem}>
-						{stat}
-					</m.div>
-				))}
-			</m.div>
+					  ]}
+			</BalanceRow>
 
-			<div className="grid cols-2">
+			<div className="card-flow">
 				<Card title="Node status">
 					<table className="kv">
 						<tbody>
