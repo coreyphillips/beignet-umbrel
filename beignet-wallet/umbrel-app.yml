@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.36.1"
+version: "0.37.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,14 +30,27 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.36.1, a patch release. When a channel is voided, for
-  example because the payer of a zero-conf open spent its funding elsewhere,
-  the direct-funding payments it carried are now marked as reverted instead
-  of staying paid. The void of a dual-funded open that could not be
-  broadcast also cleans up its saved funding transaction.
+  Bundles beignet 0.37.0. A wallet can now rank several primaries for
+  receiving and pay an address out of several channels in one transaction,
+  through the daemon's new /primaries and /channel-send routes; the
+  dashboard does not use them yet. A peer's warnings and payments routed
+  through this node that a channel turned away are no longer reported as
+  node errors, so they stay out of the error card and the channel history.
+  Recovery frames for a busy channel now stay under the guardians' record
+  limit, and the network map no longer passes on channel updates marked do
+  not forward.
 
 
-  Going back to 0.36.0 keeps the wallet storage, which is unchanged.
+  The dashboard keeps its balance row and cards inside the screen beside
+  the wallet sidebar, the Swaps card keeps its Swap size and Fee tiles
+  inside the card, the Liquidity provider card sets its four tiles two by
+  two when they do not fit, and the Logs tab keeps peer warnings and
+  turned-away payments out of the red error card.
+
+
+  Going back to 0.36.1 keeps the wallet storage, unless a multi-channel
+  splice-out is in progress. 0.37.0 adds a table for those, which 0.36.1
+  ignores.
 dependencies: []
 path: ""
 defaultUsername: ""
