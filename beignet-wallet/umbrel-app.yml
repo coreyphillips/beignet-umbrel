@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.37.0"
+version: "0.37.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,27 +30,25 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.37.0. A wallet can now rank several primaries for
-  receiving and pay an address out of several channels in one transaction,
-  through the daemon's new /primaries and /channel-send routes; the
-  dashboard does not use them yet. A peer's warnings and payments routed
-  through this node that a channel turned away are no longer reported as
-  node errors, so they stay out of the error card and the channel history.
-  Recovery frames for a busy channel now stay under the guardians' record
-  limit, and the network map no longer passes on channel updates marked do
-  not forward.
+  A pending transaction the network dropped now shows as dropped in the
+  Activity tab instead of waiting for a block for good. That is the losing
+  version of a cooperative close whose other version confirmed, a
+  transaction replaced by a fee bump, or one every mempool evicted. Its
+  details say it will not confirm and that its amount is not in the balance,
+  it offers no fee bump, and the new receive notice no longer announces it.
+  The manager checks each transaction still pending after two minutes
+  against the wallet's own Electrum server. One it cannot check, because the
+  server does not answer or is a Tor address, shows as before.
 
 
-  The dashboard keeps its balance row and cards inside the screen beside
-  the wallet sidebar, the Swaps card keeps its Swap size and Fee tiles
-  inside the card, the Liquidity provider card sets its four tiles two by
-  two when they do not fit, and the Logs tab keeps peer warnings and
-  turned-away payments out of the red error card.
+  When a wallet starts, its offline receive return now waits for the
+  daemon's event stream, so a plain offline receive book the return closes
+  reaches the channel history and the wallet log instead of staying at
+  ACTIVE.
 
 
-  Going back to 0.36.1 keeps the wallet storage, unless a multi-channel
-  splice-out is in progress. 0.37.0 adds a table for those, which 0.36.1
-  ignores.
+  Still bundles beignet 0.37.0, so going back to 0.37.0 is safe: the wallet
+  storage is unchanged.
 dependencies: []
 path: ""
 defaultUsername: ""
