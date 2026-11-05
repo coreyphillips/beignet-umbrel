@@ -7,6 +7,7 @@ const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, PUBLIC_ELECTRUM_SERVERS } 
 const { WalletManager } = require('./wallet-manager');
 const { createAccessGuard } = require('./access-control');
 const { releaseUpstreamOnClose } = require('./proxy-release');
+const { createTransactionsRoute } = require('./dropped-transactions');
 
 // Cap on how much of a failed daemon response is buffered before logging it.
 // Error bodies are small; this only stops a large one from being held in memory.
@@ -102,6 +103,18 @@ async function main() {
 				});
 			}
 		}
+	});
+
+	// A pending on-chain transaction the network dropped is marked as such
+	// instead of showing as pending for good (#285). Anything this cannot do
+	// falls through to the daemon, which answers as it always did.
+	const transactions = createTransactionsRoute(manager);
+	app.get('/wallets/:id/api/transactions', (req, res, next) => {
+		if (!manager.target(req.params.id) || !manager.runtimeState(req.params.id).proc) return next();
+		const at = req.originalUrl.indexOf('?');
+		transactions(req.params.id, at < 0 ? '' : req.originalUrl.slice(at))
+			.then((result) => res.json({ ok: true, result }))
+			.catch(() => next());
 	});
 
 	app.use('/wallets/:id/api', (req, res, next) => {

@@ -127,6 +127,17 @@ test('an on-chain receive is announced from the poll, sends are not', async () =
 	await view.unmount();
 });
 
+test('a receive the network dropped is not announced (#285)', async () => {
+	const api = stubApi();
+	const { view, got } = await mountWatch(api);
+
+	api.state.txs.unshift({ ...tx('9'.repeat(64), 979), dropped: true });
+	api.state.txs.unshift(tx('8'.repeat(64), 1150, true));
+	await settle(TICK * 2);
+	assert.deepEqual(got.map((r) => r.txid), ['8'.repeat(64)], 'only the receive that confirmed is news');
+	await view.unmount();
+});
+
 test('the stream announces first, and the poll does not say it again', async () => {
 	const api = stubApi();
 	const { view, got, handle } = await mountWatch(api);

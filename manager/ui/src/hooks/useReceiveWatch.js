@@ -147,7 +147,8 @@ export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 			}
 			if (Array.isArray(txs)) {
 				for (const t of txs) {
-					if (t.type !== 'received' || !t.txid) continue;
+					// A receive the network dropped (#285) is no news of money.
+					if (t.type !== 'received' || !t.txid || t.dropped) continue;
 					const isNew = !txSeen.has(t.txid);
 					txSeen.add(t.txid);
 					if (txBaselined && isNew) {

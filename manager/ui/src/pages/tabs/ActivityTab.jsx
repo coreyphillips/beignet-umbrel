@@ -128,6 +128,8 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 											<td>
 												{t.confirmed ? (
 													<Badge tone="green">{Math.max(1, tipHeight - t.height + 1)}</Badge>
+												) : t.dropped ? (
+													<Badge tone="muted">dropped</Badge>
 												) : (
 													<Badge tone="yellow">pending</Badge>
 												)}
@@ -135,7 +137,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 											<td className="mono" title={t.txid}>{shortId(t.txid)}</td>
 											<td className="wallet-meta">{fmtDate(t.confirmTimestamp || t.timestamp)}</td>
 											<td>
-												{!t.confirmed && boostMethod[t.txid] && (
+												{!t.confirmed && !t.dropped && boostMethod[t.txid] && (
 													<button
 														type="button"
 														className="btn sm"
@@ -335,6 +337,17 @@ function TxDetail({ tx, network, tipHeight, fallback }) {
 					<>
 						<Badge tone="green">{confs} confirmation{confs === 1 ? '' : 's'}</Badge>
 						{tx.height ? <span className="wallet-meta"> in block {tx.height}</span> : null}
+					</>
+				) : tx.dropped ? (
+					<>
+						<Badge tone="muted">dropped, will not confirm</Badge>
+						{/* The manager found it gone from the wallet's server
+						    (#285): another transaction spent its coins, or every
+						    mempool let it go. Its coins were never the wallet's. */}
+						<div className="wallet-meta">
+							The network no longer has this transaction. Another transaction spent the same coins, or it was
+							dropped from the mempool, so it will not confirm and its amount is not in your balance.
+						</div>
 					</>
 				) : (
 					<Badge tone="yellow">pending, waiting for a block</Badge>
