@@ -702,7 +702,17 @@ env:
   # composite_splices table). The environment settings and the runtime
   # dependencies are unchanged, and the capability probes in
   # server/engine.js answer as for 0.36.1.
-  BEIGNET_VERSION: "0.37.0"
+  # 0.38.0 lists an unconfirmed transaction its server no longer has in the
+  # mempool or a block (replaced, conflicted by a confirmed spend of its
+  # inputs, or evicted) with dropped: true in GET /transactions
+  # (coreyphillips/beignet#1967). The dashboard already reads that field, and
+  # the manager takes it as is without asking Electrum (#288). A gap scan
+  # that extends past its first window now keeps the coins in its middle
+  # windows in the balance (coreyphillips/beignet#1966). The storage schema
+  # (20), the environment settings and the runtime dependencies are
+  # unchanged, and the capability probes in server/engine.js answer as for
+  # 0.37.0.
+  BEIGNET_VERSION: "0.38.0"
 
 jobs:
   build:
