@@ -320,3 +320,65 @@ test('reconnect skips legacy books and scopes concurrent recovery to the reconne
   await m._fforReturn('r1', { concurrentOnly: true, peer: 'settler' });
   assert.deepEqual(calls, [CH]);
 });
+
+// beignet-umbrel #282: the event stream is opened at spawn, before the daemon
+// listens, and can be waiting out a retry backoff when the daemon reads
+// healthy. The startup return closes a plain book in a second or two, and its
+// DRAINING and CLOSED reach the channel history only through the stream.
+test('the post-start return waits for the event stream, kicking it out of its backoff first', async () => {
+  const { m } = managerWith({ r1: receiver() });
+  const order = [];
+  m._captureNodeId = async () => order.push('node id');
+  m._restoreLfbwLinks = async () => order.push('links');
+  m._fforReturn = async () => order.push('return');
+  let attached = false;
+  m.runtimeState('r1').events = {
+    get connected() { return attached; },
+    kick: () => order.push('kick'),
+    whenConnected: async (ms) => {
+      order.push(`wait ${ms}`);
+      attached = true;
+      return true;
+    }
+  };
+  await m._onHealthy('r1');
+  assert.deepEqual(order, ['node id', 'links', 'kick', 'wait 5000', 'return']);
+  assert.ok(!m.logs.some((l) => /event stream not attached/.test(l)));
+});
+
+test('an attached stream is not kicked or waited on', async () => {
+  const { m } = managerWith({ r1: receiver() });
+  const order = [];
+  m._captureNodeId = async () => {};
+  m._restoreLfbwLinks = async () => {};
+  m._fforReturn = async () => order.push('return');
+  m.runtimeState('r1').events = {
+    connected: true,
+    kick: () => order.push('kick'),
+    whenConnected: async () => { order.push('wait'); return true; }
+  };
+  await m._onHealthy('r1');
+  assert.deepEqual(order, ['return']);
+});
+
+test('a stream that does not attach in time still lets the return run, and the log says so', async () => {
+  const { m } = managerWith({ r1: receiver() });
+  const order = [];
+  m._captureNodeId = async () => {};
+  m._restoreLfbwLinks = async () => {};
+  m._fforReturn = async () => order.push('return');
+  m.runtimeState('r1').events = { connected: false, kick: () => {}, whenConnected: async () => false };
+  await m._onHealthy('r1');
+  assert.deepEqual(order, ['return']);
+  assert.ok(m.logs.some((l) => /event stream not attached after 5s/.test(l)), m.logs.join(' | '));
+});
+
+test('a wallet with no event stream handle runs the return as before', async () => {
+  const { m } = managerWith({ r1: receiver() });
+  const order = [];
+  m._captureNodeId = async () => {};
+  m._restoreLfbwLinks = async () => {};
+  m._fforReturn = async () => order.push('return');
+  await m._onHealthy('r1');
+  assert.deepEqual(order, ['return']);
+});

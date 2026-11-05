@@ -82,6 +82,10 @@ const MAX_LOG_LINES = 300;
 // failed, which the daemon reports only as a transient `node:error` event, so
 // they are retained here for the dashboard to read back.
 const MAX_NODE_ERRORS = 100;
+// How long the post-start setup waits for the daemon's event stream before
+// the FFOR return runs. A healthy daemon on loopback answers at once; the
+// bound only keeps a stream that cannot attach from holding the return up.
+const EVENTS_READY_TIMEOUT_MS = 5000;
 // How long a daemon gets to shut down on SIGTERM before it is SIGKILLed. The
 // engine drains HTLCs for up to 10s and force-exits itself at 15s, so a
 // shorter grace than that kills a daemon that was about to exit cleanly on
@@ -2403,7 +2407,31 @@ class WalletManager {
 	async _onHealthy(id) {
 		await this._captureNodeId(id);
 		await this._restoreLfbwLinks(id);
+		await this._eventsReady(id);
 		await this._fforReturn(id);
+	}
+
+	/**
+	 * Attach the daemon's event stream before anything makes the daemon emit
+	 * what the manager must record. The stream is opened at spawn, before the
+	 * daemon listens, so by the time the daemon reads healthy it can be
+	 * waiting out a retry backoff of several seconds. A return closes a plain
+	 * book within a second or two on loopback, and its DRAINING and CLOSED
+	 * reach the channel history only through the stream: missed, nothing
+	 * replays them (#282). So the stream is told to retry now and waited for,
+	 * briefly. The return still runs if it does not attach in time, and the
+	 * log says so.
+	 */
+	async _eventsReady(id) {
+		const events = this.runtimeState(id).events;
+		if (!events || typeof events.whenConnected !== 'function') return true;
+		if (events.connected) return true;
+		if (typeof events.kick === 'function') events.kick();
+		const ok = await events.whenConnected(EVENTS_READY_TIMEOUT_MS);
+		if (!ok) {
+			this._log(id, `event stream not attached after ${EVENTS_READY_TIMEOUT_MS / 1000}s; an offline receive return now may leave its states out of the channel history`);
+		}
+		return ok;
 	}
 
 	/**
