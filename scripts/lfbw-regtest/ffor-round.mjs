@@ -184,8 +184,8 @@ export async function offlineReceiveRound({ R, S, X, label, concurrent }) {
 		check(`${label}: R's channel kept both vouchers through the close`, kept.localBalanceSats >= localBefore + 2 * VOUCHER_SATS, `local ${localBefore} -> ${kept.localBalanceSats}`);
 	}
 	// Only this round's entries: an earlier round on the channel left its own.
-	// A plain book that the startup return closes before the manager's event
-	// stream attaches leaves no DRAINING or CLOSED here (#282).
+	// The startup return waits for the manager's event stream, so a plain book
+	// it closes leaves its DRAINING and CLOSED here too (#282).
 	const events = (await api(`/wallets/${R}/channel-events?channelId=${channel.channelId}`)).filter((e) => e.timestamp >= roundStart);
 	check(`${label}: the channel history records the epoch's states`, events.some((e) => e.event === 'ffor:state' && e.state === 'ACTIVE') && events.some((e) => e.event === 'ffor:state' && e.state === 'CLOSED'), JSON.stringify(events.filter((e) => e.event.startsWith('ffor')).map((e) => e.state)));
 	// beignet 0.21.5: the credited voucher's invoice reads PAID (#876).
