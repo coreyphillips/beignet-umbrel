@@ -101,7 +101,23 @@ Each creates its own wallets, opens the channels it needs, starts a
 two-voucher book on the receiver's channel to the settling sibling, mints
 the first invoice, stops the receiver, pays the invoice from the payer
 while it is down, starts the receiver, and asserts the manager's return
-closed the book with the voucher credited. `08` also checks the record
+credited the voucher.
+
+The book has one of two profiles, and each scenario asks for its profile
+explicitly, because the manager starts a concurrent book by default
+whenever the engine offers one:
+
+- **Plain**: the return closes the book cooperatively. Used by the first
+  round of `08` and by both books of `10`, since witnesses and the issuer
+  are plain-book features.
+- **Concurrent** (version 2): the return syncs the book instead of
+  closing it. The book stays ACTIVE with slot 1 redeemed. The round then
+  pays slot 2 with the receiver up, and closes the book once both slots
+  are redeemed, because a concurrent book closed early keeps draining
+  with its open slot reserved. Used by the second round of `08` and by
+  `09`.
+
+`08` also checks the record
 model (an on-chain only wallet cannot settle, a peer without the role
 aborts the book with the engine's reason 2). See `docs/FFOR.md`.
 

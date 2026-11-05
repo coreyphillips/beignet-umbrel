@@ -37,7 +37,9 @@ await waitFor('X\'s graph carries the W -> S channel', async () => { const h = a
 const channel = await channelWith(R.id, Srec.nodeId);
 const localBefore = channel.localBalanceSats;
 const tip = await chainTip();
-const book = { channelId: channel.channelId, voucherAmountsMsat: [String(VOUCHER_SATS * 1000), String(VOUCHER_SATS * 1000)], settlementDeadline: tip + 144, voucherExpiry: tip + 144 + 1152, feeBaseMsat: 1000, feeProportionalMillionths: 100 };
+// Both books are plain: the manager would start a concurrent one by default,
+// which a return syncs rather than closes, and which takes no issuer.
+const book = { channelId: channel.channelId, voucherAmountsMsat: [String(VOUCHER_SATS * 1000), String(VOUCHER_SATS * 1000)], settlementDeadline: tip + 144, voucherExpiry: tip + 144 + 1152, feeBaseMsat: 1000, feeProportionalMillionths: 100, concurrent: false };
 try {
 	await api(`/wallets/${R.id}/ffor/epoch`, { method: 'POST', body: { ...book, witnessWalletIds: [S.id] } });
 	check('the settlement peer cannot be its own witness', false);
