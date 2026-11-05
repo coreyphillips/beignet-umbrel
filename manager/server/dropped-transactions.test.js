@@ -57,10 +57,16 @@ test('a fresh transaction, one that cannot be looked up, or an unreadable answer
 });
 
 test('the engine saying a transaction is gone is enough, and a timestamp in seconds is read as seconds', async () => {
-	const gone = rows(); gone[1].exists = false; gone[1].timestamp = now;
 	let asked = 0;
-	const marked = await markDropped(gone, { network: 'mainnet', lookup: async () => { asked += 1; return new Map(); }, now });
-	assert.equal(marked[1].dropped, true);
+	const lookup = async () => { asked += 1; return new Map(); };
+	// Beignet 0.38.0 lists it with dropped: true, and earlier engines' raw record carries exists: false.
+	for (const flag of [{ dropped: true }, { exists: false }]) {
+		// First seen six minutes ago, so without the flag it would be looked up.
+		const gone = rows(); Object.assign(gone[1], flag);
+		const marked = await markDropped(gone, { network: 'mainnet', lookup, now });
+		assert.equal(marked[1].dropped, true, JSON.stringify(flag));
+		assert.equal(marked[0].dropped, undefined);
+	}
 	assert.equal(asked, 0);
 	const seconds = rows(); seconds[1].timestamp = Math.floor((now - 6 * 60000) / 1000);
 	assert.equal((await markDropped(seconds, { network: 'mainnet', lookup: historyOf([]), now }))[1].dropped, true);

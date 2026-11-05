@@ -8,16 +8,18 @@
  * receive whose coins a conflicting transaction spent (a double spend, a
  * replacement, the other signed version of a cooperative close) or one every
  * mempool evicted. The engine's wallet notices and marks such a record
- * `exists: false`, but the listing leaves that flag out (Beignet 0.37.0), so
+ * `exists: false`, but up to Beignet 0.37.0 the listing left that flag out, so
  * the dashboard showed a dead transaction as "pending, waiting for a block"
- * for good.
+ * for good. From Beignet 0.38.0 the listing marks it `dropped: true` itself
+ * (coreyphillips/beignet#1967).
  *
  * Each pending row is checked here against the wallet's own Electrum server,
  * the one its daemon uses. A live transaction is in its address's history,
  * whether in the mempool or in a block, on any server, with or without a
  * transaction index. One that is not there, and was first seen more than
  * GRACE_MS ago, is marked `dropped: true`. A row the engine itself reports
- * with `exists: false` is dropped without asking. Anything that cannot be
+ * dropped, with `dropped: true` or `exists: false`, is dropped without
+ * asking. Anything that cannot be
  * checked, a row with no address or a server that does not answer, is left
  * exactly as the daemon reported it.
  */
@@ -49,6 +51,11 @@ function scriptHash(address, network) {
 	}
 }
 
+/** Whether the engine itself reports `row` gone: `dropped` from Beignet 0.38.0, or a raw `exists: false`. */
+function engineSaysDropped(row) {
+	return row.dropped === true || row.exists === false;
+}
+
 /** First-seen time in ms, from a timestamp the engine may give in seconds or milliseconds. */
 function firstSeenMs(row) {
 	const value = Number(row.timestamp);
@@ -67,7 +74,7 @@ async function markDropped(rows, { network, lookup, now = Date.now() }) {
 	if (!pending.length) return rows;
 	const hashes = new Map();
 	for (const row of pending) {
-		if (row.exists === false) continue;
+		if (engineSaysDropped(row)) continue;
 		const seen = firstSeenMs(row);
 		if (seen === null || now - seen < GRACE_MS) continue;
 		const hash = scriptHash(row.address, network);
@@ -83,7 +90,7 @@ async function markDropped(rows, { network, lookup, now = Date.now() }) {
 	}
 	const dropped = new Set();
 	for (const row of pending) {
-		if (row.exists === false) {
+		if (engineSaysDropped(row)) {
 			dropped.add(row.txid);
 			continue;
 		}
