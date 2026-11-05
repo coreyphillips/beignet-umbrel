@@ -690,7 +690,19 @@ env:
   # environment settings, the storage schema (19) and the runtime
   # dependencies are unchanged, and the capability probes in
   # server/engine.js answer as for 0.36.0.
-  BEIGNET_VERSION: "0.36.1"
+  # 0.37.0 adds ranked receive primaries (the /primaries routes), splice-out
+  # of one or several channels in one transaction (the /channel-send routes,
+  # feature bits 454/455) and the direct-funding payer SDK. A peer's BOLT 1
+  # warning now arrives as peer:warning, and a refused forward as
+  # htlc:forward-refused with an info log line, instead of a CHANNEL_ERROR
+  # node:error. The manager needs nothing for it: the error card and the
+  # channel history read only node:error, so neither shows them any more,
+  # and the engine's own warn line for a peer warning is still tinted as a
+  # warning in the Logs tab. The storage schema moves to 20 (a
+  # composite_splices table). The environment settings and the runtime
+  # dependencies are unchanged, and the capability probes in
+  # server/engine.js answer as for 0.36.1.
+  BEIGNET_VERSION: "0.37.0"
 
 jobs:
   build:
