@@ -25,7 +25,9 @@ if (home.remoteBalanceSats < 3 * VOUCHER_SATS) {
 	await waitFor('P side holds the book', async () => { const c = await channelWith(L.id, Prec.nodeId); return c && c.remoteBalanceSats >= 2 * VOUCHER_SATS ? c : null; }, { timeoutMs: 60000 });
 }
 await openSiblingChannel(X.id, P.id, 500000);
-const r = await offlineReceiveRound({ R: L.id, S: P.id, X: X.id, label: 'lfbw' });
+// A concurrent book, the one the app starts on a lightning-first wallet's
+// home channel; 08 covers the plain book.
+const r = await offlineReceiveRound({ R: L.id, S: P.id, X: X.id, label: 'lfbw', concurrent: true });
 const back = await api(`/wallets/${L.id}`);
 check('lfbw: the link with the primary is ready again after the restart', back.lfbw.setup === 'ready' && back.healthy, JSON.stringify({ setup: back.lfbw.setup, healthy: back.healthy }));
 check('lfbw: the home channel is still the one channel with P', (await w(L.id, '/channels')).filter((c) => c.peerPubkey === Prec.nodeId && !/CLOSED/.test(c.state)).length === 1);

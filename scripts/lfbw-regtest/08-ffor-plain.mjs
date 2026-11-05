@@ -34,7 +34,11 @@ const refused = await w(S.id, '/ffor/epoch/start', { method: 'POST', body: { cha
 const aborted = await waitFor('the book with a peer without the role aborts', async () => { const e = await epochOn(S.id, sToX.channelId); return e && e.state === 'ABORTED' ? e : null; }, { timeoutMs: 30000 });
 check('a peer without the role refuses the book (ABORTED, reason 2)', refused.state === 'NEGOTIATING' && aborted.abortReason === 2, JSON.stringify({ started: refused.state, abortReason: aborted.abortReason }));
 check('the refused setup left no live epoch on S', !(await w(S.id, '/ffor/epochs')).some((e) => !/CLOSED|ABORTED/.test(e.state)));
-await offlineReceiveRound({ R: R.id, S: S.id, X: X.id, label: 'plain' });
+// The same channel carries both book profiles in turn: a plain book, which
+// the return closes, then a concurrent one (the manager's default), which
+// the return syncs and the round closes afterwards.
+await offlineReceiveRound({ R: R.id, S: S.id, X: X.id, label: 'plain', concurrent: false });
+await offlineReceiveRound({ R: R.id, S: S.id, X: X.id, label: 'concurrent', concurrent: true });
 
 // Enforcement: a second book, S gone, the return says unreachable, and
 // Enforce force-closes the channel. The epoch stays ACTIVE on the record
