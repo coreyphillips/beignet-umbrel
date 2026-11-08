@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.38.0"
+version: "0.38.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -17,8 +17,8 @@ description: >-
 
   No full node required. Point Beignet at any Electrum server you like, or, if
   you run the Electrs or Fulcrum app on your Umbrel, or the rbitcoin app from
-  this store, connect to it with a single click. You can set a default Electrum
-  server for new wallets and override it per wallet.
+  the rbitcoin store, connect to it with a single click. You can set a default
+  Electrum server for new wallets and override it per wallet.
 developer: Corey Phillips
 website: https://github.com/coreyphillips/beignet
 submitter: Corey Phillips
@@ -30,18 +30,21 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.38.0. The engine now reports a pending transaction that
-  can no longer confirm as dropped itself: one replaced by a fee bump, the
-  losing version of a cooperative close whose other version confirmed, or
-  one the mempool evicted. The Activity tab shows it as dropped with any
-  Electrum server, a Tor one included, and the manager no longer has to
-  look it up. A gap scan that extends past its first window now keeps the
-  coins in its middle windows in the balance.
+  Bundles beignet 0.38.1. A Lightning payment that no single channel can
+  carry, but your channels together can, now shows its fee in the Send tab,
+  priced as the split payment Beignet makes, instead of a "No route found"
+  note.
 
 
-  Going back to 0.37.1 keeps the wallet storage, which is unchanged. There
-  the manager checks pending transactions against Electrum again, as it
-  did in 0.37.1.
+  The rbitcoin app has moved out of this store into its own, the rbitcoin
+  store (github.com/coreyphillips/rbitcoin-umbrel), and the one-click Umbrel
+  rbitcoin preset now points at the app from there. A wallet already using
+  the old rbitcoin app keeps that server. After you move to the new app (its
+  store's README has the steps), open the wallet's Electrum settings and pick
+  the preset again.
+
+
+  Going back to 0.38.0 keeps the wallet storage, which is unchanged.
 dependencies: []
 path: ""
 defaultUsername: ""
