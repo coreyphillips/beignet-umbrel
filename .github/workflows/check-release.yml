@@ -24,12 +24,11 @@ name: check-release
 # Step 3 is the only commit that changes what Umbrel is told to install, and it
 # cannot pass this check until the thing it points at is real.
 #
-# Two apps live here. beignet-wallet releases on `v*` tags as
-# ghcr.io/coreyphillips/beignet-app; beignet-rbitcoin on `rbitcoin-v*` tags as
-# ghcr.io/coreyphillips/rbitcoin. The rules are the same for both: every
-# image in the compose file is digest-pinned, and the app's own image (the one
-# under ghcr.io/coreyphillips/) carries the app's version as its tag and
-# resolves in the registry.
+# beignet-wallet releases on `v*` tags as ghcr.io/coreyphillips/beignet-app.
+# Every image in the compose file is digest-pinned, and the app's own image
+# (the one under ghcr.io/coreyphillips/) carries the app's version as its tag
+# and resolves in the registry. (The rbitcoin app that also lived here moved
+# to its own store, coreyphillips/rbitcoin-umbrel, with its own check.)
 
 on:
   pull_request:
@@ -37,8 +36,6 @@ on:
     paths:
       - 'beignet-wallet/docker-compose.yml'
       - 'beignet-wallet/umbrel-app.yml'
-      - 'beignet-rbitcoin/docker-compose.yml'
-      - 'beignet-rbitcoin/umbrel-app.yml'
   push:
     branches: [main]
 
@@ -48,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [beignet-wallet, beignet-rbitcoin]
+        app: [beignet-wallet]
     steps:
       - uses: actions/checkout@v4
 
@@ -76,8 +73,8 @@ jobs:
           APP_VERSION=$(grep -oE '^version: *"[^"]+"' "$MANIFEST" | sed 's/.*"\(.*\)"/\1/')
           echo "app version : $APP_VERSION"
 
-          # 1. Every image is digest-pinned, the app's own and the sidecars
-          #    (Tor, nginx) alike: a tag alone can move under the app.
+          # 1. Every image is digest-pinned, the app's own and the sidecar
+          #    (Tor) alike: a tag alone can move under the app.
           grep -oE '^\s*image: *[^[:space:]]+' "$COMPOSE" | sed -E 's/^\s*image: *//' | while read -r IMAGE; do
             echo "image       : $IMAGE"
             case "$IMAGE" in
@@ -135,8 +132,7 @@ jobs:
   # the two, so the check would be red exactly when the process is right.
   # The release PR is the one commit that must line the two up. It is
   # recognised by what it touches: a PR that leaves this app's manifest
-  # alone (the other app's release, say, while this one sits between its
-  # step 1 and step 3) is not this app's release PR and is not held to it.
+  # alone is not a release PR and is not held to it.
   beignet-release-notes:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -187,67 +183,3 @@ jobs:
           fi
 
           echo "ok: the release notes name beignet $BEIGNET."
-
-  # The same drift guard for the rbitcoin app, whose one pin is the
-  # RBITCOIN_VERSION ARG in its Dockerfile: the app version must be that
-  # release plus an app patch (0.8.0-1), and the notes must name it.
-  rbitcoin-release-notes:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Only a PR that changes this app's manifest is its release PR
-        id: touched
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if gh pr diff "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --name-only | grep -qx 'beignet-rbitcoin/umbrel-app.yml'; then
-            echo "manifest=yes" >> "$GITHUB_OUTPUT"
-          else
-            echo "This PR does not change beignet-rbitcoin/umbrel-app.yml; it is not an rbitcoin release PR, nothing to check."
-            echo "manifest=no" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: The app version and release notes must name the rbitcoin release the image carries
-        if: steps.touched.outputs.manifest == 'yes'
-        run: |
-          set -euo pipefail
-
-          DOCKERFILE=docker/rbitcoin/Dockerfile
-          MANIFEST=beignet-rbitcoin/umbrel-app.yml
-
-          if [ ! -f "$MANIFEST" ]; then
-            echo "::error::this PR touches $MANIFEST but leaves no manifest behind; removing the app is not a release."
-            exit 1
-          fi
-
-          RB=$(sed -nE 's/^ARG RBITCOIN_VERSION=(.+)$/\1/p' "$DOCKERFILE")
-          if [ -z "$RB" ]; then
-            echo "::error::$DOCKERFILE pins no RBITCOIN_VERSION."
-            exit 1
-          fi
-          echo "bundled rbitcoin: $RB"
-
-          APP_VERSION=$(grep -oE '^version: *"[^"]+"' "$MANIFEST" | sed 's/.*"\(.*\)"/\1/')
-          case "$APP_VERSION" in
-            "$RB"-*) ;;
-            *)
-              echo "::error::$MANIFEST version ($APP_VERSION) must be \"$RB-<app patch>\", the rbitcoin release $DOCKERFILE pins plus a packaging number."
-              exit 1
-              ;;
-          esac
-
-          NOTES=$(awk '/^releaseNotes:/{on=1; next} on && /^[^[:space:]]/{exit} on{print}' "$MANIFEST" | tr '\n' ' ' | tr -s ' ')
-          if [ -z "$NOTES" ]; then
-            echo "::error::$MANIFEST has no releaseNotes."
-            exit 1
-          fi
-          ESCAPED=$(printf '%s' "$RB" | sed 's/\./\\./g')
-          if ! printf '%s\n' "$NOTES" | grep -qE "rbitcoin ${ESCAPED}([^0-9]|$)"; then
-            echo "::error::The release notes in $MANIFEST do not mention \"rbitcoin $RB\", the release $DOCKERFILE pins."
-            exit 1
-          fi
-
-          echo "ok: version $APP_VERSION and the release notes name rbitcoin $RB."
