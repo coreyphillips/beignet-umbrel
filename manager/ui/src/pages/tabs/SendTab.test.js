@@ -890,7 +890,9 @@ test('a priced payment shows its estimate and asks the wallet nothing more', asy
 test('the reason leaves with the invoice it was about', async () => {
 	const api = stubRouteApi({
 		estimate: (bolt11) => (bolt11 === SPEC_INVOICE ? NO_ROUTE() : GOOD_ESTIMATE),
-		decoded: (bolt11) => (bolt11 === SPEC_INVOICE ? fieldDecoded() : fieldDecoded(250_000))
+		// The second asks for less than the channels hold, so it prices: one
+		// above what they can send is refused before any estimate is shown.
+		decoded: (bolt11) => (bolt11 === SPEC_INVOICE ? fieldDecoded() : fieldDecoded(25_000))
 	});
 	const view = await mountRouteSend(api);
 	try {
@@ -926,6 +928,107 @@ test('a payment that finds no route after an estimate that did gets the same rea
 		const note = view.$('[data-testid="no-route"]');
 		assert.ok(note, 'and the reason appears above the button');
 		assert.match(note.textContent, /Powdered Sugar/);
+	} finally {
+		await view.unmount();
+	}
+});
+
+// Pinned from the field: 20,000 sats on one channel with the hub, an invoice
+// naming no amount, and Max filled in 20,000. The channel refused it locally
+// as "Insufficient balance for HTLC": the reserve cannot leave, and Max had
+// summed the raw local balance instead of what the channel can send.
+const RESERVED_CHANNEL = {
+	...OPEN_CHANNEL,
+	channelId: 'a'.repeat(64),
+	peerPubkey: HUB,
+	localBalanceSats: 20_000,
+	maxSendableSats: 19_646,
+	remoteBalanceSats: 15_400,
+	capacitySats: 35_400
+};
+const reservedApi = () =>
+	stubRouteApi({
+		channels: [RESERVED_CHANNEL],
+		decoded: () => ({ ...fieldDecoded(), payeeNodeKey: HUB, amountSats: null }),
+		estimate: { estimatedFeeSats: 0, successProbabilityPct: 95, hopCount: 1 }
+	});
+
+test('Max on an amountless invoice stops at what the channel can send, not its balance', async () => {
+	const view = await mountRouteSend(reservedApi());
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await priced();
+		assert.match(view.text(), /up to the 19,646 sats your channels can send right now/);
+		await click(view.$$('button').find((b) => b.textContent.trim() === 'Max'));
+		await settle(50);
+		assert.equal(view.$('.amount-input').value, '19646', 'Max is the channel ceiling');
+		assert.equal(view.$('[data-testid="over-sendable"]'), null, 'and Max itself is never refused');
+		assert.ok(!payButton(view).disabled, 'so Pay stays live');
+	} finally {
+		await view.unmount();
+	}
+});
+
+test('an amount above what the channels can send is refused before Pay, with the reason', async () => {
+	const api = reservedApi();
+	const view = await mountRouteSend(api);
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await priced();
+		await type(view.$('.amount-input'), '20000');
+		await settle(50);
+		const note = view.$('[data-testid="over-sendable"]');
+		assert.ok(note, 'the over-sendable note shows');
+		assert.match(note.textContent, /can send up to 19,646 sats over Lightning right now/);
+		assert.match(note.textContent, /channel\s+reserve/);
+		assert.ok(payButton(view).disabled, 'and Pay is held back rather than left to fail');
+		await click(payButton(view));
+		await settle(50);
+		assert.equal(
+			api.calls.find(([method, path]) => method === 'POST' && path === '/invoice/pay-safe'),
+			undefined,
+			'nothing reaches the daemon'
+		);
+	} finally {
+		await view.unmount();
+	}
+});
+
+// The field channel exactly: the hub opened 2,006,977 sats, the wallet holds
+// 20,000 of it, and the 1% reserve is 20,069, so nothing can leave at all.
+// The daemon still estimated 95% over one hop (its router planned over the
+// channel's public gossip copy), and the payment died in addHtlc.
+const FIELD_RESERVE_CHANNEL = {
+	...OPEN_CHANNEL,
+	channelId: '7a242db2e140be5779f2ec08c3743a9c335c639a948f658778d4cf34c123bf16',
+	peerPubkey: HUB,
+	localBalanceSats: 20_000,
+	maxSendableSats: 0,
+	localReserveWaived: false,
+	isOpener: false,
+	localReserveSats: 20_069,
+	remoteBalanceSats: 1_986_977,
+	capacitySats: 2_006_977
+};
+
+test('a balance still filling the channel reserve says so, and the estimate that disagrees is left out', async () => {
+	const api = stubRouteApi({
+		channels: [FIELD_RESERVE_CHANNEL],
+		decoded: () => ({ ...fieldDecoded(), payeeNodeKey: HUB, amountSats: null }),
+		estimate: { estimatedFeeSats: 0, successProbabilityPct: 95, hopCount: 1 }
+	});
+	const view = await mountRouteSend(api);
+	try {
+		await type(view.$('textarea[placeholder^="lnbc"]'), SPEC_INVOICE);
+		await priced();
+		await type(view.$('.amount-input'), '20000');
+		await priced();
+		const note = view.$('[data-testid="over-sendable"]');
+		assert.ok(note, 'the card refuses the amount');
+		assert.match(note.textContent, /Nothing can be sent over Lightning yet/);
+		assert.match(note.textContent, /20,000 sats\) is\s+still below the channel reserve \(20,069 sats\)/);
+		assert.doesNotMatch(view.text(), /95% success/, 'no estimate contradicting it');
+		assert.ok(payButton(view).disabled, 'and Pay is held back');
 	} finally {
 		await view.unmount();
 	}

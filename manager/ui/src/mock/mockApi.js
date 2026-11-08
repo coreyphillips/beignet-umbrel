@@ -1247,6 +1247,25 @@ function lightningBalance(id) {
 		return a;
 	}, 0);
 }
+// What one channel can send, as the daemon reports it on GET /channels
+// (maxSendableSats): nothing unless it takes HTLCs, else its balance above the
+// ~1% reserve (the conservative side mid-splice) less, on a channel this
+// wallet opened, a commitment fee held at twice the rate with room for an
+// HTLC. The figures are illustrative; what matters is that it sits below the
+// local balance, as it does on a real node.
+const MOCK_OPENER_FEE_BUFFER_SATS = 1_100;
+function mockChannelReserve(c) {
+	return Math.max(546, Math.round(c.capacitySats * 0.01));
+}
+function mockMaxSendable(c) {
+	if (!(c.state === 'NORMAL' || c.htlcUsable)) return 0;
+	const local =
+		c.pendingSpliceLocalBalanceSats != null
+			? Math.min(c.localBalanceSats, c.pendingSpliceLocalBalanceSats)
+			: c.localBalanceSats;
+	const fee = c.isOpener ? MOCK_OPENER_FEE_BUFFER_SATS : 0;
+	return Math.max(0, local - mockChannelReserve(c) - fee);
+}
 function splicingBalance(id) {
 	// Faithful to beignet 0.6.0: the in-transit remainder for pay-through
 	// splices, the whole settle-to balance for parked ones.
@@ -2918,7 +2937,7 @@ function walletRequest(id, path, method, body) {
 			// reports. Below the reserve, sendable is zero even with a balance.
 			// Mid-splice the spendable side is the conservative min of the live and
 			// settle-to balances, the same ceiling the daemon's addHtlc enforces.
-			const chReserve = (c) => Math.max(546, Math.round(c.capacitySats * 0.01));
+			const chReserve = mockChannelReserve;
 			const spendable = (c) =>
 				c.pendingSpliceLocalBalanceSats != null
 					? Math.min(c.localBalanceSats, c.pendingSpliceLocalBalanceSats)
@@ -2936,6 +2955,9 @@ function walletRequest(id, path, method, body) {
 				totalCapacitySats,
 				reserveSats,
 				sendableSats,
+				// The daemon's exact ceiling (beignet 0.32.0 and later): the
+				// reserve and, on a channel this wallet opened, its commitment fee.
+				maxSendableSats: routable.reduce((a, c) => a + mockMaxSendable(c), 0),
 				outboundLiquidityPct,
 				inboundLiquidityPct: totalCapacitySats ? 100 - outboundLiquidityPct : 0,
 				recommendations:
@@ -3453,7 +3475,11 @@ function walletRequest(id, path, method, body) {
 			return { txid: newTxid, hex: hex(400), boostType: 'cpfp', feeSats, originalTxid: body.txid };
 		}
 		case '/channels':
-			return st.channels;
+			return st.channels.map((c) => ({
+				...c,
+				localReserveSats: c.localReserveSats ?? mockChannelReserve(c),
+				maxSendableSats: mockMaxSendable(c)
+			}));
 		case '/channel/diagnostics': {
 			const cid = new URLSearchParams(query).get('channelId');
 			const c = st.channels.find((x) => x.channelId === cid);

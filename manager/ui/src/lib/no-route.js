@@ -19,6 +19,7 @@
  * daemon said "no route or invalid invoice" and nothing else.
  */
 import { fmtSats, shortId } from './format.js';
+import { channelSendableSats, liquiditySendableSats } from './sendable.js';
 
 /** Codes after which pressing Pay cannot do better than the estimate did. */
 export const BLOCKS_PAY = new Set(['NO_CHANNEL', 'CHANNEL_NOT_READY', 'INSUFFICIENT_FUNDS']);
@@ -90,6 +91,8 @@ const list = (names) =>
 	names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 
 const sum = (rows) => rows.reduce((total, c) => total + (Number(c.localBalanceSats) || 0), 0);
+// What the channels can actually send, by the daemon's own per-channel ceiling.
+const sendableOf = (rows) => rows.reduce((total, c) => total + channelSendableSats(c), 0);
 
 const inWords = (state) => String(state || 'not ready').toLowerCase().replace(/_/g, ' ');
 
@@ -156,7 +159,9 @@ export function explainNoRoute(facts) {
 		return answer('CHANNEL_NOT_READY', `Your channel cannot send yet (${inWords(open[0].state)}). Payments resume once it is ready.`);
 	}
 
-	const sendable = Number.isFinite(f.liquidity?.sendableSats) ? f.liquidity.sendableSats : sum(ready);
+	const reported =
+		f.liquidity && (Number.isFinite(f.liquidity.maxSendableSats) || Number.isFinite(f.liquidity.sendableSats));
+	const sendable = reported ? liquiditySendableSats(f.liquidity) : sendableOf(ready);
 	if (amount >= sendable) {
 		const reserve = Number(f.liquidity?.reserveSats) || 0;
 		return answer(
