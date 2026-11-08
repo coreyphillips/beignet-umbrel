@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.38.1"
+version: "0.38.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,21 +30,21 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.38.1. A Lightning payment that no single channel can
-  carry, but your channels together can, now shows its fee in the Send tab,
-  priced as the split payment Beignet makes, instead of a "No route found"
-  note.
+  Bundles beignet 0.38.2. The Send tab now stops at what your channels can
+  actually send. Max, the Keysend slider and Can send counted your whole
+  channel balance, including the channel reserve your peer requires you to
+  keep, so Max could fill in an amount the channel then refused as
+  "Insufficient balance for HTLC". An amount above what you can send is now
+  refused on the card with the reason, and while your balance has not yet
+  filled the channel reserve, the note says so in those words.
 
 
-  The rbitcoin app has moved out of this store into its own, the rbitcoin
-  store (github.com/coreyphillips/rbitcoin-umbrel), and the one-click Umbrel
-  rbitcoin preset now points at the app from there. A wallet already using
-  the old rbitcoin app keeps that server. After you move to the new app (its
-  store's README has the steps), open the wallet's Electrum settings and pick
-  the preset again.
+  Beignet no longer prices a payment over a channel that can send nothing by
+  reading that channel's public listing, so the estimate shown and the
+  payment made agree: such a payment is refused before anything is sent.
 
 
-  Going back to 0.38.0 keeps the wallet storage, which is unchanged.
+  Going back to 0.38.1 keeps the wallet storage, which is unchanged.
 dependencies: []
 path: ""
 defaultUsername: ""
