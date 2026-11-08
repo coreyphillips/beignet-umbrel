@@ -712,7 +712,15 @@ env:
   # (20), the environment settings and the runtime dependencies are
   # unchanged, and the capability probes in server/engine.js answer as for
   # 0.37.0.
-  BEIGNET_VERSION: "0.38.0"
+  # 0.38.1 prices a payment that no single channel can carry but the
+  # channels together can as the multi-path split sendPayment would make,
+  # instead of answering POST /payment/estimate with NO_ROUTE
+  # (coreyphillips/beignet#1969). The Send tab asks for that estimate as an
+  # invoice is entered, so such a payment now shows its fee there instead of
+  # a "No route found" note. The estimate's shape, the storage schema (20),
+  # the environment settings and the runtime dependencies are unchanged,
+  # and the capability probes in server/engine.js answer as for 0.38.0.
+  BEIGNET_VERSION: "0.38.1"
 
 jobs:
   build:
