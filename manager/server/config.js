@@ -77,17 +77,20 @@ const ELECTRUM_PRESETS = [
 	{
 		id: 'umbrel-rbitcoin',
 		label: 'Umbrel rbitcoin',
-		// The pinned container name from this store's beignet-rbitcoin app,
-		// resolved by Docker's DNS on the shared network. No fixed IP: that
-		// app pins names, not addresses (see its docker-compose.yml).
-		host: 'beignet-rbitcoin_node_1',
+		// The pinned container name of the rbitcoin-node app from the
+		// rbitcoin store (coreyphillips/rbitcoin-umbrel), resolved by
+		// Docker's DNS on the shared network. No fixed IP: that app pins
+		// names, not addresses (see its docker-compose.yml). Until app
+		// 0.8.99-2 it was this store's beignet-rbitcoin app, at
+		// beignet-rbitcoin_node_1; wallets saved with that host keep it.
+		host: 'rbitcoin-node_node_1',
 		port: 50001,
 		tls: false,
 		// That app runs mainnet and nothing else, so the dashboard offers
 		// this preset only when the wallet (or the default) is on mainnet.
 		// A preset without `networks` is offered for every network.
 		networks: ['mainnet'],
-		note: 'Use if the rbitcoin app from this store is installed'
+		note: 'Use if the rbitcoin app (rbitcoin store) is installed'
 	}
 ];
 

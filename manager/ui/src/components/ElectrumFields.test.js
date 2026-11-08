@@ -185,7 +185,7 @@ test('Test probes the server as typed and the answer goes away when the fields c
 
 test('a preset that names its networks is offered for those alone', async () => {
 	const restore = stub('discoverElectrum', async () => discovered());
-	const presets = [...PRESETS, { id: 'umbrel-rbitcoin', label: 'Umbrel rbitcoin', host: 'beignet-rbitcoin_node_1', port: 50001, tls: false, networks: ['mainnet'], note: 'n' }];
+	const presets = [...PRESETS, { id: 'umbrel-rbitcoin', label: 'Umbrel rbitcoin', host: 'rbitcoin-node_node_1', port: 50001, tls: false, networks: ['mainnet'], note: 'n' }];
 	const main = await render(Harness, { initial: { host: '', port: 50001, tls: false }, seen: {}, presets, network: 'mainnet' });
 	try {
 		assert.equal(main.$$('.preset-btn').length, 3);
