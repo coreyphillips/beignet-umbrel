@@ -720,7 +720,16 @@ env:
   # a "No route found" note. The estimate's shape, the storage schema (20),
   # the environment settings and the runtime dependencies are unchanged,
   # and the capability probes in server/engine.js answer as for 0.38.0.
-  BEIGNET_VERSION: "0.38.1"
+  # 0.38.2 keeps a channel that can send nothing (its balance still below
+  # the reserve) in the router's own channel list at zero, instead of
+  # dropping it and letting the router plan over that channel's public
+  # gossip copy (coreyphillips/beignet#1971). POST /payment/estimate now
+  # answers NO_ROUTE for such a payment instead of a one-hop route, and the
+  # payment is refused before any HTLC is offered rather than failing as
+  # "Insufficient balance for HTLC". The estimate's shape, the storage
+  # schema (20), the environment settings and the runtime dependencies are
+  # unchanged, and the capability probes answer as for 0.38.1.
+  BEIGNET_VERSION: "0.38.2"
 
 jobs:
   build:
