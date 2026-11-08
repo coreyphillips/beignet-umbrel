@@ -17,6 +17,7 @@ import { describeRecovery } from '../../lib/recovery.js';
 
 import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
 import { nodeUris } from '../../lib/node-uris.js';
+import { liquiditySendableSats } from '../../lib/sendable.js';
 
 export default function OverviewTab({ id, api, info, health, recovery, rec, tick, config }) {
 	// A liquidity provider fronts its own coins for lightning-first wallets;
@@ -108,23 +109,28 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 		? data.channels.filter((c) => !isClosedChannel(c)).length
 		: null;
 
-	// What you can actually send is the balance above the channel reserve; below
-	// it, nothing is sendable and the balance is still filling the reserve. Fall
-	// back to the raw local balance when the daemon does not report the reserve.
-	const sendable = liq?.sendableSats ?? liq?.totalLocalBalanceSats ?? 0;
+	// What you can actually send is the daemon's own send ceiling: the balance
+	// above the channel reserve, less the commitment fee on a channel this
+	// wallet opened (lib/sendable.js). The balance above the reserve alone
+	// overstated it, and Can send named a figure the channel then refused.
+	// Below the reserve nothing is sendable and the balance is still filling
+	// it, which is judged on the reserve alone so the note keeps its meaning.
+	const sendable = liquiditySendableSats(liq);
+	const aboveReserve = liq?.sendableSats ?? liq?.totalLocalBalanceSats ?? 0;
 	const belowReserve =
-		liq && sendable === 0 && liq.activeChannelCount > 0 && liq.reserveSats > 0;
+		liq && aboveReserve === 0 && liq.activeChannelCount > 0 && liq.reserveSats > 0;
 	const reservePct = belowReserve
 		? Math.min(100, Math.round((liq.totalLocalBalanceSats / liq.reserveSats) * 100))
 		: 0;
 
 	// The liquidity bar splits capacity into what you can send (sendable), the
-	// slice of your balance locked as reserve, and what you can receive. Basing
+	// slice of your balance held back (the reserve, and the commitment fee on a
+	// channel you opened), and what you can receive. Basing
 	// outbound on sendable rather than the raw local balance keeps the bar honest:
 	// below the reserve, outbound reads zero. Falls back to the daemon's own
 	// percentages when it does not report the reserve.
 	const cap = liq?.totalCapacitySats || 0;
-	const hasReserveData = liq?.sendableSats != null && cap > 0;
+	const hasReserveData = (liq?.maxSendableSats != null || liq?.sendableSats != null) && cap > 0;
 	const outBarPct = hasReserveData
 		? (sendable / cap) * 100
 		: liq?.outboundLiquidityPct ?? 0;
@@ -197,7 +203,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 									<div
 										className="reserve-seg"
 										style={{ width: `${reserveBarPct}%` }}
-										title="Locked as channel reserve"
+										title="Held back as channel reserve and commitment fee"
 									/>
 								)}
 								<div className="in" style={{ width: `${inBarPct}%` }} />

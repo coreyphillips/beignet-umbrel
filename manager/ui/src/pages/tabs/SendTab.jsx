@@ -21,6 +21,7 @@ import { LiveFundingSteps } from '../../components/FundingSteps.jsx';
 import { useQuote } from '../../hooks/useQuote.js';
 import AddressSend from './lfbw/AddressSend.jsx';
 import { arrivingFundsNote, lfbwStatus } from '../../lib/lfbw.js';
+import { channelSendableSats } from '../../lib/sendable.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 import { manager, walletApi } from '../../api.js';
 
@@ -1298,11 +1299,14 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 	}
 
 	// The most that can leave over Lightning, for the amount slider a zero-amount
-	// invoice needs. Routing fees and each channel's reserve come out of it, so
-	// this is a ceiling rather than a promise.
+	// invoice needs: each usable channel's own send ceiling as the daemon
+	// reports it, which is the local balance less the channel reserve (and the
+	// commitment fee on a channel this wallet opened). The raw local balance
+	// it used to sum put Max on a figure the channel refuses outright, as
+	// "Insufficient balance for HTLC". A routing fee still comes out of it.
 	const outbound = (channels || [])
 		.filter(usable)
-		.reduce((sum, c) => sum + (c.localBalanceSats || 0), 0);
+		.reduce((sum, c) => sum + channelSendableSats(c), 0);
 
 	// The amount this payment asks for, from the request or the box. A
 	// lightning-first wallet says what is arriving when it exceeds Can send
@@ -1312,6 +1316,29 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 	const arriving = lfbwState ? arrivingFundsNote(askedSats, lfbwState) : null;
 	const overTotal = lfbwState ? askedSats > 0 && askedSats > lfbwState.total : false;
 	const overCanSend = lfbwState ? askedSats > 0 && askedSats > lfbwState.canSend : false;
+	// Any other wallet is refused here too when the amount is above what its
+	// channels can send, rather than left to a Pay button that can only fail.
+	// Only once a usable channel has been read: with none, the no-route reading
+	// says why, and while the list loads there is nothing to judge by.
+	const overSendable =
+		!lfbwState && askedSats > 0 && (channels || []).some(usable) && askedSats > outbound;
+	// The commonest way to get there, and the most puzzling: a balance that has
+	// not yet filled the channel reserve. Seen in the field on a 2,006,977 sat
+	// channel the hub opened, whose 1% reserve (20,069 sats) was more than the
+	// 20,000 the wallet held on it, so nothing at all could leave.
+	const usableChannels = (channels || []).filter(usable);
+	const heldSats = usableChannels.reduce((sum, c) => sum + (Number(c.localBalanceSats) || 0), 0);
+	const reserveSats = usableChannels.reduce((sum, c) => sum + (Number(c.localReserveSats) || 0), 0);
+	const fillingReserve =
+		overSendable &&
+		outbound === 0 &&
+		usableChannels.length > 0 &&
+		usableChannels.every(
+			(c) =>
+				c.localReserveWaived !== true &&
+				Number(c.localReserveSats) > 0 &&
+				(Number(c.localBalanceSats) || 0) <= Number(c.localReserveSats)
+		);
 
 	const pay = async () => {
 		setBusy(true);
@@ -1496,7 +1523,11 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 									</td>
 								</tr>
 							)}
-							{estimate && !expired && (
+							{/* The daemon can price a route its own channel then refuses
+							    (one that cannot send at all is planned over its public
+							    copy in the gossip graph), so the row is left out for an
+							    amount this card already refuses. */}
+							{estimate && !expired && !overSendable && (
 								<tr>
 									<td className="wallet-meta">Estimate</td>
 									<td>
@@ -1523,7 +1554,13 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 								isMax={outbound > 0 && typedAmount === outbound}
 								hint={`This ${
 									offer ? 'offer' : 'invoice'
-								} names no amount, so it is yours to choose. Bounded by your outbound channel balance, which routing fees and the channel reserve come out of.`}
+								} names no amount, so it is yours to choose${
+									outbound > 0
+										? `, up to the ${fmtSats(
+												outbound
+										  )} your channels can send right now. That is your Lightning balance less the channel reserve, and a routing fee comes out of it too.`
+										: ', but your channels cannot send anything right now: what they hold has not yet filled the channel reserve.'
+								}`}
 							/>
 						</div>
 					)}
@@ -1543,9 +1580,29 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 							This asks for {fmtSats(askedSats)}, more than this wallet holds in total ({fmtSats(lfbwState.total)}).
 						</div>
 					)}
+					{!expired && overSendable && (
+						<div className="error-note" role="alert" data-testid="over-sendable" style={{ marginTop: 12 }}>
+							{fillingReserve ? (
+								<>
+									Nothing can be sent over Lightning yet. Your channel balance ({fmtSats(heldSats)}) is
+									still below the channel reserve ({fmtSats(reserveSats)}), the part of the channel your
+									peer requires you to keep, so a payment can leave only from what you hold above it.
+									Receiving more over Lightning fills the reserve.
+								</>
+							) : (
+								<>
+									This wallet can send up to {fmtSats(outbound)} over Lightning right now, which does
+									not cover {fmtSats(askedSats)}. The rest of your channel balance stays behind as the
+									channel reserve (and, on a channel you opened, its commitment fee), so it cannot
+									leave in a payment.
+								</>
+							)}
+						</div>
+					)}
 					{/* A lightning-first wallet's own notes above carry better figures
-					    for a shortfall (what is arriving, and when), so they win. */}
-					{!expired && !arriving && !overTotal && noRoute && (
+					    for a shortfall (what is arriving, and when), so they win, and so
+					    does the plainer over-sendable note just above. */}
+					{!expired && !arriving && !overTotal && !overSendable && noRoute && (
 						<div className="error-note" role="alert" data-testid="no-route" style={{ marginTop: 12 }}>
 							{noRoute.message}
 							{noRoute.remedy && <Help>{noRoute.remedy}</Help>}
@@ -1567,6 +1624,7 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 						(needsAmount && typedAmount <= 0) ||
 						overTotal ||
 						overCanSend ||
+						overSendable ||
 						(noRoute != null && BLOCKS_PAY.has(noRoute.code))
 					}
 				>
@@ -1595,13 +1653,13 @@ function Keysend({ api, channels, bump }) {
 	const [amount, setAmount] = useState('');
 	const [busy, setBusy] = useState(false);
 
-	// The most that can leave over Lightning is the local side of the usable
-	// channels. Routing fees and each channel's reserve come out of that, so this
-	// is a ceiling rather than a promise, and the slider is bounded by it only to
-	// keep the amount in the right order of magnitude.
+	// The most that can leave over Lightning: each usable channel's send
+	// ceiling as the daemon reports it, the local balance less the channel
+	// reserve (and the commitment fee on a channel this wallet opened). Routing
+	// fees still come out of it, so the very top may not go through.
 	const outbound = (channels || [])
 		.filter(usable)
-		.reduce((sum, c) => sum + (c.localBalanceSats || 0), 0);
+		.reduce((sum, c) => sum + channelSendableSats(c), 0);
 
 	const send = async () => {
 		setBusy(true);
@@ -1637,7 +1695,7 @@ function Keysend({ api, channels, bump }) {
 				max={outbound}
 				onMax={() => setAmount(String(outbound))}
 				isMax={outbound > 0 && parseInt(amount, 10) === outbound}
-				hint="Bounded by your outbound channel balance. Routing fees and the channel reserve come out of it, so the very top of the range may not go through."
+				hint="Bounded by what your channels can send right now: your Lightning balance less the channel reserve. Routing fees come out of it too, so the very top of the range may not go through."
 			/>
 			<Button variant="primary" busy={busy} onClick={send} disabled={!pubkey || !amount}>
 				Send keysend

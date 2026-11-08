@@ -10,6 +10,8 @@
  * apart, so every card reads them the same way.
  */
 
+import { channelSendableSats, liquiditySendableSats } from './sendable.js';
+
 // The manager moves confirmed on-chain funds into the home channel at or
 // above this (manager/server/lfbw.js CHANNELIZE_FLOOR_SATS).
 export const CHANNELIZE_FLOOR_SATS = 25000;
@@ -129,11 +131,10 @@ export function lfbwStatus({ rec, info, balance, liquidity, channels, utxos, pee
 	const openingSats = pendingChannels.reduce((s, c) => s + (c.localBalanceSats || 0), 0);
 	const splicingSats = balance ? balance.splicingSats || 0 : (info && info.splicingBalanceSats) || 0;
 
-	const canSend = liquidity
-		? liquidity.sendableSats ?? liquidity.totalLocalBalanceSats ?? 0
-		: home
-		? home.localBalanceSats || 0
-		: 0;
+	// The daemon's own send ceiling (lib/sendable.js): the balance above the
+	// reserve overstated it by the commitment fee on a channel this wallet
+	// opened, and an amount in that gap failed as "Insufficient balance".
+	const canSend = liquidity ? liquiditySendableSats(liquidity) : home ? channelSendableSats(home) : 0;
 	const canReceive = withPrimary.filter(usable).reduce((s, c) => s + (c.remoteBalanceSats || 0), 0);
 	const lightning = balance ? balance.lightning || 0 : (info && info.lightningBalanceSats) || 0;
 	const pending = unconfirmed + confirmedOnchain + openingSats + splicingSats;
