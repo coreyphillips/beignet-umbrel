@@ -79,6 +79,8 @@ const PAYKIT_CHECK_MS = 15 * 60 * 1000;
 const PAYKIT_FIRST_CHECK_MIN_MS = 60 * 1000;
 const PAYKIT_FIRST_CHECK_MAX_MS = 5 * 60 * 1000;
 const PAYKIT_BACKOFF_MAX_MS = 6 * 60 * 60 * 1000;
+// How soon after a direct funding lands the published details are checked.
+const PAYKIT_SOON_MS = 10 * 1000;
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -835,6 +837,28 @@ class WalletManager {
 			rt.paykitTimer = null;
 		}
 		rt.paykitNextAt = null;
+		rt.paykitSoon = false;
+	}
+
+	/**
+	 * A direct funding just landed on this wallet. If it paid the request the
+	 * wallet publishes under its pubky, that request is spent, and a second
+	 * payer reading it would be refused (or, paying from the same wallet, get
+	 * the first payment's answer back). So check in a few seconds instead of
+	 * at the next quarter hour; the check itself decides whether to publish.
+	 */
+	_paykitSoon(id, rt) {
+		const paykitRec = this.registry.get(id)?.paykit;
+		if (!paykitRec?.autoRefresh || !paykitRec.publishedAt || !paykitRec.df) return;
+		if (!rt.paykitTimer) {
+			// A check is running now and may have read the list before this
+			// landed: the one after it comes soon.
+			rt.paykitSoon = true;
+			return;
+		}
+		if (rt.paykitNextAt - Date.now() <= PAYKIT_SOON_MS) return;
+		this._stopPaykitWatch(rt);
+		this._schedulePaykit(id, rt, PAYKIT_SOON_MS);
 	}
 
 	_schedulePaykit(id, rt, delay) {
@@ -844,8 +868,10 @@ class WalletManager {
 			this._paykitCheck(id)
 				.catch(() => {})
 				.finally(() => {
+					const soon = rt.paykitSoon;
+					rt.paykitSoon = false;
 					if (rt.status === 'running' && !rt.paykitTimer && this.registry.get(id)?.paykit?.autoRefresh) {
-						this._schedulePaykit(id, rt, rt.paykitBackoff || PAYKIT_CHECK_MS);
+						this._schedulePaykit(id, rt, soon ? PAYKIT_SOON_MS : rt.paykitBackoff || PAYKIT_CHECK_MS);
 					}
 				});
 		}, delay);
@@ -1952,6 +1978,9 @@ class WalletManager {
 				if (name.startsWith('direct-funding:')) {
 					this._nudgeDfPull(id, rt, !/:(completed|declined|failed)$/.test(name));
 				}
+				// A direct funding landed: if it paid the request this wallet
+				// publishes under its pubky, a fresh one goes out within seconds.
+				if (name === 'direct-funding:offer:completed') this._paykitSoon(id, rt);
 				// A swap this provider serves (beignet #737, #743), one line per
 				// step in either direction: created, funded, paying, preimage,
 				// claim broadcast and confirmed, or failed, refunded, exposed.

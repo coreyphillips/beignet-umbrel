@@ -128,10 +128,11 @@ export default function PaykitCard({ id, rec, running }) {
 							/>
 							Keep these up to date
 							<Help>
-								Checks every fifteen minutes while the wallet runs and publishes again when something
-								has changed: the address was paid, the offer is gone, or the direct funding request was
-								used or is a day from expiring. A direct funding request works once, so without this it
-								stops working after the first payment.
+								Checks every fifteen minutes while the wallet runs, and within seconds of a direct
+								funding landing, and publishes again when something has changed: the address was paid,
+								the offer is gone, or the direct funding request was used or is a day from expiring. A
+								direct funding request works once, so without this it stops working after the first
+								payment.
 							</Help>
 						</label>
 					)}

@@ -23,6 +23,8 @@ A direct funding request works once and lasts seven days, so a published list go
 - the offer is gone,
 - or a coin arrived at the published address.
 
+When a direct funding lands on the wallet, the check runs about ten seconds later instead of waiting for the next quarter hour, so the next payer gets a fresh request rather than the spent one. A payer reading the list in those few seconds still gets the spent request: a different wallet is refused by the payee and pays the address instead, and the wallet that just paid it gets its earlier payment's answer back, with nothing new sent.
+
 The first check after the wallet starts waits a random one to five minutes, so a box starting many wallets doesn't hit the homeserver all at once. A failed check is retried with a growing delay, up to six hours, and the card shows the last error.
 
 ### The pubky
