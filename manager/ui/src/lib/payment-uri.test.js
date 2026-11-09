@@ -836,3 +836,24 @@ test('bgnq is a known field, so its case is held to the same rule as amount', ()
 	assert.equal(r.kind, 'invalid');
 	assert.equal(r.code, 'PARAM_CASE_MISMATCH');
 });
+
+const PUBKY = 'aihfhgdfshrj8nz9ofo7khayc1mgcqa4wrrdjahs5tmgo4pna3iy';
+
+test('a pubky is read in every form it is written, as the bare key', () => {
+	for (const form of [PUBKY, `pubky${PUBKY}`, `pubky://${PUBKY}`, `pk:${PUBKY}`, PUBKY.toUpperCase(), `<pubky://${PUBKY}>`]) {
+		const r = parsePayment(form, { network: 'mainnet' });
+		assert.equal(r.kind, 'pubky', form);
+		assert.equal(r.pubky, PUBKY, form);
+	}
+});
+
+test('nothing else is taken for a pubky', () => {
+	// One character short or long, an "l" (not in z-base32), a path, and the
+	// strings a pubky could be confused with all read as what they are.
+	assert.notEqual(parsePayment(PUBKY.slice(1)).kind, 'pubky');
+	assert.notEqual(parsePayment(`${PUBKY}y`).kind, 'pubky');
+	assert.notEqual(parsePayment(PUBKY.replace('a', 'l')).kind, 'pubky');
+	assert.notEqual(parsePayment(`pubky://${PUBKY}/pub/paykit`).kind, 'pubky');
+	assert.equal(parsePayment('bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4').kind, 'onchain');
+	assert.equal(parsePayment('bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr').kind, 'onchain');
+});

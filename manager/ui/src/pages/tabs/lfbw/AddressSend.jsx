@@ -5,6 +5,7 @@ import { AmountField, Button, Card, FeeField, Field } from '../../../components/
 import { fmtSats } from '../../../lib/format.js';
 import { FEE_CAP_MULTIPLE, perkwFromSatVb } from '../../../lib/fees.js';
 import { parsePayment } from '../../../lib/payment-uri.js';
+import { usePubkyLookup } from '../../../hooks/usePubkyLookup.js';
 import { useSettledRefusal } from '../../../hooks/useSettledRefusal.js';
 import {
 	describeFallback,
@@ -79,6 +80,26 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	const quoteAddress = parsed.kind === 'onchain' ? parsed.address : undefined;
 	const quoteKey = JSON.stringify([home?.channelId, feeratePerkw, quoteAddress]);
 	const quote = quoted?.key === quoteKey ? quoted.value : null;
+
+	// A pubky is looked up, and what it publishes replaces it in the box as
+	// one request (address, direct funding, Lightning) read like any other;
+	// Lightning alone goes to the Lightning rail.
+	const pubkyRead = usePubkyLookup(id, parsed.kind === 'pubky' ? parsed.pubky : null, rec?.network);
+	const [readFrom, setReadFrom] = useState(null);
+	useEffect(() => {
+		const r = pubkyRead.request;
+		if (!r) return;
+		if (r.address) {
+			onChange(r.text);
+			setReadFrom(`Read from ${pubkyRead.who}'s payment details.`);
+			return;
+		}
+		onLightning?.(r.lightning, { note: `Read from ${pubkyRead.who}'s payment details. They take Lightning only, so it was moved here.` });
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [pubkyRead.request]);
+	useEffect(() => {
+		if (parsed.kind === 'empty') setReadFrom(null);
+	}, [parsed.kind]);
 
 	// An LNURL or a Lightning address is a Lightning payment through and
 	// through, so it goes straight to the Lightning rail, the way the
@@ -355,6 +376,21 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 			{parsed.kind === 'onchain' && parsed.warnings.length > 0 && (
 				<div className="info-note" role="status">
 					{parsed.warnings.map((w) => w.message).join(' ')}
+				</div>
+			)}
+			{readFrom && parsed.kind === 'onchain' && (
+				<div className="info-note" role="status">
+					{readFrom}
+				</div>
+			)}
+			{parsed.kind === 'pubky' && pubkyRead.looking && (
+				<div className="wallet-meta" role="status">
+					Reading {pubkyRead.who}'s payment details…
+				</div>
+			)}
+			{parsed.kind === 'pubky' && pubkyRead.error && (
+				<div className="error-note" role="alert">
+					{pubkyRead.error}
 				</div>
 			)}
 			{(parsed.kind === 'bolt11' || parsed.kind === 'bolt12') && (

@@ -9,7 +9,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
-const { lnurlLinkingKey, masterKey } = require('./derive');
+const { lnurlLinkingKey, masterKey, bip85Entropy, pubkyPhrase, pubkySecret, pubkyOf, PUBKY_PHRASE_PATH } = require('./derive');
+const { HDKey } = require('@scure/bip32');
+const bip39 = require('bip39');
 const { bech32 } = require('bech32');
 const { decodeBolt11 } = require('./bolt11-tags');
 
@@ -66,5 +68,46 @@ test('decodeBolt11 reads a plain description and refuses what is not an invoice'
 	assert.equal(decodeBolt11(bech32.encode('lntb2500u', words, 2000)).amountMsat, 250_000_000n);
 	for (const bad of ['', 'hello', 'lnurl1dp68gurn8ghj7', 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4']) {
 		assert.throws(() => decodeBolt11(bad), (e) => e.code === 'BOLT11_INVALID', bad);
+	}
+});
+
+test("BIP85's own vector: a 12-word English child phrase", () => {
+	const root = HDKey.fromExtendedKey(
+		'xprv9s21ZrQH143K2LBWUUQRFXhucrQqBpKdRRxNVq2zBqsx8HVqFk2uYo8kmbaLLHRdqtQpUm98uKfu3vca1LqdGhUtyoFnCNkfmXRyPXLjbKb'
+	);
+	const entropy = bip85Entropy(root, PUBKY_PHRASE_PATH, 16);
+	assert.equal(entropy.toString('hex'), '6250b68daf746d12a24d58b4787a714b');
+	assert.equal(bip39.entropyToMnemonic(entropy), 'girl mad pet galaxy egg matter matrix prison refuse sense ordinary nose');
+});
+
+test('the pubky phrase is a stable child of the seed, never the seed itself', () => {
+	const phrase = pubkyPhrase(SEED);
+	assert.equal(phrase, pubkyPhrase(SEED));
+	assert.notEqual(phrase, SEED);
+	assert.equal(phrase.split(' ').length, 12);
+	assert.ok(bip39.validateMnemonic(phrase));
+	assert.notEqual(phrase, pubkyPhrase('legal winner thank year wave sausage worth useful legal winner thank yellow'));
+});
+
+test("pubkyOf matches paykit-discovery's publishing fixtures", () => {
+	// fixtures/publishing.json at paykit-discovery 16ee157: mnemonic, the
+	// identity secret it stands for, and the pubky.
+	const vectors = [
+		{
+			mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+			secret: '5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc1',
+			pubky: 'aihfhgdfshrj8nz9ofo7khayc1mgcqa4wrrdjahs5tmgo4pna3iy'
+		},
+		{
+			mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art',
+			secret: '408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf70',
+			pubky: 'dztif3nc4c3sqjcu6e3wwhaqdyfk6kep7npkn5kebz13ja4qffoo'
+		}
+	];
+	for (const v of vectors) {
+		const secret = pubkySecret(v.mnemonic);
+		assert.equal(secret.toString('hex'), v.secret);
+		assert.equal(pubkyOf(secret), v.pubky);
+		assert.equal(pubkyOf(secret).length, 52);
 	}
 });

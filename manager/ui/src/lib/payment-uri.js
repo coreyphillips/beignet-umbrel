@@ -530,6 +530,29 @@ function readLnurlForm(text, warnings) {
 	return null;
 }
 
+// A Pubky identity: 52 characters of z-base32, the encoding of its ed25519
+// public key. No address of any type is 52 characters long, and the alphabet
+// has no "l", so no invoice or offer can be read as one.
+const ZBASE32_KEY = /^[ybndrfg8ejkmcpqxot1uwisza345h769]{52}$/;
+
+/**
+ * A pubky in any of the ways one is written (`pubky://<key>`, `pubky<key>`,
+ * `pk:<key>`, or the bare key, any case), as the bare key. Null otherwise.
+ * Its payment details are published under it (Paykit), and the dashboard
+ * looks them up through the manager.
+ */
+export function pubkyOf(text) {
+	const lower = String(text || '').trim().toLowerCase();
+	const key = lower.startsWith('pubky://')
+		? lower.slice('pubky://'.length)
+		: lower.startsWith('pk:')
+		? lower.slice('pk:'.length)
+		: lower.startsWith('pubky') && lower.length === 'pubky'.length + 52
+		? lower.slice('pubky'.length)
+		: lower;
+	return ZBASE32_KEY.test(key) ? key : null;
+}
+
 function schemeOf(text) {
 	const colon = text.indexOf(':');
 	if (colon < 1) return null;
@@ -814,6 +837,7 @@ function parseBip21(text, warnings, opts) {
  *   { kind: 'bolt11', invoice, network, amountSats }
  *   { kind: 'bolt12', offer }
  *   { kind: 'lnurl', input, lightningAddress }   (read by the manager, lnurl.js)
+ *   { kind: 'pubky', pubky }   (its payment details are looked up by the manager, paykit.js)
  *   { kind: 'invalid', code, message }
  *
  * `opts.network` is the wallet's chain. Given it, an address or invoice for a
@@ -859,6 +883,9 @@ function readPayment(input, opts) {
 
 	const lnurlForm = readLnurlForm(text, warnings);
 	if (lnurlForm) return lnurlForm;
+
+	const pubky = pubkyOf(text);
+	if (pubky) return { kind: 'pubky', pubky, warnings };
 
 	const scheme = schemeOf(text);
 	if (scheme === 'bitcoin') return parseBip21(text, warnings, opts);
