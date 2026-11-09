@@ -345,6 +345,24 @@ async function main() {
 		})
 	);
 
+	// LNURL: the manager reads the link and talks to the service over the
+	// wallet's own route (network mode); the dashboard pays what it checked.
+	for (const [route, method] of [
+		['resolve', 'lnurlResolve'],
+		['pay', 'lnurlPay'],
+		['success', 'lnurlSuccess'],
+		['withdraw', 'lnurlWithdraw'],
+		['auth', 'lnurlAuth']
+	]) {
+		api.post(
+			`/wallets/:id/lnurl/${route}`,
+			asyncHandler(async (req, res) => {
+				res.setHeader('Cache-Control', 'no-store');
+				res.json({ ok: true, result: await manager[method](req.params.id, req.body || {}) });
+			})
+		);
+	}
+
 	// FFOR offline receive: the siblings a wallet can pick as its settlement
 	// peer, and a manual re-run of the return the manager performs on start.
 	api.get(
@@ -567,7 +585,8 @@ async function main() {
 	// eslint-disable-next-line no-unused-vars
 	app.use((err, req, res, next) => {
 		const status = err.statusCode || 500;
-		if (status >= 500) console.error(err);
+		if (err.upstream) console.log(`${req.method} ${req.path}: ${err.code} ${err.message}`);
+		else if (status >= 500) console.error(err);
 		res.status(status).json({
 			ok: false,
 			error: {

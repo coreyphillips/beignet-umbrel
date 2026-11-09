@@ -65,6 +65,8 @@ const { electrumRequests, cachedProbe, discoverServers } = require('./electrum-p
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
 const netmode = require('./network-mode');
+const { createOutbound } = require('./outbound');
+const { createLnurl } = require('./lnurl');
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -203,6 +205,10 @@ class WalletManager {
 		this.electrumTlsVerifySupported = electrumTlsVerifyAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
+		// The manager's one way out to the internet (LNURL services), routed
+		// by each wallet's network mode.
+		this.outbound = createOutbound({ torProxy: config.torProxy });
+		this.lnurl = createLnurl({ outbound: this.outbound });
 	}
 
 	async init() {
@@ -613,6 +619,13 @@ class WalletManager {
 	 * record.
 	 */
 	recoveryPhrase(id) {
+		const mnemonic = this._readMnemonic(id);
+		this._log(id, 'recovery phrase shown in the dashboard');
+		return { mnemonic };
+	}
+
+	/** A wallet's phrase from its seed file, for a derivation; never logged. */
+	_readMnemonic(id) {
 		if (!this.registry.get(id)) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		let mnemonic = '';
 		try {
@@ -623,8 +636,45 @@ class WalletManager {
 		if (!mnemonic) {
 			throw httpError(404, 'NO_SEED', "This wallet's recovery phrase is not on this Umbrel.");
 		}
-		this._log(id, 'recovery phrase shown in the dashboard');
-		return { mnemonic };
+		return mnemonic;
+	}
+
+	/* ------------------------------------------------------------ LNURL */
+
+	_lnurlRecord(id) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		return rec;
+	}
+
+	/** Read an LNURL or Lightning address for a wallet: what it is and its limits. */
+	lnurlResolve(id, { input } = {}) {
+		return this.lnurl.resolve(id, this._lnurlRecord(id), input);
+	}
+
+	/** The checked invoice an LNURL-pay link gives for an amount. */
+	lnurlPay(id, body = {}) {
+		return this.lnurl.pay(id, this._lnurlRecord(id), body);
+	}
+
+	/** An encrypted LNURL-pay success message, opened with the preimage. */
+	lnurlSuccess(id, body = {}) {
+		this._lnurlRecord(id);
+		return this.lnurl.decryptSuccess(id, body);
+	}
+
+	/** Hand an LNURL-withdraw link the invoice it is to pay this wallet. */
+	async lnurlWithdraw(id, body = {}) {
+		const result = await this.lnurl.withdraw(id, this._lnurlRecord(id), body);
+		this._log(id, `lnurl: withdraw requested from ${result.domain}`);
+		return result;
+	}
+
+	/** Log in to a site with this wallet's LNURL-auth key for its domain. */
+	async lnurlAuth(id, body = {}) {
+		const result = await this.lnurl.auth(id, this._lnurlRecord(id), body, () => this._readMnemonic(id));
+		this._log(id, `lnurl: logged in to ${result.domain}`);
+		return result;
 	}
 
 	target(id) {

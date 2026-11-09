@@ -1,20 +1,93 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '../../components/Toast.jsx';
 import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
+import { LnurlAuth, LnurlPay, LnurlWithdraw, useLnurlResolve } from '../../components/Lnurl.jsx';
+import { usePoll } from '../../hooks/usePoll.js';
 import { shortId } from '../../lib/format.js';
+import { parsePayment } from '../../lib/payment-uri.js';
+import { channelSendableSats } from '../../lib/sendable.js';
 
 /**
- * Node-key signing, in both directions. Signing proves a message came from
- * whoever controls this node; verification recovers which node key signed a
- * message. The signature format is the LND-compatible one, so what is signed
- * here checks out under lncli verifymessage and vice versa.
+ * The wallet's tools:
+ *
+ * - Node-key signing, in both directions. Signing proves a message came from
+ *   whoever controls this node; verification recovers which node key signed a
+ *   message. The signature format is the LND-compatible one, so what is signed
+ *   here checks out under lncli verifymessage and vice versa.
+ * - LNURL: pay a link or a Lightning address, withdraw from a link, or log in
+ *   to a site, whichever the pasted link turns out to be.
  */
-export default function ToolsTab({ api }) {
+export default function ToolsTab({ id, api, rec, bump, lastReceive }) {
 	return (
 		<div className="grid cols-2">
 			<SignCard api={api} />
 			<VerifyCard api={api} />
+			<LnurlCard id={id} api={api} rec={rec} bump={bump} lastReceive={lastReceive} />
 		</div>
+	);
+}
+
+const usable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
+
+/**
+ * One box for every kind of LNURL. What the link is for decides the panel
+ * under it: a payment, a withdrawal, or a login.
+ */
+function LnurlCard({ id, api, rec, bump, lastReceive }) {
+	const [text, setText] = useState('');
+	const parsed = parsePayment(text, { network: rec?.network });
+	const carried = parsed.kind === 'onchain' && parsed.lightning?.kind === 'lnurl' ? parsed.lightning : null;
+	const lnurl = parsed.kind === 'lnurl' ? parsed : carried;
+	const { link, error, resolving } = useLnurlResolve(id, lnurl?.input || null);
+	const { data: channels } = usePoll(
+		() => (rec?.onchainOnly ? Promise.resolve([]) : api.get('/channels').catch(() => null)),
+		15000,
+		[id]
+	);
+	const outbound = (channels || []).filter(usable).reduce((sum, c) => sum + channelSendableSats(c), 0);
+	const needsLightning = link && (link.tag === 'pay' || link.tag === 'withdraw') && rec?.onchainOnly;
+	const notLnurl = text.trim() && !lnurl && parsed.kind !== 'empty';
+
+	return (
+		<Card
+			title="LNURL"
+			help="Paste an LNURL or a Lightning address (name@domain). A pay link or address is paid from this wallet's channels; a withdraw link pays into this wallet; a login link signs you in with a key this wallet keeps for that one site. The Umbrel talks to the service itself, over Tor when this wallet's network mode is Tor, and checks the invoice it gets back matches what is shown here before anything is paid."
+		>
+			<Field label="LNURL or Lightning address">
+				<textarea
+					rows={3}
+					value={text}
+					onChange={(e) => setText(e.target.value)}
+					placeholder="lnurl1… or name@domain.com"
+				/>
+			</Field>
+			{notLnurl && (
+				<div className="error-note" role="alert">
+					{parsed.kind === 'invalid'
+						? parsed.message
+						: 'That is not an LNURL or a Lightning address. Invoices and addresses are paid from the Send tab.'}
+				</div>
+			)}
+			{resolving && <div className="wallet-meta">Reading the link…</div>}
+			{error && (
+				<div className="error-note" role="alert">
+					{error}
+				</div>
+			)}
+			{needsLightning && (
+				<div className="error-note" role="alert">
+					This wallet is on-chain only, so it cannot {link.tag === 'pay' ? 'pay' : 'receive'} over Lightning.
+					Lightning can be switched on in the wallet's Edit dialog.
+				</div>
+			)}
+			{link && !needsLightning && link.tag === 'pay' && (
+				<LnurlPay key={link.session} id={id} api={api} link={link} input={lnurl.input} outbound={outbound} bump={bump} />
+			)}
+			{link && !needsLightning && link.tag === 'withdraw' && (
+				<LnurlWithdraw key={link.session} id={id} api={api} rec={rec} link={link} lastReceive={lastReceive} onDone={bump} />
+			)}
+			{link && link.tag === 'login' && <LnurlAuth key={link.session} id={id} link={link} />}
+		</Card>
 	);
 }
 

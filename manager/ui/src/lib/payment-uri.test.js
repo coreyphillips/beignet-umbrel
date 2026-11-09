@@ -571,13 +571,49 @@ test('an invoice wrapped by an email client is unwrapped', () => {
 test('the things that start with ln and are not invoices say so', () => {
 	const cases = [
 		['lno1pg257enxv4ezqcneype82um50ynhxgrwdajx283qfwdpl28qqmc78ymlvhmxcsywdk5wrjnj36jryg488qwlrnzyjczlqsp9nyu4phcg6dqhlhzgxagfu7zh3d9re0sqp9ts2yfugvnnm9gxkcnnnkdpa084a6t520h5zhkxsdnghvpukvd43lastpwuh73k29qsy', 'bolt12'],
-		['lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84', 'invalid'],
+		['lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84', 'lnurl'],
 		['lnr1qqgds4z5x9m0d4kzmnpvyhsqvfhqcnsdaeqxc2z9se5wpjxjmn9v4nzqctyv3ex2umnyfhkwmtjw3jhx0m3jz', 'invalid']
 	];
 	for (const [input, kind] of cases) {
 		assert.equal(parsePayment(input, {}).kind, kind, input.slice(0, 12));
 	}
-	assert.equal(parsePayment('lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84', {}).code, 'LNURL_UNSUPPORTED');
+	assert.equal(parsePayment('lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84'.toUpperCase(), {}).input, 'lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84');
+});
+
+test('LNURLs and Lightning addresses are read in every form they are pasted in', () => {
+	const cases = [
+		['lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84', 'lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84', null],
+		['lightning:LNURL1DP68GURN8GHJ7UM9WFMXJCM99E3K7MF0V9CXJ0M385EKVCENXC6R2C35XVUKXEFCV5MKVV34X5EKZD3EV56NYD3HXQURZEPEXUJCC33S84', 'lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84', null],
+		['https://wallet.example/pay?lightning=LNURL1DP68GURN8GHJ7UM9WFMXJCM99E3K7MF0V9CXJ0M385EKVCENXC6R2C35XVUKXEFCV5MKVV34X5EKZD3EV56NYD3HXQURZEPEXUJCC33S84', 'lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84', null],
+		['lnurlp://service.example/pay/1', 'lnurlp://service.example/pay/1', null],
+		['lnurlw://service.example/w?id=2', 'lnurlw://service.example/w?id=2', null],
+		['keyauth://site.example/login?tag=login&k1=00', 'keyauth://site.example/login?tag=login&k1=00', null],
+		['corey@getalby.com', 'corey@getalby.com', 'corey@getalby.com'],
+		['Corey@GetAlby.com', 'corey@getalby.com', 'corey@getalby.com'],
+		['\u20bfcorey@getalby.com', 'corey@getalby.com', 'corey@getalby.com'],
+		['<satoshi@example.onion>', 'satoshi@example.onion', 'satoshi@example.onion']
+	];
+	for (const [text, input, address] of cases) {
+		const r = parsePayment(text, { network: 'mainnet' });
+		assert.equal(r.kind, 'lnurl', text);
+		assert.equal(r.input, input, text);
+		assert.equal(r.lightningAddress, address, text);
+	}
+	assert.equal(parsePayment('lnurlc://service.example/c', {}).code, 'LNURL_CHANNEL_UNSUPPORTED');
+	// A node URI is an address of a different kind, and is named as one.
+	const node = `02${'a'.repeat(64)}@203.0.113.7:9735`;
+	assert.equal(parsePayment(node, {}).code, 'NODE_URI');
+	// Something shaped like an address that LUD-16 does not allow is not sent
+	// off to be fetched.
+	assert.equal(parsePayment('a b@example.com', {}).kind, 'invalid');
+});
+
+test('a unified request may carry an LNURL as its Lightning half', () => {
+	const r = parsePayment(`bitcoin:${ADDR}?lightning=lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84`, { network: 'mainnet' });
+	assert.equal(r.kind, 'onchain');
+	assert.equal(r.lightning.kind, 'lnurl');
+	assert.equal(r.lightning.input, 'lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84');
+	assert.equal(parsePayment(`bitcoin:?lightning=lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexujcc33s84`, { network: 'mainnet' }).kind, 'lnurl');
 });
 
 test('a request this writes with an invoice in it is one this reads', () => {
@@ -635,7 +671,6 @@ test('strings that are not payments are named, not called invalid', () => {
 		['5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ', 'PRIVATE_KEY'],
 		['wpkh([d34db33f/84h/0h/0h]xpub6.../0/*)', 'DESCRIPTOR'],
 		['npub180cvv07tjdrrgpa0j7j7tmnyl2yr6yr7l8j4s3evf6u64th6gkwsyjh6w6', 'NOSTR_KEY'],
-		['corey@getalby.com', 'LIGHTNING_ADDRESS_UNSUPPORTED'],
 		['sp1qq0u00ldg5e3s6rp4c6dhrhkmk8lqrqjkvzjsxjqu8xj7xnpvzz8xqf6zfpwl4nqzcmv4qkrfmxfzskzxlfg', 'SILENT_PAYMENT_UNSUPPORTED']
 	];
 	for (const [input, code] of cases) {
