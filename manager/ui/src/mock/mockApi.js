@@ -1382,6 +1382,65 @@ function demoSignature() {
 	return sig;
 }
 
+/*
+ * LNURL in the demo. A link whose text mentions "withdraw" (or is lnurlw://)
+ * is a withdraw link, one that mentions "login" (or is keyauth://) is a login
+ * link, and anything else is a pay link, so every panel can be seen without a
+ * service on the other end.
+ */
+const demoLnurlSessions = new Map();
+
+function demoLnurl(w, action, body) {
+	if (action === 'resolve') {
+		const input = String(body.input || '').trim();
+		const lower = input.toLowerCase();
+		const address = /^[a-z0-9\-_.+]+@[a-z0-9.-]+\.[a-z]+$/.test(lower) ? lower : null;
+		const domain = address ? address.split('@')[1] : lower.includes('://') ? lower.split('://')[1].split(/[/?]/)[0] : 'demo.lnurl.example';
+		const session = hex(32);
+		if (lower.startsWith('keyauth://') || lower.includes('login')) {
+			demoLnurlSessions.set(session, { tag: 'login', domain });
+			return { session, tag: 'login', domain, action: 'login' };
+		}
+		if (lower.startsWith('lnurlw://') || lower.includes('withdraw')) {
+			demoLnurlSessions.set(session, { tag: 'withdraw', domain });
+			return { session, tag: 'withdraw', domain, minSats: 1, maxSats: 21000, defaultDescription: 'Demo voucher' };
+		}
+		demoLnurlSessions.set(session, { tag: 'pay', domain });
+		return {
+			session,
+			tag: 'pay',
+			domain,
+			lightningAddress: address,
+			description: address ? `Pay ${address}` : 'Demo coffee shop',
+			longDescription: null,
+			minSats: 1,
+			maxSats: 1_000_000,
+			commentAllowed: 140
+		};
+	}
+	const s = demoLnurlSessions.get(String(body.session || ''));
+	if (!s) throw err('That link was read too long ago. Paste it again.', 'LNURL_EXPIRED');
+	if (action === 'pay') {
+		const amountSats = Math.floor(Number(body.amountSats) || 0);
+		if (amountSats <= 0) throw err('Enter an amount in whole sats.', 'INVALID_AMOUNT');
+		return {
+			bolt11: demoInvoice(w.network, amountSats),
+			paymentHash: hex(64),
+			successAction: { tag: 'message', message: `Thanks from ${s.domain}!` }
+		};
+	}
+	if (action === 'success') return { tag: 'message', description: '', message: 'Demo secret' };
+	if (action === 'withdraw') {
+		demoLnurlSessions.delete(String(body.session));
+		return { ok: true, domain: s.domain, paymentHash: hex(64) };
+	}
+	if (action === 'auth') {
+		demoLnurlSessions.delete(String(body.session));
+		return { ok: true, domain: s.domain, linkingKey: `02${hex(64)}` };
+	}
+	throw err(`Unknown demo endpoint lnurl/${action}`, 'NOT_FOUND');
+}
+
 function err(message, code = 'DEMO') {
 	const e = new Error(message);
 	e.code = code;
@@ -1880,6 +1939,7 @@ function managerRequest(path, method, body) {
 	const [sub, subQuery] = (m[2] || '').split('?');
 
 	if (sub === 'recovery-phrase' && method === 'POST') return { mnemonic: seedOf(w.id) };
+	if (sub && sub.startsWith('lnurl/') && method === 'POST') return demoLnurl(w, sub.slice('lnurl/'.length), body || {});
 
 	if (!sub) {
 		if (method === 'GET') return publicRecord(w);

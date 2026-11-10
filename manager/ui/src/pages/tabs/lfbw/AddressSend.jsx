@@ -37,7 +37,7 @@ const QUOTE_DEBOUNCE_MS = 250;
  * a beignet wallet too, moves the plain payment into Lightning by itself
  * after one confirmation.
  */
-export default function AddressSend({ id, api, rec, channels, bump, state, patch }) {
+export default function AddressSend({ id, api, rec, channels, bump, state, patch, onLightning }) {
 	const toast = useToast();
 	const { input: value, amount, feeRate, maxMode } = state;
 	const setAmount = (v) => patch({ amount: v });
@@ -79,6 +79,17 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 	const quoteAddress = parsed.kind === 'onchain' ? parsed.address : undefined;
 	const quoteKey = JSON.stringify([home?.channelId, feeratePerkw, quoteAddress]);
 	const quote = quoted?.key === quoteKey ? quoted.value : null;
+
+	// An LNURL or a Lightning address is a Lightning payment through and
+	// through, so it goes straight to the Lightning rail, the way the
+	// on-chain card hands one over.
+	useEffect(() => {
+		if (parsed.kind !== 'lnurl' || !onLightning) return;
+		onLightning(parsed.input, {
+			note: `That is ${parsed.lightningAddress ? 'a Lightning address' : 'an LNURL'}, so it was moved to the Lightning rail.`
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [parsed]);
 
 	// The box is made to hold the address the parser settled on, whatever
 	// arrived, with the request's own figure filled in once.

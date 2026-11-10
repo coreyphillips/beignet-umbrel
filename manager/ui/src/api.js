@@ -74,6 +74,8 @@ async function download(path, body) {
 }
 
 // Manager (control plane) API
+const LNURL_TIMEOUT_MS = 150000;
+
 export const manager = {
 	config: () => request('/api/config'),
 	getSettings: () => request('/api/settings'),
@@ -99,6 +101,16 @@ export const manager = {
 	updateWallet: (id, body) => request(`/api/wallets/${id}`, { method: 'PATCH', body }),
 	// The wallet's seed, read back for its owner to write down again.
 	recoveryPhrase: (id) => request(`/api/wallets/${id}/recovery-phrase`, { method: 'POST' }),
+	// LNURL: the manager reads the link and talks to the service over the
+	// wallet's own route, Tor included, so these get a timeout well past the
+	// manager's own (60 s a hop over Tor) and its message arrives first.
+	lnurlResolve: (id, input) =>
+		request(`/api/wallets/${id}/lnurl/resolve`, { method: 'POST', body: { input }, timeoutMs: LNURL_TIMEOUT_MS }),
+	lnurlPay: (id, body) => request(`/api/wallets/${id}/lnurl/pay`, { method: 'POST', body, timeoutMs: LNURL_TIMEOUT_MS }),
+	lnurlSuccess: (id, body) => request(`/api/wallets/${id}/lnurl/success`, { method: 'POST', body, timeoutMs: 15000 }),
+	lnurlWithdraw: (id, body) =>
+		request(`/api/wallets/${id}/lnurl/withdraw`, { method: 'POST', body, timeoutMs: LNURL_TIMEOUT_MS }),
+	lnurlAuth: (id, body) => request(`/api/wallets/${id}/lnurl/auth`, { method: 'POST', body, timeoutMs: LNURL_TIMEOUT_MS }),
 	startWallet: (id) => request(`/api/wallets/${id}/start`, { method: 'POST' }),
 	stopWallet: (id) => request(`/api/wallets/${id}/stop`, { method: 'POST' }),
 	deleteWallet: (id, purge) =>

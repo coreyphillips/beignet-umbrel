@@ -23,6 +23,7 @@ import AddressSend from './lfbw/AddressSend.jsx';
 import { arrivingFundsNote, lfbwStatus } from '../../lib/lfbw.js';
 import { channelSendableSats } from '../../lib/sendable.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
+import { LnurlAuth, LnurlFrom, LnurlSuccess, LnurlWithdraw, lnurlInvoice } from '../../components/Lnurl.jsx';
 import { manager, walletApi } from '../../api.js';
 
 // Headroom over the quoted routing fee when a payment is held to its estimate,
@@ -37,7 +38,7 @@ const usable = (c) => c.htlcUsable ?? c.state === 'NORMAL';
 
 const EMPTY_ONCHAIN = { input: '', request: null, amount: '', feeRate: '', maxMode: false };
 
-export default function SendTab({ id, api, info, rec, tick, bump }) {
+export default function SendTab({ id, api, info, rec, tick, bump, lastReceive }) {
 	// A lightning-first wallet's balance lives in its channel, so Lightning is
 	// the rail it opens on; "send to an address" is a splice-out of that channel.
 	const isLfbw = !!rec?.lfbw?.enabled;
@@ -193,6 +194,7 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 					bump={bump}
 					state={onchain}
 					patch={patchOnchain}
+					onLightning={toLightning}
 				/>
 			)}
 			{mode === 'onchain' && !isLfbw && (
@@ -217,6 +219,7 @@ export default function SendTab({ id, api, info, rec, tick, bump }) {
 					info={info}
 					channels={channels}
 					bump={bump}
+					lastReceive={lastReceive}
 					value={lnInput}
 					onChange={setLnInput}
 					arrival={arrival?.rail === 'lightning' ? arrival : null}
@@ -410,11 +413,19 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	// it. `onLightning` changes identity with `canLightning`, so listing it here
 	// is what makes a change in channel state re-run the hand-off.
 	useEffect(() => {
-		if (parsed.kind !== 'bolt11' && parsed.kind !== 'bolt12') return;
+		if (parsed.kind !== 'bolt11' && parsed.kind !== 'bolt12' && parsed.kind !== 'lnurl') return;
 		const isOffer = parsed.kind === 'bolt12';
-		const what = isOffer ? 'a BOLT12 offer' : 'a Lightning invoice';
+		const what =
+			parsed.kind === 'lnurl'
+				? parsed.lightningAddress
+					? 'a Lightning address'
+					: 'an LNURL'
+				: isOffer
+				? 'a BOLT12 offer'
+				: 'a Lightning invoice';
+		const text = parsed.kind === 'lnurl' ? parsed.input : isOffer ? parsed.offer : parsed.invoice;
 		if (
-			onLightning(isOffer ? parsed.offer : parsed.invoice, {
+			onLightning(text, {
 				note: `That is ${what}, so it was moved here from the on-chain form.`
 			})
 		) {
@@ -602,11 +613,15 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	// offered across with the same button an invoice gets rather than being named
 	// and left with nowhere to go.
 	const carriedIsOffer = request?.lightning?.kind === 'bolt12';
+	const carriedIsLnurl = request?.lightning?.kind === 'lnurl';
 	const carried = !request?.lightning
 		? null
 		: carriedIsOffer
 		? request.lightning.offer
+		: carriedIsLnurl
+		? request.lightning.input
 		: request.lightning.invoice;
+	const carriedName = carriedIsOffer ? 'BOLT12 offer' : carriedIsLnurl ? 'Lightning address' : 'Lightning invoice';
 
 	const onDest = async (val) => {
 		setDest(val);
@@ -793,11 +808,7 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					{request.amountTaken && request.amountSats != null
 						? ' You have changed the amount.'
 						: ''}
-					{request.lightning && canLightning
-						? carriedIsOffer
-							? ' It also carries a BOLT12 offer.'
-							: ' It also carries a Lightning invoice.'
-						: ''}
+					{request.lightning && canLightning ? ` It also carries a ${carriedName}.` : ''}
 					{carried && canLightning && (
 						<div className="center-actions">
 							<Button
@@ -813,16 +824,12 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 											request.lightning.amountSats == null ? request.amountSats : null,
 										note:
 											request.lightning.amountSats == null && request.amountSats != null
-												? `That request also carried a ${
-														carriedIsOffer ? 'BOLT12 offer' : 'Lightning invoice'
-												  }, so it was moved here. The ${
-														carriedIsOffer ? 'offer' : 'invoice'
+												? `That request also carried a ${carriedName}, so it was moved here. The ${
+														carriedIsOffer ? 'offer' : carriedIsLnurl ? 'address' : 'invoice'
 												  } names no amount, so the ${fmtSats(
 														request.amountSats
 												  )} the request asked for has been filled in below.`
-												: `That request also carried a ${
-														carriedIsOffer ? 'BOLT12 offer' : 'Lightning invoice'
-												  }, so it was moved here.`
+												: `That request also carried a ${carriedName}, so it was moved here.`
 									})
 								}
 							>
@@ -1012,8 +1019,11 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 // enough that a pasted one answers before the eye leaves the field.
 const DECODE_DEBOUNCE_MS = 300;
 
-function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, onLightning, arrival, bump }) {
+function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, onLightning, arrival, bump, lastReceive }) {
 	const toast = useToast();
+	// The wallet's id under another name: the decode effect below numbers its
+	// requests with a local `id` of its own.
+	const walletId = id;
 	// The other wallets on this Umbrel, offered as destinations the way the
 	// on-chain card offers them: picking one asks it for an invoice, so paying a
 	// sibling is not a trip to its Receive tab and back. An on-chain only wallet
@@ -1048,6 +1058,8 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 		[isLfbw, lfbwData, rec, info, channels]
 	);
 	const [decoded, setDecoded] = useState(null);
+	// What an LNURL-pay service sent back with a completed payment (LUD-09).
+	const [success, setSuccess] = useState(null);
 	const [estimate, setEstimate] = useState(null);
 	// Why the estimate found no route, read from the wallet's own figures once
 	// the daemon has said only that it did not.
@@ -1076,11 +1088,15 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
 	const invoice = parsed.kind === 'bolt11' ? parsed.invoice : null;
 	const offer = parsed.kind === 'bolt12' ? parsed.offer : null;
-	// The one string this card is about, whichever of the two was pasted. Both are
-	// paid over Lightning from the same box: sending someone to another tab to pay
+	// An LNURL or a Lightning address is read by the manager rather than the
+	// daemon, and once read it is paid from this same box like an amountless
+	// invoice; a withdraw or login link shows its own panel instead.
+	const lnurlInput = parsed.kind === 'lnurl' ? parsed.input : null;
+	// The one string this card is about, whichever was pasted. All are paid
+	// over Lightning from the same box: sending someone to another tab to pay
 	// an offer was a redirect for a string that had already arrived somewhere it
 	// could be paid.
-	const payable = invoice ?? offer;
+	const payable = invoice ?? offer ?? lnurlInput;
 	const mayRefuse = useSettledRefusal(value, focused);
 
 	// An on-chain address in the invoice box belongs on the other rail. A unified
@@ -1091,6 +1107,13 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 	useEffect(() => {
 		if (parsed.kind !== 'onchain') return;
 		const carried = parsed.lightning;
+		if (carried?.kind === 'lnurl') {
+			onLightning(carried.input, {
+				amountSats: parsed.amountSats,
+				note: 'Read the Lightning address out of that payment request.'
+			});
+			return;
+		}
 		if (carried?.kind === 'bolt11' || carried?.kind === 'bolt12') {
 			const isOffer = carried.kind === 'bolt12';
 			const amountSats = carried.amountSats == null ? parsed.amountSats : null;
@@ -1162,10 +1185,13 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 		setDecoding(true);
 		setError(null);
 		setResult(null);
+		setSuccess(null);
 		const timer = setTimeout(() => {
 			(invoice
 				? api.post('/invoice/decode', { bolt11: invoice })
-				: api.post('/offer/decode', { offer })
+				: offer
+				? api.post('/offer/decode', { offer })
+				: manager.lnurlResolve(walletId, lnurlInput).then(lnurlDecoded)
 			)
 				.then((d) => {
 					if (id !== latest.current) return;
@@ -1189,13 +1215,23 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 				});
 		}, DECODE_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [api, payable, invoice, offer, handover]);
+	}, [api, walletId, payable, invoice, offer, lnurlInput, handover]);
+
+	// A read LNURL: a pay link is paid from here; a withdraw or login link is
+	// not a payment at all and gets a panel of its own in place of the table.
+	const lnurlLink = decoded?.lnurl || null;
+	const lnurlPanel = !!lnurlLink && lnurlLink.tag !== 'pay';
 
 	// An invoice with no amount in it leaves the amount to the payer, so it has to
 	// be asked for before anything can be estimated or paid.
-	const needsAmount = decoded != null && decoded.amountSats == null;
+	const needsAmount = decoded != null && !lnurlPanel && decoded.amountSats == null;
 	const typedAmount = parseInt(amount, 10) || 0;
 	const amountSats = needsAmount ? typedAmount : decoded?.amountSats ?? 0;
+	// A pay link sets its own limits, in whole sats once the manager has read
+	// them (it rounds the service's millisatoshis inward).
+	const lnurlOutOfRange =
+		lnurlLink?.tag === 'pay' && needsAmount && typedAmount > 0 &&
+		(typedAmount < lnurlLink.minSats || typedAmount > lnurlLink.maxSats);
 
 	// When the thing in the box stops being payable. An invoice counts its expiry
 	// from its own timestamp; an offer names an absolute one outright, and most
@@ -1307,12 +1343,15 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 	const outbound = (channels || [])
 		.filter(usable)
 		.reduce((sum, c) => sum + channelSendableSats(c), 0);
+	// The most the amount field offers: the channels' sendable figure, or a
+	// pay link's own maximum when that is lower.
+	const payCeiling = lnurlLink ? Math.min(outbound, lnurlLink.maxSats) : outbound;
 
 	// The amount this payment asks for, from the request or the box. A
 	// lightning-first wallet says what is arriving when it exceeds Can send
 	// but not Total, and refuses outright above Total; the request stays in
 	// the box either way, so a retry is a click and not a re-paste.
-	const askedSats = decoded ? decoded.amountSats || (needsAmount ? typedAmount : 0) : 0;
+	const askedSats = decoded && !lnurlPanel ? decoded.amountSats || (needsAmount ? typedAmount : 0) : 0;
 	const arriving = lfbwState ? arrivingFundsNote(askedSats, lfbwState) : null;
 	const overTotal = lfbwState ? askedSats > 0 && askedSats > lfbwState.total : false;
 	const overCanSend = lfbwState ? askedSats > 0 && askedSats > lfbwState.canSend : false;
@@ -1348,8 +1387,17 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 			// over an onion message first, then pays that. The payer does not see the
 			// intermediate invoice and has nothing to do with it, which is why this is
 			// one button rather than a fetch step and a pay step.
-			const body = offer ? { offer } : { bolt11: invoice };
-			if (needsAmount) body.amountSats = typedAmount;
+			//
+			// An LNURL is the same shape of thing, done by the manager instead: it
+			// asks the service for an invoice for this amount and checks it is the
+			// one described (amount, network, description hash) before handing it
+			// over, and the invoice is then paid like any other.
+			let fetched = null;
+			if (lnurlLink) {
+				fetched = await lnurlInvoice(walletId, lnurlLink, lnurlInput, needsAmount ? typedAmount : decoded.amountSats);
+			}
+			const body = fetched ? { bolt11: fetched.bolt11 } : offer ? { offer } : { bolt11: invoice };
+			if (needsAmount && !fetched) body.amountSats = typedAmount;
 			// The payment is held to the fee the panel just quoted, plus a little
 			// headroom for rounding and a retry, the way the phone and web wallets
 			// do. Without a cap of its own the daemon (beignet 0.23.0 and later)
@@ -1362,15 +1410,18 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 			const own = beginOwnPayment();
 			let r;
 			try {
-				r = await api.post(offer ? '/offer/pay' : '/invoice/pay-safe', body);
+				r = await api.post(offer && !fetched ? '/offer/pay' : '/invoice/pay-safe', body);
 			} finally {
 				endOwnPayment(own, r?.paymentHash);
 			}
 			setResult(r);
+			if (fetched && r?.status === 'COMPLETED' && fetched.successAction) {
+				setSuccess({ session: fetched.session || lnurlLink.session, action: fetched.successAction, preimage: r.preimage });
+			}
 			// The safe route answers a failure as a value, so a payment that found
 			// no route after an estimate that did gets the same reading as a
 			// failed estimate would have.
-			if (r?.status === 'FAILED' && isNoRouteFailure(r.failureDescription) && !noRoute) explain(latestEstimate.current, amountSats);
+			if (r?.status === 'FAILED' && isNoRouteFailure(r.failureDescription) && !noRoute && !fetched) explain(latestEstimate.current, amountSats);
 			toast(r.status === 'COMPLETED' ? 'Payment sent' : `Payment ${r.status}`, r.status === 'COMPLETED' ? 'success' : 'error');
 			if (r.status === 'COMPLETED' && dest !== 'custom') setDest('custom');
 			bump();
@@ -1467,9 +1518,9 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 				    "this is not your invoice yet" was exactly the moment that gate said
 				    nothing. */}
 				{decoding && (
-					<div className="wallet-meta">Reading the {offer ? 'offer' : 'invoice'}…</div>
+					<div className="wallet-meta">Reading the {lnurlInput ? 'link' : offer ? 'offer' : 'invoice'}…</div>
 				)}
-				{decoded && (
+				{decoded && !lnurlPanel && (
 					<>
 					<table style={{ marginTop: 4 }}>
 						<tbody>
@@ -1489,6 +1540,14 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 							    differently for an offer: there is no fee estimate, and the
 							    button takes longer to come back. Both follow from the exchange,
 							    and neither is a fault. */}
+							{lnurlLink ? (
+							<tr>
+								<td className="wallet-meta">Payee</td>
+								<td>
+									<LnurlFrom link={lnurlLink} />
+								</td>
+							</tr>
+							) : (
 							<tr>
 								<td className="wallet-meta">
 									{offer ? (
@@ -1513,6 +1572,7 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 									</td>
 								)}
 							</tr>
+							)}
 							{expiresAt != null && (
 								<tr>
 									<td className="wallet-meta">Expires</td>
@@ -1549,18 +1609,29 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 								label="Amount to pay (sats)"
 								value={amount}
 								onChange={setAmount}
-								max={outbound}
-								onMax={() => setAmount(String(outbound))}
-								isMax={outbound > 0 && typedAmount === outbound}
-								hint={`This ${
-									offer ? 'offer' : 'invoice'
-								} names no amount, so it is yours to choose${
-									outbound > 0
-										? `, up to the ${fmtSats(
-												outbound
-										  )} your channels can send right now. That is your Lightning balance less the channel reserve, and a routing fee comes out of it too.`
-										: ', but your channels cannot send anything right now: what they hold has not yet filled the channel reserve.'
-								}`}
+								max={payCeiling}
+								onMax={() => setAmount(String(payCeiling))}
+								isMax={payCeiling > 0 && typedAmount === payCeiling}
+								hint={
+									// A pay link's own limits come first; the channels are
+									// mentioned only when they, not the link, are what stops
+									// the amount going higher.
+									lnurlLink && outbound >= lnurlLink.maxSats
+										? `${lnurlLink.domain} takes ${fmtSats(lnurlLink.minSats)} to ${fmtSats(lnurlLink.maxSats)}, so the amount is yours to choose within that.`
+										: `${
+												lnurlLink
+													? `${lnurlLink.domain} takes ${fmtSats(lnurlLink.minSats)} to ${fmtSats(lnurlLink.maxSats)}. `
+													: ''
+										  }This ${
+												lnurlLink ? 'payment' : offer ? 'offer' : 'invoice'
+										  } names no amount, so it is yours to choose${
+												outbound > 0
+													? `, up to the ${fmtSats(
+															outbound
+													  )} your channels can send right now. That is your Lightning balance less the channel reserve, and a routing fee comes out of it too.`
+													: ', but your channels cannot send anything right now: what they hold has not yet filled the channel reserve.'
+										  }`
+								}
 							/>
 						</div>
 					)}
@@ -1568,6 +1639,11 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 						<div className="error-note" role="alert">
 							This {offer ? 'offer' : 'invoice'} has expired, so it can no longer be
 							paid. Ask for a new one.
+						</div>
+					)}
+					{lnurlOutOfRange && (
+						<div className="error-note" role="alert" style={{ marginTop: 12 }}>
+							{lnurlLink.domain} takes {fmtSats(lnurlLink.minSats)} to {fmtSats(lnurlLink.maxSats)}.
 						</div>
 					)}
 					{!expired && arriving && (
@@ -1611,6 +1687,26 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 					</>
 				)}
 			</div>
+			{/* A withdraw or login link is not a payment: its panel stands in for
+			    the table and the Pay button, outside the live region so its
+			    fields are not read out on every change. Clear goes beside the
+			    panel's own button rather than on a row of its own. */}
+			{lnurlLink?.tag === 'withdraw' && (
+				<LnurlWithdraw
+					key={lnurlLink.session}
+					id={walletId}
+					api={api}
+					rec={rec}
+					link={lnurlLink}
+					lastReceive={lastReceive}
+					onDone={bump}
+					actions={<Button onClick={clear}>Clear</Button>}
+				/>
+			)}
+			{lnurlLink?.tag === 'login' && (
+				<LnurlAuth key={lnurlLink.session} id={walletId} link={lnurlLink} actions={<Button onClick={clear}>Clear</Button>} />
+			)}
+			{!lnurlPanel && (
 			<div className="center-actions">
 				<Button
 					variant="primary"
@@ -1622,6 +1718,7 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 						fetchingInvoice ||
 						expired ||
 						(needsAmount && typedAmount <= 0) ||
+						lnurlOutOfRange ||
 						overTotal ||
 						overCanSend ||
 						overSendable ||
@@ -1632,6 +1729,7 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 				</Button>
 				{value && <Button onClick={clear}>Clear</Button>}
 			</div>
+			)}
 			{result && (
 				<div
 					className={result.status === 'COMPLETED' ? 'info-note' : 'error-note'}
@@ -1643,8 +1741,23 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 					{result.failureDescription ? ` · ${result.failureDescription}` : ''}
 				</div>
 			)}
+			{success && <LnurlSuccess id={walletId} session={success.session} action={success.action} preimage={success.preimage} />}
 		</Card>
 	);
+}
+
+/**
+ * A read LNURL in the shape the card's decode state takes: a pay link reads
+ * like an invoice (a fixed amount when its limits allow only one), and the
+ * link itself rides along for the panel and the pay step.
+ */
+function lnurlDecoded(link) {
+	if (link.tag !== 'pay') return { lnurl: link };
+	return {
+		lnurl: link,
+		amountSats: link.minSats === link.maxSats ? link.minSats : null,
+		description: link.description
+	};
 }
 
 function Keysend({ api, channels, bump }) {

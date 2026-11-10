@@ -38,7 +38,7 @@ Hover or tap the **?** beside a setting in the dashboard for what it does.
 
 ### Sending and receiving
 
-- **Send** on-chain (address or BIP21, to another of your wallets, Max, fee presets with the exact fee quoted) or over Lightning (BOLT11 invoices, BOLT12 offers, keysend), with a fee and route preview.
+- **Send** on-chain (address or BIP21, to another of your wallets, Max, fee presets with the exact fee quoted) or over Lightning (BOLT11 invoices, BOLT12 offers, keysend, LNURL and Lightning addresses), with a fee and route preview. An LNURL or Lightning address pasted in either box is recognized and paid over Lightning with nothing extra to do. See [docs/LNURL.md](docs/LNURL.md).
 - **Receive** with a BIP21 QR that can carry the Lightning invoice too, and invoices that flip to a paid receipt.
 - **Receive offline**: an opt-in on the invoice form that prepares an invoice payable while the wallet is stopped, settled by a node that stays online and credited when the wallet is back. Manual voucher books sit under Advanced offline receive. See [docs/FFOR.md](docs/FFOR.md).
 - **Offers**: create, share, pay and delete BOLT12 offers.
@@ -74,6 +74,7 @@ Every role is off until you switch it on for a wallet, except that a wallet pick
 - A per-wallet **API explorer** (Swagger UI) over the full beignet JSON API, and a **Console** for calling it directly.
 - **Logs** per wallet, filterable and downloadable, with the recent node errors.
 - **Sign and verify** messages with the node key (lncli-compatible).
+- **LNURL**: pay a link or a Lightning address, withdraw from a link, or log in to a site with a key the wallet keeps for that one site. See [docs/LNURL.md](docs/LNURL.md).
 - Light and dark themes.
 
 Controls for a feature stay hidden until the bundled engine has the routes behind it, so an older image never shows a button that cannot work.
@@ -184,6 +185,7 @@ The `check-release` workflow enforces this: it requires every image in the compo
 - Each wallet's seed is stored on your Umbrel under the app data directory (`wallets/<id>/secrets/mnemonic`, mode 600). This is a single-tenant home-server model, the same as other Umbrel wallet apps. Back up your seed phrase: it is shown at creation, and again on request with **Show recovery phrase** in the wallet's **Edit** dialog. That route answers only what fronts the app with Umbrel's sign-in and loopback, like the backup routes, and each read is noted in the wallet's log.
 - The backup archive holds every seed on the box. It is encrypted with your passphrase and nothing else, so a weak passphrase is the security of every wallet in it, and a lost one cannot be recovered.
 - The manager's API is restricted to what enforces Umbrel's single sign-on and to loopback, so other apps on your Umbrel's shared network cannot reach the wallet control plane directly. On legacy Umbrel and umbrelOS 1.x that is the app's `app_proxy` container. umbrelOS 2 has no such container: its app gateway runs in umbreld on the host, so the manager trusts the Docker bridge host, found from its container's default route. The host is trusted on the older versions too, where it is Umbrel itself. Apps that share the host's network (`network_mode: host`) connect from that same address, so they are not kept out. Until the manager knows which of the two fronts it, the rest of the API allows every source, but the backup and recovery phrase routes never do: they answer loopback and the host only. It knows once `app_proxy` resolves, or once Docker DNS answers for the manager's own container but not for `app_proxy`. If you run the manager outside Umbrel, or your setup resolves `app_proxy` differently, set `BEIGNET_TRUST_ALL=1` to disable the restriction (or `APP_PROXY_HOST` to point at the right host).
+- The manager makes web requests of its own only for LNURL, and only when you paste a link. A wallet in Tor mode sends them through Umbrel's Tor (and refuses rather than going direct if Tor is down), and an onion address always goes over Tor. Requests are https only, never reach addresses on your own network, and the invoice a service hands back is checked against what you were shown before anything is paid. See [docs/LNURL.md](docs/LNURL.md).
 - The wallet daemons' HTTP APIs bind only to `127.0.0.1` inside the container and are never exposed to your network. Their Lightning listen ports are published on the host (19101 to 19130) so peers can dial them; that transport is authenticated and encrypted end to end (BOLT 8), and a port answers nothing to anyone without the node's public key. Behind a home router nothing reaches them from the internet unless you forward a port; an Umbrel with a public IPv6 address is reachable on them directly, as it is on the LND app's port.
 
 ## License

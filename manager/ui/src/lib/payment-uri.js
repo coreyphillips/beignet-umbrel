@@ -94,11 +94,12 @@ const MESSAGES = {
 		'This invoice fails its own checksum, so it is incomplete or was mistyped. Copy the whole of it again.',
 	BOLT11_TRUNCATED:
 		'This invoice is too short to be a whole one, so the end of it is missing. Copy the whole of it again.',
-	LNURL_UNSUPPORTED: 'That is an LNURL. This wallet pays invoices and offers, not LNURL.',
+	LNURL_CHANNEL_UNSUPPORTED:
+		'That is an LNURL-channel link, which this wallet does not support. Open channels from the Channels tab.',
 	BOLT12_REQUEST_UNSUPPORTED:
 		'That is a BOLT12 invoice request, not something you can pay. Ask for an offer (it starts with lno1) instead.',
-	LIGHTNING_ADDRESS_UNSUPPORTED:
-		'That is a Lightning address. This wallet pays invoices and offers, so ask the recipient for one.',
+	NODE_URI:
+		'That is a Lightning node address, not a payment. Open a channel to it from the Channels tab, or ask for an invoice.',
 	SILENT_PAYMENT_UNSUPPORTED: 'That is a silent payment address, which this wallet cannot pay yet.',
 	EXTENDED_KEY:
 		'That is an extended public key, which is a whole wallet rather than an address. Ask for a single address to pay.',
@@ -494,6 +495,41 @@ function squeeze(token, warnings) {
 	return tight;
 }
 
+// LUD-16: the user part is lowercase letters, digits and -_.+; the domain is
+// a host name with a dot in it (an onion included), no port. The ₿ some apps
+// write before a human-readable name is read past.
+const LIGHTNING_ADDRESS = /^([a-z0-9\-_.+]+)@([a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z][a-z0-9-]*)$/;
+
+/** A Lightning address in canonical (lowercase) form, or null. */
+export function lightningAddressOf(text) {
+	const lower = String(text || '').trim().replace(/^\u20bf/, '').toLowerCase();
+	return LIGHTNING_ADDRESS.test(lower) ? lower : null;
+}
+
+// LUD-17's schemes, each naming what the link is for.
+const LUD17_SCHEMES = ['lnurlp', 'lnurlw', 'keyauth'];
+
+/**
+ * An LNURL in one of the forms that are not `lnurl1...`: a LUD-17 scheme, a
+ * ₿-prefixed Lightning address, or the LUD-01 fallback (a web link carrying
+ * ?lightning=lnurl1...). Null for anything else.
+ */
+function readLnurlForm(text, warnings) {
+	const lower = text.toLowerCase();
+	const scheme = lower.slice(0, Math.max(0, lower.indexOf('://')));
+	if (scheme === 'lnurlc') return refuse('LNURL_CHANNEL_UNSUPPORTED');
+	if (LUD17_SCHEMES.includes(scheme)) return { kind: 'lnurl', input: text, lightningAddress: null, warnings };
+	if (text.startsWith('\u20bf')) {
+		const address = lightningAddressOf(text);
+		if (address) return { kind: 'lnurl', input: address, lightningAddress: address, warnings };
+	}
+	if (scheme === 'https' || scheme === 'http') {
+		const m = /[?&]lightning=(lnurl1[0-9a-z]+)/i.exec(text);
+		if (m) return { kind: 'lnurl', input: m[1].toLowerCase(), lightningAddress: null, warnings };
+	}
+	return null;
+}
+
 function schemeOf(text) {
 	const colon = text.indexOf(':');
 	if (colon < 1) return null;
@@ -508,7 +544,9 @@ function schemeOf(text) {
 function parseLightning(token, warnings, opts) {
 	const tight = squeeze(token, warnings);
 	const lower = tight.toLowerCase();
-	if (lower.startsWith('lnurl1')) return refuse('LNURL_UNSUPPORTED');
+	// An LNURL is a link to a service rather than a payment in itself: the
+	// manager reads it (lnurl.js) and the card shows what it asks for.
+	if (lower.startsWith('lnurl1')) return { kind: 'lnurl', input: lower, lightningAddress: null, warnings };
 	if (lower.startsWith('lnr1') || lower.startsWith('lni1')) return refuse('BOLT12_REQUEST_UNSUPPORTED');
 	if (lower.startsWith('lno1')) {
 		// An offer carries no checksum and does not name its chain in the string
@@ -560,7 +598,10 @@ function parseAddress(token, warnings, opts) {
 	}
 	if (lower.startsWith('npub1')) return refuse('NOSTR_KEY');
 	if (lower.startsWith('sp1') || lower.startsWith('tsp1')) return refuse('SILENT_PAYMENT_UNSUPPORTED');
-	if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(tight)) return refuse('LIGHTNING_ADDRESS_UNSUPPORTED');
+	if (/^(02|03)[0-9a-f]{64}@/i.test(tight)) return refuse('NODE_URI');
+	const address = lightningAddressOf(tight);
+	if (address) return { kind: 'lnurl', input: address, lightningAddress: address, warnings };
+	if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(tight)) return refuse('NOT_PAYABLE');
 
 	const classified = classifyAddress(tight);
 	if (!classified.ok) return refuse(classified.code);
@@ -696,7 +737,7 @@ function parseBip21(text, warnings, opts) {
 	const lnValue = params.get('lightning');
 	if (lnValue) {
 		const inner = parseLightning(lnValue.replace(/^lightning:/i, ''), [], opts);
-		if (inner.kind === 'bolt11' || inner.kind === 'bolt12') lightning = inner;
+		if (inner.kind === 'bolt11' || inner.kind === 'bolt12' || inner.kind === 'lnurl') lightning = inner;
 		else warn(warnings, 'LN_PAYLOAD_UNPARSEABLE');
 	}
 
@@ -772,6 +813,7 @@ function parseBip21(text, warnings, opts) {
  *   { kind: 'onchain', address, amountSats, label, message, lightning, … }
  *   { kind: 'bolt11', invoice, network, amountSats }
  *   { kind: 'bolt12', offer }
+ *   { kind: 'lnurl', input, lightningAddress }   (read by the manager, lnurl.js)
  *   { kind: 'invalid', code, message }
  *
  * `opts.network` is the wallet's chain. Given it, an address or invoice for a
@@ -814,6 +856,9 @@ function readPayment(input, opts) {
 		warn(warnings, 'PUNCTUATION_STRIPPED');
 	}
 	if (!text) return { kind: 'empty' };
+
+	const lnurlForm = readLnurlForm(text, warnings);
+	if (lnurlForm) return lnurlForm;
 
 	const scheme = schemeOf(text);
 	if (scheme === 'bitcoin') return parseBip21(text, warnings, opts);

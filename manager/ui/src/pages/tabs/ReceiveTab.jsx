@@ -7,14 +7,13 @@ import { Button, Card, CopyText, Field, Help, QR, Badge } from '../../components
 import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
 import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
+import { createReceiveInvoice, isConnectedPeer } from '../../lib/receive-invoice.js';
 import OfflineReceiveCard from '../../components/OfflineReceiveCard.jsx';
 import { manager } from '../../api.js';
 
 // A direct-funding request is re-minted when the amount changes (the
 // receiver signs the amount into it), after the hand has settled.
 const FUNDING_DEBOUNCE_MS = 400;
-// A JIT invoice's lifetime, and with it the intent the primary holds open.
-const JIT_INVOICE_EXPIRY_SECS = 15 * 60;
 // The smallest amount an offline receive slot can hold (the engine's dust limit).
 const OFFLINE_MIN_SATS = 354;
 
@@ -76,7 +75,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 		[id, tick, wantsOffline, isLfbw]
 	);
 	const connectedPeers = useMemo(
-		() => (peers || []).filter((p) => p.state === 'connected' || p.state === 'ready' || p.connected === true),
+		() => (peers || []).filter(isConnectedPeer),
 		[peers]
 	);
 	const receivingNodes = useMemo(
@@ -450,51 +449,19 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 				if (r.offlineReceive !== true) throw new Error('Your payment request could not be prepared. Try again.');
 				sessionStorage.removeItem(key);
 				setRequestRevision(n => n + 1);
-			} else if (isLfbw) {
-				// Provision inbound first when the home channel cannot take the
-				// amount: the invoice is payable through a channel the primary
-				// funds the moment the payment arrives (a zero-conf open, or a
-				// splice of the home channel), minus the fee it quotes.
-				const lf = rec.lfbw;
-				let primaryRunning = true;
-				if (lf.mode === 'internal' && lf.primaryWalletId) {
-					primaryRunning = await manager
-						.getWallet(lf.primaryWalletId)
-						.then((w) => w.status === 'running')
-						.catch(() => true);
-				}
-				const decided = planInvoice({
-					wantedSats: body.amountSats || 0,
-					channels: channels || (await api.get('/channels').catch(() => [])),
-					primaryPubkey: lf.primaryPubkey,
-					setup: lf.setup,
-					primaryRunning,
-					primaryConnected
+			} else {
+				const made = await createReceiveInvoice({
+					api,
+					rec,
+					channels,
+					primaryConnected,
+					amountSats: body.amountSats,
+					description: body.description,
+					getWallet: manager.getWallet
 				});
-				if (decided.kind === 'refuse') {
-					throw new Error(
-						decided.code === 'PRIMARY_DOWN'
-							? decided.reason === 'not-connected'
-								? 'Your primary node is not connected, and this invoice needs it to provide inbound capacity. Wait for it to reconnect, or ask for an amount the channel already covers.'
-								: 'Your primary node is not running, and this invoice needs it to provide inbound capacity. Start it, or ask for an amount the channel already covers.'
-							: 'The link to your primary node is not set up yet. Retry setup from the Overview tab.'
-					);
-				}
-				if (decided.kind === 'jit') {
-					r = await api.post('/jit/invoice', {
-						lspPubkey: lf.primaryPubkey,
-						...(body.amountSats ? { amountSats: body.amountSats } : {}),
-						description: body.description,
-						targetRemainingInboundSat: INBOUND_HEADROOM_SATS,
-						// The primary holds an intent open for as long as the invoice
-						// lives and allows a few per wallet, so an unpaid invoice must
-						// not hold its slot for an hour (beignet #674).
-						expirySecs: JIT_INVOICE_EXPIRY_SECS
-					});
-					jit = { flatFeeSat: r.flatFeeSat || 0, feePpm: r.feePpm || 0 };
-				}
+				r = made.invoice;
+				jit = made.jit;
 			}
-			if (!r) r = await api.post('/invoice/create', body);
 			setInvoice(r);
 			setJitInfo(jit);
 			toast(
