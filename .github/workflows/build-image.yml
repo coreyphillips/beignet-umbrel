@@ -729,7 +729,18 @@ env:
   # "Insufficient balance for HTLC". The estimate's shape, the storage
   # schema (20), the environment settings and the runtime dependencies are
   # unchanged, and the capability probes answer as for 0.38.1.
-  BEIGNET_VERSION: "0.38.2"
+  # 0.38.3 pays an offer whose blinded path this node introduces: the
+  # invoice request now goes to the next hop instead of to the node's own
+  # id, so a primary can pay its own lightning-first wallet's offer
+  # (coreyphillips/beignet#1974, #1975). Before, POST /offer/pay answered
+  # 500 INTERNAL_ERROR for that case; a missing link to the node the request
+  # is handed to now comes back as PEER_NOT_CONNECTED, with nothing sent.
+  # POST /direct-funding/request also takes an optional expirySecs, up to
+  # seven days (coreyphillips/beignet#1973); omitted, the hour default
+  # applies. The storage schema (20), the environment settings and the
+  # runtime dependencies are unchanged, and the capability probes answer as
+  # for 0.38.2.
+  BEIGNET_VERSION: "0.38.3"
 
 jobs:
   build:
