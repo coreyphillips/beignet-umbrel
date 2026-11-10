@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '../../components/Toast.jsx';
 import { Badge, Button, Card, CopyText, Field } from '../../components/ui.jsx';
 import { LnurlAuth, LnurlPay, LnurlWithdraw, useLnurlResolve } from '../../components/Lnurl.jsx';
+import PaykitCard from '../../components/Paykit.jsx';
 import { usePoll } from '../../hooks/usePoll.js';
 import { shortId } from '../../lib/format.js';
 import { parsePayment } from '../../lib/payment-uri.js';
@@ -16,6 +17,8 @@ import { channelSendableSats } from '../../lib/sendable.js';
  *   here checks out under lncli verifymessage and vice versa.
  * - LNURL: pay a link or a Lightning address, withdraw from a link, or log in
  *   to a site, whichever the pasted link turns out to be.
+ * - Paykit: publish this wallet's payment details under its pubky, and look
+ *   up anyone else's.
  */
 export default function ToolsTab({ id, api, rec, bump, lastReceive }) {
 	return (
@@ -23,6 +26,7 @@ export default function ToolsTab({ id, api, rec, bump, lastReceive }) {
 			<SignCard api={api} />
 			<VerifyCard api={api} />
 			<LnurlCard id={id} api={api} rec={rec} bump={bump} lastReceive={lastReceive} />
+			<PaykitCard id={id} rec={rec} running={!!(rec?.healthy ?? rec?.status === 'running')} />
 		</div>
 	);
 }

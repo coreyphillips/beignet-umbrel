@@ -49,6 +49,7 @@ const {
 	recoveryAvailable,
 	lfbwAvailable,
 	jitQuoteAvailable,
+	paykitDirectFundingAvailable,
 	recoveryAutoApplyAvailable,
 	guardianHostingAvailable,
 	guardianRotationAvailable,
@@ -67,6 +68,19 @@ const ffor = require('./ffor');
 const netmode = require('./network-mode');
 const { createOutbound } = require('./outbound');
 const { createLnurl } = require('./lnurl');
+const paykit = require('./paykit');
+const { pubkyPhrase, pubkySecret, pubkyOf } = require('./derive');
+
+// Paykit's refresh watch: how often a wallet with published details checks
+// they still stand, how long after a start it first looks (spread out so a
+// box of wallets does not all publish at boot), and the longest it backs off
+// after a failure.
+const PAYKIT_CHECK_MS = 15 * 60 * 1000;
+const PAYKIT_FIRST_CHECK_MIN_MS = 60 * 1000;
+const PAYKIT_FIRST_CHECK_MAX_MS = 5 * 60 * 1000;
+const PAYKIT_BACKOFF_MAX_MS = 6 * 60 * 60 * 1000;
+// How soon after a direct funding lands the published details are checked.
+const PAYKIT_SOON_MS = 10 * 1000;
 
 const HEALTH_TIMEOUT_MS = 45000;
 const HEALTH_POLL_MS = 500;
@@ -182,6 +196,7 @@ class WalletManager {
 		// #687) and the daemon applying a peer-storage checkpoint by itself
 		// (beignet #690).
 		this.jitQuoteSupported = jitQuoteAvailable();
+		this.paykitDfSupported = paykitDirectFundingAvailable();
 		this.recoveryAutoApplySupported = recoveryAutoApplyAvailable();
 		// A wallet serving the reference guardian to other beignet nodes at its
 		// Lightning address, and a node URI resolving to a guardian entry
@@ -209,6 +224,9 @@ class WalletManager {
 		// by each wallet's network mode.
 		this.outbound = createOutbound({ torProxy: config.torProxy });
 		this.lnurl = createLnurl({ outbound: this.outbound });
+		this.paykit = paykit.createPaykit({ torProxy: config.torProxy });
+		// Each wallet's pubky, worked out from its seed once: it is public.
+		this.pubkys = new Map();
 	}
 
 	async init() {
@@ -463,6 +481,13 @@ class WalletManager {
 				dfLastPull: 0,
 				dfPull: null,
 				dfPullAgain: false,
+				// Paykit: the next refresh check, its backoff after a failure,
+				// when it last looked, and the publish in flight.
+				paykitTimer: null,
+				paykitNextAt: null,
+				paykitBackoff: 0,
+				paykitCheckAt: null,
+				paykitPublishing: null,
 				// FFOR offline receive: what the last return (the reconcile
 				// with the settlement peer after a start) produced, whether a
 				// peer contradicted an ACTIVE epoch at reconnect (enforce
@@ -670,6 +695,211 @@ class WalletManager {
 		return result;
 	}
 
+	/* ----------------------------------------------------------- Paykit */
+
+	/**
+	 * The wallet's Pubky identity: the phrase is a BIP85 child of its seed,
+	 * the secret the first 32 bytes of that phrase's own seed, the pubky its
+	 * public key. Only the pubky is kept; the caller zeroes the secret.
+	 */
+	_pubkyIdentity(id) {
+		const phrase = pubkyPhrase(this._readMnemonic(id));
+		const secret = pubkySecret(phrase);
+		const pubky = pubkyOf(secret);
+		this.pubkys.set(id, pubky);
+		return { phrase, secret, pubky };
+	}
+
+	_pubkyOf(id) {
+		const rec = this.registry.get(id);
+		if (rec?.paykit?.pubky) return rec.paykit.pubky;
+		if (this.pubkys.has(id)) return this.pubkys.get(id);
+		try {
+			const { secret, pubky } = this._pubkyIdentity(id);
+			secret.fill(0);
+			return pubky;
+		} catch (_) {
+			return null;
+		}
+	}
+
+	/** What this wallet publishes under its pubky, and the watch that keeps it current. */
+	paykitStatus(id) {
+		const rec = this._lnurlRecord(id);
+		const rt = this.runtimeState(id);
+		const state = rec.paykit || {};
+		return {
+			pubky: this._pubkyOf(id),
+			publishedAt: state.publishedAt || null,
+			published: state.published || [],
+			autoRefresh: !!state.autoRefresh,
+			lastError: state.lastError || null,
+			lastCheckAt: rt.paykitCheckAt || null,
+			nextCheckAt: state.autoRefresh && state.publishedAt ? rt.paykitNextAt || null : null,
+			directFunding: {
+				// The engine can mint a request that lasts a week, and this
+				// wallet can be paid by one: both, or none is published.
+				engine: this.paykitDirectFundingAvailable(),
+				ready: paykit.directFundingReady(rec, this.paykitDirectFundingAvailable()),
+				expiresAt: state.df ? state.df.expiresAt : null
+			}
+		};
+	}
+
+	/**
+	 * Publish this wallet's payment details under its pubky: a reusable
+	 * offer, a fresh address and, for a ready lightning-first wallet, a
+	 * week-long direct funding request. Concurrent presses share one publish.
+	 */
+	async paykitPublish(id, { reasons } = {}) {
+		const rec = this._lnurlRecord(id);
+		const rt = this.runtimeState(id);
+		if (!rt.healthy) throw httpError(409, 'WALLET_NOT_RUNNING', 'Start the wallet first: its payment details come from it.');
+		if (rt.paykitPublishing) return rt.paykitPublishing;
+		rt.paykitPublishing = (async () => {
+			const before = rec.paykit || {};
+			try {
+				const call = (method, apiPath, body) => this._daemonCall(rec, method, apiPath, body);
+				const gathered = await paykit.gatherEndpoints({
+					rec: { ...rec, reach: rec.onchainOnly ? null : this._reach(rec) },
+					call,
+					state: before,
+					dfAvailable: this.paykitDirectFundingAvailable()
+				});
+				const { secret, pubky } = this._pubkyIdentity(id);
+				await this.paykit.publish(rec, secret, gathered.endpoints);
+				const first = !before.publishedAt;
+				rec.paykit = {
+					...before,
+					...gathered.state,
+					pubky,
+					publishedAt: Date.now(),
+					published: paykit.describeEndpoints(gathered.endpoints).map(({ identifier, value }) => ({ identifier, value })),
+					// Kept current by default: a direct funding request is
+					// single use, so without the watch it stops working.
+					autoRefresh: first ? true : !!before.autoRefresh,
+					lastError: null
+				};
+				this.registry.upsert(rec);
+				const why = reasons && reasons.length ? ` (${reasons.join('; ')})` : '';
+				this._log(id, `paykit: published ${gathered.endpoints.length} payment details for ${pubky}${why}`);
+				if (first) this._startPaykitWatch(id, rt);
+				return this.paykitStatus(id);
+			} catch (e) {
+				rec.paykit = { ...before, lastError: { code: e.code || 'ERROR', message: e.message, at: Date.now() } };
+				this.registry.upsert(rec);
+				this._log(id, `paykit: publish failed: ${e.code || 'ERROR'} ${e.message}`);
+				throw e;
+			} finally {
+				rt.paykitPublishing = null;
+			}
+		})();
+		return rt.paykitPublishing;
+	}
+
+	/** Turn the refresh watch on or off. */
+	paykitSetAutoRefresh(id, { autoRefresh } = {}) {
+		const rec = this._lnurlRecord(id);
+		if (typeof autoRefresh !== 'boolean') throw httpError(400, 'INVALID_PARAMS', 'autoRefresh must be true or false.');
+		rec.paykit = { ...(rec.paykit || {}), autoRefresh };
+		this.registry.upsert(rec);
+		const rt = this.runtimeState(id);
+		this._stopPaykitWatch(rt);
+		if (autoRefresh && rt.healthy) this._startPaykitWatch(id, rt);
+		return this.paykitStatus(id);
+	}
+
+	/** Another identity's published payment details, read over this wallet's route. */
+	async paykitLookup(id, { pubky } = {}) {
+		const result = await this.paykit.lookup(this._lnurlRecord(id), pubky);
+		return { pubky: result.pubky, endpoints: paykit.describeEndpoints(result.endpoints) };
+	}
+
+	/** The identity phrase, for Pubky Ring. A secret: guarded like the recovery phrase. */
+	paykitPhrase(id) {
+		const { phrase, secret, pubky } = this._pubkyIdentity(id);
+		secret.fill(0);
+		this._log(id, 'paykit: pubky phrase shown in the dashboard');
+		return { phrase, pubky };
+	}
+
+	_startPaykitWatch(id, rt) {
+		this._stopPaykitWatch(rt);
+		const rec = this.registry.get(id);
+		if (!rec?.paykit?.autoRefresh || !rec.paykit.publishedAt) return;
+		const spread = PAYKIT_FIRST_CHECK_MIN_MS + Math.random() * (PAYKIT_FIRST_CHECK_MAX_MS - PAYKIT_FIRST_CHECK_MIN_MS);
+		this._schedulePaykit(id, rt, spread);
+	}
+
+	_stopPaykitWatch(rt) {
+		if (rt.paykitTimer) {
+			clearTimeout(rt.paykitTimer);
+			rt.paykitTimer = null;
+		}
+		rt.paykitNextAt = null;
+		rt.paykitSoon = false;
+	}
+
+	/**
+	 * A direct funding just landed on this wallet. If it paid the request the
+	 * wallet publishes under its pubky, that request is spent, and a second
+	 * payer reading it would be refused (or, paying from the same wallet, get
+	 * the first payment's answer back). So check in a few seconds instead of
+	 * at the next quarter hour; the check itself decides whether to publish.
+	 */
+	_paykitSoon(id, rt) {
+		const paykitRec = this.registry.get(id)?.paykit;
+		if (!paykitRec?.autoRefresh || !paykitRec.publishedAt || !paykitRec.df) return;
+		if (!rt.paykitTimer) {
+			// A check is running now and may have read the list before this
+			// landed: the one after it comes soon.
+			rt.paykitSoon = true;
+			return;
+		}
+		if (rt.paykitNextAt - Date.now() <= PAYKIT_SOON_MS) return;
+		this._stopPaykitWatch(rt);
+		this._schedulePaykit(id, rt, PAYKIT_SOON_MS);
+	}
+
+	_schedulePaykit(id, rt, delay) {
+		rt.paykitNextAt = Date.now() + delay;
+		rt.paykitTimer = setTimeout(() => {
+			rt.paykitTimer = null;
+			this._paykitCheck(id)
+				.catch(() => {})
+				.finally(() => {
+					const soon = rt.paykitSoon;
+					rt.paykitSoon = false;
+					if (rt.status === 'running' && !rt.paykitTimer && this.registry.get(id)?.paykit?.autoRefresh) {
+						this._schedulePaykit(id, rt, soon ? PAYKIT_SOON_MS : rt.paykitBackoff || PAYKIT_CHECK_MS);
+					}
+				});
+		}, delay);
+		if (rt.paykitTimer.unref) rt.paykitTimer.unref();
+	}
+
+	/** One refresh check: publish again if what is out there no longer stands. */
+	async _paykitCheck(id) {
+		const rec = this.registry.get(id);
+		const rt = this.runtimeState(id);
+		if (!rec?.paykit?.autoRefresh || !rec.paykit.publishedAt || !rt.healthy) return;
+		try {
+			const reasons = await paykit.refreshReasons({
+				rec,
+				call: (method, apiPath, body) => this._daemonCall(rec, method, apiPath, body),
+				state: rec.paykit,
+				dfAvailable: this.paykitDirectFundingAvailable()
+			});
+			rt.paykitCheckAt = Date.now();
+			if (reasons.length) await this.paykitPublish(id, { reasons });
+			rt.paykitBackoff = 0;
+		} catch (_) {
+			// Recorded on the record by the publish; back off, doubling, so a
+			// homeserver that is down is not asked every fifteen minutes.
+			rt.paykitBackoff = Math.min(PAYKIT_BACKOFF_MAX_MS, Math.max(PAYKIT_CHECK_MS, (rt.paykitBackoff || PAYKIT_CHECK_MS / 2) * 2));
+		}
+	}
+
 	/** Log in to a site with this wallet's LNURL-auth key for its domain. */
 	async lnurlAuth(id, body = {}) {
 		const result = await this.lnurl.auth(id, this._lnurlRecord(id), body, () => this._readMnemonic(id));
@@ -751,6 +981,10 @@ class WalletManager {
 
 	jitQuoteAvailable() {
 		return this.jitQuoteSupported === true;
+	}
+
+	paykitDirectFundingAvailable() {
+		return this.paykitDfSupported === true;
 	}
 
 	recoveryAutoApplyAvailable() {
@@ -1580,10 +1814,12 @@ class WalletManager {
 		if (rt.chainWatch) clearInterval(rt.chainWatch);
 		this._stopLfbwWatch(rt);
 		this._stopDfWatch(rt);
+		this._stopPaykitWatch(rt);
 		rt.chainWatch = setInterval(() => {
 			this._checkChainStall(id).catch(() => {});
 		}, CHAIN_WATCH_POLL_MS);
 		this._startDfWatch(id, rt);
+		this._startPaykitWatch(id, rt);
 		// Lightning-first: on-chain arrivals move into the home channel. The
 		// event stream drives it (transaction:confirmed); this is the backstop
 		// for an event missed while the stream reconnects.
@@ -1742,6 +1978,9 @@ class WalletManager {
 				if (name.startsWith('direct-funding:')) {
 					this._nudgeDfPull(id, rt, !/:(completed|declined|failed)$/.test(name));
 				}
+				// A direct funding landed: if it paid the request this wallet
+				// publishes under its pubky, a fresh one goes out within seconds.
+				if (name === 'direct-funding:offer:completed') this._paykitSoon(id, rt);
 				// A swap this provider serves (beignet #737, #743), one line per
 				// step in either direction: created, funded, paying, preimage,
 				// claim broadcast and confirmed, or failed, refunded, exposed.
@@ -1979,6 +2218,7 @@ class WalletManager {
 		}
 		this._stopLfbwWatch(rt);
 		this._stopDfWatch(rt);
+		this._stopPaykitWatch(rt);
 		this._stopEvents(rt);
 		this._log(id, `exited code=${code} signal=${signal}`);
 		this._maybeRestart(id, rt);
@@ -3711,7 +3951,11 @@ class WalletManager {
 			fforEnforced: rt.fforEnforced || null,
 			fforSetup: rt.fforSetup || null,
 			// The offers an issuer answers for this wallet's epochs, by channel.
-			fforIssuance: rec.fforIssuance || {}
+			fforIssuance: rec.fforIssuance || {},
+			// Paykit: the identity the wallet publishes under, once it has.
+			paykit: rec.paykit
+				? { pubky: rec.paykit.pubky, publishedAt: rec.paykit.publishedAt || null, autoRefresh: !!rec.paykit.autoRefresh }
+				: null
 		};
 	}
 

@@ -175,3 +175,151 @@ test('the LNURL card turns away what is not an LNURL, and an on-chain wallet can
 		mgr.restore();
 	}
 });
+
+const PUBKY = 'aihfhgdfshrj8nz9ofo7khayc1mgcqa4wrrdjahs5tmgo4pna3iy';
+const OTHER_PUBKY = 'uopciqnqm997k7o5dx7n4przj76ik9tuwjk4afacy7y6bt69ipey';
+
+/** The manager's Paykit routes, answering as wallet-manager.js does. */
+function stubPaykitManager() {
+	const calls = [];
+	const realFetch = globalThis.fetch;
+	let status = {
+		pubky: PUBKY,
+		publishedAt: null,
+		published: [],
+		autoRefresh: false,
+		lastError: null,
+		lastCheckAt: null,
+		nextCheckAt: null,
+		directFunding: { engine: true, ready: true, expiresAt: null }
+	};
+	globalThis.fetch = async (url, init = {}) => {
+		const body = init.body ? JSON.parse(init.body) : null;
+		const path = String(url);
+		calls.push({ url: path, method: init.method || 'GET', body });
+		const answer = (result) => ({ ok: true, status: 200, json: async () => ({ ok: true, result }) });
+		if (path.endsWith('/paykit/publish')) {
+			status = {
+				...status,
+				publishedAt: Date.now(),
+				autoRefresh: true,
+				published: [
+					{ identifier: 'btc-lightning-bolt12', value: 'lno1publishedoffer' },
+					{ identifier: 'btc-bitcoin-p2wpkh', value: 'bc1qpublishedaddress' },
+					{ identifier: 'btc-bitcoin-bip21', value: 'bitcoin:bc1qpublishedaddress?bgnq=abc' }
+				],
+				directFunding: { engine: true, ready: true, expiresAt: Date.now() + 7 * 86400000 }
+			};
+			return answer(status);
+		}
+		if (path.endsWith('/paykit') && init.method === 'PATCH') {
+			status = { ...status, autoRefresh: body.autoRefresh };
+			return answer(status);
+		}
+		if (path.endsWith('/paykit')) return answer(status);
+		if (path.endsWith('/paykit/lookup')) {
+			return answer({
+				pubky: body.pubky,
+				endpoints: [
+					{ appId: 'beignet', identifier: 'btc-lightning-bolt12', value: 'lno1theiroffer' },
+					{ appId: 'bitkit', identifier: 'usdt-tron-address', value: 'TXYZtheirs' }
+				]
+			});
+		}
+		if (path.endsWith('/paykit/phrase')) {
+			return answer({ pubky: PUBKY, phrase: 'girl mad pet galaxy egg matter matrix prison refuse sense ordinary nose' });
+		}
+		return answer(null);
+	};
+	return { calls, restore: () => (globalThis.fetch = realFetch) };
+}
+
+test('Set payment details publishes, lists what went out, and offers to keep it up to date', async () => {
+	const mgr = stubPaykitManager();
+	const view = await mountTools(stubApi(), { rec: { network: 'mainnet', status: 'running', lfbw: { enabled: true } } });
+	try {
+		await settle(100);
+		assert.match(view.text(), new RegExp(`pubky${PUBKY.slice(0, 8)}`), 'the pubky, ready to copy');
+		assert.match(view.text(), /Nothing published yet\./);
+		assert.ok(!view.$('[data-testid="paykit-auto"]'), 'nothing to keep up to date yet');
+
+		await click(view.$('[data-testid="paykit-publish"]'));
+		await settle(100);
+		assert.ok(mgr.calls.some((c) => c.url.endsWith('/paykit/publish') && c.method === 'POST'));
+		const table = view.$('[data-testid="paykit-published"]').textContent;
+		assert.match(table, /Lightning offer/);
+		assert.match(table, /Bitcoin address/);
+		assert.match(table, /Direct funding request/);
+		assert.match(view.text(), /The direct funding request is good until/);
+		assert.equal(view.$('[data-testid="paykit-publish"]').textContent.trim(), 'Update payment details');
+
+		const auto = view.$('[data-testid="paykit-auto"]');
+		assert.ok(auto.checked, 'on after the first publish');
+		await click(auto);
+		await settle(50);
+		assert.deepEqual(mgr.calls.find((c) => c.method === 'PATCH').body, { autoRefresh: false });
+		assert.ok(!view.$('[data-testid="paykit-auto"]').checked);
+	} finally {
+		await view.unmount();
+		mgr.restore();
+	}
+});
+
+test('a stopped wallet cannot publish, and says why', async () => {
+	const mgr = stubPaykitManager();
+	const view = await mountTools(stubApi(), { rec: { network: 'mainnet', status: 'stopped' } });
+	try {
+		await settle(100);
+		assert.ok(view.$('[data-testid="paykit-publish"]').disabled);
+		assert.match(view.text(), /Start the wallet to publish/);
+	} finally {
+		await view.unmount();
+		mgr.restore();
+	}
+});
+
+test('looking up a pubky lists everything it publishes, other apps included', async () => {
+	const mgr = stubPaykitManager();
+	const view = await mountTools(stubApi(), { rec: { network: 'mainnet', status: 'running' } });
+	try {
+		await settle(100);
+		const box = view.$('input[placeholder^="pubky"]');
+		await type(box, 'not a key');
+		await settle(20);
+		assert.match(view.text(), /That is not a pubky\./);
+		const lookBtn = () => view.$$('button').find((b) => b.textContent.trim() === 'Look up');
+		assert.ok(lookBtn().disabled);
+
+		await type(box, `pk:${OTHER_PUBKY}`);
+		await settle(20);
+		await click(lookBtn());
+		await settle(100);
+		assert.deepEqual(mgr.calls.find((c) => c.url.endsWith('/paykit/lookup')).body, { pubky: OTHER_PUBKY });
+		const table = view.$('[data-testid="paykit-lookup"]').textContent;
+		assert.match(table, /Lightning offer/);
+		assert.match(table, /usdt-tron-address/);
+		assert.match(table, /bitkit/, "another app's entry is marked as such");
+	} finally {
+		await view.unmount();
+		mgr.restore();
+	}
+});
+
+test('Use in Pubky Ring asks for the phrase only when Show phrase is pressed', async () => {
+	const mgr = stubPaykitManager();
+	const view = await mountTools(stubApi(), { rec: { network: 'mainnet', status: 'running' } });
+	try {
+		await settle(100);
+		await click(view.$$('button').find((b) => b.textContent.trim() === 'Use in Pubky Ring'));
+		await settle(50);
+		assert.match(document.body.textContent, /not this wallet's recovery\s+phrase/);
+		assert.ok(!mgr.calls.some((c) => c.url.endsWith('/paykit/phrase')), 'not fetched just by opening');
+		await click(document.querySelector('[data-testid="reveal-pubky-phrase"]'));
+		await settle(50);
+		assert.ok(mgr.calls.some((c) => c.url.endsWith('/paykit/phrase') && c.method === 'POST'));
+		assert.match(document.body.textContent, /galaxy/);
+	} finally {
+		await view.unmount();
+		mgr.restore();
+	}
+});

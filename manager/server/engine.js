@@ -68,6 +68,10 @@ const LFBW_ROUTE_MARKERS = ["'/jit/invoice'", "'/direct-funding/send'", 'allowSp
 // primary (beignet #687), so the Receive tab can say the price before the
 // invoice exists.
 const JIT_QUOTE_MARKERS = ['/jit/quote'];
+// A direct funding request that lasts as long as it is asked to (beignet
+// #1973): what Paykit needs to publish one for a week. A sentence of the
+// route's own summary, since the field name alone appears elsewhere.
+const PAYKIT_DF_MARKERS = ['expirySecs sets how long the request stays payable'];
 // The daemon applying a peer-storage checkpoint by itself on an empty
 // database (beignet #690). The env name is a literal in the engine's config
 // module, which is the one file certain to carry it.
@@ -116,6 +120,11 @@ function probe(bin, file, markers) {
 /** True when the engine behind `bin` serves JIT receive and direct funding. */
 function lfbwAvailable(bin = process.env.BEIGNET_BIN) {
 	return probe(bin, 'openapi.js', LFBW_ROUTE_MARKERS);
+}
+
+/** True when the engine behind `bin` mints direct funding requests that last up to a week. */
+function paykitDirectFundingAvailable(bin = process.env.BEIGNET_BIN) {
+	return probe(bin, 'openapi.js', PAYKIT_DF_MARKERS);
 }
 
 /** True when the engine behind `bin` quotes a JIT receive without an intent. */
@@ -190,10 +199,12 @@ module.exports = {
 	recoveryAvailable,
 	lfbwAvailable,
 	jitQuoteAvailable,
+	paykitDirectFundingAvailable,
 	recoveryAutoApplyAvailable,
 	guardianHostingAvailable,
 	guardianRotationAvailable,
 	RECOVERY_MIN_VERSION,
+	PAYKIT_DF_MARKERS,
 	LFBW_ROUTE_MARKERS,
 	JIT_QUOTE_MARKERS,
 	RECOVERY_AUTO_APPLY_MARKERS,

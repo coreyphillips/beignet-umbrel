@@ -75,6 +75,10 @@ async function download(path, body) {
 
 // Manager (control plane) API
 const LNURL_TIMEOUT_MS = 150000;
+// A Paykit publish may sign the identity up first, and over Tor the manager
+// gives it three minutes; a lookup gets ninety seconds there.
+const PAYKIT_PUBLISH_TIMEOUT_MS = 200000;
+const PAYKIT_LOOKUP_TIMEOUT_MS = 100000;
 
 export const manager = {
 	config: () => request('/api/config'),
@@ -111,6 +115,13 @@ export const manager = {
 	lnurlWithdraw: (id, body) =>
 		request(`/api/wallets/${id}/lnurl/withdraw`, { method: 'POST', body, timeoutMs: LNURL_TIMEOUT_MS }),
 	lnurlAuth: (id, body) => request(`/api/wallets/${id}/lnurl/auth`, { method: 'POST', body, timeoutMs: LNURL_TIMEOUT_MS }),
+	paykitStatus: (id) => request(`/api/wallets/${id}/paykit`),
+	paykitPublish: (id) =>
+		request(`/api/wallets/${id}/paykit/publish`, { method: 'POST', timeoutMs: PAYKIT_PUBLISH_TIMEOUT_MS }),
+	paykitSetAutoRefresh: (id, autoRefresh) => request(`/api/wallets/${id}/paykit`, { method: 'PATCH', body: { autoRefresh } }),
+	paykitLookup: (id, pubky) =>
+		request(`/api/wallets/${id}/paykit/lookup`, { method: 'POST', body: { pubky }, timeoutMs: PAYKIT_LOOKUP_TIMEOUT_MS }),
+	paykitPhrase: (id) => request(`/api/wallets/${id}/paykit/phrase`, { method: 'POST' }),
 	startWallet: (id) => request(`/api/wallets/${id}/start`, { method: 'POST' }),
 	stopWallet: (id) => request(`/api/wallets/${id}/stop`, { method: 'POST' }),
 	deleteWallet: (id, purge) =>

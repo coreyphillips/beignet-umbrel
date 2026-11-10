@@ -138,6 +138,9 @@ async function main() {
 	// One wallet's seed, read back for its owner: the same stakes as an
 	// export, so the same guard.
 	app.use('/api/wallets/:id/recovery-phrase', accessGuard.strict);
+	// The Pubky identity phrase holds the wallet's published identity: the
+	// same guard as the seed it is derived from.
+	app.use('/api/wallets/:id/paykit/phrase', accessGuard.strict);
 
 	// A restore carries the whole archive in its body (base64), which on a box
 	// with many wallets is larger than any other request here. Mounted first so
@@ -187,6 +190,7 @@ async function main() {
 				// Lightning-first wallets need JIT receive and direct funding,
 				// which the engine gained after 0.9.3; probed on the bundle.
 				lfbwAvailable: manager.lfbwAvailable(),
+				paykitDirectFundingAvailable: manager.paykitDirectFundingAvailable(),
 				// A fee quote before a just-in-time invoice exists (beignet
 				// #687) and the daemon applying a peer-storage checkpoint by
 				// itself (beignet #690), both probed on the bundle.
@@ -342,6 +346,41 @@ async function main() {
 		asyncHandler(async (req, res) => {
 			res.setHeader('Cache-Control', 'no-store');
 			res.json({ ok: true, result: manager.recoveryPhrase(req.params.id) });
+		})
+	);
+
+	// Paykit: this wallet's payment details under its pubky, and another
+	// pubky's. The manager does the Pubky calls over the wallet's route.
+	api.get(
+		'/wallets/:id/paykit',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: manager.paykitStatus(req.params.id) });
+		})
+	);
+	api.patch(
+		'/wallets/:id/paykit',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: manager.paykitSetAutoRefresh(req.params.id, req.body || {}) });
+		})
+	);
+	api.post(
+		'/wallets/:id/paykit/publish',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: await manager.paykitPublish(req.params.id) });
+		})
+	);
+	api.post(
+		'/wallets/:id/paykit/lookup',
+		asyncHandler(async (req, res) => {
+			res.setHeader('Cache-Control', 'no-store');
+			res.json({ ok: true, result: await manager.paykitLookup(req.params.id, req.body || {}) });
+		})
+	);
+	api.post(
+		'/wallets/:id/paykit/phrase',
+		asyncHandler(async (req, res) => {
+			res.setHeader('Cache-Control', 'no-store');
+			res.json({ ok: true, result: manager.paykitPhrase(req.params.id) });
 		})
 	);
 

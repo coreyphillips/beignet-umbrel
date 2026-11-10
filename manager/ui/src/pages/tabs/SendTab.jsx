@@ -24,6 +24,7 @@ import { arrivingFundsNote, lfbwStatus } from '../../lib/lfbw.js';
 import { channelSendableSats } from '../../lib/sendable.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 import { LnurlAuth, LnurlFrom, LnurlSuccess, LnurlWithdraw, lnurlInvoice } from '../../components/Lnurl.jsx';
+import { usePubkyLookup } from '../../hooks/usePubkyLookup.js';
 import { manager, walletApi } from '../../api.js';
 
 // Headroom over the quoted routing fee when a payment is held to its estimate,
@@ -287,6 +288,31 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 	// than on paste alone, so typing and pasting behave identically.
 	const parsed = useMemo(() => parsePayment(value, { network: rec?.network }), [value, rec?.network]);
 	const mayRefuse = useSettledRefusal(value, focused);
+
+	// A pubky is looked up rather than paid: what it publishes comes back as one
+	// unified request (address, direct funding, Lightning), which replaces it in
+	// the box and is read from there like any pasted request. Lightning alone
+	// goes to the Lightning card.
+	const pubkyRead = usePubkyLookup(id, parsed.kind === 'pubky' ? parsed.pubky : null, rec?.network);
+	useEffect(() => {
+		const r = pubkyRead.request;
+		if (!r) return;
+		if (r.address) {
+			onChange(r.text);
+			setArrived(`Read from ${pubkyRead.who}'s payment details.`);
+			return;
+		}
+		if (onLightning(r.lightning, { note: `Read from ${pubkyRead.who}'s payment details. They take Lightning only, so it was moved here.` })) {
+			return;
+		}
+		setNote({
+			tone: 'error',
+			text: rec?.onchainOnly
+				? `${pubkyRead.who} takes Lightning only, and this wallet is on-chain only, so it cannot pay them. Lightning can be switched on in the wallet's Edit dialog.`
+				: `${pubkyRead.who} takes Lightning only, and this wallet has no channel to pay them with yet.`
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [pubkyRead.request]);
 
 	// The amount, the fee and the Send button mean nothing until there is a
 	// destination, so the card opens on the destination alone and grows the rest
@@ -787,6 +813,16 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					{parsed.message}
 				</div>
 			)}
+			{parsed.kind === 'pubky' && pubkyRead.looking && (
+				<div className="wallet-meta" role="status">
+					Reading {pubkyRead.who}'s payment details…
+				</div>
+			)}
+			{parsed.kind === 'pubky' && pubkyRead.error && (
+				<div className="error-note" role="alert">
+					{pubkyRead.error}
+				</div>
+			)}
 			{note && (
 				<div
 					className={note.tone === 'error' ? 'error-note' : 'info-note'}
@@ -1098,6 +1134,18 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 	// could be paid.
 	const payable = invoice ?? offer ?? lnurlInput;
 	const mayRefuse = useSettledRefusal(value, focused);
+
+	// A pubky pasted here: its offer (or invoice) is what this box pays. One
+	// that publishes nothing for Lightning goes to the on-chain card with what
+	// it does publish.
+	const pubkyRead = usePubkyLookup(walletId, parsed.kind === 'pubky' ? parsed.pubky : null, rec?.network);
+	useEffect(() => {
+		const r = pubkyRead.request;
+		if (!r) return;
+		if (r.lightning && onLightning(r.lightning, { note: `Read from ${pubkyRead.who}'s payment details.` })) return;
+		onOnchain(r.text, { note: `Read from ${pubkyRead.who}'s payment details. They take on-chain payments only, so it was moved here.` });
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [pubkyRead.request]);
 
 	// An on-chain address in the invoice box belongs on the other rail. A unified
 	// request is the exception: it carries an invoice or an offer of its own, and
@@ -1519,6 +1567,14 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 				    nothing. */}
 				{decoding && (
 					<div className="wallet-meta">Reading the {lnurlInput ? 'link' : offer ? 'offer' : 'invoice'}…</div>
+				)}
+				{parsed.kind === 'pubky' && pubkyRead.looking && (
+					<div className="wallet-meta">Reading {pubkyRead.who}'s payment details…</div>
+				)}
+				{parsed.kind === 'pubky' && pubkyRead.error && (
+					<div className="error-note" role="alert">
+						{pubkyRead.error}
+					</div>
 				)}
 				{decoded && !lnurlPanel && (
 					<>

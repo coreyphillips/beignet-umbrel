@@ -1441,6 +1441,99 @@ function demoLnurl(w, action, body) {
 	throw err(`Unknown demo endpoint lnurl/${action}`, 'NOT_FOUND');
 }
 
+/*
+ * Paykit in the demo. Each wallet has a pubky made from its id; publishing
+ * mints the offer, address and direct funding request through the demo
+ * daemon, so another demo wallet that looks the pubky up pays what is really
+ * there. Any other pubky answers with a made-up payee's offer and address.
+ */
+const demoPaykitState = new Map();
+const ZB32 = 'ybndrfg8ejkmcpqxot1uwisza345h769';
+
+function demoPubky(id) {
+	let h = 2166136261;
+	let out = '';
+	for (let i = 0; out.length < 52; i++) {
+		h ^= (id.charCodeAt(i % id.length) + i) & 0xff;
+		h = Math.imul(h, 16777619) >>> 0;
+		out += ZB32[h & 31];
+	}
+	return out;
+}
+
+function demoPaykitStatus(w) {
+	const st = demoPaykitState.get(w.id) || {};
+	const ready = !!(w.lfbw && w.lfbw.enabled && w.lfbw.setup === 'ready' && !w.onchainOnly);
+	return {
+		pubky: demoPubky(w.id),
+		publishedAt: st.publishedAt || null,
+		published: st.published || [],
+		autoRefresh: !!st.autoRefresh,
+		lastError: null,
+		lastCheckAt: st.publishedAt || null,
+		nextCheckAt: st.autoRefresh ? Date.now() + 15 * 60 * 1000 : null,
+		directFunding: { engine: true, ready, expiresAt: st.df ? st.df.expiresAt : null }
+	};
+}
+
+async function demoPaykit(w, sub, method, body) {
+	if (sub === 'paykit' && method === 'GET') return demoPaykitStatus(w);
+	if (sub === 'paykit' && method === 'PATCH') {
+		demoPaykitState.set(w.id, { ...(demoPaykitState.get(w.id) || {}), autoRefresh: !!body.autoRefresh });
+		return demoPaykitStatus(w);
+	}
+	if (sub === 'paykit/publish' && method === 'POST') {
+		if (w.status !== 'running') throw err('Start the wallet first: its payment details come from it.', 'WALLET_NOT_RUNNING');
+		const before = demoPaykitState.get(w.id) || {};
+		const published = [];
+		let offerId = null;
+		if (!w.onchainOnly) {
+			const offers = await walletRequest(w.id, '/offers', 'GET');
+			const offer = offers.find((o) => o.offerId === before.offerId) || (await walletRequest(w.id, '/offer/create', 'POST', { description: 'Paykit payment' }));
+			offerId = offer.offerId;
+			published.push({ identifier: 'btc-lightning-bolt12', value: offer.encoded });
+		}
+		const { address } = await walletRequest(w.id, '/address/new', 'POST', {});
+		published.push({ identifier: 'btc-bitcoin-p2wpkh', value: address });
+		let df = null;
+		if (demoPaykitStatus(w).directFunding.ready) {
+			const minted = await walletRequest(w.id, '/direct-funding/request', 'POST', { expirySecs: 604800 });
+			df = { paymentHash: minted.paymentHash, expiresAt: Date.now() + 7 * DAY };
+			published.push({ identifier: 'btc-bitcoin-bip21', value: `bitcoin:${address}?bgnq=${minted.request}` });
+		}
+		demoPaykitState.set(w.id, {
+			...before,
+			offerId,
+			df,
+			published,
+			publishedAt: Date.now(),
+			autoRefresh: before.publishedAt ? !!before.autoRefresh : true
+		});
+		return demoPaykitStatus(w);
+	}
+	if (sub === 'paykit/lookup' && method === 'POST') {
+		const pubky = String(body.pubky || '').trim().toLowerCase();
+		if (!/^[ybndrfg8ejkmcpqxot1uwisza345h769]{52}$/.test(pubky)) throw err('That is not a pubky.', 'PAYKIT_INVALID_PUBKY');
+		const owner = store.wallets.find((x) => demoPubky(x.id) === pubky);
+		if (owner) {
+			const st = demoPaykitState.get(owner.id);
+			return { pubky, endpoints: (st?.published || []).map((e) => ({ appId: 'beignet', ...e })) };
+		}
+		return {
+			pubky,
+			endpoints: [
+				{ appId: 'beignet', identifier: 'btc-lightning-bolt12', value: 'lno1' + hex(120) },
+				{ appId: 'beignet', identifier: 'btc-bitcoin-p2wpkh', value: demoAddress(w.network) },
+				{ appId: 'bitkit', identifier: 'usdt-tron-address', value: 'TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf' }
+			]
+		};
+	}
+	if (sub === 'paykit/phrase' && method === 'POST') {
+		return { pubky: demoPubky(w.id), phrase: seedOf(w.id).split(' ').slice(0, 12).join(' ') };
+	}
+	throw err(`Unknown demo endpoint ${sub}`, 'NOT_FOUND');
+}
+
 function err(message, code = 'DEMO') {
 	const e = new Error(message);
 	e.code = code;
@@ -1781,6 +1874,7 @@ function managerRequest(path, method, body) {
 			recoveryGuardians: store.settings.recoveryGuardians.slice(),
 			lastBackupAt: store.settings.lastBackupAt,
 			lfbwAvailable: true,
+			paykitDirectFundingAvailable: true,
 			jitQuoteAvailable: true,
 			offlineReceiveAvailable: true,
 			recoveryAutoApplyAvailable: true,
@@ -1940,6 +2034,7 @@ function managerRequest(path, method, body) {
 
 	if (sub === 'recovery-phrase' && method === 'POST') return { mnemonic: seedOf(w.id) };
 	if (sub && sub.startsWith('lnurl/') && method === 'POST') return demoLnurl(w, sub.slice('lnurl/'.length), body || {});
+	if (sub === 'paykit' || (sub && sub.startsWith('paykit/'))) return demoPaykit(w, sub, method, body || {});
 
 	if (!sub) {
 		if (method === 'GET') return publicRecord(w);
