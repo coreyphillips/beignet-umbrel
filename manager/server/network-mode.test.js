@@ -186,3 +186,64 @@ test('empty relay lists use defaults and hidden relay input cannot prevent disab
 		BEIGNET_IROH_RELAYS: 'https://relay.example/'
 	});
 });
+
+// Relay-only (beignet #1982): the switch that lets the Iroh link be handed
+// to someone else. It is one more key on the record's iroh block.
+test('Iroh relay-only is a boolean an engine has to support, set without resending the rest', () => {
+	const on = { available: true, relayOnlyAvailable: true };
+	assert.deepEqual(nm.normalizeIroh({ enabled: true, relayOnly: true }, on), { enabled: true, relayOnly: true });
+	assert.deepEqual(nm.normalizeIroh({ enabled: true, relayOnly: false }, on), { enabled: true });
+	assert.deepEqual(nm.normalizeIroh({ enabled: true }, on), { enabled: true });
+	// The switch beside the link sends this key alone: the listener and its
+	// relays stay as they were.
+	const existing = { enabled: true, relays: ['https://relay.example/'] };
+	assert.deepEqual(nm.normalizeIroh({ relayOnly: true }, { ...on, existing }), { ...existing, relayOnly: true });
+	assert.deepEqual(nm.normalizeIroh({ relayOnly: false }, { ...on, existing: { ...existing, relayOnly: true } }), existing);
+	for (const relayOnly of ['true', 1, null]) {
+		assert.throws(() => nm.normalizeIroh({ enabled: true, relayOnly }, on), { code: 'BAD_IROH' });
+	}
+	assert.throws(() => nm.normalizeIroh({ enabled: true, relayOnly: true }, { available: true }), { code: 'IROH_RELAY_ONLY_UNSUPPORTED' });
+	// Turning it off needs nothing of the engine.
+	assert.deepEqual(nm.normalizeIroh({ relayOnly: false }, { available: true, existing: { enabled: true, relayOnly: true } }), { enabled: true });
+});
+
+test('relay-only survives the edits that do not name it, Iroh going off and a parked wallet', () => {
+	const on = { available: true, relayOnlyAvailable: true };
+	const existing = { enabled: true, relayOnly: true };
+	assert.deepEqual(nm.normalizeIroh(undefined, { ...on, existing }), existing);
+	// The Edit dialog sends enabled and relays and nothing else.
+	assert.deepEqual(nm.normalizeIroh({ enabled: true, relays: null }, { ...on, existing }), existing);
+	assert.deepEqual(
+		nm.normalizeIroh({ enabled: true, relays: ['https://relay.example/'] }, { ...on, existing }),
+		{ enabled: true, relays: ['https://relay.example/'], relayOnly: true }
+	);
+	// A link that went out relay-only does not come back with direct paths
+	// because Iroh was switched off and on again.
+	const off = nm.normalizeIroh({ enabled: false }, { ...on, existing });
+	assert.deepEqual(off, { enabled: false, relayOnly: true });
+	assert.deepEqual(nm.normalizeIroh({ enabled: true, relays: null }, { ...on, existing: off }), existing);
+	assert.deepEqual(nm.normalizeIroh(undefined, { ...on, existing, onchainOnly: true }), { enabled: false, relayOnly: true });
+	// An engine without the switch does not refuse an edit that leaves it alone.
+	assert.deepEqual(nm.normalizeIroh({ enabled: true, relays: null }, { available: true, existing }), existing);
+});
+
+test('a relay-only wallet starts Iroh with the switch, or not at all', () => {
+	assert.deepEqual(nm.irohEnv({ iroh: { enabled: true, relayOnly: true } }, true, true), {
+		BEIGNET_IROH: 'true',
+		BEIGNET_IROH_DISCOVERY: 'true',
+		BEIGNET_IROH_RELAY_ONLY: 'true'
+	});
+	assert.deepEqual(nm.irohEnv({ iroh: { enabled: true, relays: ['https://relay.example/'], relayOnly: true } }, true, true), {
+		BEIGNET_IROH: 'true',
+		BEIGNET_IROH_DISCOVERY: 'false',
+		BEIGNET_IROH_RELAYS: 'https://relay.example/',
+		BEIGNET_IROH_RELAY_ONLY: 'true'
+	});
+	assert.equal(nm.irohEnv({ iroh: { enabled: true } }, true, true).BEIGNET_IROH_RELAY_ONLY, undefined);
+	// An engine that cannot hold the endpoint on the relay gets no listener:
+	// the old kind would offer direct paths on a link handed out as private.
+	assert.deepEqual(nm.irohEnv({ iroh: { enabled: true, relayOnly: true } }, true, false), {});
+	assert.deepEqual(nm.irohEnv({ iroh: { enabled: true, relayOnly: true } }, true), {});
+	assert.deepEqual(nm.irohEnv({ iroh: { enabled: false, relayOnly: true } }, true, true), {});
+	assert.deepEqual(nm.irohEnv({ onchainOnly: true, iroh: { enabled: true, relayOnly: true } }, true, true), {});
+});

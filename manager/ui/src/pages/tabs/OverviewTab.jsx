@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
+import { manager } from '../../api.js';
+import { useToast } from '../../components/Toast.jsx';
 import {
 	Badge,
 	Button,
 	Card,
 	CopyText,
 	Help,
+	Modal,
 	QR,
 	Stat,
 	StatAmount,
@@ -19,7 +22,7 @@ import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
 import { nodeUris } from '../../lib/node-uris.js';
 import { liquiditySendableSats } from '../../lib/sendable.js';
 
-export default function OverviewTab({ id, api, info, health, recovery, rec, tick, config }) {
+export default function OverviewTab({ id, api, info, health, recovery, rec, tick, bump, config }) {
 	// A liquidity provider fronts its own coins for lightning-first wallets;
 	// what it is willing to front and what it has committed is the one figure
 	// its owner cannot see anywhere else (GET /jit/status, beignet 0.10+).
@@ -271,7 +274,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 				</Card>
 
 
-				{!onchainOnly && <ConnectCard info={info} rec={rec} />}
+				{!onchainOnly && <ConnectCard info={info} rec={rec} config={config} bump={bump} />}
 			</div>
 		</div>
 	);
@@ -288,46 +291,149 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
  * The first way that has an address is shown until the reader picks another.
  * Every way with an address comes with a QR code of it, so a phone wallet can
  * scan the node URI instead of having it typed or pasted across.
+ *
+ * The Iroh phone link carries its own switch, "Relay only" (beignet #1982),
+ * here where the link is copied: whether the link can leave the owner's
+ * hands is decided at the moment of handing it out. Changing it restarts
+ * the wallet, so the change is confirmed first.
  */
-function ConnectCard({ info, rec }) {
+function ConnectCard({ info, rec, config, bump }) {
+	const toast = useToast();
 	const [picked, setPicked] = useState(null);
-	const ways = nodeUris({ nodeId: info?.nodeId, rec, info, lanHost: window.location.hostname });
-	const first = (ways.find((w) => w.uri) || ways[0]).key;
+	// The relay-only value being confirmed, or null with no dialog open.
+	const [asking, setAsking] = useState(null);
+	const [busy, setBusy] = useState(false);
+	const relayOnlyAvailable = !!config?.irohRelayOnlyAvailable;
+	const ways = nodeUris({ nodeId: info?.nodeId, rec, info, lanHost: window.location.hostname, relayOnlyAvailable });
+	// Open on the first way that has a link, except that a relay-only Iroh link
+	// on its way up (about twelve seconds after each start) keeps its place:
+	// the page remounts this card when a wallet restarts, and opening on
+	// another way would hide the switch that was just confirmed.
+	const first = (ways.find((w) => w.pending) || ways.find((w) => w.uri) || ways[0]).key;
 	const key = picked && ways.some((w) => w.key === picked) ? picked : first;
 	const way = ways.find((w) => w.key === key);
+	const relayOnly = rec?.iroh?.relayOnly === true;
+	const customRelays = !!rec?.iroh?.relays?.length;
+
+	const setRelayOnly = async (next) => {
+		setBusy(true);
+		try {
+			await manager.updateWallet(rec.id, { iroh: { relayOnly: next } });
+			toast(next ? 'Relay only is on. The wallet is restarting.' : 'Relay only is off. The wallet is restarting.', 'success');
+			setAsking(null);
+			bump?.();
+		} catch (e) {
+			toast(e.message, 'error');
+		} finally {
+			setBusy(false);
+		}
+	};
 
 	return (
-		<Card
-			title="Connect to this node"
-			help={`${ways.some((item) => item.key === 'iroh') ? "The Iroh phone link is for your own phone. Your phone and relay can see this Umbrel's IP, including in Tor mode. Defaults also contact n0 discovery; custom relays disable discovery. " : ''}Each other way in follows this wallet's network mode: its public address in Clearnet and Hybrid, Tor in Tor and Hybrid, and your home network in every mode. Forward the public port on your router for internet peers.`}
-		>
-			<div style={{ display: 'flex', gap: 6, marginBottom: 12 }} data-testid="connect-ways">
-				{ways.map((w) => (
-					<Button
-						key={w.key}
-						className="sm"
-						style={{ flex: 1 }}
-						variant={w.key === key ? 'primary' : 'ghost'}
-						onClick={() => setPicked(w.key)}
-					>
-						{w.label}
-					</Button>
-				))}
-			</div>
-			{way.uri ? (
-				<>
-					<CopyText value={way.uri} />
-					<div style={{ marginTop: 12, textAlign: 'center' }}>
-						<QR value={way.uri} />
+		<>
+			<Card
+				title="Connect to this node"
+				help={`${ways.some((item) => item.key === 'iroh') ? "The Iroh phone link is for your own phone unless Relay only is on. Without it, your phone and the relay can see this Umbrel's IP, including in Tor mode. With it, only the relay can. Defaults also contact n0 discovery; custom relays disable discovery. " : ''}Each other way in follows this wallet's network mode: its public address in Clearnet and Hybrid, Tor in Tor and Hybrid, and your home network in every mode. Forward the public port on your router for internet peers.`}
+			>
+				<div style={{ display: 'flex', gap: 6, marginBottom: 12 }} data-testid="connect-ways">
+					{ways.map((w) => (
+						<Button
+							key={w.key}
+							className="sm"
+							style={{ flex: 1 }}
+							variant={w.key === key ? 'primary' : 'ghost'}
+							onClick={() => setPicked(w.key)}
+						>
+							{w.label}
+						</Button>
+					))}
+				</div>
+				{way.uri ? (
+					<>
+						<CopyText value={way.uri} />
+						<div style={{ marginTop: 12, textAlign: 'center' }}>
+							<QR value={way.uri} />
+						</div>
+					</>
+				) : (
+					<div className="empty">Not available yet.</div>
+				)}
+				<span className="field-hint" style={{ display: 'block', marginTop: 8 }} data-testid="connect-hint">
+					{way.hint}
+				</span>
+				{way.key === 'iroh' && (relayOnlyAvailable || relayOnly) && (
+					<label className="checkbox field" style={{ marginTop: 12, marginBottom: 0 }}>
+						<input
+							type="checkbox"
+							data-testid="iroh-relay-only"
+							checked={relayOnly}
+							disabled={busy || (!relayOnlyAvailable && !relayOnly)}
+							onChange={(e) => setAsking(e.target.checked)}
+						/>
+						Relay only
+						{info?.irohRelayOnly === true && info.irohRelayOnlyMode && (
+							<span className="wallet-meta" data-testid="iroh-relay-only-mode" style={{ marginLeft: 8 }}>
+								({info.irohRelayOnlyMode})
+							</span>
+						)}
+						<Help>
+							Keeps every connection made through this link on the relay, so the link can be handed
+							to someone else: whoever holds it cannot learn this Umbrel&apos;s IP address from it.
+							The relay&apos;s operator still sees the address. Without Relay only a phone connects
+							directly when it can, which is a little faster and shows the phone this Umbrel&apos;s
+							IP address. Changing this restarts the wallet.
+						</Help>
+					</label>
+				)}
+			</Card>
+			{/* Beside the card, not inside it: a card's own layer would pin the overlay to the card. */}
+			{asking !== null && (
+				<Modal title={asking ? 'Turn on Relay only' : 'Turn off Relay only'} onClose={() => !busy && setAsking(null)}>
+					{asking ? (
+						<>
+							<p className="wallet-meta">
+								Every connection made through the Iroh phone link will stay on the relay. Whoever
+								holds the link cannot learn this Umbrel&apos;s IP address from it, so it can be
+								handed to someone else. In testing a payment took about 80 ms longer this way.
+							</p>
+							<ul className="wallet-meta" data-testid="iroh-relay-only-notes">
+								<li>
+									The relay&apos;s operator still sees this Umbrel&apos;s IP address.{' '}
+									{customRelays ? 'That is whoever runs your custom relays.' : 'With the default relays that is n0.'}
+								</li>
+								<li>
+									It does not take an address back. A phone that connected before keeps the address
+									it learned until its app is restarted.
+								</li>
+								<li>
+									If your router opens a port for the link, the link switches itself off instead of
+									offering that address, and this card says why.
+								</li>
+								<li>The link comes up about 12 seconds later after each restart.</li>
+							</ul>
+						</>
+					) : (
+						<p className="wallet-meta">
+							Phones will connect directly when they can. That is a little faster, and anyone who
+							holds the Iroh phone link can then learn this Umbrel&apos;s IP address. Turn this off
+							only if the link never left your own phone.
+						</p>
+					)}
+					<div className="info-note" style={{ marginBottom: 12 }}>This restarts the wallet.</div>
+					<div className="center-actions">
+						<Button
+							variant={asking ? 'primary' : 'danger'}
+							busy={busy}
+							data-testid="iroh-relay-only-confirm"
+							onClick={() => setRelayOnly(asking)}
+						>
+							{asking ? 'Turn on and restart' : 'Turn off and restart'}
+						</Button>
+						<Button disabled={busy} onClick={() => setAsking(null)}>Cancel</Button>
 					</div>
-				</>
-			) : (
-				<div className="empty">Not available yet.</div>
+				</Modal>
 			)}
-			<span className="field-hint" style={{ display: 'block', marginTop: 8 }} data-testid="connect-hint">
-				{way.hint}
-			</span>
-		</Card>
+		</>
 	);
 }
 

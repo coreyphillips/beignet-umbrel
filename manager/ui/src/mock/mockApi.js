@@ -1868,6 +1868,7 @@ function managerRequest(path, method, body) {
 			onionAvailable: true,
 			torProxyScopeAvailable: true,
 			irohAvailable: true,
+			irohRelayOnlyAvailable: true,
 			electrumTlsVerifyAvailable: true,
 			engineVersion: '0.12.0',
 			recoveryAvailable: true,

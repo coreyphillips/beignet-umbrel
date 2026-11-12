@@ -409,3 +409,20 @@ test('Iroh is isolated per wallet, independent of network mode and never enabled
 	manager.irohSupported = false;
 	assert.equal(manager._daemonEnv(rec({ iroh: { enabled: true } }), PATHS, 'seed words', 'token').BEIGNET_IROH, undefined);
 });
+
+test('a relay-only wallet is started with the switch, and with no Iroh at all on an engine without it', () => {
+	const manager = bareManager();
+	manager.irohSupported = true;
+	manager.irohRelayOnlySupported = true;
+	const relayOnly = rec({ iroh: { enabled: true, relayOnly: true } });
+	const env = manager._daemonEnv(relayOnly, PATHS, 'seed words', 'token');
+	assert.equal(env.BEIGNET_IROH, 'true');
+	assert.equal(env.BEIGNET_IROH_RELAY_ONLY, 'true');
+	assert.equal(manager._daemonEnv(rec({ iroh: { enabled: true } }), PATHS, 'seed words', 'token').BEIGNET_IROH_RELAY_ONLY, undefined);
+	manager.irohRelayOnlySupported = false;
+	const old = manager._daemonEnv(relayOnly, PATHS, 'seed words', 'token');
+	assert.equal(old.BEIGNET_IROH, undefined);
+	assert.equal(old.BEIGNET_IROH_RELAY_ONLY, undefined);
+	// A wallet that never asked for relay-only keeps its listener there.
+	assert.equal(manager._daemonEnv(rec({ iroh: { enabled: true } }), PATHS, 'seed words', 'token').BEIGNET_IROH, 'true');
+});

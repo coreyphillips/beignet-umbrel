@@ -9,7 +9,7 @@ import { nodeNames } from '../../lib/node-names.js';
 import { nodeUris } from '../../lib/node-uris.js';
 import PeerName from '../../components/PeerName.jsx';
 
-export default function PeersTab({ id, api, info, rec, tick, bump }) {
+export default function PeersTab({ id, api, info, rec, tick, bump, config }) {
 	const toast = useToast();
 	const { data: peers, refresh } = usePoll(
 		async () => {
@@ -96,11 +96,11 @@ export default function PeersTab({ id, api, info, rec, tick, bump }) {
 					</span>
 				</div>
 
-			{nodeUris({ nodeId: info?.nodeId, rec, info, lanHost: window.location.hostname })
+			{nodeUris({ nodeId: info?.nodeId, rec, info, lanHost: window.location.hostname, relayOnlyAvailable: !!config?.irohRelayOnlyAvailable })
 				.filter((way) => way.key !== 'local' && way.uri)
 				.map((way) => (
 					<div className="field" key={way.key}>
-						<span className="field-label">{way.key === 'iroh' ? 'Iroh phone link (pair only with your own phone)' : `${way.label} connection URI (share for inbound channels)`}</span>
+						<span className="field-label">{way.key === 'iroh' ? (way.relayOnly ? 'Iroh phone link (relay only)' : 'Iroh phone link (pair only with your own phone)') : `${way.label} connection URI (share for inbound channels)`}</span>
 						<CopyText value={way.uri} />
 						<span className="field-hint">{way.hint}</span>
 					</div>

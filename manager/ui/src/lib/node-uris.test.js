@@ -73,3 +73,85 @@ test('Iroh pairing is opt-in and independent of announcement and routing mode', 
 	}
 	assert.equal(nodeUris({ nodeId: NODE, rec: {}, info }).some((w) => w.key === 'iroh'), false);
 });
+
+// Relay-only (beignet #1982): the link is called private only once the
+// running daemon reports the mode, and is held back in every state where it
+// might not be.
+test('a relay-only Iroh link says who still sees the address, and is held back until the daemon reports the mode', () => {
+	const uri = `${NODE}@iroh:${'a'.repeat(64)}?relay=https%3A%2F%2Frelay.example%2F`;
+	const rec = { networkMode: 'tor', announce: false, iroh: { enabled: true, relayOnly: true } };
+	const iroh = (args) => nodeUris({ nodeId: NODE, rec, relayOnlyAvailable: true, ...args })[0];
+
+	const live = iroh({ info: { irohAvailable: true, irohUri: uri, irohRelayOnly: true, irohRelayOnlyMode: 'loopback-pin' } });
+	assert.equal(live.uri, uri);
+	assert.equal(live.relayOnly, true);
+	assert.match(live.hint, /cannot learn this Umbrel's IP address/);
+	assert.match(live.hint, /relay's operator still sees it/);
+	assert.match(live.hint, /n0/);
+	assert.doesNotMatch(live.hint, /Your phone and the relay can see/);
+
+	// Starting: nothing to show yet, and the wait is explained.
+	const starting = iroh({ info: { irohAvailable: true } });
+	assert.equal(starting.uri, null);
+	assert.match(starting.hint, /about 12 seconds/);
+	assert.equal(starting.pending, true, 'on its way, so the card keeps its place');
+
+	// The record says relay-only and the daemon answering is not in that mode
+	// (the one from before the restart): no link is shown as private.
+	const stale = iroh({ info: { irohAvailable: true, irohUri: uri } });
+	assert.equal(stale.uri, null);
+	assert.match(stale.hint, /has not started with it yet/);
+	assert.equal(stale.pending, true);
+
+	// The engine closed the endpoint because an address appeared.
+	const closed = iroh({ info: { irohAvailable: true, irohListenError: { message: 'Relay-only Iroh endpoint closed: a routable address appeared' } } });
+	assert.equal(closed.uri, null);
+	assert.match(closed.hint, /routable address appeared/);
+	// Off, not on its way: neither this nor a live link is pending.
+	assert.equal(closed.pending, undefined);
+	assert.equal(live.pending, undefined);
+
+	// An engine without the switch: the manager starts no listener for it.
+	const old = iroh({ relayOnlyAvailable: false, info: { irohAvailable: true } });
+	assert.equal(old.uri, null);
+	assert.match(old.hint, /bundled engine cannot provide it/);
+});
+
+test('a relay-only link names custom relays and warns beside an announced public address', () => {
+	const uri = `${NODE}@iroh:${'a'.repeat(64)}?relay=https%3A%2F%2Frelay.example%2F`;
+	const info = { irohAvailable: true, irohUri: uri, irohRelayOnly: true };
+	const custom = nodeUris({
+		nodeId: NODE,
+		rec: { networkMode: 'tor', iroh: { enabled: true, relayOnly: true, relays: ['https://relay.example/'] } },
+		info,
+		relayOnlyAvailable: true
+	})[0];
+	assert.match(custom.hint, /Custom relays disable n0 discovery/);
+	assert.doesNotMatch(custom.hint, /that is n0/);
+	assert.doesNotMatch(custom.hint, /announces its public address/);
+
+	const announced = nodeUris({
+		nodeId: NODE,
+		rec: { networkMode: 'hybrid', announce: true, publicHost: '203.0.113.4', publicAddress: '203.0.113.4:19102', iroh: { enabled: true, relayOnly: true } },
+		info,
+		relayOnlyAvailable: true
+	})[0];
+	assert.equal(announced.uri, uri);
+	assert.match(announced.hint, /announces its public address/);
+	// A wallet that holds a public address and does not announce it has nothing to look up.
+	const quiet = nodeUris({
+		nodeId: NODE,
+		rec: { networkMode: 'hybrid', announce: false, publicHost: '203.0.113.4', publicAddress: '203.0.113.4:19102', iroh: { enabled: true, relayOnly: true } },
+		info,
+		relayOnlyAvailable: true
+	})[0];
+	assert.doesNotMatch(quiet.hint, /announces its public address/);
+});
+
+test('without relay-only the Iroh link reads as before and carries no relay-only mark', () => {
+	const uri = `${NODE}@iroh:${'a'.repeat(64)}?relay=https%3A%2F%2Frelay.example%2F`;
+	const way = nodeUris({ nodeId: NODE, rec: { networkMode: 'tor', iroh: { enabled: true } }, info: { irohAvailable: true, irohUri: uri }, relayOnlyAvailable: true })[0];
+	assert.equal(way.uri, uri);
+	assert.equal(way.relayOnly, false);
+	assert.match(way.hint, /Your phone and the relay can see this Umbrel's IP address/);
+});

@@ -185,15 +185,26 @@ function validateNetworkChoice({ mode, publicHost, onchainOnly } = {}) {
 	}
 }
 
-/** Iroh is an opt-in listener independent of the routing mode. */
-function normalizeIroh(input, { existing, available = false, onchainOnly = false } = {}) {
+/**
+ * Iroh is an opt-in listener independent of the routing mode. `relayOnly`
+ * keeps every connection on the relay, so the link can be handed to someone
+ * else (beignet #1982). It is kept while Iroh is off: a link that went out
+ * relay-only must not come back with direct paths when Iroh is switched on
+ * again.
+ */
+function normalizeIroh(input, { existing, available = false, relayOnlyAvailable = false, onchainOnly = false } = {}) {
 	const value = input === undefined ? (existing || { enabled: false }) : input;
 	const bad = (message) => httpError(400, 'BAD_IROH', message);
 	if (!value || typeof value !== 'object' || Array.isArray(value)) throw bad('Iroh settings must be an object.');
 	if (value.enabled !== undefined && typeof value.enabled !== 'boolean') throw bad('Iroh enabled must be true or false.');
+	if (value.relayOnly !== undefined && typeof value.relayOnly !== 'boolean') throw bad('Iroh relay only must be true or false.');
 	const enabled = !onchainOnly && (value.enabled ?? existing?.enabled ?? false);
 	if (enabled && !available && input !== undefined) {
 		throw httpError(400, 'IROH_UNSUPPORTED', 'The bundled engine does not support Iroh.');
+	}
+	const relayOnly = value.relayOnly ?? existing?.relayOnly ?? false;
+	if (input?.relayOnly === true && !relayOnlyAvailable) {
+		throw httpError(400, 'IROH_RELAY_ONLY_UNSUPPORTED', 'The bundled engine cannot keep the Iroh link on the relay.');
 	}
 	const relays = !enabled || value.relays === undefined ? existing?.relays : value.relays === null ? undefined : value.relays;
 	if (relays !== undefined && (!Array.isArray(relays) || relays.length > 16)) throw bad('Provide at most 16 relay URLs.');
@@ -206,15 +217,23 @@ function normalizeIroh(input, { existing, available = false, onchainOnly = false
 		}
 		return url.href;
 	});
-	return { enabled, ...(normalized?.length ? { relays: [...new Set(normalized)] } : {}) };
+	return { enabled, ...(normalized?.length ? { relays: [...new Set(normalized)] } : {}), ...(relayOnly ? { relayOnly: true } : {}) };
 }
 
-function irohEnv(rec, available) {
+/**
+ * A wallet set to relay-only gets no Iroh listener at all from an engine
+ * that cannot hold the endpoint on the relay: starting it the old way would
+ * offer direct paths on a link its owner handed out as private.
+ */
+function irohEnv(rec, available, relayOnlyAvailable = false) {
 	if (!available || rec.onchainOnly || rec.iroh?.enabled !== true) return {};
+	const relayOnly = rec.iroh.relayOnly === true;
+	if (relayOnly && !relayOnlyAvailable) return {};
 	return {
 		BEIGNET_IROH: 'true',
 		BEIGNET_IROH_DISCOVERY: rec.iroh.relays?.length ? 'false' : 'true',
-		...(rec.iroh.relays?.length ? { BEIGNET_IROH_RELAYS: rec.iroh.relays.join(',') } : {})
+		...(rec.iroh.relays?.length ? { BEIGNET_IROH_RELAYS: rec.iroh.relays.join(',') } : {}),
+		...(relayOnly ? { BEIGNET_IROH_RELAY_ONLY: 'true' } : {})
 	};
 }
 

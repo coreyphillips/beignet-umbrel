@@ -22,22 +22,71 @@ export function hostForUri(host) {
 const ANNOUNCE_OFF = 'Announcing is off for this wallet. Turn it on with Edit above.';
 
 /**
+ * The Iroh phone link and what it lets others see. Without relay-only the
+ * phone connects directly when it can, so the link is for the owner's own
+ * phone. With relay-only (beignet #1982) every connection stays on the
+ * relay and the link can be handed out, which this only says once the
+ * running daemon reports the mode: a link is never shown as private on the
+ * record's word alone.
+ */
+function irohWay({ rec, info, relayOnlyAvailable }) {
+	const custom = !!rec.iroh.relays?.length;
+	const relayOnly = rec.iroh.relayOnly === true;
+	const way = { key: 'iroh', label: 'Iroh phone link', uri: info.irohUri || null, relayOnly };
+	if (!relayOnly) {
+		return {
+			...way,
+			hint: info.irohListenError?.message || (way.uri
+				? `Scan with Chicory to pair your own phone. Your phone and the relay can see this Umbrel's IP address. ${custom ? 'Custom relays disable n0 discovery.' : 'n0 discovery also sees your IP and publishes the endpoint record.'}`
+				: 'Starting the Iroh listener. Its address will appear when ready.')
+		};
+	}
+	if (relayOnlyAvailable === false) {
+		return {
+			...way,
+			uri: null,
+			hint: 'Relay only is set for this link and the bundled engine cannot provide it, so the link is off instead of being offered with direct connections.'
+		};
+	}
+	if (info.irohListenError?.message) return { ...way, uri: null, hint: info.irohListenError.message };
+	// `pending` marks a link that is on its way rather than off: the card
+	// stays on it meanwhile instead of opening on another way and jumping back.
+	if (!way.uri) {
+		return {
+			...way,
+			pending: true,
+			hint: 'Starting the Iroh listener. With relay only on, the link appears after a check of about 12 seconds that no address of this Umbrel is offered.'
+		};
+	}
+	if (info.irohRelayOnly !== true) {
+		return { ...way, uri: null, pending: true, hint: 'Relay only is set and the wallet has not started with it yet. The link appears once it has.' };
+	}
+	const announced = !!rec.announce && !!rec.publicAddress;
+	return {
+		...way,
+		hint:
+			"Scan with Chicory to pair a phone. Relay only is on: every connection stays on the relay, so whoever holds this link cannot learn this Umbrel's IP address from it. " +
+			(custom
+				? "The relay's operator still sees it. Custom relays disable n0 discovery."
+				: "The relay's operator still sees it: with the default relays that is n0, whose discovery also sees it and publishes the relay only.") +
+			(announced
+				? ' This wallet also announces its public address, and the link carries the node id that address is listed under. Turn announcing off, or use Tor mode, before handing the link out.'
+				: '')
+	};
+}
+
+/**
  * The private Iroh phone link, followed by the ways other peers can reach this node: the
  * public address (Clearnet and Hybrid), the Tor address (Tor and Hybrid),
  * and the address on the home network, which every wallet has because the
  * app publishes the wallet ports on the Umbrel. `uri` is null with a `hint`
  * saying why when a way is not there yet.
  */
-export function nodeUris({ nodeId, rec, lanHost, info }) {
+export function nodeUris({ nodeId, rec, lanHost, info, relayOnlyAvailable }) {
 	const mode = modeOf(rec);
 	const out = [];
 	if (rec?.iroh?.enabled && !rec?.onchainOnly && info?.irohAvailable) {
-		out.push({
-			key: 'iroh', label: 'Iroh phone link', uri: info.irohUri || null,
-			hint: info.irohListenError?.message || (info.irohUri
-				? `Scan with Chicory to pair your own phone. Your phone and the relay can see this Umbrel's IP address. ${rec.iroh.relays?.length ? "Custom relays disable n0 discovery." : "n0 discovery also sees your IP and publishes the endpoint record."}`
-				: 'Starting the Iroh listener. Its address will appear when ready.')
-		});
+		out.push(irohWay({ rec, info, relayOnlyAvailable }));
 	}
 	if (usesPublic(mode)) {
 		let hint;

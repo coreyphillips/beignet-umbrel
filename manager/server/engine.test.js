@@ -196,6 +196,30 @@ test('Iroh requires implemented listener and configuration support', () => {
 	} finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('Iroh relay-only needs Iroh, the setting and the mode /info reports (beignet #1982)', () => {
+	const { irohAvailable, irohRelayOnlyAvailable } = require('./engine');
+	const { root, bin } = fakeInstall('0.39.0');
+	const dir = path.dirname(bin);
+	try {
+		assert.equal(irohRelayOnlyAvailable(bin), false);
+		// The setting without an Iroh listener to apply it to is not support.
+		fs.writeFileSync(path.join(dir, 'config.js'), 'BEIGNET_IROH BEIGNET_IROH_RELAY_ONLY');
+		fs.writeFileSync(path.join(dir, 'beignet-node.js'), 'irohRelayOnlyMode');
+		assert.equal(irohRelayOnlyAvailable(bin), false);
+		// An engine with Iroh and no relay-only switch (0.38.x).
+		fs.writeFileSync(path.join(dir, 'config.js'), 'BEIGNET_IROH');
+		fs.writeFileSync(path.join(dir, 'iroh-config.js'), 'BEIGNET_IROH_RELAYS');
+		fs.writeFileSync(path.join(dir, 'beignet-node.js'), 'listenIroh( irohUri');
+		assert.equal(irohAvailable(bin), true);
+		assert.equal(irohRelayOnlyAvailable(bin), false);
+		fs.writeFileSync(path.join(dir, 'config.js'), 'BEIGNET_IROH BEIGNET_IROH_RELAY_ONLY');
+		assert.equal(irohRelayOnlyAvailable(bin), false);
+		fs.writeFileSync(path.join(dir, 'beignet-node.js'), 'listenIroh( irohUri irohRelayOnlyMode');
+		assert.equal(irohRelayOnlyAvailable(bin), true);
+	} finally { fs.rmSync(root, { recursive: true, force: true }); }
+	assert.equal(irohRelayOnlyAvailable(undefined), false);
+});
+
 test('Electrum certificate verification needs the env parser and the option wiring (beignet #1776)', () => {
 	const { electrumTlsVerifyAvailable } = require('./engine');
 	const { root, bin } = fakeInstall('0.31.0');

@@ -59,7 +59,8 @@ const {
 	offlineReceiveAvailable,
 	torProxyScopeAvailable,
 	electrumTlsVerifyAvailable,
-	irohAvailable
+	irohAvailable,
+	irohRelayOnlyAvailable
 } = require('./engine');
 const { normalizeElectrumTls, electrumTlsEnv } = require('./electrum-tls');
 const { electrumRequests, cachedProbe, discoverServers } = require('./electrum-probe');
@@ -216,6 +217,8 @@ class WalletManager {
 		// still reach onion peers through the app's Tor.
 		this.torProxyScopeSupported = torProxyScopeAvailable();
 		this.irohSupported = irohAvailable();
+		// Iroh held to the relay (beignet #1982, engine 0.39.0).
+		this.irohRelayOnlySupported = irohRelayOnlyAvailable();
 		// Electrum TLS certificate verification (beignet #1776, engine 0.31.0).
 		this.electrumTlsVerifySupported = electrumTlsVerifyAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
@@ -1008,6 +1011,10 @@ class WalletManager {
 		return this.irohSupported === true;
 	}
 
+	irohRelayOnlyAvailable() {
+		return this.irohSupported === true && this.irohRelayOnlySupported === true;
+	}
+
 	torProxyScopeAvailable() {
 		return this.torProxyScopeSupported === true;
 	}
@@ -1347,7 +1354,11 @@ class WalletManager {
 		const mode = netmode.requestedMode({ networkMode, tor }, netmode.DEFAULT_MODE);
 		const host = netmode.normalizePublicHost(publicHost);
 		netmode.validateNetworkChoice({ mode, publicHost: host, onchainOnly: !!onchainOnly });
-		const irohBlock = netmode.normalizeIroh(iroh, { available: this.irohAvailable(), onchainOnly: !!onchainOnly });
+		const irohBlock = netmode.normalizeIroh(iroh, {
+			available: this.irohAvailable(),
+			relayOnlyAvailable: this.irohRelayOnlyAvailable(),
+			onchainOnly: !!onchainOnly
+		});
 		const port = this._allocatePort();
 		const rec = {
 			id,
@@ -1490,7 +1501,12 @@ class WalletManager {
 		const nextMode = netmode.requestedMode({ networkMode, tor }, netmode.networkMode(rec));
 		const nextHost = publicHost !== undefined ? netmode.normalizePublicHost(publicHost) : rec.publicHost || '';
 		netmode.validateNetworkChoice({ mode: nextMode, publicHost: nextHost, onchainOnly: nextOnchainOnly });
-		const nextIroh = netmode.normalizeIroh(iroh, { existing: rec.iroh, available: this.irohAvailable(), onchainOnly: nextOnchainOnly });
+		const nextIroh = netmode.normalizeIroh(iroh, {
+			existing: rec.iroh,
+			available: this.irohAvailable(),
+			relayOnlyAvailable: this.irohRelayOnlyAvailable(),
+			onchainOnly: nextOnchainOnly
+		});
 		// The server is checked against the wallet's network only when it is
 		// actually being changed, so an edit to anything else goes through
 		// even if the server it already has is on the wrong chain or away.
@@ -1637,7 +1653,7 @@ class WalletManager {
 			publicHost: rec.publicHost,
 			publicPort: this.publicPort(rec)
 		});
-		Object.assign(env, netmode.irohEnv(rec, this.irohAvailable()));
+		Object.assign(env, netmode.irohEnv(rec, this.irohAvailable(), this.irohRelayOnlyAvailable()));
 		if (announced.length) env.BEIGNET_ANNOUNCE_ADDRESSES = announced.join(',');
 		// Channel backup (the Recovery Protocol). Off contributes nothing, so
 		// an engine that predates the feature sees the env it always saw. It
