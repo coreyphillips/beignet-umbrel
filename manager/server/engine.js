@@ -187,8 +187,20 @@ function irohAvailable(bin = process.env.BEIGNET_BIN) {
 		&& probe(bin, 'beignet-node.js', ['listenIroh(', 'irohUri']);
 }
 
+/**
+ * True when the engine behind `bin` can keep its Iroh endpoint on the relay
+ * (beignet #1982, engine 0.39.0): the setting, and the mode /info reports
+ * once an endpoint is bound that way.
+ */
+function irohRelayOnlyAvailable(bin = process.env.BEIGNET_BIN) {
+	return irohAvailable(bin)
+		&& probe(bin, 'config.js', ['BEIGNET_IROH_RELAY_ONLY'])
+		&& probe(bin, 'beignet-node.js', ['irohRelayOnlyMode']);
+}
+
 module.exports = {
 	irohAvailable,
+	irohRelayOnlyAvailable,
 	concurrentOfflineReceiveAvailable,
 
 	offlineReceiveAvailable,

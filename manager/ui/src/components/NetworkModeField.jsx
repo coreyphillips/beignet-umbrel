@@ -107,7 +107,7 @@ export default function NetworkModeField({
 					<label className="checkbox field">
 						<input type="checkbox" data-testid="iroh-enabled" checked={iroh} onChange={(e) => onIroh(e.target.checked)} />
 						Phone link over Iroh (experimental)
-						<Help>Iroh adds a phone connection without port forwarding. Your phone and the relay can see this Umbrel&apos;s IP address, including in Tor mode. Default relays also use n0 discovery, which sees this Umbrel&apos;s IP and publishes its endpoint record. Custom relays disable n0 discovery. Use it for a node you control. Other peers keep using the selected network mode. Iroh addresses are shared privately and never announced in Lightning gossip.</Help>
+						<Help>Iroh adds a phone connection without port forwarding. Your phone and the relay can see this Umbrel&apos;s IP address, including in Tor mode, so use it for a phone you control. To hand the link to someone else, turn on Relay only beside the link on the Overview tab: then only the relay sees the address. Default relays also use n0 discovery, which sees this Umbrel&apos;s IP and publishes its endpoint record. Custom relays disable n0 discovery. Other peers keep using the selected network mode. Iroh addresses are shared privately and never announced in Lightning gossip.</Help>
 					</label>
 					{iroh && (
 						<details className="field">

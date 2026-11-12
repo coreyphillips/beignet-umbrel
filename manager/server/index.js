@@ -179,6 +179,9 @@ async function main() {
 				// it the dashboard offers no verify switch.
 				electrumTlsVerifyAvailable: manager.electrumTlsVerifyAvailable(),
 				irohAvailable: manager.irohAvailable(),
+				// Iroh held to the relay (beignet #1982): without it the dashboard
+				// offers no relay-only switch beside the phone link.
+				irohRelayOnlyAvailable: manager.irohRelayOnlyAvailable(),
 				// Channel backup (the Recovery Protocol) needs an engine that
 				// carries its surface; older engines get no controls for it.
 				engineVersion: manager.engineVersion,

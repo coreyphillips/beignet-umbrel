@@ -740,7 +740,22 @@ env:
   # applies. The storage schema (20), the environment settings and the
   # runtime dependencies are unchanged, and the capability probes answer as
   # for 0.38.2.
-  BEIGNET_VERSION: "0.38.3"
+  # 0.39.0 can keep the Iroh endpoint on its relay (BEIGNET_IROH_RELAY_ONLY,
+  # coreyphillips/beignet#1982), so whoever dials the phone link never
+  # learns this node's address; /info reports irohRelayOnly and
+  # irohRelayOnlyMode, and the endpoint is watched for 12 seconds before it
+  # accepts anyone. The app's "Relay only" checkbox beside the link sets it,
+  # behind the new irohRelayOnlyAvailable probe in server/engine.js. In that
+  # mode an address taken from a peer's node_announcement is dialed through
+  # the proxy or not at all (#1981). WebSocket peers are now dialed through
+  # the Tor proxy as TCP peers are (#1995), and TCP peer sockets send
+  # without Nagle's delay (#1990). The release also carries the Porch relay
+  # (BEIGNET_PORCH_*, #1986 to #1988, #1996), which the app does not set.
+  # 0.38.4, skipped here, closes a peer that stops answering pings 60 s
+  # after the first one it left unanswered (#1977) and moves bitcoinjs-lib
+  # to 6.1.10 (#1978). The storage schema (20) is unchanged, and the other
+  # capability probes answer as for 0.38.3.
+  BEIGNET_VERSION: "0.39.0"
 
 jobs:
   build:
