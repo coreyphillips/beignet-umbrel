@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.39.0"
+version: "0.40.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,37 +30,38 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.38.3, and adds LNURL and Paykit to each wallet's Tools
-  tab. The Send tab looks the same, but now also takes Lightning addresses,
-  LNURLs and pubkys, and works out the rest.
+  Bundles beignet 0.39.0, and adds Relay only to the Iroh phone link.
 
 
-  LNURL: pay a Lightning address or an LNURL-pay link, pull sats from an
-  LNURL-withdraw link, and log in to sites that support LNURL-auth with a
-  key derived from the wallet's seed.
+  Relay only is a checkbox under the Iroh phone link in each wallet's
+  "Connect to this node" card. With it on, every connection made through
+  the link stays on the relay, so whoever holds the link cannot learn this
+  Umbrel's IP address from it and the link can be handed to someone else.
+  The relay's operator still sees the address, which is n0 with the default
+  relays. It is off by default, and turning it on or off restarts the
+  wallet.
 
 
-  Paykit: press Set payment details and the wallet publishes how to pay it
-  (a Lightning offer, an address and, for a lightning-first wallet, a direct
-  funding request) under a pubky that comes from its seed, so there's
-  nothing new to back up. Any other Beignet wallet can then pay that pubky
-  from the Send tab, by direct funding, Lightning or on-chain. Keep these up
-  to date publishes again when something changes, and Use in Pubky Ring
-  shows the phrase for importing the same pubky there. What a wallet
-  publishes is public, and there's no way to take it down from here yet.
+  What it costs: a payment takes about 80 ms longer, and the link comes up
+  about 12 seconds later after each restart. If your router opens a port
+  for the link, the link switches itself off instead of offering that
+  address, and the card says why. A phone that connected before you turned
+  it on keeps the address it learned until its app is restarted.
 
 
-  These are the only web requests the app makes on its own, and they follow
-  each wallet's network mode: a Tor wallet sends them through Umbrel's Tor
-  and fails rather than going direct when Tor is down.
+  Chicory 0.7.18 and Chicory Desktop 0.3.6 connect through such a link as
+  they are.
 
 
-  A primary can now pay its own lightning-first wallet's BOLT 12 offer,
-  which failed before.
+  Also from the engine: in Tor mode, peers reached over WebSocket are now
+  dialed through Tor as other peers are, and a peer that stops answering
+  pings is dropped after 60 seconds.
 
 
-  Going back to 0.38.2 keeps the wallet storage, which is unchanged.
-  Published Paykit details stay up but stop being refreshed.
+  Going back to 0.39.0 keeps the wallet storage, which is unchanged. That
+  version does not know Relay only and offers the same link with direct
+  connections again, so turn the Iroh phone link off before going back if
+  the link has been handed out.
 dependencies: []
 path: ""
 defaultUsername: ""
