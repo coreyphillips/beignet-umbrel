@@ -103,6 +103,11 @@ export default function PeersTab({ id, api, info, rec, tick, bump, config }) {
 						<span className="field-label">{way.key === 'iroh' ? (way.relayOnly ? 'Iroh phone link (relay only)' : 'Iroh phone link (pair only with your own phone)') : `${way.label} connection URI (share for inbound channels)`}</span>
 						<CopyText value={way.uri} />
 						<span className="field-hint">{way.hint}</span>
+						{way.warnings?.map((warning) => (
+							<div className="error-note" key={warning} style={{ marginTop: 10, marginBottom: 0 }} data-testid="peer-uri-warning">
+								{warning}
+							</div>
+						))}
 					</div>
 				))}
 			</Card>
