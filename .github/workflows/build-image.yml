@@ -755,7 +755,21 @@ env:
   # after the first one it left unanswered (#1977) and moves bitcoinjs-lib
   # to 6.1.10 (#1978). The storage schema (20) is unchanged, and the other
   # capability probes answer as for 0.38.3.
-  BEIGNET_VERSION: "0.39.0"
+  # 0.40.0 holds a relay-only wallet's own Iroh dials to its relays
+  # (coreyphillips/beignet#2050). Asked to dial someone else's iroh: address,
+  # such a wallet used to reach it through that peer's relay, which then saw
+  # this node's IP address. With discovery on, as the app runs it, a
+  # relay-only wallet now refuses every outbound Iroh dial: POST
+  # /peer/connect answers CONNECT_FAILED with the reason, and nothing is
+  # sent. The dashboard's connect form takes host and port only, so this is
+  # met through the daemon's API or CLI. Peers that connect in through the
+  # link, and a wallet without Relay only, are not affected. Where the engine
+  # cannot pin its IPv6 socket because the container has no ::1, the reason
+  # the card shows in place of the link now says how to put that right
+  # (#2051). The storage schema (20), the environment settings and the
+  # runtime dependencies are unchanged, and the capability probes answer as
+  # for 0.39.0.
+  BEIGNET_VERSION: "0.40.0"
 
 jobs:
   build:
