@@ -52,3 +52,46 @@ test('a connected phone wallet is named a private peer, next to a named node', a
 		await view.unmount();
 	}
 });
+
+// The relay-only Iroh link is copied from here too, so what still gives the
+// address away is boxed under it here as it is on the Overview card.
+test('a relay-only Iroh link carries its warnings on the Peers tab', async () => {
+	const NODE = '02' + '1'.repeat(64);
+	const uri = `${NODE}@iroh:${'b'.repeat(64)}?relay=https%3A%2F%2Frelay.example%2F`;
+	const api = {
+		get: async (path) => (path === '/peers' ? [] : path.startsWith('/node/uri') ? { uri: null } : null),
+		post: async () => ({})
+	};
+	const tab = (rec) =>
+		render(
+			(props) => createElement(ToastProvider, null, createElement(PeersTab, props)),
+			{
+				id: 'w1',
+				api,
+				info: { nodeId: NODE, irohAvailable: true, irohUri: uri, irohRelayOnly: true },
+				rec: { announce: false, iroh: { enabled: true, relayOnly: true }, ...rec },
+				config: { irohRelayOnlyAvailable: true },
+				tick: 0,
+				bump: () => {}
+			}
+		);
+	const warnings = (view) => view.$$('[data-testid="peer-uri-warning"]').map((el) => el.textContent);
+	const hybrid = await tab({ networkMode: 'hybrid' });
+	try {
+		await settle(50);
+		assert.match(hybrid.text(), /Iroh phone link \(relay only\)/);
+		const boxes = warnings(hybrid);
+		assert.equal(boxes.length, 1);
+		assert.match(boxes[0], /Hybrid mode/);
+	} finally {
+		await hybrid.unmount();
+	}
+	const tor = await tab({ networkMode: 'tor' });
+	try {
+		await settle(50);
+		assert.match(tor.text(), /Iroh phone link \(relay only\)/);
+		assert.deepEqual(warnings(tor), []);
+	} finally {
+		await tor.unmount();
+	}
+});
