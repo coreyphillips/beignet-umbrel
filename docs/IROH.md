@@ -23,6 +23,8 @@ How it behaves:
 - The checkbox shows the mode the engine reports in brackets. `loopback-pin` is what the bundled Iroh library allows today.
 - A payment took about 80 ms longer through the relay than over a direct path in the engine's test run.
 - The setting is kept when Iroh is switched off and on again, and in backups. On an engine older than 0.39.0 a wallet set to relay only gets no Iroh listener at all, instead of one that offers direct connections.
+- From Beignet 0.40.0 a wallet set to relay only does not dial out over Iroh. Asked through its API to connect to someone else's `iroh:` address, it refuses, because that peer's relay would see the Umbrel's IP address. The dashboard's connect form never makes such a dial, and peers that connect in through the link are not affected.
+- Relay only needs the IPv6 loopback address (`::1`) inside the app's container. Without it the engine serves no link and the card shows the reason, which from 0.40.0 names the missing address and the setting that restores it.
 
 Advanced settings accept comma-separated HTTP or HTTPS relay URLs. Blank uses n0's public relays. The defaults also contact n0 discovery, which sees the Umbrel's IP and publishes its signed endpoint record. Custom URLs replace the default relays and disable n0 discovery; share the URI containing the relay hint with your phone. The app does not run a relay container. Hosting a relay yourself needs a reachable server and its own network configuration.
 
