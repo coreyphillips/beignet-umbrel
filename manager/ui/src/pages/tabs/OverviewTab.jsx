@@ -361,6 +361,14 @@ function ConnectCard({ info, rec, config, bump }) {
 				<span className="field-hint" style={{ display: 'block', marginTop: 8 }} data-testid="connect-hint">
 					{way.hint}
 				</span>
+				{/* What still ties this wallet's node id to an address, each one
+				    its own box: a reason to hold the link back is not left at
+				    the tail of the hint. */}
+				{way.warnings?.map((warning) => (
+					<div className="error-note" key={warning} style={{ marginTop: 10, marginBottom: 0 }} data-testid="connect-warning">
+						{warning}
+					</div>
+				))}
 				{way.key === 'iroh' && (relayOnlyAvailable || relayOnly) && (
 					<label className="checkbox field" style={{ marginTop: 12, marginBottom: 0 }}>
 						<input
@@ -406,8 +414,18 @@ function ConnectCard({ info, rec, config, bump }) {
 									it learned until its app is restarted.
 								</li>
 								<li>
-									If your router opens a port for the link, the link switches itself off instead of
-									offering that address, and this card says why.
+									The link carries this wallet&apos;s Lightning node id. If that id was ever
+									announced with a public address, or this wallet&apos;s Lightning port can be
+									reached from the internet (a router forward, or IPv6), this Umbrel can be found
+									without the link&apos;s help.
+								</li>
+								<li>
+									In Clearnet and Hybrid mode, peers you connect to yourself still see this
+									Umbrel&apos;s IP address. Use Tor mode for a link you post publicly.
+								</li>
+								<li>
+									If your router opens a port for the link, the link switches itself off, and this
+									card says why.
 								</li>
 								<li>The link comes up about 12 seconds later after each restart.</li>
 							</ul>

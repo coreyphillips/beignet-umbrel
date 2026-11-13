@@ -61,18 +61,38 @@ function irohWay({ rec, info, relayOnlyAvailable }) {
 	if (info.irohRelayOnly !== true) {
 		return { ...way, uri: null, pending: true, hint: 'Relay only is set and the wallet has not started with it yet. The link appears once it has.' };
 	}
-	const announced = !!rec.announce && !!rec.publicAddress;
 	return {
 		...way,
 		hint:
 			"Scan with Chicory to pair a phone. Relay only is on: every connection stays on the relay, so whoever holds this link cannot learn this Umbrel's IP address from it. " +
 			(custom
 				? "The relay's operator still sees it. Custom relays disable n0 discovery."
-				: "The relay's operator still sees it: with the default relays that is n0, whose discovery also sees it and publishes the relay only.") +
-			(announced
-				? ' This wallet also announces its public address, and the link carries the node id that address is listed under. Turn announcing off, or use Tor mode, before handing the link out.'
-				: '')
+				: "The relay's operator still sees it: with the default relays that is n0, whose discovery also sees it and publishes the relay only."),
+		warnings: relayOnlyWarnings(rec)
 	};
+}
+
+/**
+ * What still gives this Umbrel's address away while the link itself does
+ * not. The link carries the wallet's Lightning node id, so anything that
+ * ties that id to an address undoes Relay only from outside Iroh. These are
+ * shown apart from the hint, as warnings: each one is a reason not to hand
+ * the link out yet, and the tail of a long hint is where nobody reads.
+ */
+function relayOnlyWarnings(rec) {
+	const out = [];
+	const mode = modeOf(rec);
+	if (rec.announce && rec.publicAddress) {
+		out.push(
+			'This wallet announces its public address, and the link carries the node id that address is listed under. Turn announcing off, or use Tor mode, before handing the link out.'
+		);
+	}
+	if (usesPublic(mode)) {
+		out.push(
+			`This wallet is in ${MODE_LABELS[mode]} mode: peers you connect to yourself, and peers it saved before Relay only was turned on, are dialed directly and see this Umbrel's IP address. Use Tor mode for a link you post publicly.`
+		);
+	}
+	return out;
 }
 
 /**

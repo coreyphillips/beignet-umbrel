@@ -648,6 +648,11 @@ test('turning Relay only on asks first, sends that key alone and refreshes the w
 		assert.match(notes, /relay's operator still sees this Umbrel's IP address/);
 		assert.match(notes, /that is n0/);
 		assert.match(notes, /does not take an address back/);
+		// What the switch does not cover is said before it is turned on: the
+		// node id in the link, and the peers a wallet dials directly.
+		assert.match(notes, /carries this wallet's Lightning node id/);
+		assert.match(notes, /reached from the internet/);
+		assert.match(notes, /Use Tor mode for a link you post publicly/);
 		assert.match(notes, /switches itself off/);
 		assert.match(notes, /12 seconds/);
 		assert.match(r.text(), /This restarts the wallet/);
@@ -699,6 +704,39 @@ test('a relay-only wallet shows the switch on with the mode the daemon reports, 
 		net.restore();
 		await r.unmount();
 	}
+});
+
+// Relay only covers Iroh, and the link carries the wallet's node id: what
+// still ties that id to an address is boxed under the link, one box each.
+test('a relay-only link warns, apart from its hint, about what still gives the address away', async () => {
+	const live = { irohRelayOnly: true, irohRelayOnlyMode: 'loopback-pin' };
+	const warnings = (r) => r.$$('[data-testid="connect-warning"]').map((el) => el.textContent);
+	const hybrid = irohProps({ relayOnly: true, info: live });
+	hybrid.rec = { ...hybrid.rec, networkMode: 'hybrid', announce: true, publicHost: '203.0.113.4', publicAddress: '203.0.113.4:19102', publicPort: 19102, listenPort: 9102 };
+	const r = await render(wrapped, hybrid);
+	try {
+		assert.ok(shown(r).includes(IROH_URI), 'the link is still offered');
+		const boxes = warnings(r);
+		assert.equal(boxes.length, 2);
+		assert.match(boxes[0], /announces its public address/);
+		assert.match(boxes[1], /Hybrid mode/);
+		assert.match(boxes[1], /Use Tor mode for a link you post publicly/);
+		assert.doesNotMatch(r.$('[data-testid="connect-hint"]').textContent, /announces its public address/);
+		assert.ok(r.$('[data-testid="connect-ways"]').parentElement.contains(r.$('[data-testid="connect-warning"]')), 'inside the Connect card');
+	} finally { await r.unmount(); }
+	// Tor mode with announcing off has nothing to warn about, and neither has
+	// a link that is not offered as private.
+	const tor = await render(wrapped, irohProps({ relayOnly: true, info: live }));
+	try {
+		assert.ok(shown(tor).includes(IROH_URI));
+		assert.deepEqual(warnings(tor), []);
+	} finally { await tor.unmount(); }
+	const direct = irohProps();
+	direct.rec = { ...direct.rec, networkMode: 'hybrid' };
+	const d = await render(wrapped, direct);
+	try {
+		assert.deepEqual(warnings(d), []);
+	} finally { await d.unmount(); }
 });
 
 test('a relay-only link is not shown while the daemon answering has not started with it', async () => {

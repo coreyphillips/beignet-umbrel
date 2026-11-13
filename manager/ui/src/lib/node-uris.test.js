@@ -89,6 +89,8 @@ test('a relay-only Iroh link says who still sees the address, and is held back u
 	assert.match(live.hint, /relay's operator still sees it/);
 	assert.match(live.hint, /n0/);
 	assert.doesNotMatch(live.hint, /Your phone and the relay can see/);
+	// Tor mode with announcing off: nothing else ties the node id to an address.
+	assert.deepEqual(live.warnings, []);
 
 	// Starting: nothing to show yet, and the wait is explained.
 	const starting = iroh({ info: { irohAvailable: true } });
@@ -128,8 +130,9 @@ test('a relay-only link names custom relays and warns beside an announced public
 	})[0];
 	assert.match(custom.hint, /Custom relays disable n0 discovery/);
 	assert.doesNotMatch(custom.hint, /that is n0/);
-	assert.doesNotMatch(custom.hint, /announces its public address/);
+	assert.deepEqual(custom.warnings, []);
 
+	// The warnings stand apart from the hint, so the card can box them.
 	const announced = nodeUris({
 		nodeId: NODE,
 		rec: { networkMode: 'hybrid', announce: true, publicHost: '203.0.113.4', publicAddress: '203.0.113.4:19102', iroh: { enabled: true, relayOnly: true } },
@@ -137,7 +140,10 @@ test('a relay-only link names custom relays and warns beside an announced public
 		relayOnlyAvailable: true
 	})[0];
 	assert.equal(announced.uri, uri);
-	assert.match(announced.hint, /announces its public address/);
+	assert.doesNotMatch(announced.hint, /announces its public address/);
+	assert.equal(announced.warnings.length, 2);
+	assert.match(announced.warnings[0], /announces its public address/);
+	assert.match(announced.warnings[1], /Hybrid mode/);
 	// A wallet that holds a public address and does not announce it has nothing to look up.
 	const quiet = nodeUris({
 		nodeId: NODE,
@@ -145,7 +151,31 @@ test('a relay-only link names custom relays and warns beside an announced public
 		info,
 		relayOnlyAvailable: true
 	})[0];
-	assert.doesNotMatch(quiet.hint, /announces its public address/);
+	assert.ok(!quiet.warnings.some((w) => /announces its public address/.test(w)));
+});
+
+// Relay only covers Iroh. A wallet that dials clearnet peers directly still
+// shows its address to the peers its owner connects to, and to the ones it
+// saved before the switch, so the mode is named on the link itself.
+test('a relay-only link in Clearnet or Hybrid mode says which peers still see the address', () => {
+	const uri = `${NODE}@iroh:${'a'.repeat(64)}?relay=https%3A%2F%2Frelay.example%2F`;
+	const info = { irohAvailable: true, irohUri: uri, irohRelayOnly: true };
+	const warnings = (rec) => nodeUris({ nodeId: NODE, rec: { announce: false, iroh: { enabled: true, relayOnly: true }, ...rec }, info, relayOnlyAvailable: true })[0].warnings;
+
+	const hybrid = warnings({ networkMode: 'hybrid' });
+	assert.equal(hybrid.length, 1);
+	assert.match(hybrid[0], /Hybrid mode/);
+	assert.match(hybrid[0], /dialed directly and see this Umbrel's IP address/);
+	assert.match(hybrid[0], /Use Tor mode/);
+	assert.match(warnings({ networkMode: 'clearnet', publicHost: '203.0.113.4' })[0], /Clearnet mode/);
+	// A record with no mode reads as Hybrid, the default.
+	assert.match(warnings({})[0], /Hybrid mode/);
+	assert.deepEqual(warnings({ networkMode: 'tor' }), []);
+
+	// Only a link shown as private carries them: one that offers direct
+	// connections already says the phone sees the address.
+	const direct = nodeUris({ nodeId: NODE, rec: { networkMode: 'hybrid', iroh: { enabled: true } }, info: { irohAvailable: true, irohUri: uri }, relayOnlyAvailable: true })[0];
+	assert.equal(direct.warnings, undefined);
 });
 
 test('without relay-only the Iroh link reads as before and carries no relay-only mark', () => {
