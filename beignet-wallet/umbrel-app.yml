@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.40.0"
+version: "0.40.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,38 +30,37 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.39.0, and adds Relay only to the Iroh phone link.
+  Bundles beignet 0.40.0, and says what Relay only does not cover.
 
 
-  Relay only is a checkbox under the Iroh phone link in each wallet's
-  "Connect to this node" card. With it on, every connection made through
-  the link stays on the relay, so whoever holds the link cannot learn this
-  Umbrel's IP address from it and the link can be handed to someone else.
-  The relay's operator still sees the address, which is n0 with the default
-  relays. It is off by default, and turning it on or off restarts the
-  wallet.
+  Relay only keeps the Iroh phone link on the relay, so the link itself
+  does not give away this Umbrel's IP address. The link also carries the
+  wallet's Lightning node id, and anything that ties that id to an address
+  undoes Relay only from outside the link. The card now warns under the
+  link when the wallet announces a public address, and when it is in
+  Clearnet or Hybrid mode, where the peers you connect it to see the
+  address. The dialog that turns Relay only on lists both, and adds that a
+  Lightning port which can be reached from the internet (a router forward,
+  or IPv6) lets the node be found without the link.
 
 
-  What it costs: a payment takes about 80 ms longer, and the link comes up
-  about 12 seconds later after each restart. If your router opens a port
-  for the link, the link switches itself off instead of offering that
-  address, and the card says why. A phone that connected before you turned
-  it on keeps the address it learned until its app is restarted.
+  Before handing a link out, and above all before posting one publicly,
+  go through the list in docs/IROH.md: Tor mode, a node id that never
+  announced a public address, and a Lightning port that cannot be reached
+  from outside. The relay's operator still sees the address in every case.
 
 
-  Chicory 0.7.18 and Chicory Desktop 0.3.6 connect through such a link as
-  they are.
+  From the engine: a wallet set to Relay only no longer dials out over
+  Iroh, because the relay of the peer it dialed would see this Umbrel's
+  address. The dashboard never made such a dial; it could only be asked
+  for through the wallet's API. Phones and peers that connect in through
+  the link are not affected. Where the link cannot come up because the
+  app's container has no IPv6 loopback address, the card now names the
+  cause and the setting that restores it.
 
 
-  Also from the engine: in Tor mode, peers reached over WebSocket are now
-  dialed through Tor as other peers are, and a peer that stops answering
-  pings is dropped after 60 seconds.
-
-
-  Going back to 0.39.0 keeps the wallet storage, which is unchanged. That
-  version does not know Relay only and offers the same link with direct
-  connections again, so turn the Iroh phone link off before going back if
-  the link has been handed out.
+  Going back to app 0.40.0 keeps the wallet storage, which is unchanged.
+  That version has neither the warnings nor the engine's dial rule.
 dependencies: []
 path: ""
 defaultUsername: ""
