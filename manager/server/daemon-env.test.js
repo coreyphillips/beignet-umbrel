@@ -426,3 +426,13 @@ test('a relay-only wallet is started with the switch, and with no Iroh at all on
 	// A wallet that never asked for relay-only keeps its listener there.
 	assert.equal(manager._daemonEnv(rec({ iroh: { enabled: true } }), PATHS, 'seed words', 'token').BEIGNET_IROH, 'true');
 });
+
+test('the node alias is the wallet name cleaned of what BOLT 1 forbids (beignet #2074)', () => {
+	const m = bareManager();
+	assert.equal(m._daemonEnv(rec(), PATHS, 's', 't').BEIGNET_ALIAS, 'Test wallet');
+	const joined = m._daemonEnv(rec({ name: 'Home\n\u{1F468}\u200D\u{1F4BB}\u202E node' }), PATHS, 's', 't');
+	assert.equal(joined.BEIGNET_ALIAS, 'Home \u{1F468}\u{1F4BB} node');
+	assert.doesNotMatch(joined.BEIGNET_ALIAS, /[\p{C}\u2028\u2029]/u);
+	const empty = m._daemonEnv(rec({ id: 'abcd1234', name: '\u200B\u200D' }), PATHS, 's', 't');
+	assert.equal(empty.BEIGNET_ALIAS, 'Wallet abcd');
+});

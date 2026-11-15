@@ -81,3 +81,9 @@ test('an internal primary that is stopped is refused, read through getWallet', a
 		/primary node is not running/
 	);
 });
+
+test('a description is cleaned of what BOLT 1 forbids before the invoice is asked for (beignet #2074)', async () => {
+	const api = stubApi();
+	await createReceiveInvoice({ api, rec: { network: 'mainnet' }, amountSats: 1000, description: 'Rent\nfor\tMay \u{1F468}\u200D\u{1F373}' });
+	assert.deepEqual(api.calls, [['POST', '/invoice/create', { description: 'Rent for May \u{1F468}\u{1F373}', amountSats: 1000 }]]);
+});

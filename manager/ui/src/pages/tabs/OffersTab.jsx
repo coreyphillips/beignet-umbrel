@@ -7,6 +7,7 @@ import { fmtSats, shortId } from '../../lib/format.js';
 import { parsePayment } from '../../lib/payment-uri.js';
 import { beginOwnPayment, endOwnPayment } from '../../lib/own-payments.js';
 import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
+import { protocolText } from '../../lib/protocol-text.js';
 
 export default function OffersTab({ id, api, tick, bump }) {
 	const toast = useToast();
@@ -53,8 +54,11 @@ export default function OffersTab({ id, api, tick, bump }) {
 	const create = async () => {
 		setCreating(true);
 		try {
-			const body = { description };
-			if (amount) body.amountSats = parseInt(amount, 10);
+			const body = { description: protocolText(description) };
+			// An offer for 0 sats is refused by the engine (beignet #2053):
+			// no amount, or 0, is an offer for any amount.
+			const sats = parseInt(amount, 10);
+			if (sats > 0) body.amountSats = sats;
 			const r = await api.post('/offer/create', body);
 			setCreated(r && r.encoded ? r : null);
 			toast('Offer created', 'success');
@@ -125,7 +129,7 @@ export default function OffersTab({ id, api, tick, bump }) {
 					<Field label="Amount (sats, optional)">
 						<input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="any amount" />
 					</Field>
-					<Button variant="primary" busy={creating} onClick={create} disabled={!description}>
+					<Button variant="primary" busy={creating} onClick={create} disabled={!protocolText(description)}>
 						Create offer
 					</Button>
 					<AnimatePresence>

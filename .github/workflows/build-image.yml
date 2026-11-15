@@ -769,7 +769,24 @@ env:
   # (#2051). The storage schema (20), the environment settings and the
   # runtime dependencies are unchanged, and the capability probes answer as
   # for 0.39.0.
-  BEIGNET_VERSION: "0.40.0"
+  # 0.41.0 applies BOLT 1's string rule to invoice and offer text and to the
+  # node alias (coreyphillips/beignet#2074): a description with a line
+  # break, a tab, a bidi control or the U+200D that joins emoji is refused
+  # with INVALID_PARAMS, and a node whose alias holds one does not start.
+  # The manager now cleans the wallet name it passes as BEIGNET_ALIAS, and
+  # the dashboard cleans the descriptions it sends, so a wallet named with
+  # a joined emoji keeps starting. POST /offer/create refuses amountSats 0
+  # (#2053); the Offers tab leaves the amount out for 0. Third-party
+  # invoices that break the BOLT 11 or BOLT 1 reader rules (#2071, #2074)
+  # are refused when decoded. A permanent channel failure is reported as
+  # 0x4008 (#2088). On reconnect the node no longer re-sends updates the
+  # peer already holds (#2089, #2090), which an LND peer answered with a
+  # force close. SqliteStorage refuses to open a database whose earlier
+  # migration left a required column out, instead of running without it
+  # (#2055). The storage schema (20), the environment settings and the
+  # runtime dependencies are unchanged, and the capability probes in
+  # server/engine.js answer as for 0.40.0.
+  BEIGNET_VERSION: "0.41.0"
 
 jobs:
   build:

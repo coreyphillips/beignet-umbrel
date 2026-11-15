@@ -1,4 +1,5 @@
 import { INBOUND_HEADROOM_SATS, planInvoice } from './lfbw.js';
+import { protocolText } from './protocol-text.js';
 
 // A JIT invoice's lifetime, and with it the intent the primary holds open.
 // The primary holds an intent open for as long as the invoice lives and
@@ -24,7 +25,7 @@ export function isConnectedPeer(p) {
  * the primary quoted or null.
  */
 export async function createReceiveInvoice({ api, rec, channels, primaryConnected, amountSats, description, getWallet }) {
-	const body = { description };
+	const body = { description: protocolText(description) };
 	if (amountSats) body.amountSats = amountSats;
 	const lf = rec?.lfbw;
 	if (lf?.enabled) {

@@ -3,6 +3,7 @@ import { usePoll } from '../hooks/usePoll.js';
 import { useToast } from './Toast.jsx';
 import { Badge, Button, Card, CopyText, Field, Help, QR } from './ui.jsx';
 import { fmtSats } from '../lib/format.js';
+import { protocolText } from '../lib/protocol-text.js';
 import { manager } from '../api.js';
 import {
 	DEFAULT_FEE,
@@ -115,7 +116,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info, config })
 				concurrent,
 				...(concurrent ? { concurrentVersion: 2 } : {}),
 				witnessWalletIds: witnessIds,
-				...(issuerId ? { issuer: { walletId: issuerId, description: offerDescription || 'Offline receive' } } : {})
+				...(issuerId ? { issuer: { walletId: issuerId, description: protocolText(offerDescription) || 'Offline receive' } } : {})
 			});
 			setAnother(false);
 			toast(witnessIds.length > 0 ? 'The book is set up with its witnesses' : 'The book is set up with your settlement peer', 'success');
@@ -133,7 +134,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info, config })
 			await manager.fforProvision(id, {
 				channelId: epoch.channelId,
 				witnessWalletIds: (s.witnesses || []).map((w) => w.walletId),
-				...(s.issuer ? { issuer: { walletId: s.issuer.walletId, description: issuance?.description || offerDescription || 'Offline receive' } } : {})
+				...(s.issuer ? { issuer: { walletId: s.issuer.walletId, description: protocolText(issuance?.description || offerDescription) || 'Offline receive' } } : {})
 			});
 			toast('Provisioned', 'success');
 		} catch (e) {
