@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.40.0"
+version: "0.41.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,38 +30,51 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.39.0, and adds Relay only to the Iroh phone link.
+  Bundles beignet 0.41.0, and says what Relay only does not cover.
 
 
-  Relay only is a checkbox under the Iroh phone link in each wallet's
-  "Connect to this node" card. With it on, every connection made through
-  the link stays on the relay, so whoever holds the link cannot learn this
-  Umbrel's IP address from it and the link can be handed to someone else.
-  The relay's operator still sees the address, which is n0 with the default
-  relays. It is off by default, and turning it on or off restarts the
-  wallet.
+  Reconnects are safer. After a dropped connection a wallet no longer sends
+  its peer updates the peer already has. An LND peer answered those with an
+  error, and the channel was force closed.
 
 
-  What it costs: a payment takes about 80 ms longer, and the link comes up
-  about 12 seconds later after each restart. If your router opens a port
-  for the link, the link switches itself off instead of offering that
-  address, and the card says why. A phone that connected before you turned
-  it on keeps the address it learned until its app is restarted.
+  Invoices and offers follow Lightning's text rules. A description may not
+  hold a line break, a tab, an invisible character or an emoji made of
+  several joined together (a family, a profession). The dashboard cleans
+  what you type before it makes the invoice or offer: line breaks become
+  spaces, and a joined emoji shows as its parts side by side. A wallet whose
+  name holds such a character keeps working; its Lightning alias leaves
+  those characters out. An invoice from elsewhere that breaks these rules
+  is refused when you try to pay it, with a message that says why. An offer
+  with the amount left empty, or 0, is an offer for any amount.
 
 
-  Chicory 0.7.18 and Chicory Desktop 0.3.6 connect through such a link as
-  they are.
+  Relay only keeps the Iroh phone link on the relay, so the link itself
+  does not give away this Umbrel's IP address. The link also carries the
+  wallet's Lightning node id, and anything that ties that id to an address
+  undoes Relay only from outside the link. The card now warns under the
+  link when the wallet announces a public address, and when it is in
+  Clearnet or Hybrid mode, where the peers you connect it to see the
+  address. The dialog that turns Relay only on lists both, and adds that a
+  Lightning port which can be reached from the internet (a router forward,
+  or IPv6) lets the node be found without the link. Before handing a link
+  out, go through the list in docs/IROH.md. The relay's operator still sees
+  the address in every case.
 
 
-  Also from the engine: in Tor mode, peers reached over WebSocket are now
-  dialed through Tor as other peers are, and a peer that stops answering
-  pings is dropped after 60 seconds.
+  Also from the engine: a wallet set to Relay only no longer dials out over
+  Iroh, because the relay of the peer it dialed would see this Umbrel's
+  address (the dashboard never made such a dial). Where the link cannot
+  come up because the app's container has no IPv6 loopback address, the
+  card names the cause and the setting that restores it. A permanent
+  channel failure is now reported with the code Lightning's spec gives it.
 
 
-  Going back to 0.39.0 keeps the wallet storage, which is unchanged. That
-  version does not know Relay only and offers the same link with direct
-  connections again, so turn the Iroh phone link off before going back if
-  the link has been handed out.
+  Going back to app 0.40.0 keeps your wallets and channels: it opens the
+  same storage and pays as before. It does not have the warnings above, and
+  it drops two things this version records: the preimage kept on a
+  fulfilled payment for crash recovery, and invoice payment metadata, which
+  this app does not use.
 dependencies: []
 path: ""
 defaultUsername: ""
