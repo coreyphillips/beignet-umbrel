@@ -10,6 +10,7 @@ const bip39 = require('bip39');
 const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, publicElectrumServers } = require('./config');
 const { Registry } = require('./registry');
 const { Settings } = require('./settings');
+const { nodeAlias } = require('./node-alias');
 const { TorControl, pickLocalIp } = require('./tor-control');
 const { probeSocksConnect } = require('./socks-probe');
 const { TorHealth } = require('./tor-health');
@@ -1604,9 +1605,10 @@ class WalletManager {
 			BEIGNET_NETWORK: rec.network,
 			// The wallet's name doubles as the Lightning node alias in the
 			// node_announcement. The daemon truncates values over the BOLT 7
-			// 32-byte limit itself, so no validation is needed here. A rename
+			// 32-byte limit itself, but refuses to start on a character BOLT 1
+			// forbids, so those are cleaned out (nodeAlias). A rename
 			// propagates because updateWallet restarts a running daemon.
-			BEIGNET_ALIAS: rec.name,
+			BEIGNET_ALIAS: nodeAlias(rec.name) || `Wallet ${String(rec.id).slice(0, 4)}`,
 			BEIGNET_DAEMON_HOST: '127.0.0.1',
 			BEIGNET_DAEMON_PORT: String(rec.port),
 			BEIGNET_ELECTRUM_HOST: rec.electrum.host,

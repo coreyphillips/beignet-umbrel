@@ -8,6 +8,7 @@ import { fmtSats, shortId } from '../../lib/format.js';
 import { buildBip21 } from '../../lib/payment-uri.js';
 import { INBOUND_HEADROOM_SATS, planInvoice } from '../../lib/lfbw.js';
 import { createReceiveInvoice, isConnectedPeer } from '../../lib/receive-invoice.js';
+import { protocolText } from '../../lib/protocol-text.js';
 import OfflineReceiveCard from '../../components/OfflineReceiveCard.jsx';
 import { manager } from '../../api.js';
 
@@ -431,7 +432,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 	const createInvoice = async () => {
 		setBusy(true);
 		try {
-			const body = { description };
+			const body = { description: protocolText(description) };
 			if (amount) body.amountSats = parseInt(amount, 10);
 			let r;
 			let jit = null;
