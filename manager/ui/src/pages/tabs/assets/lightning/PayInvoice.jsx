@@ -6,7 +6,7 @@ import { useToast } from '../../../../components/Toast.jsx';
 import { Button, CopyText, Countdown, Field } from '../../../../components/ui.jsx';
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
-import { lightningRefusal, payFailure, payLabel, payableAssets, quoteChange, quoteExpired } from '../../../../lib/asset-lightning.js';
+import { lightningRefusal, payFailure, payLabel, payableAssets, quoteChange, quoteExpired, quotePriced } from '../../../../lib/asset-lightning.js';
 import { submitOnce } from '../../../../lib/assets.js';
 import { idempotencyKey } from '../../../../lib/assets-api.js';
 import { fmtSats, shortId } from '../../../../lib/format.js';
@@ -122,6 +122,7 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 				receipt: {
 					assetAmount: paid ?? shown.assetAmount,
 					amountSats: shown.amountSats,
+					priced: quotePriced(shown),
 					feeSats: (row ? row.feeSats : answer.feeSats) ?? null,
 					paymentHash: (row ? row.paymentHash : answer.paymentHash) || null,
 					settled: DONE.has(status),
@@ -156,6 +157,8 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 
 	if (receipt) {
 		const paidWhat = fmtAsset(receipt.assetAmount, receipt.asset);
+		// An invoice a peer made for the asset alone has no bitcoin amount worth repeating.
+		const forWhat = receipt.priced === false ? '' : `, for an invoice of ${fmtSats(receipt.amountSats)}`;
 		return (
 			<div className="paid-receipt asset-pay-receipt" role="status" data-testid="asset-pay-receipt" data-settled={receipt.settled ? 'yes' : 'no'}>
 				<div className="paid-check" aria-hidden="true">
@@ -164,8 +167,8 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 				<div className="paid-title">{receipt.settled ? 'Paid' : 'On its way'}</div>
 				<div className="wallet-meta">
 					{receipt.settled
-						? `${paidWhat} paid over Lightning, for an invoice of ${fmtSats(receipt.amountSats)}.`
-						: `${paidWhat} is on its way over Lightning, for an invoice of ${fmtSats(receipt.amountSats)}. Its outcome shows under Holdings.`}
+						? `${paidWhat} paid over Lightning${forWhat}.`
+						: `${paidWhat} is on its way over Lightning${forWhat}. Its outcome shows under Holdings.`}
 				</div>
 				<table className="kv asset-pay-facts">
 					<tbody>
@@ -255,10 +258,11 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 						aria-live="polite"
 						data-testid="asset-pay-quote"
 						data-state={price.pending ? 'asking' : quote ? (expired ? 'expired' : 'priced') : 'empty'}
+						data-priced={quote ? (quotePriced(quote) ? 'yes' : 'no') : undefined}
 					>
 						{!asset && <div className="field-note">Choose the asset to pay with.</div>}
 						{asset && !(sats > 0) && <div className="field-note">Type how many sats to pay.</div>}
-						{price.pending && <div className="wallet-meta">Asking your channel peer for a price…</div>}
+						{price.pending && <div className="wallet-meta">Asking your channel peer…</div>}
 						{quote && asset && (
 							<div className={`asset-preview pay-quote${expired ? ' stale' : ''}`}>
 								<div className="asset-preview-head">
@@ -272,17 +276,29 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 								</div>
 								<table className="kv">
 									<tbody>
-										<tr>
-											<td>The invoice gets</td>
-											<td>{fmtSats(quote.amountSats)}</td>
-										</tr>
-										<tr>
-											<td>Price</td>
-											<td>
-												{quote.rateText}
-												{quote.peerAlias && <span className="kv-sub">from {quote.peerAlias}</span>}
-											</td>
-										</tr>
+										{quotePriced(quote) ? (
+											<>
+												<tr>
+													<td>The invoice gets</td>
+													<td>{fmtSats(quote.amountSats)}</td>
+												</tr>
+												<tr>
+													<td>Price</td>
+													<td>
+														{quote.rateText}
+														{quote.peerAlias && <span className="kv-sub">from {quote.peerAlias}</span>}
+													</td>
+												</tr>
+											</>
+										) : (
+											<tr>
+												<td>Paid to</td>
+												<td>
+													Your channel peer
+													{quote.peerAlias && <span className="kv-sub">{quote.peerAlias}</span>}
+												</td>
+											</tr>
+										)}
 										{quote.sendable !== undefined && quote.sendable !== null && (
 											<tr>
 												<td>You can send</td>
@@ -290,7 +306,7 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 											</tr>
 										)}
 										<tr>
-											<td>Price held for</td>
+											<td>{quotePriced(quote) ? 'Price held for' : 'Held for'}</td>
 											<td>
 												{expired ? (
 													<span data-testid="asset-pay-expired">Expired</span>
@@ -298,7 +314,7 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 													<Countdown
 														until={quote.expiresAt}
 														total={Math.max(1, (Number(quote.expiresAt) - price.at) / 1000)}
-														label="Price held for"
+														label={quotePriced(quote) ? 'Price held for' : 'Held for'}
 														onExpire={() => {
 															setRanOut(quote.quoteId);
 															setChange(null);
@@ -309,6 +325,11 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 										</tr>
 									</tbody>
 								</table>
+								{!quotePriced(quote) && (
+									<div className="field-hint" data-testid="asset-pay-unpriced">
+										Your channel peer made this invoice for the asset alone. The sats written on it are not a price.
+									</div>
+								)}
 							</div>
 						)}
 					</div>
@@ -330,7 +351,9 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 					)}
 					{expired && !change && (
 						<div className="info-note" role="status" data-testid="asset-pay-stale">
-							That price has run out, and nothing was paid. Ask for a new one to go on.
+							{quotePriced(quote)
+								? 'That price has run out, and nothing was paid. Ask for a new one to go on.'
+								: 'The time your peer held this for has run out, and nothing was paid. Ask again to go on.'}
 						</div>
 					)}
 					{failure && (
@@ -341,7 +364,7 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 
 					{expired ? (
 						<Button variant="primary" disabled={busy || price.pending} data-testid="asset-pay-renew" onClick={renew}>
-							Get a new price
+							{quotePriced(quote) ? 'Get a new price' : 'Ask again'}
 						</Button>
 					) : (
 						<Button variant="primary" busy={busy} disabled={!quote || price.pending || held || busy} data-testid="asset-pay-submit" onClick={pay}>

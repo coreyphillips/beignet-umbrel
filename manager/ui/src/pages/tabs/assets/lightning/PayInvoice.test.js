@@ -318,3 +318,38 @@ test('a refusal the page has no words for is said in the wallet words, never as 
 		await r.unmount();
 	}
 });
+
+test('an invoice a channel peer made for the asset alone is paid at its face, with no price shown', async () => {
+	const backend = assetsBackend({ priced: false });
+	const busd = await busdOf(backend);
+	const r = await pasted(backend, 'demo-main', FIVE_THOUSAND);
+	try {
+		const panel = r.test('asset-pay-quote');
+		assert.equal(panel.getAttribute('data-state'), 'priced');
+		assert.equal(panel.getAttribute('data-priced'), 'no');
+		// A unit to the sat: 5,000 sats on the invoice is 5,000 units, 50.00 BUSD.
+		const amount = fmtAsset('5000', busd);
+		assert.equal(amount, '50.00 BUSD');
+		const rows = [...panel.querySelectorAll('tr')].map((tr) => tr.children[0].textContent);
+		assert.deepEqual(rows, ['Paid to', 'You can send', 'Held for']);
+		assert.match(panel.textContent, /Paid to\s*Your channel peerLightning Labs edge/);
+		assert.doesNotMatch(panel.textContent, /The invoice gets|Price/);
+		assert.match(
+			r.test('asset-pay-unpriced').textContent,
+			/Your channel peer made this invoice for the asset alone\. The sats written on it are not a price\./
+		);
+
+		const submit = r.test('asset-pay-submit');
+		assert.equal(submit.textContent, `Pay ${amount}`);
+		await click(submit);
+		await settle(ANSWERED_MS);
+		const sent = backend.posted('/pay');
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].body.maxAssetAmount, '5000');
+		const receipt = r.test('asset-pay-receipt');
+		assert.ok(receipt.textContent.includes(`${amount} paid over Lightning.`));
+		assert.doesNotMatch(receipt.textContent, /for an invoice of/);
+	} finally {
+		await r.unmount();
+	}
+});

@@ -25,7 +25,7 @@ export const WALLETS = [
 	{ id: 'demo-lfbw', name: 'Lightning first', network: 'mainnet', lfbw: { enabled: true } }
 ];
 
-export function assetsBackend({ wallets = WALLETS, spendable = 500_000, lightning = true } = {}) {
+export function assetsBackend({ wallets = WALLETS, spendable = 500_000, lightning = true, priced = true } = {}) {
 	// From now, like the pages that read it: "3 days ago" is worked out against
 	// the real clock, so the backend's past has to be the real past.
 	let t = Date.now();
@@ -43,7 +43,9 @@ export function assetsBackend({ wallets = WALLETS, spendable = 500_000, lightnin
 		storage: null,
 		clock: () => t,
 		ticker: false,
-		lightning
+		lightning,
+		// False for a wallet whose channel peers are other wallets, which set no price.
+		priced
 	});
 
 	/** What walletApi(id) is to a tab: get and post, answered by the backend. */

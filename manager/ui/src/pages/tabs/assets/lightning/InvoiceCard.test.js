@@ -121,6 +121,7 @@ test('an invoice is priced, made, shown with the time it has, and gives way to a
 		assert.ok(facts.includes(`The payer is asked for ${sats}`));
 		assert.ok(facts.includes(`${expected.rateText} · price from Lightning Labs edge`));
 		assert.match(facts, /Time left to pay/);
+		assert.match(r.test('asset-invoice-who').textContent, /^Any Lightning wallet can pay this\. You receive BUSD: your channel peer makes the exchange at this price/);
 		assert.ok(r.test('countdown'), 'counting down');
 		assert.equal(r.test('asset-invoice-create'), null, 'the form steps aside for the invoice');
 
@@ -264,6 +265,44 @@ test('a price that expired before the invoice was made is said in plain words, a
 		await settle(ANSWERED_MS);
 		assert.ok(r.test('asset-invoice-qr'), 'and the next press makes it');
 		assert.equal(r.test('asset-invoice-refusal'), null);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a peer that sets no bitcoin price: the invoice is for the asset alone, and says who can pay it', async () => {
+	// Two wallets of this app with a channel between them. Neither prices the
+	// asset, so the sats on the invoice are its face and the page shows none.
+	const backend = assetsBackend({ priced: false });
+	const r = await asking(backend, 'demo-main', 'BUSD', '250');
+	try {
+		const quote = r.test('asset-invoice-quote');
+		assert.equal(quote.getAttribute('data-state'), 'priced');
+		assert.equal(quote.getAttribute('data-priced'), 'no');
+		const rows = [...quote.querySelectorAll('tr')].map((tr) => [...tr.children].map((td) => td.textContent).join(' | '));
+		assert.deepEqual(rows, ['Who can pay it | Your channel peerLightning Labs edge', 'Can receive now | up to 3,100.00 BUSD']);
+		assert.doesNotMatch(quote.textContent, /sats|Worth now|Price/, 'no worth and no rate');
+		assert.match(
+			r.test('asset-invoice-card').textContent,
+			/This peer sets no bitcoin price, so the invoice is for the asset alone and only this peer can pay it\./
+		);
+
+		await click(r.test('asset-invoice-create'));
+		await settle(ANSWERED_MS);
+		assert.equal(backend.posted('/invoices').length, 1);
+		const facts = r.test('asset-invoice-facts').textContent;
+		assert.match(facts, /For 250\.00 BUSD/);
+		assert.match(
+			r.test('asset-invoice-unpriced').textContent,
+			/Only your channel peer, Lightning Labs edge, can pay this invoice\. It is for the asset alone, with no bitcoin price\./
+		);
+		assert.doesNotMatch(facts, /The payer is asked for|price from/);
+		assert.match(facts, /Time left to pay/);
+		assert.equal(
+			r.test('asset-invoice-who').textContent,
+			'You receive BUSD straight from your channel peer, who agreed to this invoice for a set time, which is why it cannot be paid once the time runs out.',
+			'and it is not said that any wallet can pay it'
+		);
 	} finally {
 		await r.unmount();
 	}

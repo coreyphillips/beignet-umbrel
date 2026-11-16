@@ -242,6 +242,15 @@ export default function OpenAssetChannelModal({ id, api, assetKey, origin, onClo
 													<span className="kv-sub">and {fmtSats(quote.channelSats)} of bitcoin with it</span>
 												</td>
 											</tr>
+											{Number(quote.pushSats) > 0 && (
+												<tr data-testid="asset-channel-push">
+													<td>Starts on the peer&apos;s side</td>
+													<td>
+														{fmtSats(quote.pushSats)}
+														<span className="kv-sub">of that bitcoin, so the peer can pay you back</span>
+													</td>
+												</tr>
+											)}
 											<tr>
 												<td>Miner fee</td>
 												<td>
@@ -262,8 +271,9 @@ export default function OpenAssetChannelModal({ id, api, assetKey, origin, onClo
 										</tbody>
 									</table>
 									<div className="field-hint">
-										The bitcoin in the channel stays yours and comes back when the channel is closed. The miner fee is
-										spent.
+										{Number(quote.pushSats) > 0
+											? `The bitcoin in the channel stays yours and comes back when the channel is closed, all but the ${fmtSats(quote.pushSats)} that start on the peer's side: those are the peer's. The miner fee is spent.`
+											: 'The bitcoin in the channel stays yours and comes back when the channel is closed. The miner fee is spent.'}
 									</div>
 								</>
 							) : amountOk && !quoteError ? (

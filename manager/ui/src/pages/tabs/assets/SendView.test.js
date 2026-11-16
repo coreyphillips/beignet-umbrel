@@ -288,7 +288,7 @@ test('what is not a Taproot Assets address is named for what it is, and pointed 
 
 		await type(r.test('asset-send-input'), DONATION);
 		await settle(READ_MS);
-		assert.match(r.test('asset-send-invoice').textContent, /That is a Lightning invoice\. Paying one with an asset is not part of this version yet/);
+		assert.match(r.test('asset-send-invoice').textContent, /That is a Lightning invoice\. An asset pays one from an asset channel, and this wallet cannot open those\. To pay it in bitcoin, use the Send tab\./);
 		assert.equal(r.test('asset-send-submit'), null);
 		assert.equal(r.test('asset-pay'), null);
 		assert.equal(backend.posted('/pay/quote').length, 0, 'and the wallet is asked for no price');

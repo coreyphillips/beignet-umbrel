@@ -113,6 +113,8 @@ const hostOfRest = (rest) => {
  *   clock()              the time, for tests that move it by hand
  *   ticker               false to leave out the once-a-second advance
  *   lightning            whether asset channels are offered at all
+ *   priced               false when no channel peer sets a bitcoin price,
+ *                        as between two wallets of this app
  */
 export function createAssetsMock(ctx) {
 	const now = () => (ctx.clock ? ctx.clock() : Date.now());
@@ -1208,10 +1210,19 @@ export function createAssetsMock(ctx) {
 		if (lightningMode(id) === 'off') throw fail('This wallet has no Lightning, so it has no asset channels', 'LIGHTNING_UNAVAILABLE');
 	}
 
-	function usableChannel(id, key, direction, amount) {
+	function usableChannel(id, key, direction, amount, only = () => true) {
 		const field = direction === 'in' ? 'receivable' : 'sendable';
-		return S(id).channels.find((c) => c.asset.key === key && c.state === 'NORMAL' && cmpUnits(c[field], amount) >= 0) || null;
+		return S(id).channels.find((c) => c.asset.key === key && c.state === 'NORMAL' && only(c) && cmpUnits(c[field], amount) >= 0) || null;
 	}
+
+	// A peer that is another wallet sets no bitcoin price: an invoice through
+	// its channel is for the asset alone, one unit to the sat on its face. The
+	// demo's edge peer prices; a channel opened here from the dialog does not.
+	const unpriced = (c) => ctx.priced === false || !!c._unpriced;
+
+	// What starts on the peer's side of a new channel, so it can pay back: the
+	// reserve it must keep and the bitcoin two asset payments travel with.
+	const CHANNEL_PUSH_SATS = 1708;
 
 	function channelQuote(id, body) {
 		requireLightning(id);
@@ -1221,7 +1232,7 @@ export function createAssetsMock(ctx) {
 		const channelSats = 100000;
 		const totalSats = channelSats + fee.sats;
 		const spendableSats = ctx.spendable(id);
-		return { channelSats, feeSats: fee.sats, totalSats, spendableSats, sufficient: spendableSats >= totalSats };
+		return { channelSats, pushSats: CHANNEL_PUSH_SATS, feeSats: fee.sats, totalSats, spendableSats, sufficient: spendableSats >= totalSats };
 	}
 
 	function openChannel(id, body) {
@@ -1254,6 +1265,7 @@ export function createAssetsMock(ctx) {
 			sendable: '0',
 			receivable: '0',
 			channelSats: quote.channelSats,
+			_unpriced: true,
 			_openedAt: now()
 		};
 		s.channels.unshift(channel);
@@ -1286,13 +1298,15 @@ export function createAssetsMock(ctx) {
 		if (!ch) {
 			throw fail('No asset channel can receive that much', 'INSUFFICIENT_INBOUND', { details: { maxReceivable } });
 		}
+		const plain = unpriced(ch);
 		const quote = {
 			quoteId: nextId('rfq'),
 			peerPubkey: ch.peerPubkey,
 			peerAlias: ch.peerAlias,
 			assetAmount: amount,
-			amountSats: toSats(identity, amount),
-			rateText: rateText(identity),
+			amountSats: plain ? Number(amount) : toSats(identity, amount),
+			rateText: plain ? '' : rateText(identity),
+			priced: !plain,
 			expiresAt: now() + INVOICE_QUOTE_MS,
 			maxReceivable,
 			_channelId: ch.channelId,
@@ -1326,6 +1340,7 @@ export function createAssetsMock(ctx) {
 			assetAmount: quote.assetAmount,
 			amountSats: quote.amountSats,
 			rateText: quote.rateText,
+			priced: quote.priced,
 			expiresAt: quote.expiresAt,
 			invoiceExpiresAt: now() + HOUR,
 			description: String(body?.description || ''),
@@ -1350,15 +1365,27 @@ export function createAssetsMock(ctx) {
 		const amountSats = m[1] ? Math.round(Number(m[1]) * perBtc[m[2].toLowerCase()]) : Number(body.amountSats) || 0;
 		if (!(amountSats > 0)) throw fail('This invoice names no amount, so one is needed', 'AMOUNT_REQUIRED');
 		const perWhole = satsPerWhole(identity) - (moved ? Math.max(1, Math.round(satsPerWhole(identity) / 100)) : 0);
-		const assetAmount = toAssetUnits(identity, amountSats, perWhole);
 		const sendable = channelTotals(id, identity.key).sendable;
-		const ch = usableChannel(id, identity.key, 'out', assetAmount);
+		// A peer that prices is asked first. One that does not takes the
+		// invoice at its face: a unit to the sat.
+		let assetAmount = toAssetUnits(identity, amountSats, perWhole);
+		let ch = usableChannel(id, identity.key, 'out', assetAmount, (c) => !unpriced(c));
+		if (!ch) {
+			const face = String(Math.max(1, Math.floor(amountSats)));
+			const other = usableChannel(id, identity.key, 'out', face, unpriced);
+			if (other) {
+				ch = other;
+				assetAmount = face;
+			}
+		}
 		if (!ch) throw fail('No asset channel can send that much', 'INSUFFICIENT_OUTBOUND', { details: { sendable } });
+		const plain = unpriced(ch);
 		const quote = {
 			quoteId: nextId('rfq'),
 			assetAmount,
 			amountSats,
-			rateText: rateText(identity, perWhole),
+			rateText: plain ? '' : rateText(identity, perWhole),
+			priced: !plain,
 			peerAlias: ch.peerAlias,
 			expiresAt: now() + PAY_QUOTE_MS,
 			sendable,

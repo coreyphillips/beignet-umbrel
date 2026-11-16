@@ -140,6 +140,13 @@ export function quoteLeft(quote, now = Date.now()) {
 
 export const quoteExpired = (quote, now = Date.now()) => quoteLeft(quote, now) === 0;
 
+/**
+ * Whether a quote carries a bitcoin price. A peer that is another wallet
+ * sets none (`priced: false`): the sats on such an invoice are its face and
+ * nothing else, so the page shows no worth and no rate for it.
+ */
+export const quotePriced = (quote) => !(quote && quote.priced === false);
+
 /** "Pay 12.50 BUSD": the button says the amount it will pay. */
 export function payLabel(quote, asset) {
 	if (!quote || !asset) return 'Pay';
@@ -167,6 +174,12 @@ export function quoteChange(before, after, asset) {
 		return {
 			direction: 'less',
 			text: `The price moved before the payment was made, so nothing was paid. It is now ${now}, down from ${was}. Press Pay again to pay the new amount.`
+		};
+	}
+	if (!quotePriced(after)) {
+		return {
+			direction: 'same',
+			text: `The time your peer held this for ran out before the payment was made, so nothing was paid. It has been asked again, and the amount is still ${now}. Press Pay again to pay it.`
 		};
 	}
 	return {

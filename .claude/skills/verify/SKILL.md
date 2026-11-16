@@ -160,7 +160,11 @@ channel with "Lightning Labs edge" (2,400.00 yours, 3,100.00 theirs).
   Open asset channel (`asset-channel-open`) gives the dialog
   (`asset-channel-open-dialog`): an asset, an amount, a peer, a fee rate,
   then the cost table (`asset-channel-cost`: 100,000 sats go in with the
-  asset, 4,320 sats of miner fee at 18 sat/vB). The new row reads "opening"
+  asset, 1,708 of them start on the peer's side (`asset-channel-push`) and
+  the hint says those do not come back, 4,320 sats of miner fee at 18
+  sat/vB). The peer is chosen from a list once the wallet's peers have
+  loaded (`asset-channel-peer`), with "Another peer…" for a typed one. The
+  new row reads "opening"
   for about 15 s, then "open". A typed peer whose key starts `0200000000` is
   refused (`asset-channel-refusal`, `PEER_NO_ASSET_CHANNELS`). Close on a row
   gives the cooperative page, with force close behind a second page. The same
@@ -182,6 +186,19 @@ channel with "Lightning Labs edge" (2,400.00 yours, 3,100.00 theirs).
   `page.evaluate`, replace `Date.now` with one 31 s ahead and click
   `asset-pay-submit`. Expect `asset-pay-changed` (about 1% more), no receipt,
   the button showing the new amount and held disabled for a second.
+- A peer that sets no bitcoin price, as another wallet of this app is. The
+  edge peer prices; a channel opened from the dialog does not, and it is
+  asked only when the edge channel cannot carry the payment. So: close the
+  edge channel, open one with 900 BUSD, wait for "open"
+  (`[data-testid="asset-channel"][data-state="NORMAL"]`), then paste an
+  `lnbc50u` invoice on Send. `asset-pay-quote` has `data-priced="no"`, its
+  rows are Paid to, You can send and Held for, `asset-pay-unpriced` says the
+  sats on the invoice are not a price, the button reads "Pay 50.00 BUSD"
+  (a unit to the sat) and the receipt names no bitcoin amount. The peer then
+  holds 50.00, so Receive with BUSD and 20 gives an invoice quote with
+  `data-priced="no"` (Who can pay it, Can receive now), and the made invoice
+  says only the channel peer can pay it (`asset-invoice-unpriced`,
+  `asset-invoice-who`), never that any wallet can.
 - `demo-testnet` has Lightning and no asset channel: an empty Asset channels
   card, an invoice card that says nothing can be received, and `asset-pay-none`
   for a pasted `lntb` invoice. `demo-savings` (on-chain only) must show none of

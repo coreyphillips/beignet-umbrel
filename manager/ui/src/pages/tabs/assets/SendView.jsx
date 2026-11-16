@@ -51,8 +51,8 @@ function Invoice({ rec, lightning, pay }) {
 	if (PAYS_INVOICES && lightning) return <PayInvoice {...pay} />;
 	return (
 		<div className="info-note" role="status" data-testid="asset-send-invoice" data-lightning={lightning ? 'yes' : 'no'}>
-			That is a Lightning invoice. Paying one with an asset is not part of this version yet. To pay it in bitcoin, use
-			the Send tab.
+			That is a Lightning invoice. An asset pays one from an asset channel, and this wallet cannot open those. To pay
+			it in bitcoin, use the Send tab.
 		</div>
 	);
 }

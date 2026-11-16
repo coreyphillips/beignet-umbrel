@@ -7,7 +7,7 @@ import { Button, Card, Countdown, Empty, Field, QR, QRZoom } from '../../../../c
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { fmtAsset, isZero } from '../../../../lib/asset-amount.js';
-import { invoiceDeadline, invoiceStanding, lightningRefusal } from '../../../../lib/asset-lightning.js';
+import { invoiceDeadline, invoiceStanding, lightningRefusal, quotePriced } from '../../../../lib/asset-lightning.js';
 import { copy, fmtSats } from '../../../../lib/format.js';
 import { useLightningQuote } from './useLightningQuote.js';
 
@@ -125,6 +125,7 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 					assetAmount: answer.assetAmount ?? amount,
 					amountSats: answer.amountSats ?? fresh.amountSats,
 					rateText: answer.rateText || fresh.rateText || '',
+					priced: (answer.priced ?? fresh.priced) !== false,
 					peerAlias: fresh.peerAlias || null,
 					expiresAt: answer.expiresAt ?? fresh.expiresAt ?? null,
 					invoiceExpiresAt: answer.invoiceExpiresAt ?? null,
@@ -176,6 +177,7 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 									aria-live="polite"
 									data-testid="asset-invoice-quote"
 									data-state={price.pending ? 'asking' : quote ? 'priced' : 'empty'}
+									data-priced={quote ? (quotePriced(quote) ? 'yes' : 'no') : undefined}
 								>
 									<div className="asset-preview-head">
 										<AssetAvatar asset={asset} size="lg" />
@@ -183,21 +185,33 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 											<AssetAmount value={amount} asset={asset} />
 										</div>
 									</div>
-									{price.pending && <div className="wallet-meta">Asking your channel peer for a price…</div>}
+									{price.pending && <div className="wallet-meta">Asking your channel peer…</div>}
 									{quote && (
 										<table className="kv">
 											<tbody>
-												<tr>
-													<td>Worth now</td>
-													<td>about {fmtSats(quote.amountSats)}</td>
-												</tr>
-												<tr>
-													<td>Price</td>
-													<td>
-														{quote.rateText}
-														{quote.peerAlias && <span className="kv-sub">from {quote.peerAlias}</span>}
-													</td>
-												</tr>
+												{quotePriced(quote) ? (
+													<>
+														<tr>
+															<td>Worth now</td>
+															<td>about {fmtSats(quote.amountSats)}</td>
+														</tr>
+														<tr>
+															<td>Price</td>
+															<td>
+																{quote.rateText}
+																{quote.peerAlias && <span className="kv-sub">from {quote.peerAlias}</span>}
+															</td>
+														</tr>
+													</>
+												) : (
+													<tr>
+														<td>Who can pay it</td>
+														<td>
+															Your channel peer
+															{quote.peerAlias && <span className="kv-sub">{quote.peerAlias}</span>}
+														</td>
+													</tr>
+												)}
 												<tr>
 													<td>Can receive now</td>
 													<td>up to {fmtAsset(quote.maxReceivable, asset)}</td>
@@ -225,7 +239,9 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 								</Button>
 								{quote && (
 									<div className="field-hint invoice-hint">
-										The price is asked for again as the invoice is made, so the payer gets all of the time it holds for.
+										{quotePriced(quote)
+											? 'The price is asked for again as the invoice is made, so the payer gets all of the time it holds for.'
+											: 'This peer sets no bitcoin price, so the invoice is for the asset alone and only this peer can pay it. It is asked again as the invoice is made, so it gets all of the time the invoice holds for.'}
 									</div>
 								)}
 							</>
@@ -250,12 +266,21 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 								<div className="invoice-for">
 									For <strong>{what}</strong>
 								</div>
-								<div className="wallet-meta">The payer is asked for {fmtSats(made.amountSats)}</div>
-								{made.rateText && (
-									<div className="wallet-meta">
-										{made.rateText}
-										{made.peerAlias ? ` · price from ${made.peerAlias}` : ''}
+								{made.priced === false ? (
+									<div className="wallet-meta" data-testid="asset-invoice-unpriced">
+										Only your channel peer{made.peerAlias ? `, ${made.peerAlias},` : ''} can pay this invoice. It is for the
+										asset alone, with no bitcoin price.
 									</div>
+								) : (
+									<>
+										<div className="wallet-meta">The payer is asked for {fmtSats(made.amountSats)}</div>
+										{made.rateText && (
+											<div className="wallet-meta">
+												{made.rateText}
+												{made.peerAlias ? ` · price from ${made.peerAlias}` : ''}
+											</div>
+										)}
+									</>
 								)}
 								{deadline && (
 									<div className="invoice-clock">
@@ -269,9 +294,10 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 									</div>
 								)}
 							</div>
-							<div className="field-hint">
-								Any Lightning wallet can pay this. You receive {made.asset.name}: your channel peer makes the exchange at this
-								price, which is why the invoice cannot be paid once the time runs out.
+							<div className="field-hint" data-testid="asset-invoice-who">
+								{made.priced === false
+									? `You receive ${made.asset.name} straight from your channel peer, who agreed to this invoice for a set time, which is why it cannot be paid once the time runs out.`
+									: `Any Lightning wallet can pay this. You receive ${made.asset.name}: your channel peer makes the exchange at this price, which is why the invoice cannot be paid once the time runs out.`}
 							</div>
 							<div className="center-actions" style={{ justifyContent: 'center' }}>
 								<Button className="sm" data-testid="asset-invoice-replace" onClick={again}>

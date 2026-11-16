@@ -152,10 +152,16 @@ test('opening asks for the asset, the amount, the peer and the fee, says the cos
 		const cost = [...r.test('asset-channel-cost').querySelectorAll('tr')].map((tr) => [...tr.children].map((td) => td.textContent).join(' | '));
 		assert.deepEqual(cost, [
 			'Goes into the channel | 1,000.00 BUSDand 100,000 sats of bitcoin with it',
+			"Starts on the peer's side | 1,708 satsof that bitcoin, so the peer can pay you back",
 			'Miner fee | 4,320 satsat 18 sat/vB',
 			'Total in bitcoin | 104,320 sats',
 			'On-chain available | 500,000 sats'
 		]);
+		assert.match(
+			dialog.textContent,
+			/stays yours and comes back when the channel is closed, all but the 1,708 sats that start on the peer's side: those are the peer's\. The miner fee is spent\./,
+			'what is handed to the peer is not said to come back'
+		);
 		assert.deepEqual(backend.posted('/channels/quote').at(-1).body, { key: busd.key, amount: '100000', feeRate: 18 });
 		assert.equal(backend.posted('/channels/open').length, 0, 'pricing opens nothing');
 
