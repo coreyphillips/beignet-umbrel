@@ -6,7 +6,7 @@
  * (test-fakes.js). The host is given the real glue over that entry
  * (adapter.js createLightning), so every test here runs through it. `h.ln`
  * is the stand-in, which a test switches and reads; `h.host.ln` is what the
- * host works against. The nine routes, and the rules that protect funds in
+ * host works against. The ten routes, and the rules that protect funds in
  * them.
  *
  *   - a wallet that cannot have asset channels, or was not asked to, says
@@ -36,6 +36,7 @@ const LIGHTNING_ROUTES = [
 	'POST /channels/quote',
 	'POST /channels/open',
 	'POST /channels/close',
+	'POST /channels/reclaim',
 	'POST /invoices/quote',
 	'POST /invoices',
 	'GET /invoices',
@@ -119,11 +120,12 @@ test('one that was not asked says off and refuses, with its provider started all
 	// Started, and told to give nobody a price.
 	assert.deepEqual(named(h, 'start'), [['start', { quiet: true }]]);
 	assert.deepEqual(await h.get('/channels'), { channels: [] });
-	for (const route of LIGHTNING_ROUTES.filter((r) => !['GET /channels', 'POST /channels/close'].includes(r))) {
+	for (const route of LIGHTNING_ROUTES.filter((r) => !['GET /channels', 'POST /channels/close', 'POST /channels/reclaim'].includes(r))) {
 		assert.deepEqual(await codeOf(ask(h, route, {}, undefined)), ['LIGHTNING_UNAVAILABLE', 409], route);
 	}
-	// Closing works on what there is, and here there is nothing.
+	// Closing, and taking a funding back, work on what there is, and here there is nothing.
 	assert.deepEqual(await codeOf(h.call('POST /channels/close', { channelId: 'ab'.repeat(32) })), ['CHANNEL_NOT_FOUND', 404]);
+	assert.deepEqual(await codeOf(h.call('POST /channels/reclaim', { channelId: 'ab'.repeat(32) }, 'a-key')), ['CHANNEL_NOT_FOUND', 404]);
 });
 
 test('a Lightning service that will not start leaves the wallet its assets and no Lightning', async () => {
@@ -143,7 +145,7 @@ test('before the engine has handed over its node, nothing is read as "no channel
 	const h = world({ lightning: 'unbound' });
 	await h.boot();
 	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
-	for (const route of ['GET /channels', 'POST /channels/quote', 'POST /channels/close', 'POST /invoices/quote', 'POST /pay/quote']) {
+	for (const route of ['GET /channels', 'POST /channels/quote', 'POST /channels/close', 'POST /channels/reclaim', 'POST /invoices/quote', 'POST /pay/quote']) {
 		const err = await refused(ask(h, route, {}, undefined));
 		assert.deepEqual([err.extensionCode, err.status, err.message], ['ASSETS_STARTING', 503, 'Lightning is still starting. Try again in a moment.'], route);
 	}
@@ -259,7 +261,11 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 		remoteBalance: '0',
 		sendable: '0',
 		receivable: '0',
-		channelSats: 100000
+		channelSats: 100000,
+		// Its funding is made and not confirmed: should it never confirm, its bitcoin can be taken back.
+		fundingTxid: flow.fundingTxid,
+		reclaimable: true,
+		reclaimTxid: null
 	});
 	// Still opening once the engine has it, and told again under the engine's id.
 	assert.deepEqual(events(h, 'channel'), [
@@ -428,7 +434,7 @@ test('an open that fails after its funding transaction is signed is kept, for th
 	// It cannot be closed yet, and a backup is not restored over it.
 	const close = await refused(h.call('POST /channels/close', { channelId: id }));
 	assert.deepEqual([close.extensionCode, close.status], ['CHANNEL_OPENING', 409]);
-	assert.equal(close.message, 'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain.');
+	assert.equal(close.message, 'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain. If that transaction will not confirm, its bitcoin can be taken back instead, which ends the open.');
 	assert.deepEqual(named(h, 'cancelFlow').length, 1);
 	const file = { format: backup.FORMAT, version: backup.VERSION, network: 'regtest', chain: 'regtest', wallet: await h.host.fingerprint(), exportedAt: 1, rows: backup.collectRows(h.storage) };
 	file.rowsHash = backup.hashRows(file.rows);
@@ -639,7 +645,7 @@ test('a cancel that the library answers for an open it has not heard of yet is n
 	release();
 	const err = await closing;
 	assert.deepEqual([err.extensionCode, err.status], ['CHANNEL_OPENING', 409]);
-	assert.equal(err.message, 'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain.');
+	assert.equal(err.message, 'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain. If that transaction will not confirm, its bitcoin can be taken back instead, which ends the open.');
 	const answer = await opening;
 	assert.deepEqual(answer, { pendingChannelId: id, phase: 'funding' });
 	// One channel, with its marker and the answer to its key.
@@ -1838,6 +1844,195 @@ test('a payment the library refuses after an earlier try failed keeps the words 
 	assert.deepEqual([...h.host.ln.refusals], [...h.ln.entry.ASSET_PAYMENT_REFUSALS]);
 });
 
+test('the bitcoin of a funding that will not confirm is taken back: once per request key, at a fee rate the wallet allows, and the open ends when the chain says so', async () => {
+	const { h, asset } = await funded();
+	const answer = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	const id = answer.pendingChannelId;
+	const flow = h.ln.flow(id);
+	const row = async () => (await h.get('/channels')).channels[0];
+	assert.deepEqual([(await row()).state, (await row()).reclaimable, (await row()).fundingTxid, (await row()).reclaimTxid], ['OPENING', true, flow.fundingTxid, null]);
+
+	// It takes a request key, a channel there is, and a fee rate within the wallet's limits.
+	assert.deepEqual(await codeOf(h.call('POST /channels/reclaim', { channelId: id })), ['IDEMPOTENCY_KEY_REQUIRED', 400]);
+	assert.deepEqual(await codeOf(h.call('POST /channels/reclaim', { channelId: 'ab'.repeat(32) }, 'no-such')), ['CHANNEL_NOT_FOUND', 404]);
+	const dear = await refused(h.call('POST /channels/reclaim', { channelId: id, feeRate: h.cfg.limits.maxFeeRate + 1 }, 'too-dear'));
+	assert.deepEqual([dear.extensionCode, dear.status, dear.details], ['FEE_TOO_HIGH', 400, { maxFeeRate: h.cfg.limits.maxFeeRate }]);
+	assert.equal(named(h, 'reclaimFunding').length, 0);
+	assert.deepEqual(keys(h, 'idem/channels/reclaim/'), []);
+
+	// By either id. The answer names the spend as a person is shown it.
+	const told = events(h, 'channel').length;
+	const body = { channelId: flow.channelId, feeRate: 9 };
+	const taken = await h.call('POST /channels/reclaim', body, 'reclaim-key');
+	assert.deepEqual(taken, { channelId: flow.channelId, pendingChannelId: id, txid: flow.reclaimed, feeSats: 300, feeRate: 9 });
+	assert.match(taken.txid, /^[0-9a-f]{64}$/);
+	assert.deepEqual(named(h, 'reclaimFunding'), [['reclaimFunding', id, 9]]);
+	assert.deepEqual(h.ln.violations, []);
+	// The same key asks once, and answers the same. With another request it is refused.
+	assert.deepEqual(await h.call('POST /channels/reclaim', body, 'reclaim-key'), taken);
+	assert.equal(named(h, 'reclaimFunding').length, 1);
+	assert.deepEqual(await codeOf(h.call('POST /channels/reclaim', { ...body, feeRate: 10 }, 'reclaim-key')), ['IDEMPOTENCY_KEY_REUSED', 409]);
+
+	// Nothing is released by it: the channel is as it was, and its row names the spend.
+	assert.deepEqual([(await row()).state, (await row()).reclaimable, (await row()).reclaimTxid], ['OPENING', true, taken.txid]);
+	assert.deepEqual(events(h, 'channel').slice(told), [{ channelId: flow.channelId, state: 'OPENING' }]);
+	const books = async () => {
+		const { balance } = (await h.get('/balances')).assets[0];
+		return [balance.total, balance.onchain, balance.channelLocal];
+	};
+	assert.deepEqual(await books(), ['1000', '400', '600']);
+	assert.equal(h.logs.some(([level, text]) => level === 'info' && text.includes(`is being taken back in transaction ${taken.txid}`)), true);
+	// It survives a restart of the wallet's records.
+	assert.equal(JSON.parse(h.storage.get(`h/chan/${id}`)).reclaim.txid, taken.txid);
+
+	// The spend is buried: the library holds the proof that the funding
+	// cannot confirm, ends the open and frees what it set aside.
+	h.ln.abandon(id);
+	await h.host.pass({ block: true });
+	assert.deepEqual(await h.get('/channels'), { channels: [] });
+	assert.deepEqual(await books(), ['1000', '1000', '0']);
+});
+
+test('a funding that cannot be taken back says why, the key is free again, and what the library wrote stays in the log', async () => {
+	const { h, channel } = await channelled();
+	// On the chain already: there is nothing to take back.
+	assert.equal(channel.reclaimable, false);
+	const open = await refused(h.call('POST /channels/reclaim', { channelId: channel.channelId, feeRate: 9 }, 'confirmed-key'));
+	assert.deepEqual(
+		[open.extensionCode, open.status, open.message],
+		['CHANNEL_NOT_RECLAIMABLE', 409, 'The funding of this channel is on the chain, so there is nothing to take back. Close the channel instead.']
+	);
+	assert.equal(named(h, 'reclaimFunding').length, 0);
+
+	const { h: other, asset } = await funded();
+	made.push(other);
+	const id = (await other.call('POST /channels/open', openBody(asset), 'open-key')).pendingChannelId;
+	const body = { channelId: id, feeRate: 9 };
+	// The library refuses before it makes anything.
+	other.ln.opts.reclaimFails = 'ERR_BEIGNET_LN_FUNDING';
+	const refusedNow = await refused(other.call('POST /channels/reclaim', body, 'reclaim-key'));
+	assert.deepEqual(
+		[refusedNow.extensionCode, refusedNow.status, refusedNow.message],
+		['CHANNEL_NOT_RECLAIMABLE', 409, "The funding of this channel cannot be taken back: it has confirmed, the open is over, or none of this wallet's own bitcoin went into it. Nothing was spent."]
+	);
+	// Anything else: the wallet could not make the spend, or the network did not take it.
+	other.ln.opts.reclaimFails = 'ERR_SOMETHING_NOBODY_NAMED';
+	const failed = await refused(other.call('POST /channels/reclaim', body, 'reclaim-key'));
+	assert.deepEqual(
+		[failed.extensionCode, failed.status, failed.message],
+		[
+			'CHANNEL_RECLAIM_FAILED',
+			502,
+			'The transaction that takes the funding back could not be made or sent. If the funding transaction is already on the network, it takes a fee rate above the one that transaction pays.'
+		]
+	);
+	assert.equal(failed.message.includes('4f2a'), false);
+	assert.equal(other.logs.filter(([level, text]) => level === 'warn' && text.includes('could not be taken back') && text.includes('4f2a:0')).length, 2);
+	// Nothing was written down as done: the same key takes it back once the library does.
+	assert.deepEqual(keys(other, 'idem/channels/reclaim/'), []);
+	assert.equal((await other.get('/channels')).channels[0].reclaimTxid, null);
+	other.ln.opts.reclaimFails = null;
+	const taken = await other.call('POST /channels/reclaim', body, 'reclaim-key');
+	assert.equal(taken.txid, other.ln.flow(id).reclaimed);
+	assert.equal(named(other, 'reclaimFunding').length, 3);
+});
+
+test('an open the node holds the funding of, with the peer yet to sign, cannot be dropped: it says its funding can be taken back, and is', async () => {
+	const { h, asset } = await funded();
+	// This wallet signed the funding transaction, the engine has it, and no
+	// word of the peer's signature comes in time. That is not past the point
+	// of no return, and the engine cannot be made to drop the open either.
+	h.ln.opts.openStopsUnsigned = true;
+	h.ln.opts.engineHoldsFunding = true;
+	const answer = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	const id = answer.pendingChannelId;
+	const flow = h.ln.flow(id);
+	assert.deepEqual([flow.signed, !!flow.fundingTxid, flow.phase], [false, true, 'funding-created']);
+	const row = async () => (await h.get('/channels')).channels[0];
+	assert.deepEqual([(await row()).state, (await row()).reclaimable, (await row()).fundingTxid], ['OPENING', true, flow.fundingTxid]);
+	// What it set aside is still the wallet's own until the peer commits: it is not counted as a channel's.
+	const { balance } = (await h.get('/balances')).assets[0];
+	assert.equal(balance.channelLocal, '0');
+	assert.equal(balance.total, '1000');
+
+	const close = await refused(h.call('POST /channels/close', { channelId: id }));
+	assert.deepEqual([close.extensionCode, close.status, close.details], ['CHANNEL_OPENING', 409, { reclaimable: true }]);
+	assert.match(close.message, /If that transaction will not confirm, its bitcoin can be taken back instead, which ends the open\.$/);
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+
+	const taken = await h.call('POST /channels/reclaim', { channelId: id, feeRate: 9 }, 'reclaim-key');
+	assert.deepEqual([taken.channelId, taken.pendingChannelId, taken.txid], [id, id, flow.reclaimed]);
+
+	// Once the engine has dropped the open, it can be given up like any other that signed nothing.
+	h.ln.opts.engineHoldsFunding = false;
+	assert.deepEqual(await h.call('POST /channels/close', { channelId: id }), { channelId: id, closing: true, force: false });
+	assert.deepEqual(await h.get('/channels'), { channels: [] });
+	assert.deepEqual((await h.get('/balances')).assets[0].balance.onchain, '1000');
+	assert.deepEqual(h.ln.violations, []);
+});
+
+test('an open that fails after this wallet signed its funding and before the peer signed is undone: nothing was opened and nothing is set aside', async () => {
+	const { h, asset } = await funded();
+	h.ln.opts.openFailsUnsigned = 'ERR_BEIGNET_LN_FUNDING_REJECTED';
+	const err = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([err.extensionCode, err.status], ['PEER_NO_ASSET_CHANNELS', 409]);
+	assert.deepEqual(await h.get('/channels'), { channels: [] });
+	assert.deepEqual([keys(h, 'committed/funding:'), keys(h, 'chan/'), keys(h, 'idem/channels/')], [[], [], []]);
+	const { balance } = (await h.get('/balances')).assets[0];
+	assert.deepEqual([balance.total, balance.onchain, balance.channelLocal], ['1000', '1000', '0']);
+	assert.equal(h.tap.records.some((r) => r.reservedBy), false);
+	// The key opens a channel again.
+	h.ln.opts.openFailsUnsigned = null;
+	assert.equal((await h.call('POST /channels/open', openBody(asset), 'open-key')).phase, 'funding');
+});
+
+test('a node that does not offer asset channels says why in the status, begins nothing new, and still lists and closes what there is', async () => {
+	const { h, asset, channel } = await channelled({ remote: 200n });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 1 });
+	// A feature the overlay depends on is off in the node's settings.
+	h.ln.opts.advertisement = { advertised: false, reason: 'option_simple_taproot is not signalled by this node' };
+	const said =
+		"This wallet's node does not offer asset channels to its peers: a Lightning feature they depend on is turned off in the node's settings. Nothing new can be opened, invoiced or paid over asset channels until it is turned on. The channels there already are stay listed and can still be closed.";
+	assert.deepEqual((await h.get('/status')).lightning, {
+		mode: 'off',
+		usableChannels: 1,
+		unavailable: { code: 'NOT_ADVERTISED', message: said, reason: 'option_simple_taproot is not signalled by this node' }
+	});
+	for (const [route, body, key] of [
+		['POST /channels/quote', openBody(asset), undefined],
+		['POST /channels/open', openBody(asset), 'a-key-not-used-before'],
+		['POST /invoices/quote', { key: asset.key, amount: '10' }, undefined],
+		['POST /pay/quote', { bolt11: fakeInvoice({ msat: 50000 }), key: asset.key }, undefined],
+		['GET /invoices', {}, undefined]
+	]) {
+		const err = await refused(ask(h, route, body, key));
+		assert.deepEqual([err.extensionCode, err.status, err.message, err.details], ['LIGHTNING_NOT_ADVERTISED', 409, said, { reason: 'option_simple_taproot is not signalled by this node' }], route);
+	}
+	assert.equal(named(h, 'openChannel').length, 1);
+	// What there is stays listed, and can be closed.
+	assert.equal((await h.get('/channels')).channels[0].channelId, channel.channelId);
+	assert.deepEqual(await h.call('POST /channels/close', { channelId: channel.channelId }), { channelId: channel.channelId, closing: true, force: false });
+	// Offered again, it is as it was. An engine that cannot say is not taken for a no.
+	h.ln.opts.advertisement = undefined;
+	assert.equal((await h.get('/status')).lightning.mode, 'full');
+	assert.equal('unavailable' in (await h.get('/status')).lightning, false);
+});
+
+test('a fee budget for channel fees that is used up is said in a sentence, with nothing done', async () => {
+	const { h, channel } = await channelled();
+	h.ln.opts.closeFails = 'FEE_BUDGET_EXHAUSTED';
+	const err = await refused(h.call('POST /channels/close', { channelId: channel.channelId, force: true }));
+	assert.deepEqual(
+		[err.extensionCode, err.status, err.message],
+		[
+			'FEE_BUDGET_EXHAUSTED',
+			409,
+			'The budget this app sets for the miner fees of asset channels is used up, so nothing was done. Nothing was lost: the channels and what is in them are as they were.'
+		]
+	);
+	assert.equal((await h.get('/channels')).channels[0].state, 'NORMAL');
+});
+
 test('a payment is settled from the record of its own try: what an earlier try left says nothing of it', async () => {
 	const { h, asset } = await channelled();
 	const bolt11 = fakeInvoice({ msat: 50000 });
@@ -2309,5 +2504,41 @@ test('a backup left for a wallet with Lightning rows of its own is not restored 
 		assert.match((await h.get('/status')).backup.importError, /^This wallet has Lightning records of its own, so the backup was left alone\./);
 		assert.equal(fs.existsSync(importFile), true);
 		assert.deepEqual((await h.get('/balances')).assets, []);
+	});
+});
+
+test('a funding whose change comes back with it leaves no note: only a backup made before the funding was signed does', async () => {
+	await inDir(async (dir) => {
+		const source = await channelled();
+		const file = await exportedFile(source.h, dir);
+		const h = world({ lightning: true, env: { BEIGNET_ASSETS_IMPORT_FILE: leftFor(dir, file) } });
+		const like = source.h.tap.records[0];
+		h.tap.records.push({ ...like, spent: false, amount: '1000', reservedBy: `funding:${source.id}`, anchorOutPoint: `${'5'.repeat(64)}:0` });
+		// A note a store already has from before the library brought any
+		// change back, for another channel: 30 units in an output of a
+		// transaction this wallet has no record of.
+		const old = { id: 'dd'.repeat(32), channelId: 'de'.repeat(32), fundingTxid: 'df'.repeat(32), change: [{ assetId: source.asset.assetId, amount: '30' }], at: 1 };
+		h.storage.set(`h/l-change/${old.id}`, JSON.stringify(old));
+		await h.boot();
+		// The funding is buried. The backup carried what rebuilds its outputs:
+		// 600 are the channel's, and the 400 of change are back on-chain.
+		const { balance } = (await h.get('/balances')).assets[0];
+		assert.deepEqual([balance.total, balance.onchain, balance.channelLocal], ['1000', '400', '600']);
+		assert.equal(h.logs.some(([level, text]) => level === 'info' && text.includes("is back in this wallet's records") && text.includes(`400 of ${source.asset.assetId}`)), true);
+		assert.equal(h.logs.some(([, text]) => text.includes("is not in this wallet's records")), false);
+		// Nothing is written down for it. The note there already was is kept, and still said.
+		assert.deepEqual(h.host.rows.list('l-change/').map((r) => r.value), [old]);
+		assert.deepEqual((await h.get('/status')).lightning.warnings.map((w) => w.code), ['CHANNEL_MISSING', 'CHANGE_NOT_BACK']);
+		assert.equal(backup.collectRows(h.storage).some(([key]) => key === `h/l-change/${old.id}`), true);
+
+		// A record of that older transaction turns up while the wallet is
+		// stopped. The first look after a start drops its note, without
+		// waiting for a block.
+		h.tap.records.push({ ...like, spent: false, reservedBy: undefined, amount: '30', anchorOutPoint: `${old.fundingTxid}:1` });
+		const again = h.restart();
+		made.push(again);
+		await again.boot();
+		assert.deepEqual(again.host.rows.list('l-change/'), []);
+		assert.deepEqual((await again.get('/status')).lightning.warnings.map((w) => w.code), ['CHANNEL_MISSING']);
 	});
 });

@@ -175,6 +175,7 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		// Whether what channel fundings left set aside has been settled:
 		// null before it was asked, then 'kept' or 'done'.
 		lnReservations: null,
+		lnChangeLooked: false,
 		channelWords: null
 	};
 	const handles = { pass: null, tip: null, backstop: null, preview: null, export: null };
@@ -952,6 +953,7 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		// A backup carries no funding flows: what one had set aside in the
 		// on-chain records is settled again from the chain (lightning.js).
 		mem.lnReservations = null;
+		mem.lnChangeLooked = false;
 		if (!res.same) host.markDirty();
 		return res;
 	};

@@ -394,8 +394,14 @@ test('a channel as the dashboard lists it', () => {
 		remoteBalance: '0',
 		sendable: '0',
 		receivable: '0',
-		channelSats: 100000
+		channelSats: 100000,
+		fundingTxid: null,
+		reclaimable: false,
+		reclaimTxid: null
 	});
+	// A funding that is made and not confirmed, and what was sent to take it back.
+	const out = views.channelView({ ...c, fundingTxid: 'f1'.repeat(32), reclaimable: true, reclaimTxid: 'f2'.repeat(32) }, reg);
+	assert.deepEqual([out.fundingTxid, out.reclaimable, out.reclaimTxid], ['f1'.repeat(32), true, 'f2'.repeat(32)]);
 	// The engine's id once there is one, and the peer's name when the user gave one.
 	const open = views.channelView({ ...c, channelId: 'bb'.repeat(32), peerAlias: 'edge', word: 'NORMAL', local: 450n, remote: 150n, sendable: 400n, receivable: 150n }, reg);
 	assert.deepEqual(

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Asset channels: what the nine Lightning routes do, what the loop does for
+ * Asset channels: what the ten Lightning routes do, what the loop does for
  * them, and what the host answers the library's Lightning service.
  *
  * Everything here works against `host.ln`, the facade adapter.js builds over
@@ -170,9 +170,47 @@ const sentence = (text) => `${String(text).replace(/[.\s]+$/, '')}.`;
 /* -------------------------------------------------------------------- mode */
 
 /** 'full' when the wallet was asked for asset channels and can have them. Otherwise 'off'. */
-const modeOf = (host) => (host.ln && !host.mem.lnError && host.cfg.lightning === 'full' ? 'full' : 'off');
+const NOT_ADVERTISED =
+	"This wallet's node does not offer asset channels to its peers: a Lightning feature they depend on is turned off in the node's settings. Nothing new can be opened, invoiced or paid over asset channels until it is turned on. The channels there already are stay listed and can still be closed.";
+
+/**
+ * What the node says of offering asset channels to its peers, when it says
+ * it does not: { reason }, the reason being the node's own word, for the
+ * status alone. Null when it offers them, when it cannot say, and when it
+ * cannot be asked: only the node's own no turns anything off.
+ */
+function notAdvertised(host) {
+	try {
+		if (!host.ln || !host.ln.ready()) return null;
+		const said = host.ln.advertisement();
+		if (!said || said.advertised) return null;
+		// The node's own words, as it wrote them: one line, and no longer than a reason needs to be.
+		const reason = said.reason
+			? String(said.reason)
+					.replace(/[\u0000-\u001f\u007f]+/g, ' ')
+					.replace(/\s+/g, ' ')
+					.trim()
+					.slice(0, 300)
+			: '';
+		return { reason: reason || null };
+	} catch (_) {
+		return null;
+	}
+}
+
+/** Asset channels are wanted and there, apart from what the node says of offering them. */
+const wanted = (host) => !!host.ln && !host.mem.lnError && host.cfg.lightning === 'full';
+
+// 'full' only while the node offers asset channels: a node that does not is
+// one no peer opens a channel with, so nothing new is begun over it.
+const modeOf = (host) => (wanted(host) && !notAdvertised(host) ? 'full' : 'off');
 
 const unavailable = () => refusal('LIGHTNING_UNAVAILABLE', 'This wallet has no Lightning for its assets, so it has no asset channels to use.', 409);
+/** Why nothing new can be begun: the node's own no where that is the reason, and no Lightning otherwise. */
+const whyOff = (host) => {
+	const quiet = wanted(host) ? notAdvertised(host) : null;
+	return quiet ? refusal('LIGHTNING_NOT_ADVERTISED', NOT_ADVERTISED, 409, quiet.reason ? { reason: quiet.reason } : undefined) : unavailable();
+};
 const starting = () => refusal('ASSETS_STARTING', 'Lightning is still starting. Try again in a moment.', 503);
 
 /** The node is there and the opens a restart interrupted are settled. */
@@ -183,7 +221,7 @@ function requireStarted(host) {
 /** For a route that begins something: asset channels are on. */
 function requireFull(host) {
 	host.requireUp();
-	if (modeOf(host) !== 'full') throw unavailable();
+	if (modeOf(host) !== 'full') throw whyOff(host);
 	requireStarted(host);
 }
 
@@ -209,6 +247,10 @@ function requireProvider(host) {
  *   over       whether it is closed and its assets are back on-chain
  *   opening    whether it is an open still under way
  *   counted    whether its assets are in it, and not on the chain
+ *   reclaimable  whether the bitcoin of its funding can be taken back,
+ *              which ends the open: one this wallet funded, whose funding
+ *              transaction is made and has not confirmed, with what it set
+ *              aside still held (reclaimFunding)
  */
 function channelList(host) {
 	const ln = host.ln;
@@ -249,8 +291,13 @@ function channelList(host) {
 			over: isOver(word),
 			// Not usable yet and not on its way out: an open still under way.
 			opening: !isOver(word) && word !== 'MISSING' && !views.CHANNEL_CLOSING.includes(word) && c.recovery === 'none' && (word === 'OPENING' || !c.confirmed),
-			// Its units are the channel's from the moment the funding is signed.
+			// Its units are the channel's from the point of no return of its
+			// open (`signed`). Before it, what the open set aside is still
+			// the wallet's, and comes back when the open is given up.
 			counted: (c.signed || c.committed || c.confirmed) && !isOver(word),
+			fundingTxid: c.fundingTxid || null,
+			reclaimable: !!c.initiator && !!c.fundingTxid && !!c.fundingReservation && !c.confirmed && !isOver(word),
+			reclaimTxid: note.reclaim ? note.reclaim.txid : null,
 			// On record, and not held by the node: see views.channelWord.
 			missing: word === 'MISSING',
 			signed: c.signed,
@@ -289,6 +336,9 @@ function channelList(host) {
 			over: !coming,
 			opening: coming,
 			counted: false,
+			fundingTxid: null,
+			reclaimable: false,
+			reclaimTxid: null,
 			missing: false,
 			signed: !coming,
 			phase: '',
@@ -325,7 +375,15 @@ function statusOf(host) {
 		usableChannels = 0;
 	}
 	const warnings = warningsOf(host);
-	return { mode: modeOf(host), usableChannels, ...(warnings.length ? { warning: warnings.map((w) => w.text).join(' '), warnings } : {}) };
+	// Off by the node's own word: said with the node's reason, so that it
+	// is not taken for a wallet that has no Lightning for its assets.
+	const quiet = wanted(host) ? notAdvertised(host) : null;
+	return {
+		mode: modeOf(host),
+		usableChannels,
+		...(quiet ? { unavailable: { code: 'NOT_ADVERTISED', message: NOT_ADVERTISED, reason: quiet.reason } } : {}),
+		...(warnings.length ? { warning: warnings.map((w) => w.text).join(' '), warnings } : {})
+	};
 }
 
 const CHANNEL_MISSING =
@@ -605,8 +663,16 @@ function openFailure(host, err) {
 }
 
 const openCancelled = () => refusal('CHANNEL_CANCELLED', 'This channel open was cancelled before anything was signed, so nothing was opened and nothing was spent.', 409);
-const openSigned = () =>
-	refusal('CHANNEL_OPENING', 'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain.', 409);
+/** An open that cannot be dropped any more. `c` is its entry in the list, which says whether its funding can be taken back instead. */
+const openSigned = (c) =>
+	c && c.reclaimable
+		? refusal(
+				'CHANNEL_OPENING',
+				'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain. If that transaction will not confirm, its bitcoin can be taken back instead, which ends the open.',
+				409,
+				{ reclaimable: true }
+			)
+		: refusal('CHANNEL_OPENING', 'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain.', 409);
 
 /**
  * Forget an open that came to nothing: its marker, its note, and the answer
@@ -896,9 +962,11 @@ async function closeChannel(host, body) {
 	if (!c.channelId) {
 		// Not a channel yet. Once its funding transaction is signed it will be
 		// one, and can be closed when it is. Before that the open is dropped.
-		if (c.signed) throw openSigned();
+		if (c.signed) throw openSigned(c);
 		const how = await dropOpen(host, c.id);
-		if (how === 'signed') throw openSigned();
+		// The library would not give it up: past its point of no return by
+		// now, or the node holds its funding transaction and waits for the peer.
+		if (how === 'signed') throw openSigned(channelList(host).find((x) => x.id === c.id) || c);
 		if (how === 'busy') throw refusal('CHANNEL_OPENING', 'This channel is still being opened, and the open could not be stopped yet. Try again in a moment.', 409);
 		return { channelId: c.id, closing: true, force };
 	}
@@ -914,6 +982,98 @@ async function closeChannel(host, body) {
 	await noteChannels(host);
 	host.nudge();
 	return { channelId: c.channelId, closing: true, force };
+}
+
+/**
+ * Take back the bitcoin of a channel funding that will not confirm: the
+ * library publishes a spend of the funding transaction's own Bitcoin inputs
+ * back to the wallet, so that the two conflict. Nothing is released by it.
+ * Whichever of the two is buried decides: the loop ends the open and frees
+ * what it set aside once the spend is, and carries the channel on as if
+ * nothing had been asked if the funding confirms after all.
+ *
+ * The request key is written down before the library is asked, so the same
+ * key never asks twice, also across a restart: a key whose first try did
+ * not come back answers with no `txid`, and the channel list says the rest.
+ * A try the library refuses, or that fails, frees the key again. A second
+ * spend of the same inputs could at worst conflict with the first.
+ */
+async function reclaimFunding(host, body, key) {
+	const route = 'channels/reclaim';
+	const wantedId = hexKey(body.channelId);
+	const begin = () => {
+		const done = ops.replay(host, route, key, body);
+		if (done) return done;
+		requireProvider(host);
+		host.requireReady();
+		return null;
+	};
+	const first = await host.lock.run(() => {
+		if (!key) {
+			requireProvider(host);
+			throw keyRequired('take the same funding back twice');
+		}
+		return begin();
+	});
+	if (first) return first;
+	if (!host.mem.channelWords) await noteChannels(host);
+	const c = isId(wantedId) ? channelList(host).find((x) => x.id === wantedId || x.channelId === wantedId) : null;
+	if (!c || c.over) throw refusal('CHANNEL_NOT_FOUND', 'This wallet has no asset channel with that id.', 404);
+	if (!c.reclaimable) {
+		throw refusal(
+			'CHANNEL_NOT_RECLAIMABLE',
+			c.usable || (c.known && c.word !== 'OPENING' && !c.opening)
+				? 'The funding of this channel is on the chain, so there is nothing to take back. Close the channel instead.'
+				: 'The funding of this channel cannot be taken back. That can be done only for a channel this wallet is opening with its own bitcoin, once its funding transaction is made and while it has not confirmed.',
+			409
+		);
+	}
+	const feeRate = await host.feeRate(body.feeRate);
+	const answer = { channelId: c.channelId || c.id, pendingChannelId: c.id, txid: null, feeSats: null, feeRate };
+	const again = await host.lock.run(() => {
+		const done = begin();
+		if (done) return done;
+		ops.journal(host, route, key, body, { answer });
+		return null;
+	});
+	if (again) return again;
+	let made = null;
+	try {
+		made = await host.ln.reclaimFunding({ pendingChannelId: c.id, feeRate });
+	} catch (err) {
+		if (isFenced(err)) throw err;
+		await host.lock.run(() => host.rows.del(ops.journalKey(route, key)));
+		const mapped = mapLightning(err);
+		if (mapped) throw mapped;
+		host.say('warn', `assets: the funding of a channel (${c.id}) could not be taken back: ${plainMessage(err)}`);
+		// What the library refuses before it makes anything, in its own code.
+		if (codeOf(err) === 'ERR_BEIGNET_LN_FUNDING') {
+			throw refusal(
+				'CHANNEL_NOT_RECLAIMABLE',
+				"The funding of this channel cannot be taken back: it has confirmed, the open is over, or none of this wallet's own bitcoin went into it. Nothing was spent.",
+				409
+			);
+		}
+		throw refusal(
+			'CHANNEL_RECLAIM_FAILED',
+			'The transaction that takes the funding back could not be made or sent. If the funding transaction is already on the network, it takes a fee rate above the one that transaction pays.',
+			502
+		);
+	}
+	const done = { ...answer, txid: made.txid, feeSats: made.feeSats };
+	await host.lock.run(() =>
+		host.rows.tx(() => {
+			ops.journal(host, route, key, body, { answer: done });
+			const note = host.rows.get(`chan/${c.id}`);
+			if (note) host.rows.put(`chan/${c.id}`, { ...note, reclaim: { txid: made.txid, feeSats: made.feeSats, feeRate, at: host.now() } });
+		})
+	);
+	host.say('info', `assets: the funding of a channel (${c.id}) is being taken back in transaction ${made.txid}`);
+	host.markDirty();
+	// The channel's row changed, though its state did not.
+	host.emitEvent('channel', { channelId: done.channelId, state: c.word });
+	host.nudge();
+	return done;
 }
 
 /* ------------------------------------------------------------------ prices */
@@ -1090,7 +1250,7 @@ async function createInvoice(host, body) {
 
 function listInvoices(host) {
 	host.requireUp();
-	if (modeOf(host) !== 'full') throw unavailable();
+	if (modeOf(host) !== 'full') throw whyOff(host);
 	const all = host.rows
 		.list('inv/')
 		.map((r) => r.value)
@@ -1707,15 +1867,21 @@ const unitsText = (list) => (list || []).map((a) => `${a.amount} of ${a.assetId}
  * it has seen and that is not buried yet.
  *
  * Released: the units are free again. Moved: the funding transaction took
- * them, and they are the channel's. What that transaction held as change is
- * then neither in the on-chain records nor in a channel: the library does
- * not bring it back, so the host writes down what it was (`l-change/<id>`),
- * says so in its status, and stops saying so once a record of that
- * transaction's turns up.
+ * them, and they are the channel's. What that transaction held as change
+ * comes back with it, into the on-chain records: the library rebuilds the
+ * transaction's outputs from what a backup carries of a signed funding.
+ * The one case it cannot is a backup made before the funding was signed,
+ * which carries nothing to rebuild them from. The change is then neither in
+ * the on-chain records nor in a channel, so the host writes down what it
+ * was (`l-change/<id>`), says so in its status, and stops saying so once a
+ * record of that transaction's turns up. The rows a store already has from
+ * before the library brought any change back are of that same kind, and are
+ * read the same way: looked at after each start and on every new block.
  */
 async function settleReservations(host, { block = false } = {}) {
 	const { ln, rows, mem } = host;
-	if (block) {
+	if (block || !mem.lnChangeLooked) {
+		mem.lnChangeLooked = true;
 		const lost = rows.list('l-change/');
 		if (lost.length > 0) {
 			const records = (await host.tap.stores.assets.listAssets()).filter(views.isLive);
@@ -1744,6 +1910,10 @@ async function settleReservations(host, { block = false } = {}) {
 		}
 		host.say('info', `assets: what the funding of a channel (${id}) had set aside went into it${r.fundingTxid ? `, in transaction ${r.fundingTxid}` : ''}: ${unitsText(r.assets)}`);
 		if (r.change.length === 0) continue;
+		if (r.changeRestored) {
+			host.say('info', `assets: the change of that funding is back in this wallet's records: ${unitsText(r.change)}`);
+			continue;
+		}
 		host.say('warn', `assets: the change of that funding is not in this wallet's records, and is not in its balance: ${unitsText(r.change)}`);
 		await host.lock.run(() =>
 			rows.put(`l-change/${id}`, {
@@ -2000,6 +2170,7 @@ module.exports = {
 	channelQuote,
 	openChannel,
 	closeChannel,
+	reclaimFunding,
 	invoiceQuote,
 	createInvoice,
 	listInvoices,

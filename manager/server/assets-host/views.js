@@ -337,7 +337,14 @@ function channelView(c, reg) {
 		remoteBalance: c.remote.toString(),
 		sendable: c.sendable.toString(),
 		receivable: c.receivable.toString(),
-		channelSats: c.fundingSats
+		channelSats: c.fundingSats,
+		// The funding transaction, once there is one. While it has not
+		// confirmed, `reclaimable` says its bitcoin can be taken back, which
+		// ends the open (POST /channels/reclaim), and `reclaimTxid` names the
+		// transaction that was last sent to do so.
+		fundingTxid: c.fundingTxid || null,
+		reclaimable: !!c.reclaimable,
+		reclaimTxid: c.reclaimTxid || null
 	};
 }
 
@@ -386,10 +393,22 @@ function statusView({ cfg, phase, error = null, tip = 0, summary = {}, startup =
 		// one whose engine or library cannot carry them whatever was asked.
 		// `warning` is there only when something of the wallet's channels
 		// needs saying: a sentence, as `backup.importError` is. `warnings`
-		// is the same said one by one, each with its code.
+		// is the same said one by one, each with its code. `unavailable` is
+		// there when the mode is off for a reason of the node's own, such as
+		// its not offering asset channels to its peers: { code, message,
+		// reason }, the reason being the node's word for it, or null.
 		lightning: {
 			mode: lightning.mode === 'full' ? 'full' : 'off',
 			usableChannels: lightning.usableChannels || 0,
+			...(lightning.unavailable && lightning.mode !== 'full'
+				? {
+						unavailable: {
+							code: String(lightning.unavailable.code),
+							message: String(lightning.unavailable.message),
+							reason: lightning.unavailable.reason ? String(lightning.unavailable.reason) : null
+						}
+					}
+				: {}),
 			...(lightning.warning ? { warning: lightning.warning } : {}),
 			...(Array.isArray(lightning.warnings) && lightning.warnings.length ? { warnings: lightning.warnings.map((w) => ({ code: String(w.code), text: String(w.text) })) } : {})
 		},

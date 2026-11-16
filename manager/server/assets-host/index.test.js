@@ -19,12 +19,13 @@ const { parseConfig } = require('./config');
 const { memoryStorage, createHostLock } = require('./store');
 const { harness, MODULES } = require('./test-fakes');
 
-const MONEY = ['POST /mint', 'POST /send/prepare', 'POST /send/commit', 'POST /burn/prepare', 'POST /burn/commit', 'POST /channels/open', 'POST /pay'];
+const MONEY = ['POST /mint', 'POST /send/prepare', 'POST /send/commit', 'POST /burn/prepare', 'POST /burn/commit', 'POST /channels/open', 'POST /channels/reclaim', 'POST /pay'];
 const LIGHTNING = [
 	'GET /channels',
 	'POST /channels/quote',
 	'POST /channels/open',
 	'POST /channels/close',
+	'POST /channels/reclaim',
 	'POST /invoices/quote',
 	'POST /invoices',
 	'GET /invoices',
@@ -124,7 +125,7 @@ test('the routes: every one that moves money takes a request key, and only those
 	assert.ok(sized[1].maxBodyBytes <= 32 * 1024 * 1024);
 });
 
-test('the nine lightning routes are declared for every wallet, and one without asset channels says lightning is off', async () => {
+test('the ten lightning routes are declared for every wallet, and one without asset channels says lightning is off', async () => {
 	assert.deepEqual(ROUTES.filter((r) => /channel|invoice|pay|lightning/.test(r.path)).map(routeKey), LIGHTNING);
 	const h = harness();
 	await h.boot();
