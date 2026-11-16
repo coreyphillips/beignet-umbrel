@@ -410,7 +410,9 @@ const fakeInvoice = ({ msat, hash } = {}) =>
  * is not what the quote said), connectGate (a promise a connect waits on),
  * cancelFails (a cancel throws), cancelMissed (a cancel of an open the
  * service has no record of yet answers true and stops nothing), closeFails
- * (a code a close rejects with),
+ * (a code a close rejects with), recoveryErrors (what bringing a closed
+ * channel's assets home reports as having gone wrong), peerOffline (no
+ * channel's peer is connected),
  * rate, quoteMs, quoteFails, payStatus, payFailure (the word a failed
  * payment's record carries), payFails (a code the payment rejects with
  * before anything is sent), payThrowsAfter (a code it rejects with once the
@@ -441,6 +443,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		cancelFails: false,
 		cancelMissed: false,
 		closeFails: null,
+		recoveryErrors: [],
+		peerOffline: false,
 		rate: { coefficient: 100_000_000n, scale: 0 },
 		quoteMs: 60_000,
 		quoteFails: null,
@@ -638,7 +642,24 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	ln.resumeRecovery = async () => {
 		reaches('resumeRecovery');
 		log('resumeRecovery');
-		return [];
+		// It never rejects: what went wrong is in each report.
+		return [...flows.values()]
+			.filter((f) => f.channelId && f.recovery === 'pending')
+			.map((f) => ({ channelId: f.channelId, completed: 0, pending: 1, errors: [...opts.recoveryErrors] }));
+	};
+	ln.paymentLimits = () => {
+		reads('paymentLimits');
+		const limits = new Map();
+		for (const f of flows.values()) {
+			if (f.state !== 'NORMAL' || opts.peerOffline) continue;
+			const name = f.groupKey || f.assetId;
+			const limit = limits.get(name) || { assetId: f.groupKey ? null : f.assetId, groupKey: f.groupKey || null, maxSend: 0n, maxReceive: 0n, sendChannelId: null, receiveChannelId: null };
+			const send = f.local > f.reserved ? f.local - f.reserved : 0n;
+			if (send > limit.maxSend) Object.assign(limit, { maxSend: send, sendChannelId: f.channelId });
+			if (f.remote > limit.maxReceive) Object.assign(limit, { maxReceive: f.remote, receiveChannelId: f.channelId });
+			limits.set(name, limit);
+		}
+		return [...limits.values()];
 	};
 
 	ln.quoteInvoice = async ({ assetId, groupKey, amount, peerPubkey }) => {

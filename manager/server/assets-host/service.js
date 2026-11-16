@@ -165,6 +165,9 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		paying: new Set(),
 		accepted: new Map(),
 		dropping: new Set(),
+		// The closed channels whose assets could not be brought back at the
+		// last look, with since when.
+		recovery: new Map(),
 		channelWords: null
 	};
 	const handles = { pass: null, tip: null, backstop: null, preview: null, export: null };
@@ -394,7 +397,14 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		} catch (err) {
 			if (isFenced(err)) throw err;
 		}
-		return views.assetViews({ records, registry: host.registry(), groups, rows: host.listRows(), channels: lightning().channelList(host) });
+		return views.assetViews({
+			records,
+			registry: host.registry(),
+			groups,
+			rows: host.listRows(),
+			channels: lightning().channelList(host),
+			limits: lightning().paymentLimits(host)
+		});
 	};
 
 	/* ------------------------------------------------------- proof servers */

@@ -161,6 +161,7 @@ function requireProvider(host) {
  *   word       the state the dashboard is told (views.channelWord)
  *   usable     whether it can carry a payment now
  *   over       whether it is closed and its assets are back on-chain
+ *   opening    whether it is an open still under way
  *   counted    whether its assets are in it, and not on the chain
  */
 function channelList(host) {
@@ -195,6 +196,8 @@ function channelList(host) {
 			word,
 			usable,
 			over: isOver(word),
+			// Not usable yet and not on its way out: an open still under way.
+			opening: !isOver(word) && !views.CHANNEL_CLOSING.includes(word) && c.recovery === 'none' && (word === 'OPENING' || !c.confirmed),
 			counted: (c.signed || !!c.state) && !isOver(word),
 			signed: c.signed,
 			phase: c.phase,
@@ -226,6 +229,7 @@ function channelList(host) {
 			word: coming ? 'OPENING' : 'CLOSED',
 			usable: false,
 			over: !coming,
+			opening: coming,
 			counted: false,
 			signed: !coming,
 			phase: '',
@@ -259,7 +263,42 @@ function statusOf(host) {
 	} catch (_) {
 		usableChannels = 0;
 	}
-	return { mode: modeOf(host), usableChannels };
+	return { mode: modeOf(host), usableChannels, ...(recoveryStuck(host) ? { warning: RECOVERY_STUCK } : {}) };
+}
+
+/**
+ * The most one payment can send and can receive of each asset, by the
+ * host's key for it. A payment goes over one channel, so each figure is
+ * that of the best single channel and never a sum: the least of what the
+ * host's own list says a usable channel can move and what the library says,
+ * which also knows whether the channel's peer is there.
+ */
+function paymentLimits(host) {
+	const out = new Map();
+	const ln = host.ln;
+	if (!ln || !ln.ready()) return out;
+	const registry = host.registry();
+	const keyOf = (assetId, groupKey) => groupKey || (assetId && registry.get(assetId) ? registry.get(assetId).groupKey : null) || assetId || null;
+	const said = new Map();
+	for (const l of ln.paymentLimits()) {
+		const key = keyOf(l.assetId, l.groupKey);
+		if (!key) continue;
+		const known = said.get(key) || { maxSend: 0n, maxReceive: 0n };
+		said.set(key, { maxSend: l.maxSend > known.maxSend ? l.maxSend : known.maxSend, maxReceive: l.maxReceive > known.maxReceive ? l.maxReceive : known.maxReceive });
+	}
+	for (const c of channelList(host)) {
+		if (!c.usable || !c.key || !said.has(c.key)) continue;
+		const limit = out.get(c.key) || { maxSend: 0n, maxReceive: 0n, send: null, receive: null };
+		if (c.sendable > limit.maxSend) Object.assign(limit, { maxSend: c.sendable, send: c });
+		if (c.receivable > limit.maxReceive) Object.assign(limit, { maxReceive: c.receivable, receive: c });
+		out.set(c.key, limit);
+	}
+	for (const [key, limit] of out) {
+		const lib = said.get(key);
+		if (lib.maxSend < limit.maxSend) limit.maxSend = lib.maxSend;
+		if (lib.maxReceive < limit.maxReceive) limit.maxReceive = lib.maxReceive;
+	}
+	return out;
 }
 
 function listChannels(host) {
@@ -297,7 +336,9 @@ async function noteChannels(host) {
 	};
 	for (const c of list) {
 		after.set(c.id, { word: c.word, channelId: c.channelId || c.id, key: c.key });
-		if (before && (!before.has(c.id) || before.get(c.id).word !== c.word)) tell(c.channelId || c.id, c.word, c.key);
+		// Told when its state changes, and when the engine gives it its id.
+		const was = before ? before.get(c.id) : null;
+		if (before && (!was || was.word !== c.word || was.channelId !== (c.channelId || c.id))) tell(c.channelId || c.id, c.word, c.key);
 	}
 	// An open that was dropped is no channel any more.
 	if (before) for (const [id, was] of before) if (!after.has(id) && !isOver(was.word)) tell(was.channelId, 'CLOSED', was.key);
@@ -808,11 +849,11 @@ async function invoiceQuote(host, body) {
 	requireFull(host);
 	const amount = ops.parseUnits(body.amount);
 	const { reg, key } = knownAsset(host, body.key);
-	const usable = channelList(host).filter((c) => c.key === key && c.usable);
 	// A payment arrives through one channel: the most that can be received
 	// is the most any one of them has on the peer's side.
-	const best = usable.reduce((top, c) => (!top || c.receivable > top.receivable ? c : top), null);
-	const maxReceivable = best ? best.receivable : 0n;
+	const limit = paymentLimits(host).get(key);
+	const best = limit ? limit.receive : null;
+	const maxReceivable = best ? limit.maxReceive : 0n;
 	const short = () => refusal('INSUFFICIENT_INBOUND', 'No asset channel of this wallet can receive that much.', 409, { maxReceivable: maxReceivable.toString() });
 	if (amount > maxReceivable) throw short();
 	let quoted;
@@ -887,7 +928,10 @@ async function createInvoice(host, body) {
 	const { reg } = knownAsset(host, quote.key);
 	let made;
 	try {
-		made = await host.ln.createInvoice({ quoteId, description, expirySeconds: INVOICE_SECONDS });
+		// The invoice lives no longer than the price it is made on: paid after
+		// that, the peer would no longer convert at it.
+		const left = Math.ceil((quote.expiresAt - host.now()) / 1000);
+		made = await host.ln.createInvoice({ quoteId, description, expirySeconds: Math.max(1, Math.min(INVOICE_SECONDS, left)) });
 	} catch (err) {
 		throw lightningError(host, err);
 	}
@@ -940,17 +984,23 @@ function listInvoices(host) {
 	return { invoices: all.slice(0, MAX_INVOICES_LISTED).map((inv) => invoiceView(host, inv)) };
 }
 
-/** An invoice was paid, or ran out unpaid. */
+/**
+ * An invoice was paid, or ran out unpaid. That it was paid is the node's
+ * word and wins at any time, also over a row that already says nobody
+ * paid: a payment can arrive as the invoice runs out.
+ */
 function recordInvoice(host, rowId, outcome, assetAmount) {
 	const { rows } = host;
 	return host.lock.run(() => {
 		const row = host.getRow(rowId);
-		if (!row || row.state !== 'waiting') return null;
+		if (!row || row.kind !== 'ln-receive' || row.state === 'complete') return null;
+		if (outcome !== 'paid' && row.state !== 'waiting') return null;
 		const next = clone(row);
 		const now = host.now();
 		const inv = rows.get(`inv/${row.paymentHash}`);
 		if (outcome === 'paid') {
 			next.state = 'complete';
+			next.failure = null;
 			next.at.completed = now;
 			if (assetAmount !== undefined && assetAmount !== null && next.assets[0]) next.assets[0].amount = assetAmount.toString();
 		} else {
@@ -1004,7 +1054,8 @@ async function makePayQuote(host, body) {
 	const usable = channelList(host).filter((c) => c.key === key && c.usable);
 	// A payment leaves through one channel: the most that can be paid is
 	// the most any one of them can send.
-	const most = usable.reduce((top, c) => (c.sendable > top ? c.sendable : top), 0n);
+	const limit = paymentLimits(host).get(key);
+	const most = limit ? limit.maxSend : 0n;
 	const short = () => refusal('INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409, { sendable: most.toString() });
 	if (most === 0n) throw short();
 	let quoted;
@@ -1014,8 +1065,7 @@ async function makePayQuote(host, body) {
 		throw lightningError(host, err, { sendable: most.toString() });
 	}
 	const through = usable.find((c) => c.channelId === quoted.channelId) || null;
-	const sendable = through ? through.sendable : most;
-	if (quoted.assetAmount > sendable) throw short();
+	if (quoted.assetAmount > (through && through.sendable < most ? through.sendable : most)) throw short();
 	const quote = {
 		kind: 'pay',
 		quoteId: quoted.quoteId,
@@ -1029,7 +1079,8 @@ async function makePayQuote(host, body) {
 		peerAlias: through ? through.peerAlias : null,
 		channelId: quoted.channelId,
 		expiresAt: quoted.expiresAt,
-		sendable: sendable.toString()
+		// What one payment can send, whichever channel this one goes through.
+		sendable: most.toString()
 	};
 	await host.lock.run(() => {
 		dropOldQuotes(host);
@@ -1314,14 +1365,16 @@ async function settleRows(host) {
 			await failUnsent(host, row.id, { code: 'PAYMENT_NOT_SENT', message: 'This payment was never sent, so nothing was paid.' });
 		}
 	}
-	const waiting = stored.filter((r) => r.kind === 'ln-receive' && r.state === 'waiting');
-	if (waiting.length === 0) return;
+	// Every invoice that is not paid yet, the ones written down as run out
+	// among them: the node saying one was paid is the last word on it.
+	const unpaid = stored.filter((r) => r.kind === 'ln-receive' && r.state !== 'complete');
+	if (unpaid.length === 0) return;
 	const known = new Map(ln.invoices().map((i) => [i.paymentHash, i]));
-	for (const row of waiting) {
+	for (const row of unpaid) {
 		if (host.mem.stopped) return;
 		const inv = known.get(row.paymentHash);
 		if (inv && inv.status === 'paid') await recordInvoice(host, row.id, 'paid', inv.assetAmount);
-		else if ((inv && inv.status === 'expired') || (row.expiresAt || 0) <= host.now()) await recordInvoice(host, row.id, 'expired');
+		else if (row.state === 'waiting' && ((inv && inv.status === 'expired') || (row.expiresAt || 0) <= host.now())) await recordInvoice(host, row.id, 'expired');
 	}
 }
 
@@ -1441,10 +1494,49 @@ async function pass(host) {
 		// Carrying on is what could sign a funding transaction. It waits
 		// until every flow nobody confirmed is known to be gone.
 		if (host.mem.lnSettled) await quietly('asset channels could not be carried on', () => ln.resume());
-		await quietly('the assets of a closed channel could not be brought back', () => ln.resumeRecovery());
+		await quietly('the assets of a closed channel could not be brought back', async () => noteRecovery(host, await ln.resumeRecovery()));
 	}
 	await quietly('a Lightning payment could not be settled', () => settleRows(host));
 	await quietly('the asset channels could not be read', () => noteChannels(host));
+}
+
+const RECOVERY_STUCK = 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.';
+
+/**
+ * What bringing the assets of closed channels home reported. Each reason is
+ * logged once, as it first comes, and never shown: it is the library's
+ * text. A channel whose recovery has reported nothing but trouble for as
+ * long as an on-chain transaction is given before it is called stuck is
+ * said in the status (statusOf), in a sentence of the host's.
+ */
+function noteRecovery(host, reports) {
+	const { mem } = host;
+	const failing = new Set();
+	for (const r of reports || []) {
+		if (!r || !Array.isArray(r.errors) || r.errors.length === 0) continue;
+		const id = r.channelId || '';
+		failing.add(id);
+		const known = mem.recovery.get(id) || { since: host.now(), sinceHeight: host.tip(), said: new Set() };
+		for (const text of r.errors) {
+			if (known.said.has(text)) continue;
+			if (known.said.size >= 16) known.said.clear();
+			known.said.add(text);
+			host.say('warn', `assets: the assets of a closed channel${id ? ` (${id})` : ''} could not be brought back yet: ${plainMessage({ message: text })}`);
+		}
+		mem.recovery.set(id, known);
+	}
+	for (const id of [...mem.recovery.keys()]) if (!failing.has(id)) mem.recovery.delete(id);
+}
+
+/** Whether a recovery has done nothing but fail for long enough to say so. */
+function recoveryStuck(host) {
+	const { cfg, mem } = host;
+	const tip = host.tip();
+	const now = host.now();
+	for (const r of mem.recovery.values()) {
+		if (cfg.stuckAfterBlocks != null ? tip - r.sinceHeight >= cfg.stuckAfterBlocks : now - r.since > cfg.stuckAfterMs) return true;
+	}
+	return false;
 }
 
 /** Rows that mean nothing any more. The caller holds the lock. */
@@ -1478,9 +1570,11 @@ async function acceptIncoming(host, proposal) {
 		if (mem.stopped || modeOf(host) !== 'full' || !host.ln.ready() || !mem.lnSettled) return false;
 		const now = host.now();
 		for (const [id, at] of mem.accepted) if (now - at > ACCEPTED_KEPT_MS) mem.accepted.delete(id);
+		// Every channel a peer began that is not usable yet and not on its way
+		// out, by what is known of it and not by what the engine calls it.
 		const opening = new Set(
 			channelList(host)
-				.filter((c) => !c.initiator && c.word === 'OPENING')
+				.filter((c) => !c.initiator && c.opening)
 				.map((c) => c.id)
 		);
 		for (const id of mem.accepted.keys()) opening.add(id);
@@ -1562,6 +1656,7 @@ module.exports = {
 	channelCount,
 	statusOf,
 	listChannels,
+	paymentLimits,
 	channelQuote,
 	openChannel,
 	closeChannel,

@@ -245,7 +245,7 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 		pendingChannelId: id,
 		peerPubkey: PEER.pubkey,
 		peerAlias: 'edge',
-		state: 'AWAITING_FUNDING_CONFIRMED',
+		state: 'OPENING',
 		asset: { key: asset.key, assetId: asset.assetId, name: 'coin', type: 'normal', decimalDisplay: 2 },
 		capacity: '600',
 		localBalance: '600',
@@ -254,9 +254,10 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 		receivable: '0',
 		channelSats: 100000
 	});
+	// Still opening once the engine has it, and told again under the engine's id.
 	assert.deepEqual(events(h, 'channel'), [
 		{ channelId: id, state: 'OPENING' },
-		{ channelId: flow.channelId, state: 'AWAITING_FUNDING_CONFIRMED' }
+		{ channelId: flow.channelId, state: 'OPENING' }
 	]);
 	// The units left the chain for the channel: the same total, held two ways.
 	assert.deepEqual((await h.get('/balances')).assets[0].balance, {
@@ -973,7 +974,7 @@ test('an invoice: made at the quoted price, listed, and a row that waits to be p
 		rateText: '',
 		priced: false,
 		expiresAt: quote.expiresAt,
-		invoiceExpiresAt: h.clock.t + 3600000,
+		invoiceExpiresAt: h.clock.t + 60000,
 		description: 'tea',
 		asset: { key: asset.key, assetId: asset.assetId, name: 'coin', type: 'normal', decimalDisplay: 2 },
 		status: 'OPEN',
@@ -984,7 +985,8 @@ test('an invoice: made at the quoted price, listed, and a row that waits to be p
 		[row.id, row.kind, row.state, row.failed, row.paymentHash, row.assets],
 		[`ln-receive-${invoice.paymentHash}`, 'ln-receive', 'waiting', false, invoice.paymentHash, [{ key: asset.key, assetId: asset.assetId, name: 'coin', type: 'normal', decimalDisplay: 2, amount: '150' }]]
 	);
-	assert.deepEqual(named(h, 'createInvoice')[0][1], { quoteId: quote.quoteId, description: 'tea', expirySeconds: 3600 });
+	// The invoice is given the time its price has left, and no more.
+	assert.deepEqual(named(h, 'createInvoice')[0][1], { quoteId: quote.quoteId, description: 'tea', expirySeconds: 60 });
 	assert.deepEqual(await h.get('/invoices'), { invoices: [rest] });
 	assert.deepEqual(events(h, 'invoice').map((e) => [e.row.id, e.row.state]), [[row.id, 'waiting']]);
 	// It is in the activity, and found by its id like any other row.
@@ -1050,6 +1052,153 @@ test('an invoice nobody paid runs out with its price', async () => {
 	await h.host.pass();
 	const row = (await h.get('/activity', 'kind=ln-receive')).rows[0];
 	assert.deepEqual([row.state, row.failed, row.failure], ['failed', true, { code: 'INVOICE_EXPIRED', message: 'Nobody paid this invoice before it ran out.' }]);
+});
+
+test('an invoice lives no longer than the price it was made on', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+	// Twenty and a half seconds of the price's sixty are gone.
+	h.clock.t += 20500;
+	const invoice = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+	assert.equal(named(h, 'createInvoice')[0][1].expirySeconds, 40);
+	assert.ok(invoice.invoiceExpiresAt <= quote.expiresAt + 1000);
+	// With a moment left it still gets one second, never none.
+	const late = await h.call('POST /invoices/quote', { key: asset.key, amount: '10' });
+	h.clock.t = late.expiresAt - 1;
+	await h.call('POST /invoices', { key: asset.key, amount: '10', quoteId: late.quoteId });
+	assert.equal(named(h, 'createInvoice')[1][1].expirySeconds, 1);
+});
+
+test('an invoice the node says was paid is paid, also after it was written down as run out', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+	const invoice = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+	h.clock.t = quote.expiresAt + 1;
+	await h.host.pass();
+	assert.equal((await h.get('/activity', 'kind=ln-receive')).rows[0].state, 'failed');
+	// The payment had arrived as the invoice ran out, and the node says so a moment later.
+	h.ln.settle(invoice.paymentHash);
+	await h.host.pass();
+	const row = (await h.get('/activity', 'kind=ln-receive')).rows[0];
+	assert.deepEqual([row.state, row.failed, row.failure, row.at.completed], ['complete', false, null, h.clock.t]);
+	assert.equal((await h.get('/invoices')).invoices[0].status, 'PAID');
+	assert.deepEqual(events(h, 'invoice').map((e) => e.row.state), ['waiting', 'failed', 'complete']);
+	assert.deepEqual((await h.get('/channels')).channels[0].localBalance, '550');
+	// And it stays paid.
+	const said = h.events.length;
+	await h.host.pass();
+	assert.equal(h.events.length, said);
+});
+
+test('a wallet takes only so many channels from peers at a time, wherever the engine says each one is', async () => {
+	const { h, asset } = await funded();
+	const options = h.ln.state.options;
+	const offer = (id) => options.acceptIncoming({ pendingChannelId: id, peerPubkey: `03${'cd'.repeat(32)}`, assets: [{ assetId: asset.assetId, amount: 10n }], groupKey: null });
+	// Four that peers opened and that cannot carry a payment yet, each at another step.
+	const waiting = h.ln.inbound({ assetId: asset.assetId, amount: 10n, state: 'AWAITING_FUNDING_CONFIRMED' });
+	h.ln.inbound({ assetId: asset.assetId, amount: 10n, state: 'AWAITING_CHANNEL_READY' });
+	h.ln.set(h.ln.inbound({ assetId: asset.assetId, amount: 10n }).pendingChannelId, { confirmed: false });
+	h.ln.set(h.ln.inbound({ assetId: asset.assetId, amount: 10n, state: 'SENT_ACCEPT' }).pendingChannelId, { channelId: null, signed: false });
+	await h.host.pass({ block: true });
+	// Each reads as opening, to the dashboard and to the count.
+	assert.deepEqual((await h.get('/channels')).channels.map((c) => c.state), ['OPENING', 'OPENING', 'OPENING', 'OPENING']);
+	assert.equal(await offer('01'.repeat(32)), false);
+	// One of the wallet's own opens, one that is closing and one that is over do not count.
+	h.ln.confirm(waiting.pendingChannelId);
+	assert.equal(await offer('02'.repeat(32)), true);
+	assert.equal(await offer('03'.repeat(32)), false);
+	h.host.mem.accepted.clear();
+	await h.call('POST /channels/open', openBody(asset, '100'), 'open-key');
+	h.ln.set(h.ln.inbound({ assetId: asset.assetId, amount: 10n }).pendingChannelId, { state: 'SHUTTING_DOWN', recovery: 'pending' });
+	h.ln.set(h.ln.inbound({ assetId: asset.assetId, amount: 10n }).pendingChannelId, { state: 'CLOSED', recovery: 'complete' });
+	assert.equal(await offer('04'.repeat(32)), true);
+	assert.equal(await offer('05'.repeat(32)), false);
+});
+
+test('a closed channel is over only once its recovery is complete', async () => {
+	const { h, asset, id, channel } = await channelled();
+	await h.call('POST /channels/close', { channelId: channel.channelId, force: false });
+	// A library that says nothing of the recovery of a closed channel has not said it is done.
+	h.ln.set(id, { state: 'CLOSED', recovery: 'none' });
+	await h.host.pass({ block: true });
+	assert.deepEqual((await h.get('/channels')).channels.map((c) => [c.state, c.localBalance]), [['CLOSING', '600']]);
+	const { balance } = (await h.get('/balances')).assets[0];
+	assert.deepEqual([balance.total, balance.onchain, balance.channelLocal], ['1000', '400', '600']);
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.equal(h.host.mem.summary.channels, 1);
+	h.ln.set(id, { state: 'FORCE_CLOSED', recovery: 'none' });
+	await h.host.pass({ block: true });
+	assert.equal((await h.get('/channels')).channels[0].state, 'FORCE_CLOSING');
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	// Its assets come home: now it is over.
+	h.ln.recover(id);
+	await h.host.pass({ block: true });
+	assert.equal((await h.get('/channels')).channels[0].state, 'FORCE_CLOSED');
+	assert.deepEqual(keys(h, 'committed/funding:'), []);
+	assert.equal((await h.get('/balances')).assets[0].balance.total, '1000');
+	assert.equal(asset.key.length > 0, true);
+});
+
+test('a recovery that keeps failing is logged, and after a while the status says so in a sentence', async () => {
+	const { h, id, channel } = await channelled();
+	const logged = [];
+	h.host.say = (level, text) => logged.push(text);
+	await h.call('POST /channels/close', { channelId: channel.channelId, force: true });
+	h.ln.opts.recoveryErrors = ['sweep 4f2a of commitment 19: bad-txns-inputs-missingorspent'];
+	await h.host.pass({ block: true });
+	const said = logged.filter((line) => line.includes('bad-txns-inputs-missingorspent'));
+	assert.equal(said.length, 1);
+	assert.equal(said[0].includes(channel.channelId), true);
+	// Said once, not on every look, and not yet a warning.
+	await h.host.pass({ block: true });
+	assert.equal(logged.filter((line) => line.includes('bad-txns-inputs-missingorspent')).length, 1);
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
+
+	// Three blocks on (an hour, where blocks are not mined by hand) it is stuck.
+	h.wallet.data.header.height += 3;
+	await h.host.pass({ block: true });
+	const status = await h.get('/status');
+	assert.deepEqual(status.lightning, {
+		mode: 'full',
+		usableChannels: 0,
+		warning: 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.'
+	});
+	assert.equal(JSON.stringify(status).includes('missingorspent'), false);
+	assert.equal(h.events.some(([name, data]) => name === 'status' && data.lightning && data.lightning.warning), true);
+	// A new reason is logged as it comes.
+	h.ln.opts.recoveryErrors = ['the proof courier did not answer'];
+	await h.host.pass({ block: true });
+	assert.equal(logged.filter((line) => /the proof courier did not answer/i.test(line)).length, 1);
+
+	// It gets through: the warning goes.
+	h.ln.opts.recoveryErrors = [];
+	h.ln.recover(id);
+	await h.host.pass({ block: true });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
+});
+
+test('what one payment can move is the most one channel can, never the sum of several', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	// A second channel of the same asset: 300 on this side, 100 on the peer's.
+	const second = await h.call('POST /channels/open', openBody(asset, '400'), 'second-key');
+	h.ln.confirm(second.pendingChannelId);
+	h.ln.move(h.ln.flow(second.pendingChannelId).channelId, -100n);
+	await h.host.pass({ block: true });
+	assert.deepEqual((await h.get('/channels')).channels.map((c) => [c.sendable, c.receivable]).sort(), [['300', '100'], ['400', '200']]);
+	const { balance } = (await h.get('/balances')).assets[0];
+	// 700 of it is in channels, and one payment can send 400 of that or receive 200.
+	assert.deepEqual([balance.channelLocal, balance.lightningSendable, balance.lightningReceivable], ['700', '400', '200']);
+
+	const tooMuchIn = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '250' }));
+	assert.deepEqual([tooMuchIn.extensionCode, tooMuchIn.details], ['INSUFFICIENT_INBOUND', { maxReceivable: '200' }]);
+	assert.equal((await h.call('POST /invoices/quote', { key: asset.key, amount: '150' })).maxReceivable, '200');
+	const tooMuchOut = await refused(h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 500000 }), key: asset.key }));
+	assert.deepEqual([tooMuchOut.extensionCode, tooMuchOut.details], ['INSUFFICIENT_OUTBOUND', { sendable: '400' }]);
+	// The price names what one payment can send, whichever channel it goes through.
+	assert.equal((await h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 50000 }), key: asset.key })).sendable, '400');
+	// What a payment under way holds is not there for the next one.
+	h.ln.set(h.ln.flows.keys().next().value, { reserved: 150n });
+	assert.equal((await h.get('/balances')).assets[0].balance.lightningSendable, '300');
 });
 
 /* ------------------------------------------------------------------ paying */

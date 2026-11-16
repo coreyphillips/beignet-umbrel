@@ -164,18 +164,28 @@ const sumRows = (rows, key, kinds, states) =>
  * `registry` maps asset ID to what the host has learnt of it, `groups` maps
  * group key to whether this wallet can issue more, `rows` are stored rows.
  */
-function assetViews({ records, registry, groups = new Map(), rows = [], channels = [] }) {
+function assetViews({ records, registry, groups = new Map(), rows = [], channels = [], limits = null }) {
 	const byKey = new Map();
 	// What each asset has in channels: `channels` are the host's own entries
 	// (lightning.js channelList), the ones whose assets have left the chain.
+	// A payment goes over one channel, so what can be sent and received is
+	// the most one of them can move, and never their sum. `limits` is the
+	// library's word on that, by asset: it also knows which peers are there.
 	const inChannels = new Map();
 	for (const c of channels) {
 		if (!c.counted || !c.key) continue;
 		const sum = inChannels.get(c.key) || { local: 0n, sendable: 0n, receivable: 0n, assetId: c.assetId, groupKey: c.groupKey || null };
 		sum.local += c.local;
-		sum.sendable += c.sendable;
-		sum.receivable += c.receivable;
+		if (c.sendable > sum.sendable) sum.sendable = c.sendable;
+		if (c.receivable > sum.receivable) sum.receivable = c.receivable;
 		inChannels.set(c.key, sum);
+	}
+	if (limits) {
+		for (const [key, sum] of inChannels) {
+			const limit = limits.get(key) || { maxSend: 0n, maxReceive: 0n };
+			if (limit.maxSend < sum.sendable) sum.sendable = limit.maxSend;
+			if (limit.maxReceive < sum.receivable) sum.receivable = limit.maxReceive;
+		}
 	}
 	for (const r of records) {
 		if (!isLive(r)) continue;
@@ -259,22 +269,29 @@ function activeReceives(records, { now, windowMs, max }) {
 /* ---------------------------------------------------------------- channels */
 
 const CHANNEL_OVER = Object.freeze(['CLOSED', 'FORCE_CLOSED']);
+// The engine's states of a channel whose funding is signed and not yet usable.
+const CHANNEL_FUNDING = Object.freeze(['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY']);
+// The words of a channel that is on its way out and not over yet.
+const CHANNEL_CLOSING = Object.freeze(['CLOSING', 'FORCE_CLOSING', 'SHUTTING_DOWN', 'NEGOTIATING_CLOSING']);
 
 /**
  * A channel's state as the dashboard and the manager read it. `state` is the
  * engine's own word, absent while the engine has no channel yet.
  *
- * Three of the words are the host's. A channel is OPENING until the library
- * has confirmed it, whatever the engine calls it by then: it cannot carry a
- * payment before. And a closed channel is CLOSING, or FORCE_CLOSING, until
- * its assets are back on-chain: until then it is not over, and the manager
- * counts every state but CLOSED and FORCE_CLOSED as a live channel.
+ * Three of the words are the host's. A channel is OPENING until its funding
+ * has confirmed and the library has confirmed it, whatever the engine calls
+ * it on the way: it cannot carry a payment before. And a closed channel is
+ * CLOSING, or FORCE_CLOSING, until its assets are back on-chain: until then
+ * it is not over, and the manager counts every state but CLOSED and
+ * FORCE_CLOSED as a live channel. Only the library saying the recovery is
+ * complete makes it over. No word on it, or a word this host has not met,
+ * does not.
  */
 function channelWord({ state, confirmed, recovery }) {
-	if (!state || state === 'NONE' || state.startsWith('SENT_')) return 'OPENING';
+	if (!state || state === 'NONE' || state.startsWith('SENT_') || CHANNEL_FUNDING.includes(state)) return 'OPENING';
 	if (state === 'NORMAL') return confirmed ? 'NORMAL' : 'OPENING';
-	if (state === 'CLOSED') return recovery === 'pending' ? 'CLOSING' : 'CLOSED';
-	if (state === 'FORCE_CLOSED') return recovery === 'pending' ? 'FORCE_CLOSING' : 'FORCE_CLOSED';
+	if (state === 'CLOSED') return recovery === 'complete' ? 'CLOSED' : 'CLOSING';
+	if (state === 'FORCE_CLOSED') return recovery === 'complete' ? 'FORCE_CLOSED' : 'FORCE_CLOSING';
 	return state;
 }
 
@@ -340,7 +357,13 @@ function statusView({ cfg, phase, error = null, tip = 0, summary = {}, startup =
 		startup: startup || null,
 		// 'off' for a wallet that was not asked for asset channels, and for
 		// one whose engine or library cannot carry them whatever was asked.
-		lightning: { mode: lightning.mode === 'full' ? 'full' : 'off', usableChannels: lightning.usableChannels || 0 },
+		// `warning` is there only when something of the wallet's channels
+		// needs saying: a sentence, as `backup.importError` is.
+		lightning: {
+			mode: lightning.mode === 'full' ? 'full' : 'off',
+			usableChannels: lightning.usableChannels || 0,
+			...(lightning.warning ? { warning: lightning.warning } : {})
+		},
 		proofServer: {
 			host: universe ? universe.host : null,
 			courier: universe ? universe.courier : null,
@@ -374,6 +397,7 @@ module.exports = {
 	assetViews,
 	activeReceives,
 	CHANNEL_OVER,
+	CHANNEL_CLOSING,
 	channelWord,
 	channelView,
 	isNominal,

@@ -295,9 +295,11 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     have left the wallet's on-chain records, and it may confirm.
  *     `recovery` is 'none' while the channel is open, 'pending' from
  *     its close until every asset of this wallet's is back in its on-chain
- *     records, then 'complete'. `local` and `remote` of a closed channel are
- *     its last balances. A closed channel stays listed while its rows are
- *     kept.
+ *     records, then 'complete'. A closed channel never says 'none': the
+ *     host takes a closed channel to be over only on 'complete', and reads
+ *     any other word as a recovery still to be done. `local` and `remote`
+ *     of a closed channel are its last balances. A closed channel stays
+ *     listed while its rows are kept.
  *  7. peerSupports(peer) is synchronous: whether the connected peer's
  *     features allow an asset channel. False for a peer not connected.
  *  8. quoteFunding({ assets: [{ assetId, amount }], groupKey?,
@@ -326,14 +328,19 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     channels back and resolves to [{ channelId, completed: [], pending:
  *     [], superseded: [], errors: [{ txid?, message }] }]. Each is one look
  *     at the chain with no timer left running; the host calls both from its
- *     own loop and never calls watch().
+ *     own loop and never calls watch(). `errors` holds what went wrong in
+ *     that look and is empty for a job that is only waiting: the host logs
+ *     each, and says in its status when a channel's recovery has reported
+ *     nothing else for an hour.
  * 13. quoteInvoice({ asset: { assetId } | { groupKey }, amount, peer? })
  *     asks a channel's peer what it gives for `amount` units and resolves
  *     to { quoteId, peer, assetAmount, milliSatoshi, assetRate: {
  *     coefficient, scale }, expiresAt }. `assetRate` is asset units per
  *     bitcoin, as in the price messages.
  * 14. createInvoice({ quoteId, description?, expirySeconds }) resolves to
- *     { bolt11, paymentHash, assetAmount, milliSatoshi, expiresAt }.
+ *     { bolt11, paymentHash, assetAmount, milliSatoshi, expiresAt }. The
+ *     host passes the time the quote has left as `expirySeconds`, so the
+ *     invoice never outlives the price it was made on.
  * 15. invoices() is synchronous: [{ paymentHash, assetAmount, status }] for
  *     every asset invoice kept, `status` being 'open', 'paid' or 'expired'.
  * 16. quotePayment({ invoice, asset, amountMsat? }) resolves to { quoteId,
@@ -368,6 +375,11 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *       - before `start`, and after `close`, it throws NOT_READY and never
  *         answers undefined for a payment it would know of.
  * 19. close() stops the service. The host does not wait for what it returns.
+ * 19a. paymentLimits() is synchronous: for each asset, [{ assetId? |
+ *     groupKey?, maxSend, maxReceive, sendChannelId?, receiveChannelId? }],
+ *     the most ONE payment can send and receive, from the best single
+ *     usable channel whose peer is connected. A payment is never split
+ *     across channels, so these are never sums.
  *
  * Events and errors
  *
@@ -492,7 +504,9 @@ function plainChannel(c) {
 		reserved: BigInt(c.reserved || 0),
 		fundingSats: Number(c.fundingSatoshis || 0),
 		reserveSats: whole(c.reserveSatoshis),
-		recovery: c.recovery === 'pending' || c.recovery === 'complete' ? c.recovery : 'none'
+		// Anything but a plain 'none' or 'complete' is a recovery still to be
+		// done: a word this host has not met must never read as "nothing owed".
+		recovery: c.recovery === 'none' || c.recovery === 'complete' ? c.recovery : 'pending'
 	};
 }
 
@@ -559,6 +573,9 @@ function plainEvent(e) {
  *                              -> { paymentHash, assetAmount, status,
  *                                   feeMsat, failure }
  *   payment(paymentHash)       the same shape, or null
+ *   paymentLimits()            [{ assetId, groupKey, maxSend, maxReceive,
+ *                                sendChannelId, receiveChannelId }]: the
+ *                                most one payment can move of each asset
  *
  *   resume()                   carries opens on and confirms channels
  *   resumeRecovery()           -> [{ channelId, completed, pending, errors }]
@@ -716,6 +733,17 @@ function createLightning({ entry, storage, cfg }) {
 			const p = live().payment(unhex(paymentHash));
 			return p ? plainPayment(p) : null;
 		},
+		paymentLimits: () =>
+			live()
+				.paymentLimits()
+				.map((l) => ({
+					assetId: l.assetId ? asHex(l.assetId) : null,
+					groupKey: l.groupKey ? asHex(l.groupKey) : null,
+					maxSend: BigInt(l.maxSend || 0),
+					maxReceive: BigInt(l.maxReceive || 0),
+					sendChannelId: l.sendChannelId ? asHex(l.sendChannelId) : null,
+					receiveChannelId: l.receiveChannelId ? asHex(l.receiveChannelId) : null
+				})),
 
 		async resume() {
 			await live().resume();

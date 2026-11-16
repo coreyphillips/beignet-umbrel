@@ -90,6 +90,10 @@ function fakeEntry({ supported = true } = {}) {
 		closeChannel: async (request) => {
 			note('closeChannel', request);
 		},
+		paymentLimits: () => [
+			{ assetId: buf(0x11), maxSend: 450n, maxReceive: 200n, sendChannelId: buf(0xbb), receiveChannelId: buf(0xbc) },
+			{ groupKey: Buffer.concat([Buffer.from([3]), buf(0xcd)]), maxSend: 0n, maxReceive: 7n, receiveChannelId: buf(0xbd) }
+		],
 		resume: async () => {
 			note('resume');
 		},
@@ -322,7 +326,8 @@ test('channels: every one and every unfinished open, in plain values', async () 
 			reserved: 0n,
 			fundingSats: 100000,
 			reserveSats: null,
-			recovery: 'none'
+			// The library said nothing of its recovery, which is not "nothing owed".
+			recovery: 'pending'
 		}
 	]);
 });
@@ -357,6 +362,12 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 	assert.deepEqual(calls('cancelChannel'), [buf(0xaa)]);
 	await ln.closeChannel({ channelId: 'bb'.repeat(32), force: 1 });
 	assert.deepEqual(calls('closeChannel'), [{ channelId: buf(0xbb), force: true }]);
+
+	// What one payment can move, by asset or by group.
+	assert.deepEqual(ln.paymentLimits(), [
+		{ assetId: '11'.repeat(32), groupKey: null, maxSend: 450n, maxReceive: 200n, sendChannelId: 'bb'.repeat(32), receiveChannelId: 'bc'.repeat(32) },
+		{ assetId: null, groupKey: `03${'cd'.repeat(32)}`, maxSend: 0n, maxReceive: 7n, sendChannelId: null, receiveChannelId: 'bd'.repeat(32) }
+	]);
 
 	await ln.resume();
 	assert.deepEqual(await ln.resumeRecovery(), [{ channelId: 'bb'.repeat(32), completed: 2, pending: 1, errors: ['not yet mature'] }]);

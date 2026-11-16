@@ -324,11 +324,17 @@ test('a channel state: the three words that are the host\'s, and the engine\'s o
 	// Closed is not over until the assets are back on-chain.
 	assert.equal(word('CLOSED', true, 'pending'), 'CLOSING');
 	assert.equal(word('CLOSED', true, 'complete'), 'CLOSED');
-	assert.equal(word('CLOSED', true, 'none'), 'CLOSED');
 	assert.equal(word('FORCE_CLOSED', true, 'pending'), 'FORCE_CLOSING');
 	assert.equal(word('FORCE_CLOSED', true, 'complete'), 'FORCE_CLOSED');
+	// Only a recovery that is complete makes a closed channel over. No word on it, or one this host has not met, does not.
+	for (const recovery of ['none', undefined, null, 'something-new']) {
+		assert.equal(word('CLOSED', true, recovery), 'CLOSING', String(recovery));
+		assert.equal(word('FORCE_CLOSED', true, recovery), 'FORCE_CLOSING', String(recovery));
+	}
+	// A funding the chain or the peer has still to confirm is opening, whatever the library says of it.
+	for (const state of ['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY']) for (const confirmed of [false, true]) assert.equal(word(state, confirmed), 'OPENING', state);
 	// Everything else is the engine's word, which the dashboard has a wording for or shows as it is.
-	for (const state of ['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY', 'SHUTTING_DOWN', 'NEGOTIATING_CLOSING', 'SOMETHING_NEW']) assert.equal(word(state, true), state);
+	for (const state of ['SHUTTING_DOWN', 'NEGOTIATING_CLOSING', 'AWAITING_REESTABLISH', 'SOMETHING_NEW']) assert.equal(word(state, true), state);
 	// The manager counts every state but these two as a channel the wallet still has.
 	assert.deepEqual(views.CHANNEL_OVER, ['CLOSED', 'FORCE_CLOSED']);
 });
