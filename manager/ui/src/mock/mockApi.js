@@ -3170,7 +3170,22 @@ function walletRequest(id, path, method, body, headers) {
 			if (st.channels.some((c) => c.state !== 'CLOSED' && c.state !== 'FORCE_CLOSED')) {
 				throw err('The database already holds channels; a capsule restore needs an empty target', 'CAPSULE_RESTORE_TARGET_DIRTY');
 			}
-			return runDemoCapsuleRestore(w, st);
+			if (body?.omitAssetChannels !== undefined && typeof body.omitAssetChannels !== 'boolean') throw err('omitAssetChannels must be a boolean', 'INVALID_PARAMS');
+			{
+				// As the engine: a capsule that holds asset channels is refused
+				// with the channels it names, nothing installed, unless the call
+				// says to leave them out, and then the answer lists them.
+				if (typeof assetsMock.readSwitch === 'function') assetsMock.readSwitch();
+				const assetChannels = assetsMock.capsuleAssetChannels(w.id);
+				if (assetChannels && body?.omitAssetChannels !== true) {
+					throw Object.assign(err('The capsule holds asset channels this wallet cannot restore; nothing was installed', 'ASSET_RESTORE_REFUSED'), {
+						status: 409,
+						details: { assetChannels }
+					});
+				}
+				const restored = runDemoCapsuleRestore(w, st);
+				return assetChannels ? { ...restored, omittedAssetChannels: assetChannels } : restored;
+			}
 		case '/backup/peer-retrieved':
 			if (!st.recovery.capsule) throw err('No peer-retrieved backup this session', 'NOT_FOUND');
 			return { encoded: 'beignet-scb-v1:' + hex(96), createdAt: st.recovery.capsule.receivedAt, fromPeer: st.recovery.capsule.fromPeer };

@@ -330,3 +330,28 @@ test('a restore the engine refused over an asset channel is said in a sentence, 
 		assert.equal(assetRestoreRefusal(other), null);
 	}
 });
+
+test('the asset channels a capsule restore was refused over are read from the refusal, and only from it', async () => {
+	const { refusedAssetChannels, restoreAssetChannels, assetRestoreRefusal, OMIT_ASSET_CHANNELS_PHRASE } = await import('./recovery.js');
+	const list = [
+		{ channelId: 'aa'.repeat(32), peerPubkey: '02' + 'b'.repeat(64), capacitySats: 100000 },
+		{ channelId: 'cc'.repeat(32), peerPubkey: '03' + 'd'.repeat(64), capacitySats: '250000' }
+	];
+	const named = [
+		{ channelId: 'aa'.repeat(32), peerPubkey: '02' + 'b'.repeat(64), capacitySats: 100000 },
+		{ channelId: 'cc'.repeat(32), peerPubkey: '03' + 'd'.repeat(64), capacitySats: 250000 }
+	];
+	assert.deepEqual(refusedAssetChannels({ code: 'ASSET_RESTORE_REFUSED', details: { assetChannels: list } }), named);
+	assert.deepEqual(refusedAssetChannels({ code: 'ASSET_PROVIDER_REQUIRED', details: { assetChannels: [list[0]] } }), [named[0]]);
+	// No list, an empty one, or another refusal: nothing to offer.
+	assert.equal(refusedAssetChannels({ code: 'ASSET_RESTORE_REFUSED', details: null }), null);
+	assert.equal(refusedAssetChannels({ code: 'ASSET_RESTORE_REFUSED', details: { assetChannels: [] } }), null);
+	assert.equal(refusedAssetChannels({ code: 'CAPSULE_RESTORE_TARGET_DIRTY', details: { assetChannels: list } }), null);
+	assert.equal(refusedAssetChannels({ code: 'AUXILIARY_GUARDIAN_RESTORE_REFUSED', details: { assetChannels: list } }), null, 'the guardian restore has no such option');
+	assert.equal(refusedAssetChannels(null), null);
+	// What is malformed is left out of a list, and a channel with no capacity said keeps none.
+	assert.deepEqual(restoreAssetChannels([null, { channelId: 'x' }, { channelId: 'ee', peerPubkey: '02ff' }]), [{ channelId: 'ee', peerPubkey: '02ff', capacitySats: null }]);
+	assert.deepEqual(restoreAssetChannels(undefined), []);
+	assert.match(assetRestoreRefusal({ code: 'ASSET_PROVIDER_REQUIRED' }), /the assets part of this wallet is not running to take it, so nothing was restored and nothing was written/);
+	assert.equal(OMIT_ASSET_CHANNELS_PHRASE, 'leave them out');
+});

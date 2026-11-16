@@ -896,6 +896,13 @@ export function createAssetsMock(ctx) {
 			S(id).feePolicyRefused = true;
 			return true;
 		},
+		// Use demo-capsule. The checkpoint a peer returned for the wallet holds
+		// two asset channels, so Resume channels is refused with the list, and
+		// goes through without them once that is confirmed. `ok` puts it back.
+		'capsule-assets'(id) {
+			S(id).capsuleAssets = true;
+			return true;
+		},
 		// A payment the node has no record of any more: it may have been paid.
 		'pay-unaccounted'(id) {
 			return plantNotice(id, 'PAYMENT_UNACCOUNTED');
@@ -1006,7 +1013,7 @@ export function createAssetsMock(ctx) {
 			const want = m && new URLSearchParams(loc.search || '').get('assets-demo');
 			if (!want) return;
 			const s = S(decodeURIComponent(m[1]));
-			const before = `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}:${!!s.noFeeCoins}:${!!s.feePolicyRefused}`;
+			const before = `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}:${!!s.noFeeCoins}:${!!s.feePolicyRefused}:${!!s.capsuleAssets}`;
 			if (want === 'ok') {
 				s.host = null;
 				s.proofServerDown = false;
@@ -1017,10 +1024,11 @@ export function createAssetsMock(ctx) {
 				s.draining = false;
 				s.noFeeCoins = false;
 				s.feePolicyRefused = false;
+				s.capsuleAssets = false;
 				if (s.seeded) {
 					delete s.seeded['not-advertised'];
 					delete s.seeded['fee-budget'];
-					for (const name of ['funding-inputs', 'draining', 'no-fee-coins', 'fee-policy']) delete s.seeded[name];
+					for (const name of ['funding-inputs', 'draining', 'no-fee-coins', 'fee-policy', 'capsule-assets']) delete s.seeded[name];
 				}
 			} else if (want === 'proof-server-down') {
 				s.host = null;
@@ -1030,7 +1038,7 @@ export function createAssetsMock(ctx) {
 			} else if (SEEDS[want]) {
 				putState(decodeURIComponent(m[1]), want);
 			}
-			if (before !== `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}:${!!s.noFeeCoins}:${!!s.feePolicyRefused}`) save();
+			if (before !== `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}:${!!s.noFeeCoins}:${!!s.feePolicyRefused}:${!!s.capsuleAssets}`) save();
 		} catch (_) {
 			/* no address to read, nothing switched */
 		}
@@ -2330,6 +2338,18 @@ export function createAssetsMock(ctx) {
 	 * beside the bitcoin ones, marked `auxiliary`, with the sats that carry
 	 * the asset. Reading it moves nothing and marks nothing as seen.
 	 */
+	// The asset channels the checkpoint a peer returned for this wallet
+	// holds, as the engine names them when it refuses a capsule restore over
+	// them and when it leaves them out: null when it holds none.
+	function capsuleAssetChannels(id) {
+		if (!S(id).capsuleAssets) return null;
+		return [0, 1].map((i) => ({
+			channelId: derivedHex(`capsule-asset-channel:${id}:${i}`, 64),
+			peerPubkey: `0${2 + i}${derivedHex(`capsule-asset-peer:${i}`, 64)}`,
+			capacitySats: 100000
+		}));
+	}
+
 	function daemonChannels(id) {
 		if (!state.wallets[id]) return [];
 		return state.wallets[id].channels
@@ -2414,6 +2434,10 @@ export function createAssetsMock(ctx) {
 		setHost,
 		/** For tests and the demo's switch: 'stuck', 'proof-refused', 'send-refused' or 'unwatched' on this wallet. */
 		seed: putState,
+		/** For the demo daemon: the asset channels the wallet's checkpoint holds, or null. */
+		capsuleAssetChannels,
+		/** For the demo daemon: read the switch in the address now, ahead of a route that depends on it. */
+		readSwitch,
 		/** For tests: this wallet's proof server stops answering, or answers again. */
 		setProofServer(id, down) {
 			S(id).proofServerDown = !!down;

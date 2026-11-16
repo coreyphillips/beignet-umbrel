@@ -4529,4 +4529,4 @@ class WalletManager {
 	}
 }
 
-module.exports = { WalletManager };
+module.exports = { WalletManager, ENGINE_ASSET_REFUSALS };

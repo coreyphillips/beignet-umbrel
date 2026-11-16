@@ -29,8 +29,34 @@ const ASSET_RESTORE_REFUSALS = {
 	ASSET_RESTORE_REFUSED:
 		'The channel state that was to be restored holds an asset channel, which a restore does not bring back, so nothing was restored and nothing was written. The wallet is as it was.',
 	AUXILIARY_GUARDIAN_RESTORE_REFUSED:
-		'The channel state the guardians keep for this wallet holds an asset channel, which a guardian backup does not cover, so nothing was restored and nothing was written. The wallet is as it was.'
+		'The channel state the guardians keep for this wallet holds an asset channel, which a guardian backup does not cover, so nothing was restored and nothing was written. The wallet is as it was.',
+	// A restore met with no extension running to take the asset channels.
+	ASSET_PROVIDER_REQUIRED:
+		'The channel state that was to be restored holds an asset channel, and the assets part of this wallet is not running to take it, so nothing was restored and nothing was written. The wallet is as it was.'
 };
+
+/** What is typed to restore a checkpoint without the asset channels it holds. */
+export const OMIT_ASSET_CHANNELS_PHRASE = 'leave them out';
+
+/** Asset channels as a restore names them, [{ channelId, peerPubkey, capacitySats }], with anything malformed left out. */
+export function restoreAssetChannels(list) {
+	return (Array.isArray(list) ? list : [])
+		.filter((c) => c && typeof c.channelId === 'string' && c.channelId && typeof c.peerPubkey === 'string' && c.peerPubkey)
+		.map((c) => ({ channelId: c.channelId, peerPubkey: c.peerPubkey, capacitySats: Number.isFinite(Number(c.capacitySats)) && c.capacitySats !== null ? Number(c.capacitySats) : null }));
+}
+
+/**
+ * The asset channels a capsule restore was refused over, as the daemon
+ * names them under `error.details.assetChannels`, or null: for another
+ * refusal, and for one that names none (a daemon that does not say, which
+ * is answered with the sentence alone and no way round).
+ */
+export function refusedAssetChannels(error) {
+	const code = error && error.code;
+	if (code !== 'ASSET_RESTORE_REFUSED' && code !== 'ASSET_PROVIDER_REQUIRED') return null;
+	const list = restoreAssetChannels(error.details && error.details.assetChannels);
+	return list.length > 0 ? list : null;
+}
 
 /** The sentence for a restore the engine refused over an asset channel, or null for any other error. */
 export function assetRestoreRefusal(error) {

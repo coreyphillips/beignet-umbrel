@@ -174,6 +174,8 @@ export default function WalletPage() {
 	const location = useLocation();
 	const toast = useToast();
 	const api = useMemo(() => walletApi(id), [id]);
+	// The checkpoint card, kept after a restore that left asset channels out, until that has been read.
+	const [capsuleKept, setCapsuleKept] = useState(null);
 	const [tick, setTick] = useState(0);
 	const bump = useCallback(() => setTick((t) => t + 1), []);
 	const [advanced, setAdvanced] = useState(readAdvanced);
@@ -503,16 +505,22 @@ export default function WalletPage() {
 							}}
 						/>
 					)}
-					{capsuleOffer(recovery, info) && (
+					{(capsuleOffer(recovery, info) || (capsuleKept && capsuleKept.wallet === rec?.id)) && (
 						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							<CapsuleRestoreCard
 								api={api}
-								offer={capsuleOffer(recovery, info)}
-								onRestored={() => {
+								offer={capsuleOffer(recovery, info) || capsuleKept.offer}
+								restored={capsuleKept && capsuleKept.wallet === rec?.id ? capsuleKept.result : null}
+								onRestored={(r) => {
 									toast('Checkpoint restored', 'success');
+									// The offer goes with the restore. What the restore left out stays on the page until it has been read.
+									if (r && Array.isArray(r.omittedAssetChannels) && r.omittedAssetChannels.length > 0) {
+										setCapsuleKept({ wallet: rec?.id, offer: capsuleOffer(recovery, info), result: r });
+									}
 									refreshRec();
 									bump();
 								}}
+								onDismiss={() => setCapsuleKept(null)}
 							/>
 						</div>
 					)}
