@@ -86,6 +86,25 @@
  *   the host concludes itself, marks as its own conclusion, and takes back
  *   if the node turns out to have the payment after all.
  *
+ *   The record of a payment hash is that of its latest try, which it
+ *   numbers. A row keeps the number that stood when it was written
+ *   (`attemptBefore`), and takes its end only from a record numbered above
+ *   it: what an earlier try at the same invoice left is not this one's.
+ *
+ *   Two things a record can say are neither an end nor a failure, and the
+ *   row says them as a `notice`: that the node no longer has a record of
+ *   the payment (it stays pending, time ends nothing, and the invoice is
+ *   never paid again), and that the node took the send without confirming
+ *   that it went out as an asset payment (it ends as the node reports).
+ *   The wallet's own spending limit refusing a payment is a refusal before
+ *   anything left, in a sentence that names the limit when the engine does.
+ *
+ * Being paid
+ *
+ *   An invoice says what was invoiced and, once paid, what arrived: a
+ *   payer's rate can round that one unit down. The activity row and the
+ *   balance count what arrived.
+ *
  * Rows
  *
  *   chan/<id>            what the host knows of a channel that the library
@@ -999,6 +1018,9 @@ function invoiceView(host, inv) {
 		description: inv.description,
 		asset: inv.asset,
 		status: inv.status === 'PAID' ? 'PAID' : deadline <= host.now() ? 'EXPIRED' : 'OPEN',
+		// What a paid invoice brought in. A payer's rate can round it one
+		// unit under what was invoiced, which `assetAmount` goes on saying.
+		receivedAmount: inv.status === 'PAID' ? inv.receivedAmount || inv.assetAmount : null,
 		createdAt: inv.createdAt
 	};
 }
@@ -1079,9 +1101,11 @@ function listInvoices(host) {
 /**
  * An invoice was paid, or ran out unpaid. That it was paid is the node's
  * word and wins at any time, also over a row that already says nobody
- * paid: a payment can arrive as the invoice runs out.
+ * paid: a payment can arrive as the invoice runs out. `received` is what
+ * arrived, which is what the row then counts: the amount invoiced stays on
+ * the invoice.
  */
-function recordInvoice(host, rowId, outcome, assetAmount) {
+function recordInvoice(host, rowId, outcome, received) {
 	const { rows } = host;
 	return host.lock.run(() => {
 		const row = host.getRow(rowId);
@@ -1094,14 +1118,16 @@ function recordInvoice(host, rowId, outcome, assetAmount) {
 			next.state = 'complete';
 			next.failure = null;
 			next.at.completed = now;
-			if (assetAmount !== undefined && assetAmount !== null && next.assets[0]) next.assets[0].amount = assetAmount.toString();
+			if (received !== undefined && received !== null && next.assets[0]) next.assets[0].amount = received.toString();
 		} else {
 			next.state = 'failed';
 			next.failure = { code: 'INVOICE_EXPIRED', message: 'Nobody paid this invoice before it ran out.' };
 		}
 		rows.tx(() => {
 			rows.put(`row/${rowId}`, next);
-			if (inv && outcome === 'paid') rows.put(`inv/${row.paymentHash}`, { ...inv, status: 'PAID', paidAt: now });
+			if (inv && outcome === 'paid') {
+				rows.put(`inv/${row.paymentHash}`, { ...inv, status: 'PAID', paidAt: now, ...(received !== undefined && received !== null ? { receivedAmount: received.toString() } : {}) });
+			}
 		});
 		host.markDirty();
 		host.emitRow(next);
@@ -1192,8 +1218,30 @@ const payAnswer = (row) => ({
 	paymentHash: row.paymentHash,
 	assetAmount: row.assets && row.assets[0] ? row.assets[0].amount : null,
 	feeSats: row.feeSats === undefined ? null : row.feeSats,
-	failureDescription: row.failure ? row.failure.message : null
+	failureDescription: row.failure ? row.failure.message : null,
+	...(row.notice ? { notice: row.notice } : {})
 });
+
+// What a payment's row says while the node cannot say how it ended, or did
+// not confirm what it sent. Neither is a failure, and neither ends the row.
+const PAYMENT_UNACCOUNTED = {
+	code: 'PAYMENT_UNACCOUNTED',
+	message: 'The node no longer has a record of this payment, so how it ended cannot be known. It may have been paid. This wallet will not pay the invoice again.'
+};
+const PAYMENT_UNCONFIRMED = {
+	code: 'PAYMENT_UNCONFIRMED',
+	message: 'The node took this payment without confirming that it went out as an asset payment. It ends as the node reports, and its units are not known to have left the channel.'
+};
+
+/**
+ * Whether the library's record `seen` speaks of the try that `row` stands
+ * for. The record of a payment hash is that of its latest try, numbered
+ * from 1, and a try the library refuses leaves the record of the one before
+ * as it was. So a record numbered no higher than what stood when this row
+ * was written says nothing of this row. A record or a row that names no try
+ * cannot be told apart that way, and is taken as before.
+ */
+const ofThisTry = (row, seen) => !!seen && (seen.attempt === null || seen.attempt === undefined || !Number.isInteger(row.attemptBefore) || seen.attempt > row.attemptBefore);
 
 const keyRequired = (so) => refusal('IDEMPOTENCY_KEY_REQUIRED', `This request needs an X-Idempotency-Key header, so that sending it twice does not ${so}.`, 400);
 
@@ -1222,13 +1270,28 @@ function recordPayment(host, rowId, seen, { handed = false, own = false } = {}) 
 		if (!own && host.mem.paying.has(rowId)) return row;
 		// What the node said is final. What the host concluded itself is not.
 		if (row.state === 'complete' || (row.state === 'failed' && !row.assumed)) return row;
+		if (seen && !ofThisTry(row, seen)) {
+			// The record of an earlier try says nothing of how this one ended.
+			// That it is still the latest does say one thing: the library
+			// never recorded this try, so it never sent it. What the host had
+			// concluded of it stands for good, in the host's own words.
+			if (row.state === 'failed' && row.assumed && !handed) {
+				const settled = clone(row);
+				delete settled.assumed;
+				host.rows.put(`row/${rowId}`, settled);
+				return settled;
+			}
+			seen = null;
+		}
 		if (!seen && !handed) return row;
 		const next = clone(row);
 		const now = host.now();
-		if (row.state === 'failed' && seen && seen.status === 'failed') {
-			// The host had concluded as much, and the record agrees: it may be
-			// that of an earlier try of the same invoice. The host's own words
-			// for why this one failed stand.
+		const numbered = !!seen && Number.isInteger(seen.attempt);
+		if (numbered) next.attempt = seen.attempt;
+		if (row.state === 'failed' && seen && seen.status === 'failed' && !numbered) {
+			// The host had concluded as much, and a record that names no try
+			// agrees: it may be that of an earlier try of the same invoice.
+			// The host's own words for why this one failed stand.
 			delete next.assumed;
 			host.rows.put(`row/${rowId}`, next);
 			return next;
@@ -1253,6 +1316,13 @@ function recordPayment(host, rowId, seen, { handed = false, own = false } = {}) 
 			next.failure = null;
 			next.at.completed = null;
 		}
+		// Pending for good, as far as anything can say now: the node forgot
+		// the payment. And, whatever became of it, a send the node never
+		// confirmed as an asset payment.
+		const notice = seen && seen.status === 'pending' && seen.lost ? PAYMENT_UNACCOUNTED : seen && seen.unconfirmed ? PAYMENT_UNCONFIRMED : null;
+		if (notice) next.notice = { ...notice };
+		else if (seen) delete next.notice;
+		if (notice && !(row.notice && row.notice.code === notice.code)) host.say('warn', `assets: Lightning payment ${row.paymentHash}: ${notice.message}`);
 		if (JSON.stringify(next) === JSON.stringify(row)) return row;
 		host.rows.put(`row/${rowId}`, next);
 		host.markDirty();
@@ -1306,11 +1376,12 @@ async function sendPayment(host, { row, quote, quoteId, bound, key, route, body,
 		}
 		let seen = lookAtPayment(host, quote.paymentHash);
 		// The library names the rejections that mean nothing left the wallet.
-		// After one, its record is gone again, or is back to what an earlier
-		// try of the same invoice left: a failure. A record that says
-		// anything else is followed, whatever was thrown.
+		// After one there is no record of this try: none at all, or that of
+		// an earlier try of the same invoice, which is a failure. A record of
+		// this try is followed, whatever was thrown.
 		const refused = !!error && host.ln.refusals.includes(codeOf(error));
-		if (refused && (seen === null || (seen && seen.status === 'failed'))) {
+		const earlier = !!seen && (Number.isInteger(seen.attempt) ? !ofThisTry(row, seen) : seen.status === 'failed');
+		if (refused && (seen === null || earlier)) {
 			// A price that moved is shown again, as long as someone is still
 			// waiting to see it.
 			if (PRICE_MOVED.includes(codeOf(error)) && !state.answered) {
@@ -1336,6 +1407,7 @@ async function sendPayment(host, { row, quote, quoteId, bound, key, route, body,
 		// Anything else may have come after the node took the payment. Its
 		// record says how it ended, now or on a later pass of the loop.
 		if (error) host.say('warn', `assets: a Lightning payment was handed over and not confirmed: ${plainMessage(error)}`);
+		if (seen && !ofThisTry(row, seen)) seen = null;
 		let current = await recordPayment(host, row.id, seen || null, { handed, own: true });
 		const deadline = started + host.cfg.payWaitMs;
 		while ((handed || seen) && !(seen && seen.status !== 'pending') && !host.mem.stopped && Date.now() < deadline) {
@@ -1344,7 +1416,7 @@ async function sendPayment(host, { row, quote, quoteId, bound, key, route, body,
 			const again = lookAtPayment(host, quote.paymentHash);
 			// A service that cannot be asked has said nothing about the payment.
 			if (again === undefined) break;
-			if (again) seen = again;
+			if (again && ofThisTry(row, again)) seen = again;
 			if (seen && seen.status !== 'pending') current = await recordPayment(host, row.id, seen, { own: true });
 		}
 		return { row: current || row };
@@ -1392,6 +1464,8 @@ async function pay(host, body, key) {
 		const seen = lookAtPayment(host, quote.paymentHash);
 		if (seen === undefined) throw starting();
 		if ((seen && seen.status === 'complete') || (prev && prev.state === 'complete')) throw refusal('ALREADY_PAID', 'This wallet has already paid that invoice.', 409);
+		// Nothing can say how that one ended, so it may have been paid.
+		if (seen && seen.status === 'pending' && seen.lost) throw refusal(PAYMENT_UNACCOUNTED.code, PAYMENT_UNACCOUNTED.message, 409);
 		if ((seen && seen.status === 'pending') || (prev && prev.state === 'pending')) {
 			throw refusal('PAYMENT_IN_FLIGHT', 'This wallet is already paying that invoice. Wait for it to finish.', 409);
 		}
@@ -1405,7 +1479,10 @@ async function pay(host, body, key) {
 			paymentHash: quote.paymentHash,
 			clientRef: key || null,
 			amountSats: quote.amountSats,
-			peerPubkey: quote.peerPubkey
+			peerPubkey: quote.peerPubkey,
+			// The try the library's record stood for before this one: 0 with
+			// no record. A record of this row's own try is numbered above it.
+			attemptBefore: seen && Number.isInteger(seen.attempt) ? seen.attempt : 0
 		});
 		host.rows.tx(() => {
 			ops.journal(host, route, key, body, { rowId });
@@ -1461,11 +1538,13 @@ async function settleRows(host) {
 		const seen = lookAtPayment(host, row.paymentHash);
 		// A service that cannot be asked has said nothing: every row stays as it is.
 		if (seen === undefined) return;
-		if (seen) {
+		// The record of this try, or that of an earlier one for a row the
+		// host has already concluded was never sent.
+		if (seen && (ofThisTry(row, seen) || row.state === 'failed')) {
 			await recordPayment(host, row.id, seen);
 			continue;
 		}
-		// The node has no record of it. A payment the library said it took is
+		// The node has no record of this try. A payment the library said it took is
 		// the node's to answer for, and waits. One it never took, that nobody
 		// is sending and that has had its time, never left.
 		if (row.state === 'pending' && !row.sent && host.now() - (row.at.created || 0) >= UNSENT_AFTER_MS) {
@@ -1480,7 +1559,8 @@ async function settleRows(host) {
 	for (const row of unpaid) {
 		if (host.mem.stopped) return;
 		const inv = known.get(row.paymentHash);
-		if (inv && inv.status === 'paid') await recordInvoice(host, row.id, 'paid', inv.assetAmount);
+		// What arrived, where the library says it: never nothing for an invoice it calls paid.
+		if (inv && inv.status === 'paid') await recordInvoice(host, row.id, 'paid', inv.received !== null && inv.received > 0n ? inv.received : inv.assetAmount);
 		else if (row.state === 'waiting' && ((inv && inv.status === 'expired') || (row.expiresAt || 0) <= host.now())) await recordInvoice(host, row.id, 'expired');
 	}
 }

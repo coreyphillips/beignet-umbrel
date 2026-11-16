@@ -957,6 +957,7 @@ test('an invoice: made at the quoted price, listed, and a row that waits to be p
 		description: 'tea',
 		asset: { key: asset.key, assetId: asset.assetId, name: 'coin', type: 'normal', decimalDisplay: 2 },
 		status: 'OPEN',
+		receivedAmount: null,
 		createdAt: h.clock.t
 	});
 	assert.match(invoice.bolt11, /^lnbcrt1/);
@@ -1823,7 +1824,10 @@ test('a payment the library refuses after an earlier try failed keeps the words 
 	const said = 'The payment could not be made, so nothing was paid.';
 	assert.deepEqual([refusedNow.status, refusedNow.failureDescription], ['FAILED', said]);
 	assert.equal(h.ln.payments.get(failed.paymentHash).status, 'failed');
-	// The loop reads the record, which agrees that it failed, and leaves the row's own words.
+	// The loop reads the record, which is still that of the first try: the
+	// library never recorded this one, so it was never sent. The row's own
+	// words stand, and for good.
+	assert.deepEqual([h.ln.payments.get(failed.paymentHash).attempt, JSON.parse(h.storage.get(`h/row/ln-send-${failed.paymentHash}`)).attemptBefore], [1, 1]);
 	await h.host.pass();
 	await h.host.pass();
 	const row = (await h.get('/activity', 'kind=ln-send')).rows[0];
@@ -1832,6 +1836,183 @@ test('a payment the library refuses after an earlier try failed keeps the words 
 	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
 	// The codes that mean nothing was sent are the library's own list, handed on as it is.
 	assert.deepEqual([...h.host.ln.refusals], [...h.ln.entry.ASSET_PAYMENT_REFUSALS]);
+});
+
+test('a payment is settled from the record of its own try: what an earlier try left says nothing of it', async () => {
+	const { h, asset } = await channelled();
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const first = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	h.ln.opts.payStatus = 'failed';
+	h.ln.opts.payFailure = 'no route';
+	const failed = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: first.quoteId, maxAssetAmount: '50' }, 'first-key');
+	assert.equal(failed.status, 'FAILED');
+	const stored = () => JSON.parse(h.storage.get(`h/row/ln-send-${failed.paymentHash}`));
+	assert.deepEqual([stored().attemptBefore, stored().attempt], [0, 1]);
+
+	// Tried again, and the call throws something that is no refusal before
+	// the library has written a word of this try. Its record is still that
+	// of the first try, a failure, and is not taken for the end of this one.
+	h.ln.opts.payStatus = 'complete';
+	h.ln.opts.payFails = 'ERR_SOMETHING_NOBODY_NAMED';
+	h.cfg.payWaitMs = 10;
+	const second = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	const answer = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: second.quoteId, maxAssetAmount: '50' }, 'second-key');
+	assert.deepEqual([answer.status, answer.failureDescription], ['PENDING', null]);
+	assert.deepEqual([stored().attemptBefore, 'attempt' in stored(), h.ln.payments.get(failed.paymentHash).attempt], [1, false, 1]);
+	await h.host.pass();
+	assert.equal(stored().state, 'pending');
+	// Nobody is sending it and the library never recorded it: once it has
+	// had its time it is the host's conclusion that it was never sent, and
+	// the record still being that of the first try makes that final.
+	h.clock.t += 31_000;
+	await h.host.pass();
+	assert.deepEqual([stored().state, stored().failure.code, stored().assumed], ['failed', 'PAYMENT_NOT_SENT', true]);
+	await h.host.pass();
+	assert.deepEqual([stored().state, stored().failure.code, 'assumed' in stored()], ['failed', 'PAYMENT_NOT_SENT', false]);
+	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
+
+	// A third try that the node takes is the record's third, and ends as the record of it says.
+	h.ln.opts.payFails = null;
+	h.ln.opts.payStatus = 'pending';
+	const third = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	assert.equal((await h.call('POST /pay', { bolt11, key: asset.key, quoteId: third.quoteId, maxAssetAmount: '50' }, 'third-key')).status, 'PENDING');
+	assert.deepEqual([stored().attemptBefore, stored().attempt, stored().state], [1, 2, 'pending']);
+	h.ln.finish(failed.paymentHash, 'complete');
+	await h.host.pass();
+	assert.deepEqual([stored().state, stored().attempt], ['complete', 2]);
+	assert.equal((await h.get('/channels')).channels[0].localBalance, '550');
+});
+
+test('a payment the node no longer has a record of stays pending, says so, and its invoice is never paid again', async () => {
+	const { h, asset } = await channelled();
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	const other = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	h.ln.opts.payStatus = 'pending';
+	h.cfg.payWaitMs = 10;
+	const answer = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: '50' }, 'pay-key');
+	assert.equal(answer.status, 'PENDING');
+	assert.equal('notice' in answer, false);
+
+	// The engine forgets the payment, with no HTLC of it left on the channel. Nothing says how it ended.
+	h.ln.forget(answer.paymentHash);
+	await h.host.pass();
+	const said = {
+		code: 'PAYMENT_UNACCOUNTED',
+		message: 'The node no longer has a record of this payment, so how it ended cannot be known. It may have been paid. This wallet will not pay the invoice again.'
+	};
+	const row = async () => (await h.get('/activity', 'kind=ln-send')).rows[0];
+	assert.deepEqual([(await row()).state, (await row()).failed, (await row()).failure, (await row()).notice], ['pending', false, null, said]);
+	assert.equal(h.logs.filter(([level, text]) => level === 'warn' && text.includes(answer.paymentHash) && text.includes('how it ended cannot be known')).length, 1);
+	// The request that began it answers the same, and the invoice is not paid a second time.
+	assert.deepEqual((await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: '50' }, 'pay-key')).notice, said);
+	const refused = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: other.quoteId, maxAssetAmount: '50' }, 'other-key').catch((err) => err);
+	assert.deepEqual([refused.extensionCode, refused.status, refused.message], ['PAYMENT_UNACCOUNTED', 409, said.message]);
+	assert.equal(named(h, 'payInvoice').length, 1);
+	// Time ends nothing, and the same is not logged on every pass.
+	h.clock.t += 3 * 24 * 60 * 60 * 1000;
+	await h.host.pass();
+	await h.host.pass();
+	assert.equal((await row()).state, 'pending');
+	assert.equal(h.logs.filter(([, text]) => text.includes('how it ended cannot be known')).length, 1);
+	// No new price is given for it either.
+	assert.deepEqual(await codeOf(h.call('POST /pay/quote', { bolt11, key: asset.key })), ['ALREADY_PAID', 409]);
+	// The channel still counts the units as leaving.
+	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
+
+	// Should the engine have a word on that very try after all, it is taken, and the notice goes.
+	h.ln.finish(answer.paymentHash, 'complete');
+	await h.host.pass();
+	assert.deepEqual([(await row()).state, 'notice' in (await row())], ['complete', false]);
+});
+
+test('a send the node took without confirming its asset records is followed like any other, and says so to the end', async () => {
+	const { h, asset } = await channelled();
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	// Thrown after the engine took the payment, with a code that is not one
+	// of the library's refusals: the record is kept, and flagged.
+	h.ln.opts.payThrowsAfter = 'ERR_BEIGNET_LN_RECORDS_UNCONFIRMED';
+	assert.equal(h.host.ln.refusals.includes('ERR_BEIGNET_LN_RECORDS_UNCONFIRMED'), false);
+	h.cfg.payWaitMs = 10;
+	const answer = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: '50' }, 'pay-key');
+	const said = {
+		code: 'PAYMENT_UNCONFIRMED',
+		message: 'The node took this payment without confirming that it went out as an asset payment. It ends as the node reports, and its units are not known to have left the channel.'
+	};
+	assert.deepEqual([answer.status, answer.failureDescription, answer.notice], ['PENDING', null, said]);
+	await h.host.pass();
+	const row = async () => (await h.get('/activity', 'kind=ln-send')).rows[0];
+	assert.deepEqual([(await row()).state, (await row()).notice], ['pending', said]);
+	// It is in flight like any other: not paid a second time.
+	assert.deepEqual(await codeOf(h.call('POST /pay/quote', { bolt11, key: asset.key })), ['ALREADY_PAID', 409]);
+	// It ends as the node reports, and goes on saying what was never confirmed.
+	h.ln.finish(answer.paymentHash, 'complete');
+	await h.host.pass();
+	assert.deepEqual([(await row()).state, (await row()).failure, (await row()).notice], ['complete', null, said]);
+	assert.equal(named(h, 'payInvoice').length, 1);
+});
+
+test('the wallet\'s own spending limit refuses a payment before anything is sent, and the limit is named when the engine names it', async () => {
+	const { h, asset } = await channelled();
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const pay = async (key) => {
+		const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+		return h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: '50' }, key);
+	};
+	// The library's code, with what the engine threw as its cause.
+	h.ln.opts.payFails = 'ERR_BEIGNET_LN_SPENDING_LIMIT';
+	h.ln.opts.payCause = Object.assign(new Error('ASSET_PAYMENT_REFUSED: 50000 msat is over what is left of the daily limit'), { code: 'ASSET_PAYMENT_REFUSED' });
+	const plain = await pay('first-key');
+	assert.deepEqual([plain.status, plain.failureDescription], ['FAILED', "This wallet's own spending limit refused the payment, so nothing was paid."]);
+	h.ln.opts.payCause = Object.assign(new Error('ASSET_PAYMENT_REFUSED'), { code: 'ASSET_PAYMENT_REFUSED', limit: 'daily' });
+	const named = await pay('second-key');
+	assert.deepEqual([named.status, named.failureDescription], ['FAILED', "This wallet's own spending limit (daily) refused the payment, so nothing was paid."]);
+	const row = (await h.get('/activity', 'kind=ln-send')).rows[0];
+	assert.deepEqual([row.state, row.failure.code], ['failed', 'SPENDING_LIMIT']);
+	// Nothing was recorded and nothing left.
+	assert.equal(h.ln.payments.size, 0);
+	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
+	// What the engine wrote is in neither answer.
+	assert.equal(JSON.stringify([plain, named]).includes('50000 msat'), false);
+});
+
+test('an invoice that brought in a unit less than it asked for counts what arrived and still says what was invoiced', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+	const invoice = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+	assert.equal((await h.get('/invoices')).invoices[0].receivedAmount, null);
+	// The payer's rate rounded it down by one.
+	h.ln.settle(invoice.paymentHash, 149n);
+	await h.host.pass();
+	const row = (await h.get('/activity', 'kind=ln-receive')).rows[0];
+	assert.deepEqual([row.state, row.assets[0].amount], ['complete', '149']);
+	const listed = (await h.get('/invoices')).invoices[0];
+	assert.deepEqual([listed.status, listed.assetAmount, listed.receivedAmount], ['PAID', '150', '149']);
+	const channel = (await h.get('/channels')).channels[0];
+	assert.deepEqual([channel.localBalance, channel.remoteBalance], ['549', '51']);
+});
+
+test('an invoice paid in full says that all of it arrived', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+	const invoice = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+	h.ln.settle(invoice.paymentHash);
+	await h.host.pass();
+	const listed = (await h.get('/invoices')).invoices[0];
+	assert.deepEqual([listed.status, listed.assetAmount, listed.receivedAmount], ['PAID', '150', '150']);
+});
+
+test('a peer whose price cannot name the amount gets no invoice made at it', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	h.ln.opts.quoteFails = 'ERR_BEIGNET_LN_RATE_TOO_COARSE';
+	const refused = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' }).catch((err) => err);
+	assert.deepEqual(
+		[refused.extensionCode, refused.status, refused.message],
+		['RATE_TOO_COARSE', 409, "The channel's peer priced this asset too coarsely for a Lightning invoice to name that amount, so no invoice was made."]
+	);
+	assert.deepEqual(keys(h, 'l-quote/'), []);
+	assert.deepEqual((await h.get('/invoices')).invoices, []);
 });
 
 /* ------------------------------------------------------------------ backup */

@@ -98,6 +98,9 @@ function rowView(row, { tip = 0, cfg, now = Date.now(), watched = null }) {
 		state: row.state,
 		failed: row.state === 'failed',
 		failure: row.failure || null,
+		// What is to be known about a row that is neither done nor failed for
+		// it: { code, message }, on the rows that have one.
+		...(row.notice ? { notice: row.notice } : {}),
 		assets: row.assets || [],
 		txid: row.txid || null,
 		feeSats: row.feeSats,
