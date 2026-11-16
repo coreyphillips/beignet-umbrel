@@ -217,7 +217,10 @@ function memoryStorage(data = new Map()) {
 		},
 		transaction(fn) {
 			guard();
-			if (depth > 0) return fn();
+			// As the engine's view does: a transaction opened inside another
+			// throws before its callback runs, because the inner one could not
+			// be undone on its own.
+			if (depth > 0) throw new Error('An extension storage transaction cannot be opened inside another transaction');
 			const before = new Map(data);
 			depth += 1;
 			try {
