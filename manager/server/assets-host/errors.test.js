@@ -19,7 +19,10 @@ const {
 	plainMessage,
 	mapError,
 	workingSats,
-	LIGHTNING_REFUSALS
+	LIGHTNING_REFUSALS,
+	PAY_NOTHING_SENT,
+	PAYMENT_FAILURES,
+	paymentFailure
 } = require('./errors');
 
 const coded = (code, message = 'the detail of what went wrong', extra = {}) => Object.assign(new Error(`${code}: ${message}`), { code, ...extra });
@@ -211,4 +214,25 @@ test('a proof that does not verify is told apart from trouble reaching anything'
 	}
 	assert.equal(isProofInvalid(new Error('socket hang up')), false);
 	assert.equal(isProofInvalid(null), false);
+});
+
+test('only a refusal made before a payment leaves says that nothing was sent', () => {
+	// Each is a code the host has a sentence for, so a row that fails on one says why.
+	for (const code of PAY_NOTHING_SENT) assert.ok(LIGHTNING_REFUSALS[code], code);
+	// A timeout, a peer that went away, and a code nobody has heard of may all come after the node took the payment.
+	for (const code of ['ERR_BEIGNET_LN_TIMEOUT', 'ERR_BEIGNET_LN_PEER_OFFLINE', 'ERR_BEIGNET_LN_UNKNOWN_CHANNEL', 'ERR_BEIGNET_WALLET', 'ERR_SOMETHING_NEW', '']) {
+		assert.equal(PAY_NOTHING_SENT.includes(code), false, code);
+	}
+	assert.equal(Object.isFrozen(PAY_NOTHING_SENT), true);
+});
+
+test('a failed payment is worded by the host, whatever the node wrote', () => {
+	for (const word of Object.keys(PAYMENT_FAILURES)) {
+		const why = paymentFailure(word);
+		assert.equal(why.known, true, word);
+		assert.match(why.message, /^[A-Z].*, so nothing was paid\.$/, word);
+	}
+	for (const text of ['htlc 7 failed at 03aa: temporary_channel_failure', 'toString', '', null, undefined, 7]) {
+		assert.deepEqual(paymentFailure(text), { known: false, message: 'The payment did not go through, so nothing was paid.' }, String(text));
+	}
 });

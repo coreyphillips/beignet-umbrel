@@ -404,8 +404,11 @@ const fakeInvoice = ({ msat, hash } = {}) =>
  * connectFails, fundFails, fundingFee, reserveSats, openHangs (the open
  * never answers), openFails (a code the open rejects with, nothing signed),
  * openFailsSigned (the same, after the funding transaction is signed),
- * rate, quoteMs, quoteFails, payStatus, payFails, payMoved (the peer's
- * price is past the bound), payFeeMsat.
+ * rate, quoteMs, quoteFails, payStatus, payFailure (the word a failed
+ * payment's record carries), payFails (a code the payment rejects with
+ * before anything is sent), payThrowsAfter (a code it rejects with once the
+ * node has the payment), payMoved (the peer's price is past the bound),
+ * payFeeMsat.
  *
  * A test moves a channel on by hand: `confirm(id)` makes it NORMAL,
  * `set(id, fields)` changes its balances, `recover(id)` brings a closed
@@ -428,7 +431,9 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		quoteMs: 60_000,
 		quoteFails: null,
 		payStatus: 'complete',
+		payFailure: 'no_route',
 		payFails: null,
+		payThrowsAfter: null,
 		payMoved: false,
 		payFeeMsat: 2000n
 	};
@@ -456,6 +461,12 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	// with the host's lock held.
 	const reaches = (name) => {
 		if (held()) violations.push(`${name} with the host's lock held`);
+		stored(name);
+		if (!state.started || !state.bound) throw tapError('ERR_BEIGNET_LN_NOT_READY', 'asset channels have not started');
+	};
+	// What only reads the service's records still needs the service: after a
+	// stop, or before the node is bound, it throws as the real one does.
+	const reads = (name) => {
 		stored(name);
 		if (!state.started || !state.bound) throw tapError('ERR_BEIGNET_LN_NOT_READY', 'asset channels have not started');
 	};
@@ -510,7 +521,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		if (opts.connectFails) throw new Error('connection refused');
 	};
 	ln.peerSupports = (pubkey) => {
-		stored('peerSupports');
+		reads('peerSupports');
 		log('peerSupports', pubkey);
 		return !!opts.supports;
 	};
@@ -606,7 +617,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		return { bolt11: fakeInvoice({ msat: amountMsat, hash: paymentHash }), paymentHash, assetAmount: quote.amount, amountMsat, expiresAt: now() + expirySeconds * 1000 };
 	};
 	ln.invoices = () => {
-		stored('invoices');
+		reads('invoices');
 		return [...invoices.values()].map((i) => ({ paymentHash: i.paymentHash, assetAmount: i.assetAmount, status: i.status }));
 	};
 
@@ -639,13 +650,16 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		quotes.delete(quoteId);
 		if (opts.payMoved || quote.assetAmount > BigInt(maxAssetAmount)) throw tapError('ERR_BEIGNET_LN_PRICE_BOUND', 'the price is past the bound');
 		if (opts.payFails) throw tapError(opts.payFails, 'the payment could not be sent');
-		const payment = { paymentHash: quote.paymentHash, assetAmount: quote.assetAmount, status: opts.payStatus, feeMsat: opts.payFeeMsat, failure: opts.payStatus === 'failed' ? 'no route to the recipient' : null, channelId: quote.channelId };
+		// The node has the payment from here on, and keeps its own record of it.
+		const status = opts.payThrowsAfter ? 'pending' : opts.payStatus;
+		const payment = { paymentHash: quote.paymentHash, assetAmount: quote.assetAmount, status, feeMsat: opts.payFeeMsat, failure: status === 'failed' ? opts.payFailure : null, channelId: quote.channelId };
 		payments.set(payment.paymentHash, payment);
+		if (opts.payThrowsAfter) throw tapError(opts.payThrowsAfter, 'no word from the node in time');
 		if (payment.status === 'complete') ln.move(payment.channelId, -payment.assetAmount);
 		return { ...payment };
 	};
 	ln.payment = (paymentHash) => {
-		stored('payment');
+		reads('payment');
 		const p = payments.get(paymentHash);
 		return p ? { ...p } : null;
 	};

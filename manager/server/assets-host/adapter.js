@@ -334,9 +334,29 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     assetAmount, status, feeMsat?, failure? } once the payment is in the
  *     engine's hands, `status` being 'pending', 'complete' or 'failed'. It
  *     rejects before anything is sent when paying would take more than
- *     `maxAssetAmount` units.
+ *     `maxAssetAmount` units. The host reads nothing from what it resolves
+ *     to but that the payment was taken: how it ended is read from 18.
+ *     A rejection with one of these codes is raised before any HTLC leaves
+ *     the wallet, and means nothing was sent (errors.js PAY_NOTHING_SENT):
+ *     NOT_READY, NO_QUOTE, QUOTE_EXPIRED, PRICE_BOUND,
+ *     INSUFFICIENT_OUTBOUND, BAD_INVOICE, INVOICE_EXPIRED, AMOUNT_REQUIRED
+ *     and ALREADY_PAID. Any other rejection, TIMEOUT and PEER_OFFLINE among
+ *     them, may come after the engine has the payment, and says nothing
+ *     about whether it was sent.
  * 18. payment(paymentHash) is synchronous: the same shape for a payment the
- *     engine has a record of, or undefined.
+ *     engine has a record of, or undefined. This record is the only word on
+ *     how a payment ended, so the host needs of it:
+ *       - it exists before the first HTLC of the payment leaves, and at the
+ *         latest when payInvoice settles, whichever way it settles. So a
+ *         payment with no record, that no payInvoice call is still working
+ *         on, was never sent;
+ *       - it survives a restart of the daemon, and after one it still says
+ *         'pending' for a payment that is in flight;
+ *       - `failure` of a failed payment is one of the words no_route,
+ *         timeout, rejected, expired and insufficient_balance. Any other
+ *         text is logged and shown to nobody (errors.js PAYMENT_FAILURES);
+ *       - before `start`, and after `close`, it throws NOT_READY and never
+ *         answers undefined for a payment it would know of.
  * 19. close() stops the service. The host does not wait for what it returns.
  *
  * Events and errors

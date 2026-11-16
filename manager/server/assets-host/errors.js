@@ -104,6 +104,41 @@ const LIGHTNING_REFUSALS = {
 	ERR_BEIGNET_LN_ALREADY_PAID: ['ALREADY_PAID', 'This wallet has already paid that invoice.', 409]
 };
 
+// What `payInvoice` rejects with before any payment has left the wallet
+// (adapter.js, the numbered list). These, and only these, say that nothing
+// was sent. Any other rejection, a timeout among them, may have come after
+// the node took the payment: then only the node's own record of it says how
+// it ended.
+const PAY_NOTHING_SENT = Object.freeze([
+	'ERR_BEIGNET_LN_NOT_READY',
+	'ERR_BEIGNET_LN_NO_QUOTE',
+	'ERR_BEIGNET_LN_QUOTE_EXPIRED',
+	'ERR_BEIGNET_LN_PRICE_BOUND',
+	'ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND',
+	'ERR_BEIGNET_LN_BAD_INVOICE',
+	'ERR_BEIGNET_LN_INVOICE_EXPIRED',
+	'ERR_BEIGNET_LN_AMOUNT_REQUIRED',
+	'ERR_BEIGNET_LN_ALREADY_PAID'
+]);
+
+// Why the node says a payment failed, by the word its record carries. A
+// record with any other text is worded generally, and its text goes to the
+// log and not to whoever asked.
+const PAYMENT_FAILURES = Object.freeze({
+	no_route: 'No route to the recipient could be found, so nothing was paid.',
+	timeout: 'The payment did not get through in time, so nothing was paid.',
+	rejected: 'The recipient turned the payment down, so nothing was paid.',
+	expired: 'The invoice ran out before the payment got through, so nothing was paid.',
+	insufficient_balance: 'The channel could not send that much, so nothing was paid.'
+});
+const PAYMENT_FAILED = 'The payment did not go through, so nothing was paid.';
+
+/** A failed payment's reason as a sentence, and whether the node's word for it was one this host knows. */
+function paymentFailure(word) {
+	const known = typeof word === 'string' && Object.prototype.hasOwnProperty.call(PAYMENT_FAILURES, word);
+	return { known, message: known ? PAYMENT_FAILURES[word] : PAYMENT_FAILED };
+}
+
 // The vbytes' worth of fee the library funds an anchor transaction around.
 const WORKING_VBYTES = 2000;
 
@@ -190,5 +225,8 @@ module.exports = {
 	plainMessage,
 	mapError,
 	workingSats,
-	LIGHTNING_REFUSALS
+	LIGHTNING_REFUSALS,
+	PAY_NOTHING_SENT,
+	PAYMENT_FAILURES,
+	paymentFailure
 };

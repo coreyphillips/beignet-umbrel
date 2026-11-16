@@ -49,6 +49,16 @@
  *   activity row are written in one transaction before the library is told
  *   to pay, so the same key never pays twice, also across a restart.
  *
+ *   How a payment ended is only ever written from the node's own record of
+ *   it (`host.ln.payment`). A call that throws, times out or is cut short
+ *   by a stop says nothing about the payment, which stays pending until a
+ *   later pass of the loop reads the record, also after a restart. The one
+ *   exception is a refusal the library makes before anything leaves the
+ *   wallet (errors.js PAY_NOTHING_SENT), and a payment the library never
+ *   took that the node has no record of. Those the host concludes itself,
+ *   marks as its own conclusion, and takes back if the node turns out to
+ *   have the payment after all.
+ *
  * Rows
  *
  *   chan/<id>            what the host knows of a channel that the library
@@ -63,7 +73,7 @@
 const crypto = require('crypto');
 const { sha256Hex } = require('./store');
 const { CHANNEL_SATS, CARRIER_SATS, unhex } = require('./adapter');
-const { refusal, isRefusal, mapError, isFenced, plainMessage, codeOf } = require('./errors');
+const { refusal, isRefusal, mapError, isFenced, plainMessage, codeOf, PAY_NOTHING_SENT, paymentFailure } = require('./errors');
 const views = require('./views');
 const ops = require('./ops');
 
@@ -81,6 +91,12 @@ const MAX_INVOICES_LISTED = 100;
 const INVOICE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 // A force-closed channel stays in the list this long after its assets are home.
 const FORCE_CLOSED_SHOWN_MS = 24 * 60 * 60 * 1000;
+// How often a request looks at the payment it began, while it waits for its end.
+const PAY_POLL_MS = 200;
+// A payment the library never said it took, and the node has no record of,
+// is taken to have never left once it is this old.
+const UNSENT_AFTER_MS = 30 * 1000;
+const PRICE_MOVED = ['ERR_BEIGNET_LN_PRICE_BOUND', 'ERR_BEIGNET_LN_QUOTE_EXPIRED'];
 const CLOSED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 const FAILED_PHASES = ['rejected', 'failed'];
 
@@ -543,6 +559,10 @@ function within(promise, ms) {
 async function openChannel(host, body, key) {
 	const route = 'channels/open';
 	const first = await host.lock.run(() => {
+		if (!key) {
+			requireFull(host);
+			throw keyRequired('open two channels');
+		}
 		const done = ops.replay(host, route, key, body);
 		if (done) return done;
 		requireFull(host);
@@ -940,37 +960,55 @@ const payAnswer = (row) => ({
 	failureDescription: row.failure ? row.failure.message : null
 });
 
-/** Why a payment failed, as one plain sentence. */
-function payFailure(result, error) {
-	if (error) {
-		const mapped = mapError(error);
-		return { code: isRefusal(mapped) ? mapped.extensionCode : 'PAYMENT_FAILED', message: sentence(plainMessage(mapped, 'The payment could not be sent')) };
+const keyRequired = (so) => refusal('IDEMPOTENCY_KEY_REQUIRED', `This request needs an X-Idempotency-Key header, so that sending it twice does not ${so}.`, 400);
+
+/** The node's record of a payment: the record, null when it has none, undefined when it cannot be asked now. */
+function lookAtPayment(host, paymentHash) {
+	try {
+		return host.ln.payment(paymentHash) || null;
+	} catch (err) {
+		if (isFenced(err)) throw err;
+		return undefined;
 	}
-	return { code: 'PAYMENT_FAILED', message: sentence(plainMessage({ message: result && result.failure }, 'The payment did not reach its recipient')) };
 }
 
 /**
- * Write down how a payment ended, or that it is on its way. `result` is the
- * library's word on it; `error` is what it threw instead.
+ * Bring a payment's row to what the node's own record of it says. That
+ * record is the only word on how a payment ended: nothing else writes
+ * `complete`, and nothing else writes a failure the node did not report.
+ * `seen` is the record. With none, `handed` says the library took the
+ * payment, which is all that is then written. `own` is for the request that
+ * began the payment: the loop leaves a row alone while one has it.
  */
-function recordPayment(host, rowId, result, error) {
+function recordPayment(host, rowId, seen, { handed = false, own = false } = {}) {
 	return host.lock.run(() => {
 		const row = host.getRow(rowId);
-		if (!row || row.state !== 'pending') return row;
+		if (!row || row.kind !== 'ln-send') return row;
+		if (!own && host.mem.paying.has(rowId)) return row;
+		// What the node said is final. What the host concluded itself is not.
+		if (row.state === 'complete' || (row.state === 'failed' && !row.assumed)) return row;
+		if (!seen && !handed) return row;
 		const next = clone(row);
 		const now = host.now();
-		if (error || (result && result.status === 'failed')) {
-			next.state = 'failed';
-			next.failure = error && error.failure ? error.failure : payFailure(result, error);
-			next.at.completed = now;
-		} else if (result && result.status === 'complete') {
+		delete next.assumed;
+		next.sent = true;
+		if (seen && seen.status === 'complete') {
 			next.state = 'complete';
+			next.failure = null;
 			next.at.completed = now;
-			if (result.assetAmount !== null && result.assetAmount !== undefined && next.assets[0]) next.assets[0].amount = result.assetAmount.toString();
-			next.feeSats = result.feeMsat === null || result.feeMsat === undefined ? 0 : views.satsOf(result.feeMsat);
+			if (seen.assetAmount !== null && seen.assetAmount !== undefined && next.assets[0]) next.assets[0].amount = seen.assetAmount.toString();
+			next.feeSats = seen.feeMsat === null || seen.feeMsat === undefined ? 0 : views.satsOf(seen.feeMsat);
+		} else if (seen && seen.status === 'failed') {
+			const why = paymentFailure(seen.failure);
+			if (!why.known && seen.failure) host.say('warn', `assets: a Lightning payment failed: ${plainMessage({ message: seen.failure })}`);
+			next.state = 'failed';
+			next.failure = { code: 'PAYMENT_FAILED', message: why.message };
+			next.at.completed = now;
 		} else {
 			// In the node's hands, and not over.
-			next.sent = true;
+			next.state = 'pending';
+			next.failure = null;
+			next.at.completed = null;
 		}
 		if (JSON.stringify(next) === JSON.stringify(row)) return row;
 		host.rows.put(`row/${rowId}`, next);
@@ -981,15 +1019,97 @@ function recordPayment(host, rowId, result, error) {
 	});
 }
 
-/** Look at a payment until it is over or `ms` have passed. */
-async function awaitPayment(host, paymentHash, first, ms) {
-	let seen = first;
-	const deadline = Date.now() + Math.max(0, ms);
-	while (seen && seen.status === 'pending' && !host.mem.stopped && Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, 200));
-		seen = host.ln.payment(paymentHash) || seen;
+/**
+ * The host's own conclusion that a payment never left the wallet: the
+ * library refused it before sending, or took no payment and the node has no
+ * record of one. It is marked as a conclusion (`assumed`), and the loop
+ * takes it back the moment the node turns out to have the payment after all.
+ */
+function failUnsent(host, rowId, failure, { own = false } = {}) {
+	return host.lock.run(() => {
+		const row = host.getRow(rowId);
+		if (!row || row.kind !== 'ln-send' || row.state !== 'pending' || row.sent) return row;
+		if (!own && host.mem.paying.has(rowId)) return row;
+		const next = clone(row);
+		next.state = 'failed';
+		next.failure = failure;
+		next.assumed = true;
+		next.at.completed = host.now();
+		host.rows.put(`row/${rowId}`, next);
+		host.markDirty();
+		host.emitRow(next);
+		return next;
+	});
+}
+
+/**
+ * Hand a payment to the library and follow it until it is over or the
+ * request has waited long enough. Runs with the lock let go, and goes on
+ * after the request that began it has answered. Resolves to { row }, to
+ * { changed, quote } when the price moved and nothing was paid, or to
+ * { fenced } when the wallet is restarting.
+ */
+async function sendPayment(host, { row, quote, quoteId, bound, key, route, body, state }) {
+	const started = Date.now();
+	try {
+		let handed = false;
+		let error = null;
+		try {
+			await host.ln.payInvoice({ quoteId, maxAssetAmount: bound === null ? BigInt(quote.assetAmount) : bound });
+			handed = true;
+		} catch (err) {
+			if (isFenced(err)) throw err;
+			error = err;
+		}
+		let seen = lookAtPayment(host, quote.paymentHash);
+		if (error && seen === null && PAY_NOTHING_SENT.includes(codeOf(error))) {
+			// Refused before anything left the wallet. A price that moved is
+			// shown again, as long as someone is still waiting to see it.
+			if (PRICE_MOVED.includes(codeOf(error)) && !state.answered) {
+				await host.lock.run(() =>
+					host.rows.tx(() => {
+						host.rows.del(`row/${row.id}`);
+						if (key) host.rows.del(ops.journalKey(route, key));
+					})
+				);
+				let fresh = null;
+				try {
+					fresh = payQuoteView(await makePayQuote(host, { bolt11: body.bolt11, key: quote.key, amountSats: quote.asked || undefined }));
+				} catch (again) {
+					if (isFenced(again)) throw again;
+				}
+				return { changed: true, quote: fresh };
+			}
+			const mapped = mapError(error);
+			return { row: await failUnsent(host, row.id, { code: mapped.extensionCode, message: mapped.message }, { own: true }) };
+		}
+		// Anything else may have come after the node took the payment. Its
+		// record says how it ended, now or on a later pass of the loop.
+		if (error) host.say('warn', `assets: a Lightning payment was handed over and not confirmed: ${plainMessage(error)}`);
+		let current = await recordPayment(host, row.id, seen || null, { handed, own: true });
+		const deadline = started + host.cfg.payWaitMs;
+		while ((handed || seen) && !(seen && seen.status !== 'pending') && !host.mem.stopped && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, PAY_POLL_MS));
+			if (host.mem.stopped) break;
+			const again = lookAtPayment(host, quote.paymentHash);
+			// A service that cannot be asked has said nothing about the payment.
+			if (again === undefined) break;
+			if (again) seen = again;
+			if (seen && seen.status !== 'pending') current = await recordPayment(host, row.id, seen, { own: true });
+		}
+		return { row: current || row };
+	} catch (err) {
+		if (isFenced(err)) {
+			if (state.answered) host.shutdown();
+			return { fenced: err };
+		}
+		// Whatever went wrong here says nothing about the payment: it stays pending.
+		host.say('warn', `assets: a Lightning payment could not be followed: ${plainMessage(err)}`);
+		return { row };
+	} finally {
+		host.mem.paying.delete(row.id);
+		if (!host.mem.stopped) host.nudge();
 	}
-	return seen;
 }
 
 async function pay(host, body, key) {
@@ -997,6 +1117,10 @@ async function pay(host, body, key) {
 	const quoteId = hexKey(body.quoteId);
 	const bound = body.maxAssetAmount === undefined || body.maxAssetAmount === null || body.maxAssetAmount === '' ? null : ops.parseUnits(body.maxAssetAmount);
 	const step = await host.lock.run(() => {
+		if (!key) {
+			requireFull(host);
+			throw keyRequired('pay twice');
+		}
 		const done = ops.replay(host, route, key, body);
 		if (done) return { done: payAnswer(done.row) };
 		requireFull(host);
@@ -1013,8 +1137,14 @@ async function pay(host, body, key) {
 		if (bound !== null && BigInt(quote.assetAmount) > bound) return { moved: quote };
 		const rowId = `ln-send-${quote.paymentHash}`;
 		const prev = host.getRow(rowId);
-		if (prev && prev.state === 'complete') throw refusal('ALREADY_PAID', 'This wallet has already paid that invoice.', 409);
-		if (prev && prev.state !== 'failed') throw refusal('PAYMENT_IN_FLIGHT', 'This wallet is already paying that invoice. Wait for it to finish.', 409);
+		// What the node says became of this invoice comes before what the row
+		// says: a row can say failed for a payment the node is still making.
+		const seen = lookAtPayment(host, quote.paymentHash);
+		if (seen === undefined) throw starting();
+		if ((seen && seen.status === 'complete') || (prev && prev.state === 'complete')) throw refusal('ALREADY_PAID', 'This wallet has already paid that invoice.', 409);
+		if ((seen && seen.status === 'pending') || (prev && prev.state === 'pending')) {
+			throw refusal('PAYMENT_IN_FLIGHT', 'This wallet is already paying that invoice. Wait for it to finish.', 409);
+		}
 		const { reg } = knownAsset(host, quote.key);
 		const row = views.newRow({
 			id: rowId,
@@ -1049,37 +1179,18 @@ async function pay(host, body, key) {
 		throw quoteChanged(payQuoteView(fresh));
 	}
 	const { row, quote } = step;
-	let result = null;
-	let error = null;
-	try {
-		try {
-			result = await host.ln.payInvoice({ quoteId, maxAssetAmount: bound === null ? BigInt(quote.assetAmount) : bound });
-			result = await awaitPayment(host, quote.paymentHash, result, host.cfg.payWaitMs);
-		} catch (err) {
-			if (isFenced(err)) throw err;
-			error = err;
-		}
-		// The peer's price moved between the quote and the payment. Nothing
-		// was sent, so nothing is on record, and the new price is shown.
-		if (error && ['ERR_BEIGNET_LN_PRICE_BOUND', 'ERR_BEIGNET_LN_QUOTE_EXPIRED'].includes(codeOf(error))) {
-			await host.lock.run(() =>
-				host.rows.tx(() => {
-					host.rows.del(`row/${row.id}`);
-					if (key) host.rows.del(ops.journalKey(route, key));
-				})
-			);
-			let fresh = null;
-			try {
-				fresh = payQuoteView(await makePayQuote(host, { bolt11: body.bolt11, key: quote.key, amountSats: quote.asked || undefined }));
-			} catch (again) {
-				if (isFenced(again)) throw again;
-			}
-			throw quoteChanged(fresh);
-		}
-		return payAnswer(await recordPayment(host, row.id, result, error));
-	} finally {
-		host.mem.paying.delete(row.id);
+	// The payment goes on whatever becomes of this request. The request
+	// waits for its end for a while, and answers PENDING when it has to.
+	const state = { answered: false };
+	const sending = host.lock.outside(() => sendPayment(host, { row, quote, quoteId, bound, key, route, body, state }));
+	const out = await within(sending, host.cfg.payWaitMs + 2 * PAY_POLL_MS);
+	if (!out) {
+		state.answered = true;
+		return payAnswer(host.getRow(row.id) || row);
 	}
+	if (out.fenced) throw out.fenced;
+	if (out.changed) throw quoteChanged(out.quote);
+	return payAnswer(out.row);
 }
 
 /* -------------------------------------------------------------------- loop */
@@ -1093,20 +1204,23 @@ async function settleRows(host) {
 	const stored = host.listRows();
 	for (const row of stored) {
 		if (host.mem.stopped) return;
-		if (row.kind !== 'ln-send' || row.state !== 'pending' || host.mem.paying.has(row.id)) continue;
-		const seen = ln.payment(row.paymentHash);
+		if (row.kind !== 'ln-send' || host.mem.paying.has(row.id)) continue;
+		// Pending, or failed by the host's own conclusion, which the node's
+		// record overrules at any time.
+		if (row.state !== 'pending' && !(row.state === 'failed' && row.assumed)) continue;
+		const seen = lookAtPayment(host, row.paymentHash);
+		// A service that cannot be asked has said nothing: every row stays as it is.
+		if (seen === undefined) return;
 		if (seen) {
-			if (seen.status !== 'pending' || !row.sent) await recordPayment(host, row.id, seen, null);
+			await recordPayment(host, row.id, seen);
 			continue;
 		}
-		// The node has no record of it. One never handed over was stopped by
-		// a restart before anything was sent. One that was handed over and is
-		// gone cannot be answered for.
-		await recordPayment(host, row.id, null, {
-			failure: row.sent
-				? { code: 'PAYMENT_UNKNOWN', message: 'This wallet no longer has a record of that payment, so it cannot say whether it went through.' }
-				: { code: 'PAYMENT_NOT_SENT', message: 'The wallet restarted before this payment was sent. Nothing was paid.' }
-		});
+		// The node has no record of it. A payment the library said it took is
+		// the node's to answer for, and waits. One it never took, that nobody
+		// is sending and that has had its time, never left.
+		if (row.state === 'pending' && !row.sent && host.now() - (row.at.created || 0) >= UNSENT_AFTER_MS) {
+			await failUnsent(host, row.id, { code: 'PAYMENT_NOT_SENT', message: 'This payment was never sent, so nothing was paid.' });
+		}
 	}
 	const waiting = stored.filter((r) => r.kind === 'ln-receive' && r.state === 'waiting');
 	if (waiting.length === 0) return;
