@@ -1979,6 +1979,9 @@ test('after a restore, what a channel funding had set aside is settled from the 
 		const record = (amount, reservedBy, n) => ({ ...like, spent: false, amount: String(amount), reservedBy, anchorOutPoint: `${String(n).repeat(64)}:0` });
 		const never = 'ee'.repeat(32);
 		h.tap.records.push(record(1000, `funding:${source.id}`, 5), record(70, `funding:${never}`, 6));
+		// The backup was made before that funding was signed, so it carries
+		// nothing that rebuilds the outputs of the transaction.
+		h.ln.opts.changeRestorable = false;
 		// The funding transaction is seen and not buried yet.
 		h.ln.opts.settleKeeps = 'the funding transaction is not buried deep enough yet: look again later';
 		await h.boot();

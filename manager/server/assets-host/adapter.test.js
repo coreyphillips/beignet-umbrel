@@ -148,8 +148,11 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 					assets: [{ assetId: ASSET, amount: 1000n }],
 					channelId: buf(0xbb),
 					fundingTxid: 'f1'.repeat(32),
+					changeRestored: true,
 					change: [{ assetId: ASSET, amount: 400n }]
 				},
+				// Only a plain true says the change came back.
+				{ reservation: `funding:${'c5'.repeat(32)}`, pendingChannelId: buf(0xc5), outcome: 'moved', assets: [], changeRestored: 'yes', change: [{ assetId: ASSET, amount: 9n }] },
 				{ reservation: `funding:${'c3'.repeat(32)}`, pendingChannelId: buf(0xc3), outcome: 'kept', assets: [], reason: 'the funding transaction is not buried yet' },
 				{ reservation: `funding:${'c4'.repeat(32)}`, outcome: 'a word this host has not met' }
 			];
@@ -163,8 +166,10 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 			return { bolt11: 'lnbcrt1invoice', paymentHash: buf(0x02), assetAmount: 150n, milliSatoshi: 150000n, expiresAt: 1700003600n };
 		},
 		invoices: () => [
-			{ paymentHash: buf(0x02), assetAmount: 150n, status: 'paid', bolt11: 'lnbcrt1invoice', description: 'tea' },
-			{ paymentHash: buf(0x03), assetAmount: 5n, status: 'something new' }
+			{ paymentHash: buf(0x02), assetAmount: 150n, receivedAssetAmount: 149n, status: 'paid', bolt11: 'lnbcrt1invoice', description: 'tea' },
+			{ paymentHash: buf(0x03), assetAmount: 5n, receivedAssetAmount: 0n, status: 'something new' },
+			// An entry that does not say what arrived.
+			{ paymentHash: buf(0x08), assetAmount: 5n, status: 'expired' }
 		],
 		quotePayment: async (request) => {
 			note('quotePayment', request);
@@ -183,9 +188,21 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 		},
 		payInvoice: async (request) => {
 			note('payInvoice', request);
-			return { paymentHash: buf(0x05), assetAmount: 50n, status: 'complete', feeMsat: 2000n };
+			return { paymentHash: buf(0x05), assetAmount: 50n, status: 'complete', attempt: 2, channelId: buf(0xbb), htlcId: 1n, feeMsat: 2000n, preimage: buf(0x99) };
 		},
-		payment: (hash) => (hash.equals(buf(0x05)) ? { paymentHash: hash, assetAmount: 50n, status: 'failed', failure: 'no route' } : undefined),
+		payment: (hash) => {
+			if (hash.equals(buf(0x05))) return { paymentHash: hash, assetAmount: 50n, status: 'failed', attempt: 1, channelId: buf(0xbb), htlcId: 0n, failure: 'no route' };
+			// One the engine forgot, and one it never confirmed as an asset payment.
+			if (hash.equals(buf(0x07))) return { paymentHash: hash, assetAmount: 9n, status: 'pending', attempt: 3, channelId: buf(0xbb), engineHasNoRecord: true, assetRecordsUnconfirmed: true };
+			// What only looks like the library's words is not taken for them.
+			if (hash.equals(buf(0x09))) return { paymentHash: hash, assetAmount: 9n, status: 'pending', attempt: '2', channelId: buf(0xbb), engineHasNoRecord: 'no', assetRecordsUnconfirmed: 1 };
+			return undefined;
+		},
+		reclaimFundingInputs: async (request) => {
+			note('reclaimFundingInputs', request);
+			return { txid: Buffer.from(`${'00'.repeat(31)}ab`, 'hex'), transaction: { txIn: [], txOut: [] }, feeSat: 321n };
+		},
+		advertisement: () => seen.advertisement,
 		close: () => {
 			seen.closed += 1;
 			return Promise.reject(new Error('already closing'));
@@ -195,7 +212,7 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 		seen,
 		service,
 		ASSET_PAYMENT_REFUSALS: REFUSALS,
-		assetLightningSupport: () => ({ supported, missing: supported ? [] : ['auxiliaryChannels'] }),
+		assetLightningSupport: () => ({ supported, ...(supported ? { engineVersion: '0.43.0', apiVersion: 1 } : {}), missing: supported ? [] : ['channel.AUXILIARY_CHANNELS_API'] }),
 		lightningStore: (backend, prefix) => ({ backend, prefix }),
 		createAssetLightningHost: (given) => {
 			seen.made = given;
@@ -530,7 +547,8 @@ test('channels: every one and every open that ended, in plain values', () => {
 });
 
 test('opening and closing: hex and sats in, the library\'s buffers and bigints out', async () => {
-	const { ln, seen } = started();
+	const entry = fakeEntry();
+	const { ln, seen } = started({}, { entry });
 	const calls = (name) => seen.calls.filter((c) => c[0] === name).map((c) => c[1]);
 
 	await ln.connect({ pubkey: hexOf(PEER), host: 'peer.example.com', port: 9735 });
@@ -575,13 +593,28 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 	// What became of what a funding had set aside. A word this host has not met is one to ask about again.
 	const unit = (amount) => [{ assetId: '11'.repeat(32), amount }];
 	assert.deepEqual(await ln.settleFundingReservations(), [
-		{ reservation: `funding:${'c1'.repeat(32)}`, pendingChannelId: 'c1'.repeat(32), outcome: 'released', assets: unit(70n), channelId: null, fundingTxid: null, change: [], reason: null },
-		{ reservation: `funding:${'c2'.repeat(32)}`, pendingChannelId: 'c2'.repeat(32), outcome: 'moved', assets: unit(1000n), channelId: 'bb'.repeat(32), fundingTxid: 'f1'.repeat(32), change: unit(400n), reason: null },
-		{ reservation: `funding:${'c3'.repeat(32)}`, pendingChannelId: 'c3'.repeat(32), outcome: 'kept', assets: [], channelId: null, fundingTxid: null, change: [], reason: 'the funding transaction is not buried yet' },
-		{ reservation: `funding:${'c4'.repeat(32)}`, pendingChannelId: null, outcome: 'kept', assets: [], channelId: null, fundingTxid: null, change: [], reason: null }
+		{ reservation: `funding:${'c1'.repeat(32)}`, pendingChannelId: 'c1'.repeat(32), outcome: 'released', assets: unit(70n), channelId: null, fundingTxid: null, change: [], changeRestored: false, reason: null },
+		{ reservation: `funding:${'c2'.repeat(32)}`, pendingChannelId: 'c2'.repeat(32), outcome: 'moved', assets: unit(1000n), channelId: 'bb'.repeat(32), fundingTxid: 'f1'.repeat(32), change: unit(400n), changeRestored: true, reason: null },
+		{ reservation: `funding:${'c5'.repeat(32)}`, pendingChannelId: 'c5'.repeat(32), outcome: 'moved', assets: [], channelId: null, fundingTxid: null, change: unit(9n), changeRestored: false, reason: null },
+		{ reservation: `funding:${'c3'.repeat(32)}`, pendingChannelId: 'c3'.repeat(32), outcome: 'kept', assets: [], channelId: null, fundingTxid: null, change: [], changeRestored: false, reason: 'the funding transaction is not buried yet' },
+		{ reservation: `funding:${'c4'.repeat(32)}`, pendingChannelId: null, outcome: 'kept', assets: [], channelId: null, fundingTxid: null, change: [], changeRestored: false, reason: null }
 	]);
-	// The way out of a funding that never confirms is not the library's to give yet.
-	await assert.rejects(ln.reclaimFunding('cc'.repeat(32)), { code: 'ERR_BEIGNET_LN_UNSUPPORTED' });
+	// The way out of a funding that will not confirm: the id as the library
+	// takes it, and the txid of the spend as a person is shown it.
+	assert.deepEqual(await ln.reclaimFunding({ pendingChannelId: 'cc'.repeat(32), feeRate: 7 }), { txid: `ab${'00'.repeat(31)}`, feeSats: 321 });
+	assert.deepEqual(calls('reclaimFundingInputs'), [{ pendingChannelId: buf(0xcc), feeRate: 7 }]);
+	// Whether the node offers asset channels to its peers, in its own word for why not.
+	seen.advertisement = { advertised: true };
+	assert.deepEqual(ln.advertisement(), { advertised: true, reason: null });
+	seen.advertisement = { advertised: false, reason: 'the node does not signal option_simple_taproot' };
+	assert.deepEqual(ln.advertisement(), { advertised: false, reason: 'the node does not signal option_simple_taproot' });
+	// Only a plain true says it does. An engine that cannot say, or a library with no such call, says nothing.
+	seen.advertisement = { advertised: 'yes' };
+	assert.deepEqual(ln.advertisement(), { advertised: false, reason: null });
+	seen.advertisement = undefined;
+	assert.equal(ln.advertisement(), null);
+	delete entry.service.advertisement;
+	assert.equal(ln.advertisement(), null);
 });
 
 test('invoices and payments: amounts as bigint, times in milliseconds, a status the host knows', async () => {
@@ -613,10 +646,11 @@ test('invoices and payments: amounts as bigint, times in milliseconds, a status 
 	assert.equal('description' in calls('createInvoice')[1], false);
 	// A status this host has no word for is an open invoice until it is paid
 	// or expired. What the engine still keeps of an invoice is not read: the
-	// host has its own row. What was received is not the library's to say yet.
+	// host has its own row. What arrived stands beside what was invoiced.
 	assert.deepEqual(ln.invoices(), [
-		{ paymentHash: '02'.repeat(32), assetAmount: 150n, received: null, status: 'paid' },
-		{ paymentHash: '03'.repeat(32), assetAmount: 5n, received: null, status: 'open' }
+		{ paymentHash: '02'.repeat(32), assetAmount: 150n, received: 149n, status: 'paid' },
+		{ paymentHash: '03'.repeat(32), assetAmount: 5n, received: 0n, status: 'open' },
+		{ paymentHash: '08'.repeat(32), assetAmount: 5n, received: null, status: 'expired' }
 	]);
 
 	const pay = await ln.quotePayment({ bolt11: 'lnbcrt1other', assetId: '11'.repeat(32), groupKey: null, amountMsat: null });
@@ -637,9 +671,13 @@ test('invoices and payments: amounts as bigint, times in milliseconds, a status 
 	assert.equal(calls('quotePayment')[1].amountMsat, 75000n);
 
 	const paid = await ln.payInvoice({ quoteId: pay.quoteId, maxAssetAmount: 50n });
-	assert.deepEqual(paid, { paymentHash: '05'.repeat(32), assetAmount: 50n, status: 'complete', feeMsat: 2000n, failure: null, attempt: null, lost: false });
+	// Which try the record stands for travels with it. The preimage does not.
+	assert.deepEqual(paid, { paymentHash: '05'.repeat(32), assetAmount: 50n, status: 'complete', feeMsat: 2000n, failure: null, attempt: 2, lost: false, unconfirmed: false });
 	assert.deepEqual(calls('payInvoice'), [{ quoteId: buf(0x04), maxAssetAmount: 50n }]);
-	assert.deepEqual(ln.payment('05'.repeat(32)), { paymentHash: '05'.repeat(32), assetAmount: 50n, status: 'failed', feeMsat: null, failure: 'no route', attempt: null, lost: false });
+	assert.deepEqual(ln.payment('05'.repeat(32)), { paymentHash: '05'.repeat(32), assetAmount: 50n, status: 'failed', feeMsat: null, failure: 'no route', attempt: 1, lost: false, unconfirmed: false });
+	// A payment the engine forgot, and one it never confirmed as an asset payment, say so.
+	assert.deepEqual(ln.payment('07'.repeat(32)), { paymentHash: '07'.repeat(32), assetAmount: 9n, status: 'pending', feeMsat: null, failure: null, attempt: 3, lost: true, unconfirmed: true });
+	assert.deepEqual(ln.payment('09'.repeat(32)), { paymentHash: '09'.repeat(32), assetAmount: 9n, status: 'pending', feeMsat: null, failure: null, attempt: null, lost: false, unconfirmed: false });
 	// No record is the library's `undefined`, and the host's null.
 	assert.equal(ln.payment('06'.repeat(32)), null);
 });

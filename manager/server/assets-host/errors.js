@@ -105,6 +105,12 @@ const LIGHTNING_REFUSALS = {
 	ERR_BEIGNET_LN_NO_QUOTE: ['PEER_GAVE_NO_PRICE', "The channel's peer did not give a price, so nothing was done. Try again in a moment.", 502],
 	ERR_BEIGNET_LN_QUOTE_EXPIRED: ['QUOTE_EXPIRED', 'That price has expired. Ask for a new one.', 410],
 	ERR_BEIGNET_LN_PRICE_BOUND: ['QUOTE_CHANGED', 'The price moved before the payment was made, so nothing was paid.', 409],
+	// The peer names the rate, and one unit at it is worth less than an
+	// invoice can say: the invoice would come to fewer units than asked for.
+	ERR_BEIGNET_LN_RATE_TOO_COARSE: ['RATE_TOO_COARSE', "The channel's peer priced this asset too coarsely for a Lightning invoice to name that amount, so no invoice was made.", 409],
+	// The wallet's own limits, before anything was recorded or sent. The
+	// limit is named when the engine's refusal carries it (mapLightning).
+	ERR_BEIGNET_LN_SPENDING_LIMIT: ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid.", 409],
 	ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND: ['INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409],
 	ERR_BEIGNET_LN_INSUFFICIENT_INBOUND: ['INSUFFICIENT_INBOUND', 'No asset channel of this wallet can receive that much.', 409],
 	ERR_BEIGNET_LN_BAD_INVOICE: ['BAD_INVOICE', 'That is not a Lightning invoice this wallet can read.', 400],
@@ -114,8 +120,9 @@ const LIGHTNING_REFUSALS = {
 	ERR_BEIGNET_LN_ALREADY_PAID: ['ALREADY_PAID', 'This wallet has already paid that invoice, or is paying it now.', 409],
 	// The engine did not take the payment, or the invoice could not be worked with.
 	ERR_BEIGNET_LN_PAYMENT: ['PAYMENT_NOT_SENT', 'The payment could not be made, so nothing was paid.', 502]
-	// S5 (adapter.js): the code quoteInvoice will refuse a rate too coarse for
-	// the amount with gets its entry here once the library names it.
+	// ERR_BEIGNET_LN_RECORDS_UNCONFIRMED has no entry, and must not read as a
+	// refusal: it comes after the engine took a payment, which is then
+	// followed from the library's record of it.
 	// ERR_BEIGNET_LN_CHANNEL, _FUNDING and _RECOVERY have no entry: they carry
 	// the library's account of what went wrong inside, which is for the log.
 	// The caller answers with a sentence of its own.
@@ -145,6 +152,47 @@ function paymentFailure(text) {
 // What mapError words with the library's own text.
 const WORDED_BY_THE_LIBRARY = new Set(['WALLET_ERROR', 'TOR_UNAVAILABLE']);
 
+// What the engine itself refuses with, where it reaches the host inside an
+// error of the library's: as the error's own code, as that of a cause, or
+// named in its text. This is the one place that knows the engine's names,
+// so one the engine settles on later is changed here and nowhere else.
+const ENGINE_REFUSALS = {
+	FEE_BUDGET_EXHAUSTED: [
+		'FEE_BUDGET_EXHAUSTED',
+		'The budget this app sets for the miner fees of asset channels is used up, so nothing was done. Nothing was lost: the channels and what is in them are as they were.',
+		409
+	],
+	ASSET_PAYMENT_REFUSED: ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid.", 409]
+};
+
+/** Every error in the chain of causes of `err`, itself first. Never more than a few. */
+function causesOf(err) {
+	const out = [];
+	for (let e = err, n = 0; e && typeof e === 'object' && n < 6; e = e.cause, n += 1) out.push(e);
+	return out;
+}
+
+/** The engine's own code inside `err`, when it is one of ENGINE_REFUSALS. '' otherwise. */
+function engineCodeOf(err) {
+	const chain = causesOf(err);
+	for (const e of chain) if (Object.prototype.hasOwnProperty.call(ENGINE_REFUSALS, codeOf(e))) return codeOf(e);
+	for (const e of chain) {
+		const text = String(e.message || '');
+		for (const code of Object.keys(ENGINE_REFUSALS)) if (new RegExp(`\\b${code}\\b`).test(text)) return code;
+	}
+	return '';
+}
+
+/** The name of the spending limit that refused a payment, when the refusal carries one in a form that can be shown. */
+function spendingLimitOf(err) {
+	for (const e of causesOf(err)) {
+		for (const said of [e.limit, e.details && e.details.limit, e.data && e.data.limit]) {
+			if (typeof said === 'string' && /^[A-Za-z][A-Za-z0-9 _.-]{0,40}$/.test(said.trim())) return said.trim();
+		}
+	}
+	return null;
+}
+
 /**
  * As mapError, for what a call into the Lightning service threw: a refusal
  * in the host's own words, or null when the host has none for it. What the
@@ -153,6 +201,16 @@ const WORDED_BY_THE_LIBRARY = new Set(['WALLET_ERROR', 'TOR_UNAVAILABLE']);
  */
 function mapLightning(err, context = {}) {
 	if (isRefusal(err)) return err;
+	const engine = engineCodeOf(err);
+	if (engine === 'ASSET_PAYMENT_REFUSED' || codeOf(err) === 'ERR_BEIGNET_LN_SPENDING_LIMIT') {
+		const limit = spendingLimitOf(err);
+		const [code, , status] = ENGINE_REFUSALS.ASSET_PAYMENT_REFUSED;
+		return refusal(code, `This wallet's own spending limit${limit ? ` (${limit})` : ''} refused the payment, so nothing was paid.`, status, limit ? { limit } : undefined);
+	}
+	if (engine) {
+		const [code, message, status] = ENGINE_REFUSALS[engine];
+		return refusal(code, message, status);
+	}
 	if (FEE_CODES.has(codeOf(err))) {
 		return refusal('FEE_TOO_HIGH', 'The miner fee would be above what this wallet allows for an asset transaction, so nothing was done.', 400);
 	}
@@ -248,6 +306,8 @@ module.exports = {
 	mapLightning,
 	workingSats,
 	LIGHTNING_REFUSALS,
+	ENGINE_REFUSALS,
+	engineCodeOf,
 	PAYMENT_FAILURES,
 	paymentFailure
 };

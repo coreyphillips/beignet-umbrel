@@ -447,9 +447,22 @@ const fakeInvoice = ({ msat, hash } = {}) =>
  */
 const LN = 'ERR_BEIGNET_LN_';
 const ASSET_PAYMENT_REFUSALS = Object.freeze(
-	['NOT_READY', 'INVALID', 'UNKNOWN_CHANNEL', 'NO_QUOTE', 'QUOTE_EXPIRED', 'PRICE_BOUND', 'INSUFFICIENT_OUTBOUND', 'BAD_INVOICE', 'INVOICE_EXPIRED', 'AMOUNT_REQUIRED', 'ALREADY_PAID', 'PAYMENT'].map(
-		(name) => LN + name
-	)
+	[
+		'UNSUPPORTED',
+		'NOT_READY',
+		'INVALID',
+		'UNKNOWN_CHANNEL',
+		'NO_QUOTE',
+		'QUOTE_EXPIRED',
+		'PRICE_BOUND',
+		'SPENDING_LIMIT',
+		'INSUFFICIENT_OUTBOUND',
+		'BAD_INVOICE',
+		'INVOICE_EXPIRED',
+		'AMOUNT_REQUIRED',
+		'ALREADY_PAID',
+		'PAYMENT'
+	].map((name) => LN + name)
 );
 // The rows a backup may carry, as the entry's own list has them.
 const CARRIED = [
@@ -457,6 +470,7 @@ const CARRIED = [
 	'tap/channel/v1/destination/',
 	'tap/channel/v1/destinations/',
 	'tap/channel/v1/last/',
+	'tap/channel/v1/funding-change/',
 	'tap/recovery/v1/channel/',
 	'tap/recovery/v1/proof/',
 	'tap/recovery/v1/job/'
@@ -482,6 +496,18 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		openFails: null,
 		openTimesOut: false,
 		openFailsSigned: null,
+		// The wallet has signed the funding transaction and the peer has not
+		// signed its commitment: the open fails there, or gets no answer.
+		openFailsUnsigned: null,
+		openStopsUnsigned: false,
+		// The engine holds the funding transaction and cannot be made to drop the open.
+		engineHoldsFunding: false,
+		reclaimFails: null,
+		reclaimFee: 300,
+		// Whether a restored backup carried what rebuilds a funding's change.
+		changeRestorable: true,
+		// What the node says of offering asset channels. Undefined for an engine that cannot say.
+		advertisement: { advertised: true },
 		openFee: null,
 		connectGate: null,
 		cancelFails: false,
@@ -498,6 +524,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		payStatus: 'complete',
 		payFailure: 'no route to the destination',
 		payFails: null,
+		// What the engine itself threw, carried as the cause of a refusal.
+		payCause: null,
 		payThrowsAfter: null,
 		payMoved: false,
 		payFeeMsat: 2000n
@@ -520,6 +548,12 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	const bytes = (text) => Buffer.from(String(text), 'hex');
 	const seconds = (ms) => BigInt(Math.floor(ms / 1000));
 	const refuse = (name, message) => tapError(LN + name, message);
+	// The library's own types name every member a call takes. A member it
+	// does not name is a mistake of the caller's, and is refused here so
+	// that the glue cannot hand over one the library would silently drop.
+	const only = (name, given, allowed) => {
+		for (const key of Object.keys(given || {})) if (!allowed.includes(key)) throw refuse('INVALID', `${name} takes no ${key}`);
+	};
 	// The real service keeps its records in the node's database, a
 	// transaction at a time: a call made inside one of the host's would be a
 	// transaction inside another.
@@ -738,6 +772,12 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			paymentHash: bytes(p.paymentHash),
 			assetAmount: p.assetAmount,
 			status: p.status,
+			// Which try the record stands for, and the circuit it left on.
+			attempt: p.attempt || 1,
+			channelId: bytes(p.channelId || '00'.repeat(32)),
+			htlcId: BigInt((p.attempt || 1) - 1),
+			...(p.status === 'pending' && p.engineHasNoRecord ? { engineHasNoRecord: true } : {}),
+			...(p.assetRecordsUnconfirmed ? { assetRecordsUnconfirmed: true } : {}),
 			...(p.status === 'pending' || p.feeMsat === undefined || p.feeMsat === null ? {} : { feeMsat: p.feeMsat }),
 			...(p.status === 'failed' ? { failure: p.failure || 'the payment failed' } : {})
 		});
@@ -753,6 +793,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			},
 			async quoteFunding(request) {
 				reaches('quoteFunding');
+				only('quoteFunding', request, ['assets', 'groupKey', 'fundingSatoshis', 'feeRate']);
 				log('quoteFunding', {
 					assets: request.assets.map((a) => ({ assetId: hexOf(a.assetId), amount: a.amount })),
 					groupKey: request.groupKey ? hexOf(request.groupKey) : null,
@@ -764,6 +805,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			},
 			async openChannel(request) {
 				reaches('openChannel');
+				only('openChannel', request, ['peer', 'pendingChannelId', 'assets', 'fundingSatoshis', 'feeRate', 'maxFee', 'pushMsat', 'decimalDisplay', 'groupKey', 'timeoutMs']);
 				const pending = hexOf(request.pendingChannelId);
 				const plain = {
 					pendingChannelId: pending,
@@ -834,9 +876,22 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 						cancelled.add(pending);
 						throw refuse('FEE_BOUND', 'the funding fee is above the bound: 99000 > 250000 at input 3');
 					}
-					Object.assign(flow, { signed: true, fundingTxid: id('funding'), phase: 'funding-created', state: 'SENT_FUNDING' });
+					// This wallet signs the funding transaction. That binds nothing:
+					// the peer is shown it without its witnesses, so the open can
+					// still be given up and its inputs released.
+					Object.assign(flow, { fundingTxid: id('funding'), phase: 'funding-created', state: 'SENT_FUNDING' });
+					if (opts.openFailsUnsigned) {
+						Object.assign(flow, { phase: 'failed', error: 'the peer hung up before it signed', state: null });
+						release(flow);
+						cancelled.add(pending);
+						throw tapError(opts.openFailsUnsigned, 'the open ended before the peer signed: the peer hung up');
+					}
+					// No word on the peer's signature in time: kept, for resume to carry on.
+					if (opts.openStopsUnsigned) throw refuse('TIMEOUT', 'the peer did not sign in time');
+					// The point of no return: the engine holds the peer's signature on the first commitment.
+					Object.assign(flow, { signed: true, committed: true, phase: 'committed' });
 					if (opts.openFailsSigned) throw tapError(opts.openFailsSigned, 'the network did not take the transaction');
-					Object.assign(flow, { phase: 'broadcast', channelId: id('channel'), committed: true, state: 'AWAITING_FUNDING_CONFIRMED' });
+					Object.assign(flow, { phase: 'broadcast', channelId: id('channel'), state: 'AWAITING_FUNDING_CONFIRMED' });
 					return { pendingChannelId: request.pendingChannelId, channelId: bytes(flow.channelId) };
 				} finally {
 					persist();
@@ -849,6 +904,9 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				if (opts.cancelFails) throw new Error('the database is busy');
 				const flow = flows.get(pending);
 				if (flow && flow.signed) return false;
+				// The engine holds the funding transaction and waits for the peer's
+				// signature: it would publish the moment the peer signs.
+				if (flow && flow.fundingTxid && !ENDED_PHASES.includes(flow.phase) && opts.engineHoldsFunding) return false;
 				if (!flow && opts.cancelMissed) return true;
 				cancelled.add(pending);
 				if (flow && !ENDED_PHASES.includes(flow.phase)) {
@@ -866,8 +924,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				if (stop) stop(refuse('CANCELLED', 'the channel open was cancelled'));
 				return true;
 			},
-			async closeChannel({ channelId, force }) {
+			async closeChannel(request) {
 				reaches('closeChannel');
+				only('closeChannel', request, ['channelId', 'force']);
+				const { channelId, force } = request;
 				const wanted = hexOf(channelId);
 				log('closeChannel', wanted, !!force);
 				const flow = byChannel(wanted);
@@ -907,6 +967,28 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 						.map((f) => ({ channelId: f.channelId, completed: [], pending: ['a sweep'], superseded: [], errors: opts.recoveryErrors.map((message) => ({ message })) }));
 				}
 			},
+			// The way out of an open whose funding will not confirm: a spend of
+			// the funding's Bitcoin inputs back to the wallet. Nothing is released.
+			async reclaimFundingInputs(request) {
+				reaches('reclaimFunding');
+				only('reclaimFundingInputs', request, ['pendingChannelId', 'feeRate']);
+				const pending = hexOf(request.pendingChannelId);
+				log('reclaimFunding', pending, request.feeRate);
+				const flow = flows.get(pending);
+				if (!flow || !flow.initiator || flow.restored) throw refuse('UNKNOWN_CHANNEL', 'no channel open of this wallet has this pending channel ID');
+				if (!flow.fundingTxid) throw refuse('FUNDING', 'the funding transaction is not signed: cancelChannel gives the open up');
+				if (ENDED_PHASES.includes(flow.phase)) throw refuse('FUNDING', 'the open has ended, and its inputs are released');
+				if (flow.confirmed) throw refuse('FUNDING', 'the funding transaction is confirmed: the channel is open');
+				if (opts.reclaimFails) throw tapError(opts.reclaimFails, 'the wallet made no spend: 1 sat/vB is not above the 2 of input 4f2a:0');
+				const txid = id('reclaim');
+				flow.reclaimed = txid;
+				// As the wire has it: the reverse of what a person is shown.
+				return { txid: Buffer.from(txid, 'hex').reverse(), transaction: { txIn: [], txOut: [] }, feeSat: BigInt(opts.reclaimFee) };
+			},
+			advertisement() {
+				reads('advertisement');
+				return opts.advertisement ? { ...opts.advertisement } : undefined;
+			},
 			async settleFundingReservations() {
 				reaches('settleFundingReservations');
 				log('settleFundingReservations');
@@ -935,7 +1017,16 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 						const change = [...sums]
 							.map(([assetId, amount]) => ({ assetId: bytes(assetId), amount: amount - (flow.assets.find((a) => a.assetId === assetId) || { amount: 0n }).amount }))
 							.filter((c) => c.amount > 0n);
-						reports.push({ ...report, outcome: 'moved', ...(change.length ? { change } : {}) });
+						// The outputs of that transaction that are the wallet's come back
+						// with it, when the backup carried what rebuilds them.
+						const restored = change.length === 0 || !!opts.changeRestorable;
+						if (restored) {
+							for (const c of change) {
+								const assetId = hexOf(c.assetId);
+								tap.records.push({ ...records[0], spent: false, reservedBy: undefined, assetId, amount: c.amount.toString(), anchorOutPoint: `${flow.fundingTxid}:1`, scriptKey: `02${sha256Hex(`change:${flow.fundingTxid}:${assetId}`)}` });
+							}
+						}
+						reports.push({ ...report, outcome: 'moved', changeRestored: restored, ...(change.length ? { change } : {}) });
 					} else {
 						for (const r of records) r.reservedBy = undefined;
 						reports.push({ ...report, outcome: 'released' });
@@ -944,8 +1035,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				return reports;
 			},
 
-			async quoteInvoice({ asset, amount, peer, expirySeconds }) {
+			async quoteInvoice(request) {
 				reaches('quoteInvoice');
+				only('quoteInvoice', request, ['asset', 'amount', 'peer', 'expirySeconds']);
+				const { asset, amount, peer, expirySeconds } = request;
 				const assetId = asset.assetId ? hexOf(asset.assetId) : null;
 				const groupKey = asset.groupKey ? hexOf(asset.groupKey) : null;
 				const peerPubkey = peer ? hexOf(peer) : null;
@@ -959,8 +1052,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				persist();
 				return { quoteId: bytes(quoteId), peer: bytes(peerPubkey), assetAmount: BigInt(amount), milliSatoshi: msatOf(amount), assetRate: { ...opts.rate }, expiresAt, priced: priced() };
 			},
-			async createInvoice({ quoteId, description, expirySeconds }) {
+			async createInvoice(request) {
 				reaches('createInvoice');
+				only('createInvoice', request, ['quoteId', 'description', 'expirySeconds']);
+				const { quoteId, description, expirySeconds } = request;
 				const wanted = hexOf(quoteId);
 				log('createInvoice', { quoteId: wanted, description, expirySeconds });
 				const quote = quotes.get(wanted);
@@ -977,11 +1072,21 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			},
 			invoices() {
 				reads('invoices');
-				return [...invoices.values()].map((i) => ({ paymentHash: bytes(i.paymentHash), assetAmount: i.assetAmount, milliSatoshi: i.amountMsat, expiresAt: i.expiresAt, status: i.status }));
+				// What was invoiced, and beside it what arrived: nothing while no HTLC has settled it.
+				return [...invoices.values()].map((i) => ({
+					paymentHash: bytes(i.paymentHash),
+					assetAmount: i.assetAmount,
+					receivedAssetAmount: i.received === undefined ? 0n : i.received,
+					milliSatoshi: i.amountMsat,
+					expiresAt: i.expiresAt,
+					status: i.status
+				}));
 			},
 
-			async quotePayment({ invoice: bolt11, asset, amountMsat }) {
+			async quotePayment(request) {
 				reaches('quotePayment');
+				only('quotePayment', request, ['invoice', 'asset', 'amountMsat', 'channelId']);
+				const { invoice: bolt11, asset, amountMsat } = request;
 				const assetId = asset.assetId ? hexOf(asset.assetId) : null;
 				const groupKey = asset.groupKey ? hexOf(asset.groupKey) : null;
 				log('quotePayment', { bolt11, assetId, groupKey, amountMsat: amountMsat === undefined ? null : amountMsat });
@@ -1016,8 +1121,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 					priced: priced()
 				};
 			},
-			async payInvoice({ quoteId, maxAssetAmount }) {
+			async payInvoice(request) {
 				reaches('payInvoice');
+				only('payInvoice', request, ['quoteId', 'maxAssetAmount']);
+				const { quoteId, maxAssetAmount } = request;
 				const wanted = hexOf(quoteId);
 				log('payInvoice', wanted, maxAssetAmount, storage ? storage.list('h/').map((r) => r.key) : []);
 				const quote = quotes.get(wanted);
@@ -1026,10 +1133,22 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				quotes.delete(wanted);
 				// Refused while nothing has left: the record of an earlier try, if any, stands.
 				if (opts.payMoved || quote.assetAmount > BigInt(maxAssetAmount)) throw refuse('PRICE_BOUND', 'the price is past the bound');
-				if (opts.payFails) throw tapError(opts.payFails, 'the payment was not sent: no usable route');
-				// The node has the payment from here on, and the wallet its own record of it.
+				if (opts.payFails) throw Object.assign(tapError(opts.payFails, 'the payment was not sent: no usable route'), opts.payCause ? { cause: opts.payCause } : {});
+				// The node has the payment from here on. The record is written in
+				// the one write before it is handed over, and stands for this try.
+				const before = payments.get(quote.paymentHash);
 				const status = opts.payThrowsAfter ? 'pending' : opts.payStatus;
-				const payment = { paymentHash: quote.paymentHash, assetAmount: quote.assetAmount, status, feeMsat: opts.payFeeMsat, failure: status === 'failed' ? opts.payFailure : null, channelId: quote.channelId };
+				const payment = {
+					paymentHash: quote.paymentHash,
+					assetAmount: quote.assetAmount,
+					status,
+					attempt: (before ? before.attempt || 1 : 0) + 1,
+					feeMsat: opts.payFeeMsat,
+					failure: status === 'failed' ? opts.payFailure : null,
+					channelId: quote.channelId,
+					// Taken by the engine, and not confirmed to carry the asset records.
+					...(opts.payThrowsAfter === `${LN}RECORDS_UNCONFIRMED` ? { assetRecordsUnconfirmed: true } : {})
+				};
 				payments.set(payment.paymentHash, payment);
 				persist();
 				if (opts.payThrowsAfter) throw tapError(opts.payThrowsAfter, 'no word from the node in time');
@@ -1071,7 +1190,13 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	const entry = {
 		ASSET_PAYMENT_REFUSALS,
 		NOMINAL_ASSET_RATE: Object.freeze({ coefficient: 100_000_000n, scale: 0 }),
-		assetLightningSupport: () => ({ supported: !!opts.supported, engineVersion: '0.43.0', missing: opts.supported ? [] : ['LightningNode.openAuxiliaryChannel'] }),
+		// Read from what the engine states of itself, and from nothing else.
+		assetLightningSupport: () => ({
+			supported: !!opts.supported,
+			engineVersion: '0.43.0',
+			...(opts.supported ? { apiVersion: 1 } : {}),
+			missing: opts.supported ? [] : ['channel.AUXILIARY_CHANNELS_API']
+		}),
 		lightningStore(backend, prefix = 'ln/') {
 			if (typeof prefix !== 'string' || !/^[a-z0-9][a-z0-9._/-]{0,62}\/$/.test(prefix)) throw tapError('ERR_LIGHTNING_STORAGE', 'the store prefix must be lowercase segments ending in "/"');
 			const tx = {
@@ -1083,11 +1208,24 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				remove: (key) => backend.delete(prefix + key),
 				keys: (scope) => backend.list(prefix + scope).map((row) => row.key.slice(prefix.length))
 			};
-			return { backend, prefix, transaction: (fn) => backend.transaction(() => fn(tx)) };
+			// One transaction of the backend, and never one inside another.
+			let open = false;
+			const transaction = (fn) => {
+				if (open) throw tapError('ERR_LIGHTNING_STORAGE', 'nested transactions are not supported');
+				open = true;
+				try {
+					return backend.transaction(() => fn(tx));
+				} finally {
+					open = false;
+				}
+			};
+			return { backend, prefix, transaction };
 		},
 		createAssetLightningHost(given) {
 			if (!opts.supported) throw refuse('UNSUPPORTED', 'this Beignet (0.42.0) has no asset channels');
-			own(given && given.store);
+			only('createAssetLightningHost', given, ['store', 'hrp', 'fixedOutputFees', 'invoiceRetentionSeconds', 'now', 'onError']);
+			if (!given || !given.store || typeof given.store.transaction !== 'function') throw refuse('INVALID', 'store must be the store lightningStore() returns');
+			own(given.store);
 			const me = { node: null, service: null };
 			Object.assign(state, { host: me, made: given, store: given.store, started: false, bound: false, options: null, adapter: null, node: null });
 			return {
@@ -1106,6 +1244,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 					if (me.service) throw refuse('INVALID', 'the asset Lightning service is already running');
 					if (!options || typeof options.fetchProvenance !== 'function') throw refuse('INVALID', 'fetchProvenance is required');
 					if (options.forwarding) throw refuse('INVALID', 'this entry forwards no payments');
+					only('start', options, ['fetchProvenance', 'groupProofResolver', 'confirmationDepth', 'acceptIncoming', 'validateAcceptedChannel', 'price', 'forwarding', 'now', 'onError', 'onEvent']);
 					if (opts.startFails) throw new Error(opts.startFails);
 					log('start', { quiet: typeof options.price === 'function' });
 					cancelled.clear();
@@ -1245,20 +1384,34 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		persist();
 		emit({ type: 'recovery', channelId: bytes(flow.channelId), status: 'complete' });
 	};
-	ln.settle = (paymentHash) => {
+	/** An invoice is paid. `received` is what arrived, when that is not what was invoiced. */
+	ln.settle = (paymentHash, received) => {
 		const invoice = invoices.get(paymentHash);
 		invoice.status = 'paid';
+		invoice.received = received === undefined ? invoice.assetAmount : BigInt(received);
 		const flow = [...flows.values()].find((f) => f.peerPubkey === invoice.peerPubkey && f.state === 'NORMAL');
-		if (flow) ln.move(flow.channelId, invoice.assetAmount);
+		if (flow) ln.move(flow.channelId, invoice.received);
 		persist();
-		emit({ type: 'invoice', paymentHash: bytes(paymentHash), status: 'paid', assetAmount: invoice.assetAmount, channelId: bytes(flow ? flow.channelId : '00'.repeat(32)) });
+		emit({
+			type: 'invoice',
+			paymentHash: bytes(paymentHash),
+			status: 'paid',
+			assetAmount: invoice.assetAmount,
+			receivedAssetAmount: invoice.received,
+			channelId: bytes(flow ? flow.channelId : '00'.repeat(32))
+		});
+	};
+	/** The engine forgets a payment it once had: the record of it stays pending, and says so. */
+	ln.forget = (paymentHash) => {
+		payments.get(paymentHash).engineHasNoRecord = true;
+		persist();
 	};
 	ln.finish = (paymentHash, status, failure = null) => {
 		const payment = payments.get(paymentHash);
 		Object.assign(payment, { status, failure });
 		if (status === 'complete') ln.move(payment.channelId, -payment.assetAmount);
 		persist();
-		emit({ type: 'payment', paymentHash: bytes(paymentHash), status, assetAmount: payment.assetAmount, channelId: bytes(payment.channelId), ...(failure ? { failure } : {}) });
+		emit({ type: 'payment', paymentHash: bytes(paymentHash), attempt: payment.attempt || 1, status, assetAmount: payment.assetAmount, channelId: bytes(payment.channelId), ...(failure ? { failure } : {}) });
 	};
 	/** A peer offers a channel: what the service asks the wallet, in the library's own values. */
 	ln.offer = ({ pendingChannelId, peerPubkey = `03${'cd'.repeat(32)}`, assets = [], groupKey = null }) =>
