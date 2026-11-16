@@ -478,6 +478,12 @@ export function proofTaken(answer) {
  * timeline for anyone watching.
  */
 export function describeAssetEvent(name, data) {
+	// A channel open that was turned down after the dialog had closed: the
+	// wallet says why in a sentence of its own, and the row is already gone,
+	// so this is the only place it can be read.
+	if (name === 'assets:error' && data && data.channelId && typeof data.message === 'string' && data.message.trim()) {
+		return { text: `The asset channel was not opened. ${data.message.trim()}`, tone: 'error', duration: 12000 };
+	}
 	const row = data && data.row;
 	if (!row) return null;
 	const failed = isFailed(row);

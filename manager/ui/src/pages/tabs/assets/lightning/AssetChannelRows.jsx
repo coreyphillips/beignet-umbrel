@@ -24,7 +24,10 @@ export default function AssetChannelRows({ channels, onClose }) {
 				const state = channelState(c.state);
 				const alias = typeof c.peerAlias === 'string' && c.peerAlias.trim() ? c.peerAlias.trim() : null;
 				return (
-					<li key={c.channelId} className="asset-channel" data-testid="asset-channel" data-state={c.state}>
+					// A channel is known by the id its open was given until the funding
+					// transaction gives it its own. The first stays with it, so the row
+					// is the same row across that change.
+					<li key={c.pendingChannelId || c.channelId} className="asset-channel" data-testid="asset-channel" data-state={c.state}>
 						<div className="asset-channel-head">
 							<AssetAvatar asset={c.asset} />
 							<div className="asset-channel-title">

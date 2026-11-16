@@ -175,6 +175,19 @@ test("the wallet's own refusal of a send is put in the reader's terms", () => {
 	assert.equal(sentence('Already ends.'), 'Already ends.');
 });
 
+test('a channel open turned down after its dialog closed is announced with the wallet\'s own reason', () => {
+	const refused = { code: 'PEER_NO_ASSET_CHANNELS', message: 'That peer does not take asset channels.', channelId: 'ab'.repeat(32) };
+	assert.deepEqual(describeAssetEvent('assets:error', refused), {
+		text: 'The asset channel was not opened. That peer does not take asset channels.',
+		tone: 'error',
+		duration: 12000
+	});
+	// Only an error about a channel, and only one that says something.
+	assert.equal(describeAssetEvent('assets:error', { code: 'X', message: 'something else' }), null);
+	assert.equal(describeAssetEvent('assets:error', { code: 'X', message: '  ', channelId: 'ab'.repeat(32) }), null);
+	assert.equal(describeAssetEvent('assets:error', null), null);
+});
+
 test('an event is announced when something finishes or fails, with what it was', () => {
 	const asset = { name: 'BUSD', type: 'normal', decimalDisplay: 2, amount: '100000000' };
 	const done = (kind, extra = {}) => ({ row: { kind, state: 'complete', assets: [asset], ...extra } });
