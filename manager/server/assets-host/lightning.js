@@ -564,7 +564,7 @@ function insufficientAsset(needed, total, free) {
 
 /**
  * What opening a channel with `body.amount` of `body.key` takes: which
- * issuances the units come from, and the bitcoin. Reads, and asks the
+ * issuance the units come from (one, always), and the bitcoin. Reads, and asks the
  * library what the funding transaction would cost; changes nothing.
  */
 async function planOpen(host, body, feeRate) {
@@ -579,20 +579,25 @@ async function planOpen(host, body, feeRate) {
 	if (views.typeName(reg.type) === 'collectible') {
 		throw refusal('INVALID_PARAMS', 'A collectible cannot go into a channel: a channel holds an amount, and a collectible is one of one.');
 	}
-	// From the issuance with the most free units down, until the amount is covered.
+	// One issuance a channel: the library funds a channel with units of one
+	// asset ID, so a wallet that holds several issuances of a group opens a
+	// channel for each. The one with the most free units is the one used,
+	// and the most a channel can be opened with is what that one holds.
 	const order = [...held.entries()].sort((a, b) => (a[1].free === b[1].free ? 0 : a[1].free > b[1].free ? -1 : 1));
-	const assets = [];
-	let left = amount;
-	for (const [assetId, h] of order) {
-		const take = h.free < left ? h.free : left;
-		if (take > 0n) assets.push({ assetId, amount: take.toString() });
-		left -= take;
-		if (left === 0n) break;
-	}
-	if (left > 0n) {
+	const [issuance, most] = order[0];
+	if (most.free < amount) {
 		const sum = (field) => order.reduce((total, [, h]) => total + h[field], 0n);
+		if (order.length > 1 && sum('free') >= amount) {
+			throw refusal(
+				'CHANNEL_ASSETS',
+				`A channel holds units of one issuance of an asset. This wallet holds enough of this asset in all, spread over ${order.length} issuances, and the most it has of a single one on-chain is ${most.free} units. Open a channel with that much or less, and another for the rest.`,
+				409,
+				{ needed: amount.toString(), largest: most.free.toString(), available: sum('free').toString(), issuances: order.length }
+			);
+		}
 		throw insufficientAsset(amount, sum('total'), sum('free'));
 	}
+	const assets = [{ assetId: issuance, amount: amount.toString() }];
 	const groupKey = reg.groupKey || null;
 	const spendableSats = await host.settledSpendable();
 	let quoted = null;
@@ -1100,7 +1105,14 @@ async function reclaimFunding(host, body, key) {
 
 function knownAsset(host, wanted) {
 	const key = hexKey(wanted);
-	const reg = key ? host.known(key) : null;
+	let reg = key ? host.known(key) : null;
+	// An asset this wallet's own records do not name by that key, such as a
+	// group it holds only in a channel a peer opened, is known by the
+	// channel that carries it: the channel says its asset ID and its group.
+	if (!reg && key) {
+		const c = channelList(host).find((x) => x.key === key || x.groupKey === key || x.assetId === key);
+		if (c) reg = { ...(host.registry().get(c.assetId) || {}), assetId: c.assetId, groupKey: c.groupKey || null };
+	}
 	if (!reg) throw refusal('ASSET_NOT_FOUND', 'This wallet does not know that asset.', 404);
 	return { reg, key: reg.groupKey || reg.assetId };
 }
@@ -1122,8 +1134,9 @@ function lightningError(host, err, details) {
 		host.say('warn', `assets: a Lightning request failed: ${plainMessage(err)}`);
 		return refusal('LIGHTNING_FAILED', 'Lightning could not do that just now. Try again in a moment.', 502);
 	}
-	// Only the two that are about a channel's balance carry the figure.
-	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND'].includes(mapped.extensionCode)) delete mapped.details;
+	// Only those whose figures the dashboard words carry them: the two that
+	// are about a channel's balance, and bitcoin on the wrong address types.
+	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS'].includes(mapped.extensionCode)) delete mapped.details;
 	return mapped;
 }
 
@@ -2161,8 +2174,23 @@ function libraryError(host, err) {
 		return;
 	}
 	noteFeeBudget(host, err);
+	// A peer's channel the library turned down before the host was asked:
+	// said in the host's sentence, with the library's own words after it.
+	if (TURNED_DOWN.has(codeOf(err))) {
+		const said = mapLightning(err);
+		if (said) {
+			sayOnce(host, 'warn', `assets: asset channels: ${said.message} (${plainMessage(err, 'no more was said')})`);
+			return;
+		}
+	}
 	sayOnce(host, 'warn', `assets: asset channels: ${plainMessage(err, 'An asset channel step failed')}`);
 }
+
+// What the library says to onError of a channel a peer proposed and it
+// turned down itself: a group that could not be shown to be real, and
+// assets that cannot be one channel. The host keeps no list of such
+// proposals (it was never asked about them), so they are for the log.
+const TURNED_DOWN = new Set(['ERR_BEIGNET_LN_GROUP_PROOF', 'ERR_BEIGNET_LN_CHANNEL_ASSETS']);
 
 /** Log `text`, unless the same words were logged a short while ago. */
 function sayOnce(host, level, text) {

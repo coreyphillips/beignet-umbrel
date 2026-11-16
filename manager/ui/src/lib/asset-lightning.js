@@ -262,12 +262,43 @@ const units = (value, asset) => (asset ? fmtAsset(value, asset) : `${String(valu
  * is said in the wallet's words, and an answer that never came is said to be
  * that. A bare code is never what the reader is shown.
  */
+/**
+ * The most of an asset that can go into one new channel. A channel is
+ * funded with units of one issuance, so for an asset this wallet holds
+ * several issuances of it is what it holds on-chain of the largest one
+ * (`balance.channelable`), and for any other asset all it holds on-chain.
+ */
+export function channelableOf(asset) {
+	const whole = (value) => typeof value === 'string' && /^\d+$/.test(value);
+	const onchain = whole(asset?.balance?.onchain) ? asset.balance.onchain : '0';
+	const one = asset?.balance?.channelable;
+	return whole(one) && BigInt(one) < BigInt(onchain) ? one : onchain;
+}
+
 export function lightningRefusal(error, { asset } = {}) {
 	if (!error) return null;
 	const code = error.code || '';
 	const details = error.details || {};
 	const name = asset && asset.name ? asset.name : 'this asset';
 	switch (code) {
+		case 'CHANNEL_ASSETS': {
+			// One issuance a channel. The host counts in units; here it is the asset's own figure.
+			if (details.largest === undefined || details.largest === null || !Number.isInteger(details.issuances)) return { code, text: error.message };
+			return {
+				code,
+				text: `A channel holds units of one issuance of an asset. This wallet holds enough ${name} in all, spread over ${details.issuances} issuances, and the most it has of a single one on-chain is ${units(details.largest, asset)}. Open a channel with that much or less, and another for the rest.`
+			};
+		}
+		case 'FUNDING_INPUTS': {
+			const sats = (value) => (/^\d+$/.test(String(value ?? '')) ? `${Number(value).toLocaleString('en-US')} sats` : null);
+			const [has, needs, other] = [sats(details.eligibleSats), sats(details.neededSats), sats(details.otherSats)];
+			if (!has || !needs) return { code, text: error.message };
+			const elsewhere = other && Number(details.otherSats) > 0 ? ` Another ${other} are on addresses of other types, which cannot be used for it.` : '';
+			return {
+				code,
+				text: `The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has ${has} on those, and this needs about ${needs}.${elsewhere} Nothing was done and nothing was spent.`
+			};
+		}
 		case 'INSUFFICIENT_INBOUND': {
 			const max = details.maxReceivable;
 			if (max === undefined || max === null || isZero(max)) {

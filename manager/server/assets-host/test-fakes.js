@@ -158,7 +158,7 @@ function fakeTap({ now = () => Date.now(), wallet } = {}) {
 				batches.set(b.id, b);
 			}
 			if (b.seedlings.some((x) => x.name === s.name)) throw tapError('ERR_TAPGARDEN_DUPLICATE_SEEDLING', s.name);
-			b.seedlings.push({ name: s.name, type: s.type, amount: String(s.amount), decimalDisplay: (s.meta && s.meta.decimalDisplay) || 0, newGroup: !!s.newGroup });
+			b.seedlings.push({ name: s.name, type: s.type, amount: String(s.amount), decimalDisplay: (s.meta && s.meta.decimalDisplay) || 0, newGroup: !!s.newGroup, groupKey: s.groupKey || null });
 			return { batchId: b.id };
 		},
 		async freeze({ feeRate, maxFee }) {
@@ -183,7 +183,7 @@ function fakeTap({ now = () => Date.now(), wallet } = {}) {
 						assets: b.seedlings.map((s) => {
 							const assetId = sha256Hex(`asset:${b.id}:${s.name}`);
 							decimals.set(assetId, s.decimalDisplay);
-							return { assetId, name: s.name, type: s.type, amount: BigInt(s.amount), groupKey: s.newGroup ? `03${sha256Hex(`group:${assetId}`)}` : null, genesis: `g:${assetId}` };
+							return { assetId, name: s.name, type: s.type, amount: BigInt(s.amount), groupKey: s.newGroup ? `03${sha256Hex(`group:${assetId}`)}` : s.groupKey ? Buffer.from(s.groupKey).toString('hex') : null, genesis: `g:${assetId}` };
 						})
 					};
 					b.state = 2;
@@ -500,6 +500,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		resumeFails: null,
 		// Whether this wallet has ever held an asset of the group a peer offers.
 		knowsGroups: true,
+		// What the library says its native witness coins hold, when they are short of a funding.
+		fundingInputs: null,
 		// The wallet has signed the funding transaction and the peer has not
 		// signed its commitment: the open fails there, or gets no answer.
 		openFailsUnsigned: null,
@@ -804,6 +806,9 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 					fundingSats: Number(request.fundingSatoshis),
 					feeRate: request.feeRate
 				});
+				// One asset ID a channel, as the library has it.
+				if (request.assets.length !== 1) throw tapError(`${LN}CHANNEL_ASSETS`, 'units of more than one asset ID cannot be one channel');
+				if (opts.fundingInputs) throw Object.assign(tapError(`${LN}FUNDING_INPUTS`, 'native witness coins do not hold the funding'), { details: opts.fundingInputs });
 				if (opts.fundFails) throw tapError('ERR_BEIGNET_FUNDING', 'wallet has no spendable fee input');
 				return { feeSatoshis: BigInt(opts.fundingFee), vsize: 210, reserveSatoshis: BigInt(opts.reserveSats === undefined ? 1000 : opts.reserveSats) };
 			},
@@ -811,6 +816,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				reaches('openChannel');
 				only('openChannel', request, ['peer', 'pendingChannelId', 'assets', 'fundingSatoshis', 'feeRate', 'maxFee', 'pushMsat', 'decimalDisplay', 'groupKey', 'timeoutMs']);
 				const pending = hexOf(request.pendingChannelId);
+				if (request.assets.length !== 1) throw tapError(`${LN}CHANNEL_ASSETS`, 'units of more than one asset ID cannot be one channel');
 				const plain = {
 					pendingChannelId: pending,
 					peerPubkey: hexOf(request.peer),
@@ -1425,15 +1431,19 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		// made, needs the issuance that made the group: asked of the
 		// resolver, and an open without one is refused there.
 		if (groupKey && !opts.knowsGroups) {
-			if (typeof state.options.groupProofResolver !== 'function') {
-				emit({ type: 'channel', pendingChannelId: bytes(pendingChannelId), phase: 'rejected', error: 'unknown asset group' });
+			// Not accepted, and said to onError with the library's code for it.
+			const turnedDown = (why) => {
+				if (typeof state.options.onError === 'function') state.options.onError(tapError(`${LN}GROUP_PROOF`, why));
 				return false;
+			};
+			if (typeof state.options.groupProofResolver !== 'function') return turnedDown('unknown asset group');
+			let file = null;
+			try {
+				file = await state.options.groupProofResolver(groupKey);
+			} catch (err) {
+				return turnedDown(`the group proof could not be fetched: ${err.message}`);
 			}
-			const file = await state.options.groupProofResolver(groupKey);
-			if (!Buffer.isBuffer(file) || !file.toString().includes(groupKey)) {
-				emit({ type: 'channel', pendingChannelId: bytes(pendingChannelId), phase: 'rejected', error: 'supporting group history does not reveal the requested group' });
-				return false;
-			}
+			if (!Buffer.isBuffer(file) || !file.toString().includes(groupKey)) return turnedDown('supporting group history does not reveal the requested group');
 			log('groupProof', groupKey);
 		}
 		return state.options.acceptIncoming({

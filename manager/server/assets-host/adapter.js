@@ -321,7 +321,23 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     and verifies before it trusts it. The same resolver is asked again
  *     when a group's anchor moved in a reorg. The host answers it from the
  *     wallet's proof server, as the wallet's own receive of such an asset
- *     does (the courier's receiveGroupProof).
+ *     does (the courier's receiveGroupProof). Without it, or when it
+ *     fails, the peer's channel is not accepted and onError hears
+ *     ERR_BEIGNET_LN_GROUP_PROOF.
+ *
+ *     A channel is funded with units of ONE asset ID (docs/beignet.md,
+ *     "Grouped assets"): quoteFunding and openChannel take `assets` with
+ *     exactly one entry, and several asset IDs, a collectible, or a
+ *     `groupKey` the asset is not of are refused with
+ *     ERR_BEIGNET_LN_CHANNEL_ASSETS before anything is written or funded.
+ *     A channel of a grouped asset is a channel of its group: channels()
+ *     gives its `groupKey`, paymentLimits() names the group (`groupKey`,
+ *     no `assetId`), and quoteInvoice and quotePayment are asked with
+ *     `asset: { groupKey }` for a grouped asset, never `{ assetId }`, which
+ *     is how the peer is asked for a price (specifier below). The bitcoin
+ *     of a funding and of a reclaim comes only from native witness coins:
+ *     short of those, both refuse with ERR_BEIGNET_LN_FUNDING_INPUTS and
+ *     `details: { eligibleSatoshis, neededSatoshis, otherSatoshis }`.
  *  6. close() of the host closes the service and the quote transport and
  *     lets go of the node: for when the node stops. close() of the service
  *     stops the service alone, and the provider stays. After either, every

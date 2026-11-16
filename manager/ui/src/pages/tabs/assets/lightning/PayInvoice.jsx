@@ -59,6 +59,8 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 
 	const [busy, setBusy] = useState(false);
 	const [failure, setFailure] = useState(null);
+	// The host's code for a refusal of the payment itself, beside its sentence.
+	const [failureCode, setFailureCode] = useState(null);
 	const [change, setChange] = useState(null);
 	const [held, setHeld] = useState(false);
 	const [ranOut, setRanOut] = useState(null);
@@ -114,6 +116,7 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 			// shown with that note, and neither as paid nor as failed.
 			const notice = noticeOf(row || answer);
 			if (status === 'FAILED' && !notice) {
+				setFailureCode(null);
 				setFailure(row ? payFailure({ failureDescription: row.failure?.message }) : payFailure(answer));
 				// The price that payment was made at is spent: a new one for another try.
 				setRanOut(null);
@@ -148,7 +151,9 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 				clearTimeout(holdTimer.current);
 				holdTimer.current = setTimeout(() => setHeld(false), CHANGE_HOLD_MS);
 			} else {
-				setFailure(lightningRefusal(e, { asset }).text);
+				const said = lightningRefusal(e, { asset });
+				setFailure(said.text);
+				setFailureCode(said.code || null);
 				if (e?.code === 'QUOTE_CHANGED' || e?.code === 'QUOTE_EXPIRED') {
 					setRanOut(null);
 					price.renew();
@@ -377,7 +382,7 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 						</div>
 					)}
 					{failure && (
-						<div className="error-note" role="alert" data-testid="asset-pay-failure">
+						<div className="error-note" role="alert" data-testid="asset-pay-failure" data-code={failureCode || undefined}>
 							{failure}
 						</div>
 					)}

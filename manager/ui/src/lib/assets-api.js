@@ -25,8 +25,11 @@
  *
  *   Asset  { key, assetId, groupKey, name, type: 'normal' | 'collectible',
  *            decimalDisplay,
- *            balance: { total, onchain, pendingIn, pendingOut, channelLocal,
- *                       lightningSendable, lightningReceivable },
+ *            balance: { total, onchain, channelable, pendingIn, pendingOut,
+ *                       channelLocal, lightningSendable, lightningReceivable },
+ *            `channelable` is the most that can go into one new channel: a
+ *            channel is funded with one issuance of an asset, so for an asset
+ *            held over several issuances it is less than `onchain`.
  *            lockedSats, anchors, canReissue, mintedHere,
  *            supply: { issued, burned, known },
  *            genesis: { outpoint, height, timestamp } }

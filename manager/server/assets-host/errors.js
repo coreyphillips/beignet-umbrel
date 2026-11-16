@@ -108,6 +108,23 @@ const LIGHTNING_REFUSALS = {
 	// The peer names the rate, and one unit at it is worth less than an
 	// invoice can say: the invoice would come to fewer units than asked for.
 	ERR_BEIGNET_LN_RATE_TOO_COARSE: ['RATE_TOO_COARSE', "The channel's peer priced this asset too coarsely for a Lightning invoice to name that amount, so no invoice was made.", 409],
+	// A channel is funded with units of one asset ID, and never with a
+	// collectible. The host plans an open that way (planOpen), so this is
+	// what the library says of a request the host should not have made.
+	ERR_BEIGNET_LN_CHANNEL_ASSETS: ['CHANNEL_ASSETS', 'A channel holds units of one issuance of an asset, and never a collectible, so nothing was opened and nothing was spent.', 400],
+	// A peer's channel that was turned down. It reaches the host through
+	// the library's onError, so this sentence is one for the log.
+	ERR_BEIGNET_LN_GROUP_PROOF: [
+		'GROUP_PROOF',
+		"A channel a peer offered was turned down: the group of its asset could not be shown to be real, because the issuance that created the group could not be fetched from this wallet's proof server.",
+		409
+	],
+	// The node is on its way down. Nothing was recorded or sent.
+	ERR_BEIGNET_LN_SERVICE_DRAINING: [
+		'SERVICE_DRAINING',
+		'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.',
+		409
+	],
 	// The wallet's own limits, before anything was recorded or sent. The
 	// limit is named when the engine's refusal carries it (mapLightning).
 	ERR_BEIGNET_LN_SPENDING_LIMIT: ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid.", 409],
@@ -170,12 +187,48 @@ const ENGINE_REFUSALS = {
 // that names none, or one not listed here, is the spending limit's.
 const PAYMENT_REFUSED_BECAUSE = {
 	SPENDING_LIMIT_EXCEEDED: ENGINE_REFUSALS.ASSET_PAYMENT_REFUSED,
-	SERVICE_DRAINING: [
-		'SERVICE_DRAINING',
-		'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.',
-		409
-	]
+	SERVICE_DRAINING: LIGHTNING_REFUSALS.ERR_BEIGNET_LN_SERVICE_DRAINING
 };
+
+/**
+ * ERR_BEIGNET_LN_FUNDING_INPUTS in the host's words. The bitcoin of an
+ * asset channel, and of taking its funding back, comes only from coins on
+ * native SegWit addresses. When those do not hold enough the library says
+ * so in sats (`details`, each a bigint): what is on such coins, about what
+ * is needed, and what sits on coins of other address types.
+ */
+function fundingInputs(err) {
+	const sats = (value) => {
+		try {
+			const n = BigInt(value);
+			return n >= 0n ? n : null;
+		} catch (_) {
+			return null;
+		}
+	};
+	let said = null;
+	for (const e of causesOf(err)) {
+		const d = e.details || e.data;
+		if (d && sats(d.eligibleSatoshis) !== null && sats(d.neededSatoshis) !== null) {
+			said = { eligible: sats(d.eligibleSatoshis), needed: sats(d.neededSatoshis), other: sats(d.otherSatoshis) || 0n };
+			break;
+		}
+	}
+	if (!said) {
+		return refusal(
+			'FUNDING_INPUTS',
+			'The bitcoin for an asset channel has to come from native SegWit addresses of this wallet, and the transaction could not be made from those alone, so nothing was done and nothing was spent.',
+			409
+		);
+	}
+	const elsewhere = said.other > 0n ? ` Another ${said.other} sats are on addresses of other types, which cannot be used for it.` : '';
+	return refusal(
+		'FUNDING_INPUTS',
+		`The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has ${said.eligible} sats on those, and this needs about ${said.needed}.${elsewhere} Nothing was done and nothing was spent.`,
+		409,
+		{ eligibleSats: said.eligible.toString(), neededSats: said.needed.toString(), otherSats: said.other.toString() }
+	);
+}
 
 /** Every error in the chain of causes of `err`, itself first. Never more than a few. */
 function causesOf(err) {
@@ -224,6 +277,7 @@ function spendingLimitOf(err) {
 function mapLightning(err, context = {}) {
 	if (isRefusal(err)) return err;
 	const engine = engineCodeOf(err);
+	if (codeOf(err) === 'ERR_BEIGNET_LN_FUNDING_INPUTS') return fundingInputs(err);
 	if (engine === 'ASSET_PAYMENT_REFUSED' || codeOf(err) === 'ERR_BEIGNET_LN_SPENDING_LIMIT') {
 		// Not a limit at all: the wallet is on its way down, and takes nothing new.
 		if (refusalReasonOf(err) === 'SERVICE_DRAINING') {

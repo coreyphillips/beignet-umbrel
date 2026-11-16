@@ -593,3 +593,40 @@ test('a fee budget for channel fees that is used up is said above the list as so
 		await r.unmount();
 	}
 });
+
+test('a channel takes one issuance: the amount is held to the most the wallet has of a single one, and says so', async () => {
+	const backend = assetsBackend();
+	const r = await mount(backend);
+	try {
+		const busd = await busdOf(backend);
+		assert.deepEqual([busd.balance.onchain, busd.balance.channelable], ['1250000', '900000']);
+		await filled(r, { amount: '10000' });
+		assert.match(
+			r.test('asset-channel-open-dialog').textContent,
+			/A channel holds one issuance of an asset, and the most this wallet has of a single one on-chain is 9,000\.00 BUSD\. Open a channel with that much or less, and another for the rest\./
+		);
+		assert.equal(r.test('asset-channel-submit').disabled, true);
+		assert.equal(r.test('asset-channel-cost'), null, 'no price is asked for an amount that cannot go in');
+		assert.equal(backend.posted('/x/assets/channels/quote').some((c) => c.body.amount === '1000000'), false);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('bitcoin on addresses a channel cannot be funded from is said in the open dialog, with the figures', async () => {
+	const backend = assetsBackend();
+	backend.mock.seed('demo-main', 'funding-inputs');
+	const r = await mount(backend);
+	try {
+		await filled(r);
+		const note = r.test('asset-channel-refusal');
+		assert.equal(note.getAttribute('data-code'), 'FUNDING_INPUTS');
+		assert.equal(
+			note.textContent,
+			'The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has 40,000 sats on those, and this needs about 104,320 sats. Another 250,000 sats are on addresses of other types, which cannot be used for it. Nothing was done and nothing was spent.'
+		);
+		assert.equal(r.test('asset-channel-submit').disabled, true);
+	} finally {
+		await r.unmount();
+	}
+});

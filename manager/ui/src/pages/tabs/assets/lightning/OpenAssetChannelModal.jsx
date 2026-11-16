@@ -6,7 +6,7 @@ import { Button, Empty, FeeField, Field, Modal, Skeleton } from '../../../../com
 import { useAssetBalances, useAssetQuote, useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { cmpUnits, decimalsOf, fmtAsset, isZero, unitsToInput } from '../../../../lib/asset-amount.js';
-import { channelAssets, lightningRefusal, parsePeer } from '../../../../lib/asset-lightning.js';
+import { channelAssets, lightningRefusal, parsePeer, channelableOf } from '../../../../lib/asset-lightning.js';
 import { submitOnce } from '../../../../lib/assets.js';
 import { idempotencyKey } from '../../../../lib/assets-api.js';
 import { FEE_CAP_MULTIPLE } from '../../../../lib/fees.js';
@@ -56,9 +56,14 @@ export default function OpenAssetChannelModal({ id, api, assetKey, origin, onClo
 	const asset = fundable.find((a) => a.key === key) || null;
 	const decimals = decimalsOf(asset);
 	const onchain = asset?.balance?.onchain || '0';
-	const isMax = !!units && cmpUnits(units, onchain) === 0;
+	// One issuance a channel: the most that can go in is what the wallet
+	// holds on-chain of a single issuance, which for an asset it holds
+	// several issuances of is less than all it holds.
+	const most = channelableOf(asset);
+	const isMax = !!units && cmpUnits(units, most) === 0;
 	const tooMuch = !!units && cmpUnits(units, onchain) > 0;
-	const amountOk = !!asset && !!units && !isZero(units) && !tooMuch;
+	const overOne = !!units && !tooMuch && cmpUnits(units, most) > 0;
+	const amountOk = !!asset && !!units && !isZero(units) && !tooMuch && !overOne;
 
 	// Peers this wallet is connected to now, named from its map of the
 	// network. A channel can be opened to any of them without an address.
@@ -159,14 +164,20 @@ export default function OpenAssetChannelModal({ id, api, assetKey, origin, onClo
 									setUnits(u);
 									setFailure(null);
 								}}
-								max={onchain}
+								max={most}
 								isMax={isMax}
 								onMax={() => {
-									setText(unitsToInput(onchain, decimals));
-									setUnits(onchain);
+									setText(unitsToInput(most, decimals));
+									setUnits(most);
 								}}
 								testId="asset-channel-amount"
-								refusal={tooMuch ? `That is more than the ${fmtAsset(onchain, asset)} this wallet holds on-chain.` : undefined}
+								refusal={
+									tooMuch
+										? `That is more than the ${fmtAsset(onchain, asset)} this wallet holds on-chain.`
+										: overOne
+											? `A channel holds one issuance of an asset, and the most this wallet has of a single one on-chain is ${fmtAsset(most, asset)}. Open a channel with that much or less, and another for the rest.`
+											: undefined
+								}
 								hint="It all starts on your side: you can pay with it as soon as the channel is open, and receive only once some has gone out, or the peer has put in some of its own."
 							/>
 						)}

@@ -277,7 +277,7 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 	assert.deepEqual(h.tap.records.filter((r) => !r.spent).map((r) => [r.amount, r.reservedBy]), [['1000', `funding:${id}`]]);
 	// The 600 are the channel's and counted there once. The rest is the
 	// funding's change, and stays on-chain: the same total, held two ways.
-	const balance = { total: '1000', onchain: '400', pendingIn: '0', pendingOut: '0', channelLocal: '600', lightningSendable: '0', lightningReceivable: '0' };
+	const balance = { total: '1000', onchain: '400', channelable: '400', pendingIn: '0', pendingOut: '0', channelLocal: '600', lightningSendable: '0', lightningReceivable: '0' };
 	assert.deepEqual((await h.get('/balances')).assets[0].balance, balance);
 	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
 	// It confirms: the input is spent, the change is a record of its own, and the books read the same.
@@ -484,6 +484,7 @@ test('a crash between the marker and the open: the next start opens it under the
 	assert.deepEqual((await h.get('/balances')).assets[0].balance, {
 		total: '1000',
 		onchain: '1000',
+		channelable: '1000',
 		pendingIn: '0',
 		pendingOut: '0',
 		channelLocal: '0',
@@ -821,6 +822,7 @@ test('closing with the peer: CLOSING until the assets are back on-chain, then go
 	assert.deepEqual((await h.get('/balances')).assets[0].balance, {
 		total: '1000',
 		onchain: '400',
+		channelable: '400',
 		pendingIn: '0',
 		pendingOut: '0',
 		channelLocal: '600',
@@ -1017,6 +1019,7 @@ test('an invoice that is paid: the row completes, the list says PAID, and the ba
 	assert.deepEqual((await h.get('/balances')).assets[0].balance, {
 		total: '950',
 		onchain: '400',
+		channelable: '400',
 		pendingIn: '0',
 		pendingOut: '0',
 		channelLocal: '550',
@@ -2587,12 +2590,16 @@ test('a peer\'s asset of a group this wallet has never held is taken: the issuan
 	assert.deepEqual(h.world.fetched.filter((f) => f.groupKey).map((f) => f.groupKey), [group]);
 	assert.deepEqual(named(h, 'groupProof'), [['groupProof', group]]);
 	assert.deepEqual(h.ln.violations, []);
-	// A proof server that does not have it, or answers with another group's, and the open is not taken.
+	// A proof server that does not have it, or answers with another group's, and the open is not taken:
+	// the library says so to onError, and the log has it in the host's sentence.
 	h.tap.opts.groupMissing = true;
-	await assert.rejects(offer('03'.repeat(32)));
+	assert.equal(await offer('03'.repeat(32)), false);
 	h.tap.opts.groupMissing = false;
 	h.tap.opts.groupWrong = true;
 	assert.equal(await offer('04'.repeat(32)), false);
+	const logged = h.logs.filter(([, text]) => /could not be shown to be real/.test(text)).map(([, text]) => text);
+	assert.equal(logged.length >= 1, true);
+	assert.match(logged[0], /^assets: asset channels: A channel a peer offered was turned down: the group of its asset could not be shown to be real, because the issuance that created the group could not be fetched from this wallet's proof server\. \(/);
 });
 
 test('a fee budget for channel fees that the loop meets used up is a warning in the status, gone with the first pass that does not meet it', async () => {
@@ -2627,4 +2634,71 @@ test('a fee budget for channel fees that the loop meets used up is a warning in 
 	h.ln.opts.resumeFails = 'ERR_SOMETHING_NOBODY_NAMED';
 	await h.host.pass();
 	assert.deepEqual(await warnings(), []);
+});
+
+/* ---------------------------------------------------------- grouped assets */
+
+/** A wallet that holds two issuances of one group: 1000 units of the first and 400 of the second. */
+async function grouped(opts = {}) {
+	const h = world({ lightning: true, ...opts });
+	await h.boot();
+	const first = await h.call('POST /mint', { seedlings: [{ ...COIN, group: { mode: 'new' } }], feeRate: 2 }, 'mint-one');
+	await h.confirm(first.row.txid);
+	const groupKey = (await h.get('/balances')).assets[0].groupKey;
+	const more = await h.call('POST /mint', { seedlings: [{ ...COIN, amount: '400', group: { mode: 'existing', groupKey } }], feeRate: 2 }, 'mint-two');
+	await h.confirm(more.row.txid);
+	const asset = (await h.get('/balances')).assets[0];
+	return { h, asset, groupKey };
+}
+
+test('a channel is funded with one issuance of a grouped asset, and a price is asked for its group', async () => {
+	const { h, asset, groupKey } = await grouped();
+	assert.equal(asset.key, groupKey);
+	assert.deepEqual([asset.balance.onchain, asset.balance.channelable], ['1400', '1000']);
+	// More than the larger issuance holds, and no more than both: said, with the figures.
+	const over = await refused(h.call('POST /channels/quote', { key: asset.key, amount: '1200', feeRate: 2 }));
+	assert.deepEqual([over.extensionCode, over.status], ['CHANNEL_ASSETS', 409]);
+	assert.equal(
+		over.message,
+		'A channel holds units of one issuance of an asset. This wallet holds enough of this asset in all, spread over 2 issuances, and the most it has of a single one on-chain is 1000 units. Open a channel with that much or less, and another for the rest.'
+	);
+	assert.deepEqual(over.details, { needed: '1200', largest: '1000', available: '1400', issuances: 2 });
+	assert.deepEqual(await codeOf(h.call('POST /channels/open', openBody(asset, '1200'), 'open-over')), ['CHANNEL_ASSETS', 409]);
+	assert.deepEqual(await codeOf(h.call('POST /channels/quote', { key: asset.key, amount: '1500', feeRate: 2 })), ['INSUFFICIENT_ASSET_BALANCE', 409]);
+	assert.equal(named(h, 'quoteFunding').length, 0, 'the library is not asked for what the wallet will not do');
+	assert.equal(named(h, 'openChannel').length, 0);
+
+	// What one issuance holds opens with that issuance alone, and with its group named.
+	const open = await h.call('POST /channels/open', openBody(asset, '600'), 'open-key');
+	const funding = named(h, 'quoteFunding').pop()[1];
+	assert.equal(funding.assets.length, 1);
+	assert.deepEqual([funding.assets[0].amount, funding.groupKey], [600n, groupKey]);
+	h.ln.confirm(open.pendingChannelId);
+	await h.host.pass({ block: true });
+	const channel = (await h.get('/channels')).channels[0];
+	assert.deepEqual([channel.state, channel.sendable], ['NORMAL', '600']);
+
+	// A price is asked for the group, never for the asset ID.
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	assert.deepEqual(named(h, 'quotePayment')[0][1], { bolt11, assetId: null, groupKey, amountMsat: null });
+
+	// The rest of the group goes into a channel of its own, an issuance at a time.
+	assert.equal((await h.call('POST /channels/quote', { key: asset.key, amount: '400', feeRate: 2 })).sufficient, true);
+	assert.deepEqual(await codeOf(h.call('POST /channels/quote', { key: asset.key, amount: '700', feeRate: 2 })), ['CHANNEL_ASSETS', 409]);
+});
+
+test('bitcoin on addresses a channel cannot be funded from is said with the figures, and nothing is opened', async () => {
+	const { h, asset } = await funded();
+	h.ln.opts.fundingInputs = { eligibleSatoshis: 40000n, neededSatoshis: 100420n, otherSatoshis: 250000n };
+	const said = await refused(h.call('POST /channels/quote', { key: asset.key, amount: '600', feeRate: 2 }));
+	assert.deepEqual([said.extensionCode, said.status], ['FUNDING_INPUTS', 409]);
+	assert.equal(
+		said.message,
+		'The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has 40000 sats on those, and this needs about 100420. Another 250000 sats are on addresses of other types, which cannot be used for it. Nothing was done and nothing was spent.'
+	);
+	assert.deepEqual(said.details, { eligibleSats: '40000', neededSats: '100420', otherSats: '250000' });
+	assert.deepEqual(await codeOf(h.call('POST /channels/open', openBody(asset), 'open-key')), ['FUNDING_INPUTS', 409]);
+	assert.equal(named(h, 'openChannel').length, 0);
+	assert.deepEqual(keys(h, 'chan/'), []);
 });

@@ -232,3 +232,28 @@ test('a channel the node no longer holds is said to be not held here, carries no
 	assert.equal(canClose({ state: 'MISSING' }), false);
 	assert.equal(canClose({ state: 'NORMAL' }), true);
 });
+
+import { channelableOf as mostInOne, lightningRefusal as saidOf } from './asset-lightning.js';
+
+test('the most that goes into one channel is what the wallet holds of a single issuance, and the refusals over it are sentences', () => {
+	const asset = (balance) => ({ name: 'BUSD', decimalDisplay: 2, balance });
+	assert.equal(mostInOne(asset({ onchain: '1250000', channelable: '900000' })), '900000');
+	assert.equal(mostInOne(asset({ onchain: '1250000', channelable: '1250000' })), '1250000');
+	// A host that does not say, or says more than is there: all that is on-chain.
+	assert.equal(mostInOne(asset({ onchain: '1250000' })), '1250000');
+	assert.equal(mostInOne(asset({ onchain: '500', channelable: '900' })), '500');
+	assert.equal(mostInOne(null), '0');
+
+	const over = saidOf({ code: 'CHANNEL_ASSETS', message: 'As the host said it.', details: { needed: '1000000', largest: '900000', available: '1250000', issuances: 2 } }, { asset: asset({}) });
+	assert.equal(over.code, 'CHANNEL_ASSETS');
+	assert.match(over.text, /^A channel holds units of one issuance of an asset\. This wallet holds enough BUSD in all, spread over 2 issuances, and the most it has of a single one on-chain is 9,000\.00 BUSD\. Open a channel with that much or less, and another for the rest\.$/);
+	assert.equal(saidOf({ code: 'CHANNEL_ASSETS', message: 'As the host said it.', details: {} }).text, 'As the host said it.');
+
+	const short = saidOf({ code: 'FUNDING_INPUTS', message: 'As the host said it.', details: { eligibleSats: '40000', neededSats: '104320', otherSats: '250000' } });
+	assert.equal(
+		short.text,
+		'The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has 40,000 sats on those, and this needs about 104,320 sats. Another 250,000 sats are on addresses of other types, which cannot be used for it. Nothing was done and nothing was spent.'
+	);
+	assert.doesNotMatch(saidOf({ code: 'FUNDING_INPUTS', message: 'x', details: { eligibleSats: '0', neededSats: '360', otherSats: '0' } }).text, /Another/);
+	assert.equal(saidOf({ code: 'FUNDING_INPUTS', message: 'As the host said it.', details: {} }).text, 'As the host said it.');
+});

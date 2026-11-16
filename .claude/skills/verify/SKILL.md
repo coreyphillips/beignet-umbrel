@@ -174,6 +174,14 @@ channel with "Lightning Labs edge" (2,400.00 yours, 3,100.00 theirs).
   be (`reclaimable`); `assets-demo=open-stuck` in the table below is the
   state to walk it in. A Close pressed on such a row is refused in a sentence
   that says the funding can be taken back instead.
+  A channel holds one issuance of an asset. `demo-main` holds its 12,500.00
+  BUSD over two issuances, 9,000.00 of one and 3,500.00 of the other, and the
+  host says the most that goes into one channel in `balance.channelable`. Max
+  in the dialog gives 9,000.00; 10,000 is held under the amount in a sentence
+  that names the 9,000.00 and says to open another channel for the rest, and
+  no price is asked (the quote route answers the same amount with 409
+  `CHANNEL_ASSETS`). 13,000 is more than the wallet holds, and says that
+  instead.
   The demo daemon also lists that BUSD channel on `GET /channels`, marked
   `auxiliary: true`, as a real daemon does. The bitcoin table above the card
   must not show it (four open rows on `demo-main`), and no bitcoin figure on
@@ -242,6 +250,8 @@ wallet in the address, and stick until switched back:
 | `invoice-short` | Use `demo-main` with `view=receive`. An invoice paid an hour ago that asked for 250.00 BUSD and brought in 249.99, as happens when a payer's price rounds down. Its row in Recent receives reads 249.99 BUSD with a quiet second line, "asked for 250.00 BUSD, received 249.99 BUSD" (`asset-receive-short`), and its dialog says the same in a blue note (`asset-invoice-short`). No other row has the line. The next invoice made on that page is paid a unit short too: the receipt reads "249.99 BUSD received over Lightning" with the same sentence under it, and the toast says 249.99. The one after that arrives whole and says nothing more. |
 | `not-advertised` | Use `demo-main`. Its node does not offer asset channels to its peers, so the host reads as off with a reason (`status.lightning.unavailable`). On `/w/demo-main/channels` a red note sits above the Asset channels card (`asset-channels-held`, `data-code="NOT_ADVERTISED"`) in the host's own sentence, Open asset channel is there and disabled, and the BUSD channel is still listed and still closes. On the Assets tab the same sentence runs across the top (`asset-warning` with that code); Receive keeps the Lightning invoice card, held (`asset-invoice-card` with `data-state="held"`, the note `asset-invoice-held`, no Create invoice, no price asked); Send reads a pasted invoice and holds it with the same reason (`asset-pay-held`) in place of the pay flow; an asset's page keeps Open channel, disabled. Nothing is hidden. `ok` puts it back. |
 | `fee-budget` | Use `demo-main` on `/w/demo-main/channels`. The budget for the miner fees of asset channels is used up: a blue note above the list (`asset-channels-warning`, `data-code="FEE_BUDGET_EXHAUSTED"`, role status), which says nothing was lost, and the same across the top of the Assets tab. Never red: the card works as ever. `ok` puts it back. |
+| `funding-inputs` | Use `demo-main` on `/w/demo-main/channels`. The wallet's bitcoin sits on addresses a channel cannot be funded from. In the open dialog, BUSD and an amount give the red `asset-channel-refusal` with `data-code="FUNDING_INPUTS"`: the bitcoin has to be on native SegWit addresses, 40,000 sats are on those, about 104,320 are needed, another 250,000 are on other address types. No cost table and Open channel held. Taking a funding back (`open-stuck` first) is refused the same way, with no word of other address types. `ok` puts it back. |
+| `draining` | Use `demo-main` on `/w/demo-main/assets?view=send`. The wallet is shutting down: paste an invoice, press Pay, and the red note under the price (`asset-pay-failure`, `data-code="SERVICE_DRAINING"`) reads "This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running". No receipt, and nothing leaves the channel. Never worded as a spending limit. `ok` puts it back. |
 | `channel-missing` | Use `demo-main` on `/w/demo-main/channels`. Its BUSD channel becomes one the node does not hold, as after a restore from a backup: the badge reads "not held here" (`asset-channel` with `data-state="MISSING"`), Can send and Can receive read 0.00, there is no Close button, and a red note above the list (`asset-channels-warning`, `data-code="CHANNEL_MISSING"`) says it cannot be used or closed from this wallet. The Assets tab says the same across its top. |
 
 A start the manager refuses. `demo-main` is on a guardian backup and has an

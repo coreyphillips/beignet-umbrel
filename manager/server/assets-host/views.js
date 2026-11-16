@@ -231,6 +231,7 @@ function assetViews({ records, registry, groups = new Map(), rows = [], channels
 		// Units in a send or burn that has not been written into the records yet.
 		const leaving = sumRows(rows, entry.key, ['send', 'burn'], ['pending', 'broadcast', 'confirming']);
 		const onchain = held > leaving ? held - leaving : 0n;
+		const largest = [...entry.members.values()].reduce((a, b) => (b > a ? b : a), 0n);
 		const family = [...registry.values()].filter((r) => (entry.groupKey ? r.groupKey === entry.groupKey : r.assetId === primaryId));
 		const mintedHere = family.some((r) => r.mintedHere);
 		const issuedKnown = family.filter((r) => r.issued != null);
@@ -247,6 +248,9 @@ function assetViews({ records, registry, groups = new Map(), rows = [], channels
 			balance: {
 				total: (onchain + ln.local).toString(),
 				onchain: onchain.toString(),
+				// The most that can go into one new channel: a channel is funded
+				// with one issuance, so it is what is held of the largest one.
+				channelable: (largest < onchain ? largest : onchain).toString(),
 				pendingIn: sumRows(rows, entry.key, ['receive'], ['confirming', 'proofs']).toString(),
 				pendingOut: sumRows(rows, entry.key, ['send'], ['pending', 'broadcast', 'confirming', 'proofs']).toString(),
 				channelLocal: ln.local.toString(),

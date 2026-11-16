@@ -239,9 +239,12 @@ export function createAssetsMock(ctx) {
 		for (const c of S(id).channels) {
 			if (c.asset.key !== key || c.state === 'CLOSED') continue;
 			local += toUnits(c.localBalance) ?? 0n;
+			// As the host: a payment goes through one channel, so what can be
+			// sent or received is what the best single channel carries.
 			if (c.state === 'NORMAL') {
-				sendable += toUnits(c.sendable) ?? 0n;
-				receivable += toUnits(c.receivable) ?? 0n;
+				const [out, back] = [toUnits(c.sendable) ?? 0n, toUnits(c.receivable) ?? 0n];
+				if (out > sendable) sendable = out;
+				if (back > receivable) receivable = back;
 			}
 		}
 		return { local: local.toString(), sendable: sendable.toString(), receivable: receivable.toString() };
@@ -266,6 +269,7 @@ export function createAssetsMock(ctx) {
 			balance: {
 				total: addUnits(rec.onchain, ch.local),
 				onchain: rec.onchain,
+				channelable: channelableOf(rec),
 				pendingIn: moving('receive', ['confirming', 'proofs']),
 				pendingOut: moving('send', ['pending', 'broadcast', 'confirming', 'proofs']),
 				channelLocal: ch.local,
@@ -866,6 +870,19 @@ export function createAssetsMock(ctx) {
 			S(id).feeBudgetOut = true;
 			return true;
 		},
+		// The wallet's bitcoin sits on addresses a channel cannot be funded
+		// from: an open and a reclaim are refused with the figures. `ok` puts
+		// it back.
+		'funding-inputs'(id) {
+			S(id).fundingShort = true;
+			return true;
+		},
+		// The wallet is shutting down: it takes no new payment, and nothing
+		// is paid. `ok` puts it back.
+		draining(id) {
+			S(id).draining = true;
+			return true;
+		},
 		// A payment the node has no record of any more: it may have been paid.
 		'pay-unaccounted'(id) {
 			return plantNotice(id, 'PAYMENT_UNACCOUNTED');
@@ -957,13 +974,15 @@ export function createAssetsMock(ctx) {
 			const want = m && new URLSearchParams(loc.search || '').get('assets-demo');
 			if (!want) return;
 			const s = S(decodeURIComponent(m[1]));
-			const before = `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}`;
+			const before = `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}`;
 			if (want === 'ok') {
 				s.host = null;
 				s.proofServerDown = false;
 				// The two that are states and not rows, so they can be put on again.
 				s.notAdvertised = false;
 				s.feeBudgetOut = false;
+				s.fundingShort = false;
+				s.draining = false;
 				if (s.seeded) {
 					delete s.seeded['not-advertised'];
 					delete s.seeded['fee-budget'];
@@ -976,7 +995,7 @@ export function createAssetsMock(ctx) {
 			} else if (SEEDS[want]) {
 				putState(decodeURIComponent(m[1]), want);
 			}
-			if (before !== `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}`) save();
+			if (before !== `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}`) save();
 		} catch (_) {
 			/* no address to read, nothing switched */
 		}
@@ -1444,6 +1463,29 @@ export function createAssetsMock(ctx) {
 
 	const rateText = (identity, perWhole = satsPerWhole(identity)) => `1 ${identity.name} = ${perWhole.toLocaleString('en-US')} sats`;
 
+	// A channel is funded with one issuance of an asset. A wallet that holds
+	// several issuances of a group (`tranches`, what it holds of each) can
+	// put into one channel what it holds of the largest, as the host says in
+	// `balance.channelable`.
+	function channelableOf(rec) {
+		const held = Array.isArray(rec.tranches) && rec.tranches.length > 1 ? rec.tranches : null;
+		if (!held) return rec.onchain;
+		const most = held.reduce((a, b) => (cmpUnits(b, a) > 0 ? b : a), '0');
+		return cmpUnits(most, rec.onchain) < 0 ? most : rec.onchain;
+	}
+
+	// The host's sentences (errors.js), word for word.
+	const DRAINING_TEXT = 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.';
+	const FUNDING_ELIGIBLE_SATS = 40000;
+	function fundingInputsRefusal(neededSats, otherSats) {
+		const elsewhere = otherSats > 0 ? ` Another ${otherSats} sats are on addresses of other types, which cannot be used for it.` : '';
+		return fail(
+			`The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has ${FUNDING_ELIGIBLE_SATS} sats on those, and this needs about ${neededSats}.${elsewhere} Nothing was done and nothing was spent.`,
+			'FUNDING_INPUTS',
+			{ status: 409, details: { eligibleSats: String(FUNDING_ELIGIBLE_SATS), neededSats: String(neededSats), otherSats: String(otherSats) } }
+		);
+	}
+
 	function requireLightning(id) {
 		if (lightningMode(id) === 'off') throw fail('This wallet has no Lightning, so it has no asset channels', 'LIGHTNING_UNAVAILABLE');
 		// As the host: nothing new over asset channels while the node does not offer them.
@@ -1467,10 +1509,21 @@ export function createAssetsMock(ctx) {
 	function channelQuote(id, body) {
 		requireLightning(id);
 		const identity = identityFor(id, String(body?.key || '').toLowerCase());
-		requireAmount(body?.amount, identity);
+		const wanted = requireAmount(body?.amount, identity);
+		// As the host: one issuance a channel, said when all the wallet holds would have been enough.
+		const held = S(id).assets[identity.key];
+		if (held && cmpUnits(wanted, held.onchain) <= 0 && cmpUnits(wanted, channelableOf(held)) > 0) {
+			const most = channelableOf(held);
+			throw fail(
+				`A channel holds units of one issuance of an asset. This wallet holds enough of this asset in all, spread over ${held.tranches.length} issuances, and the most it has of a single one on-chain is ${most} units. Open a channel with that much or less, and another for the rest.`,
+				'CHANNEL_ASSETS',
+				{ status: 409, details: { needed: wanted, largest: most, available: held.onchain, issuances: held.tranches.length } }
+			);
+		}
 		const fee = feeFor('channel', body?.feeRate);
 		const channelSats = 100000;
 		const totalSats = channelSats + fee.sats;
+		if (S(id).fundingShort) throw fundingInputsRefusal(totalSats, 250000);
 		const spendableSats = ctx.spendable(id);
 		return { channelSats, pushSats: CHANNEL_PUSH_SATS, feeSats: fee.sats, totalSats, spendableSats, sufficient: spendableSats >= totalSats };
 	}
@@ -1493,6 +1546,11 @@ export function createAssetsMock(ctx) {
 		if (/^0[23]0{8}/.test(pubkey)) throw fail('That peer does not take asset channels', 'PEER_NO_ASSET_CHANNELS');
 		ctx.spend(id, quote.totalSats);
 		rec.onchain = subUnits(rec.onchain, amount);
+		// It comes out of the issuance the wallet holds most of.
+		if (Array.isArray(rec.tranches) && rec.tranches.length) {
+			const at = rec.tranches.reduce((best, held, i) => (cmpUnits(held, rec.tranches[best]) > 0 ? i : best), 0);
+			rec.tranches[at] = cmpUnits(rec.tranches[at], amount) > 0 ? subUnits(rec.tranches[at], amount) : '0';
+		}
 		const channelId = derivedHex(`chan:${id}:${state.n}:${now()}`, 64);
 		const channel = {
 			channelId,
@@ -1551,6 +1609,10 @@ export function createAssetsMock(ctx) {
 	 * before, is the transaction the network does not take.
 	 */
 	function reclaimFunding(id, body) {
+		// As the host: the fee of taking a funding back comes from native SegWit coins too.
+		if (S(id).fundingShort && S(id).channels.some((c) => c.channelId === body?.channelId || c.pendingChannelId === body?.channelId)) {
+			throw fundingInputsRefusal(Math.ceil((Number(body?.feeRate) || 1) * RECLAIM_VBYTES), 0);
+		}
 		const s = S(id);
 		const c = s.channels.find((x) => x.channelId === body?.channelId && x.state !== 'CLOSED');
 		if (!c) throw notFound('This wallet has no asset channel with that id.', 'CHANNEL_NOT_FOUND');
@@ -1703,6 +1765,7 @@ export function createAssetsMock(ctx) {
 	function pay(id, body, key) {
 		requireLightning(id);
 		const s = S(id);
+		if (s.draining) throw fail(DRAINING_TEXT, 'SERVICE_DRAINING', { status: 409 });
 		const quote = s.quotes[body?.quoteId];
 		if (!quote || quote.expiresAt < now()) {
 			// The price ran out, and the demo's peer asks a little more the next
@@ -2105,6 +2168,8 @@ export function createAssetsMock(ctx) {
 		if (ids.has('demo-main')) {
 			const id = 'demo-main';
 			hold(id, busd, '1250000', { mintedHere: true, anchors: 2, proofs: 7 });
+			// Held over its two issuances: 9,000.00 of one and 3,500.00 of the other.
+			S(id).assets[busd.key].tranches = ['900000', '350000'];
 			hold(id, points, '4200', { proofs: 4, depth: 3 });
 			hold(id, pico, '9007199254740993', { mintedHere: true, proofs: 1 });
 			hold(id, ticket, '1', { proofs: 5, depth: 4 });

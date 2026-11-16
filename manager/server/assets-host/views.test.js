@@ -204,7 +204,7 @@ test('assets: a group is one entry with the balance of all its issuances', () =>
 		name: 'coin',
 		type: 'normal',
 		decimalDisplay: 2,
-		balance: { total: '900', onchain: '900', pendingIn: '40', pendingOut: '100', channelLocal: '0', lightningSendable: '0', lightningReceivable: '0' },
+		balance: { total: '900', onchain: '900', channelable: '600', pendingIn: '40', pendingOut: '100', channelLocal: '0', lightningSendable: '0', lightningReceivable: '0' },
 		lockedSats: 2000,
 		anchors: 2,
 		canReissue: true,
@@ -219,7 +219,7 @@ test('assets: a group is one entry with the balance of all its issuances', () =>
 		name: 'card',
 		type: 'collectible',
 		decimalDisplay: null,
-		balance: { total: '1', onchain: '1', pendingIn: '0', pendingOut: '0', channelLocal: '0', lightningSendable: '0', lightningReceivable: '0' },
+		balance: { total: '1', onchain: '1', channelable: '1', pendingIn: '0', pendingOut: '0', channelLocal: '0', lightningSendable: '0', lightningReceivable: '0' },
 		lockedSats: 1000,
 		anchors: 1,
 		canReissue: false,
@@ -303,13 +303,13 @@ test('an asset in a channel: the total is what is on the chain and what is on th
 		channel({ counted: false, local: 999n, sendable: 999n, receivable: 999n })
 	];
 	const [coin] = views.assetViews({ records, registry, channels });
-	assert.deepEqual(coin.balance, { total: '980', onchain: '400', pendingIn: '0', pendingOut: '0', channelLocal: '580', lightningSendable: '500', lightningReceivable: '50' });
+	assert.deepEqual(coin.balance, { total: '980', onchain: '400', channelable: '400', pendingIn: '0', pendingOut: '0', channelLocal: '580', lightningSendable: '500', lightningReceivable: '50' });
 
 	// An asset held only in a channel is still an asset of this wallet.
 	const [only, ...rest] = views.assetViews({ records: [], registry, channels: [channel({ local: 0n, receivable: 300n })] });
 	assert.deepEqual(rest, []);
 	assert.deepEqual([only.key, only.assetId, only.name, only.decimalDisplay, only.anchors, only.lockedSats], [A1, A1, 'coin', 2, 0, 0]);
-	assert.deepEqual(only.balance, { total: '0', onchain: '0', pendingIn: '0', pendingOut: '0', channelLocal: '0', lightningSendable: '0', lightningReceivable: '300' });
+	assert.deepEqual(only.balance, { total: '0', onchain: '0', channelable: '0', pendingIn: '0', pendingOut: '0', channelLocal: '0', lightningSendable: '0', lightningReceivable: '300' });
 	// And one the wallet knows nothing about is not invented.
 	assert.deepEqual(views.assetViews({ records: [], registry: new Map(), channels: [channel({ key: null })] }), []);
 });

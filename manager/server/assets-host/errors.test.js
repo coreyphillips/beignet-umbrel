@@ -105,6 +105,9 @@ test('each refusal of the Lightning service becomes the code the dashboard words
 		['ERR_BEIGNET_LN_QUOTE_EXPIRED', 'QUOTE_EXPIRED', 410],
 		['ERR_BEIGNET_LN_PRICE_BOUND', 'QUOTE_CHANGED', 409],
 		['ERR_BEIGNET_LN_RATE_TOO_COARSE', 'RATE_TOO_COARSE', 409],
+		['ERR_BEIGNET_LN_CHANNEL_ASSETS', 'CHANNEL_ASSETS', 400],
+		['ERR_BEIGNET_LN_GROUP_PROOF', 'GROUP_PROOF', 409],
+		['ERR_BEIGNET_LN_SERVICE_DRAINING', 'SERVICE_DRAINING', 409],
 		['ERR_BEIGNET_LN_SPENDING_LIMIT', 'SPENDING_LIMIT', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_OUTBOUND', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_INBOUND', 'INSUFFICIENT_INBOUND', 409],
@@ -321,4 +324,26 @@ test('a failed payment is worded by the host, whatever the node wrote', () => {
 	for (const text of ['htlc 7 failed at 03aa: temporary_channel_failure', 'toString', '', null, undefined, 7]) {
 		assert.deepEqual(paymentFailure(text), { known: false, message: 'The payment did not go through, so nothing was paid.' }, String(text));
 	}
+});
+
+test('bitcoin that is not on native SegWit addresses is said with what is there, what is needed and what sits elsewhere', () => {
+	const short = (details) => Object.assign(new Error('native witness coins do not hold the funding'), { code: 'ERR_BEIGNET_LN_FUNDING_INPUTS', ...(details ? { details } : {}) });
+	const open = mapLightning(short({ eligibleSatoshis: 40000n, neededSatoshis: 100420n, otherSatoshis: 250000n }));
+	assert.deepEqual([open.extensionCode, open.status], ['FUNDING_INPUTS', 409]);
+	assert.equal(
+		open.message,
+		'The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has 40000 sats on those, and this needs about 100420. Another 250000 sats are on addresses of other types, which cannot be used for it. Nothing was done and nothing was spent.'
+	);
+	assert.deepEqual(open.details, { eligibleSats: '40000', neededSats: '100420', otherSats: '250000' });
+	// Taking a funding back: nothing sits elsewhere, so nothing is said of it.
+	const reclaim = mapLightning(short({ eligibleSatoshis: 0n, neededSatoshis: 360n, otherSatoshis: 0n }));
+	assert.equal(reclaim.message, 'The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has 0 sats on those, and this needs about 360. Nothing was done and nothing was spent.');
+	// Wrapped by another error of the library, the figures are still read. With none, the rule alone is said.
+	const wrapped = mapLightning(Object.assign(new Error('outer'), { code: 'ERR_BEIGNET_LN_FUNDING_INPUTS', cause: short({ eligibleSatoshis: 5n, neededSatoshis: 9n, otherSatoshis: 0n }) }));
+	assert.deepEqual(wrapped.details, { eligibleSats: '5', neededSats: '9', otherSats: '0' });
+	const bare = mapLightning(short(null));
+	assert.deepEqual([bare.extensionCode, bare.status, 'details' in bare], ['FUNDING_INPUTS', 409, false]);
+	assert.match(bare.message, /has to come from native SegWit addresses of this wallet/);
+	// The library's own name for a wallet on its way down is the sentence the engine's reason has.
+	assert.equal(mapLightning(Object.assign(new Error('draining'), { code: 'ERR_BEIGNET_LN_SERVICE_DRAINING', details: { reason: 'SERVICE_DRAINING' } })).message, 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.');
 });
