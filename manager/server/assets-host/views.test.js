@@ -292,6 +292,126 @@ test('a waiting receive row says whether its address is still looked at', () => 
 	assert.equal(views.rowView({ ...row(T0), kind: 'send' }, { cfg: regtest, now: T0 }).watching, null);
 });
 
+test('an asset in a channel: the total is what is on the chain and what is on this side of the channel', () => {
+	const registry = new Map([[A1, { assetId: A1, groupKey: null, name: 'coin', type: 0, decimalDisplay: 2, mintedHere: true }]]);
+	const records = [{ assetId: A1, groupKey: null, amount: '400', anchorOutPoint: 'x:0' }];
+	const channel = (extra) => ({ key: A1, assetId: A1, groupKey: null, counted: true, local: 0n, sendable: 0n, receivable: 0n, ...extra });
+	const channels = [
+		channel({ local: 550n, sendable: 500n, receivable: 50n }),
+		channel({ local: 30n, sendable: 0n, receivable: 0n }),
+		// An open whose units have not left the chain is in the on-chain figure already.
+		channel({ counted: false, local: 999n, sendable: 999n, receivable: 999n })
+	];
+	const [coin] = views.assetViews({ records, registry, channels });
+	assert.deepEqual(coin.balance, { total: '980', onchain: '400', pendingIn: '0', pendingOut: '0', channelLocal: '580', lightningSendable: '500', lightningReceivable: '50' });
+
+	// An asset held only in a channel is still an asset of this wallet.
+	const [only, ...rest] = views.assetViews({ records: [], registry, channels: [channel({ local: 0n, receivable: 300n })] });
+	assert.deepEqual(rest, []);
+	assert.deepEqual([only.key, only.assetId, only.name, only.decimalDisplay, only.anchors, only.lockedSats], [A1, A1, 'coin', 2, 0, 0]);
+	assert.deepEqual(only.balance, { total: '0', onchain: '0', pendingIn: '0', pendingOut: '0', channelLocal: '0', lightningSendable: '0', lightningReceivable: '300' });
+	// And one the wallet knows nothing about is not invented.
+	assert.deepEqual(views.assetViews({ records: [], registry: new Map(), channels: [channel({ key: null })] }), []);
+});
+
+test('a channel state: the three words that are the host\'s, and the engine\'s own for the rest', () => {
+	const word = (state, confirmed = false, recovery = 'none') => views.channelWord({ state, confirmed, recovery });
+	// No channel in the engine yet, or one still exchanging its first messages.
+	for (const state of [null, undefined, '', 'NONE', 'SENT_OPEN', 'SENT_ACCEPT', 'SENT_FUNDING']) assert.equal(word(state), 'OPENING', String(state));
+	// NORMAL for the engine is not usable until the library has confirmed the funding.
+	assert.equal(word('NORMAL', false), 'OPENING');
+	assert.equal(word('NORMAL', true), 'NORMAL');
+	// Closed is not over until the assets are back on-chain.
+	assert.equal(word('CLOSED', true, 'pending'), 'CLOSING');
+	assert.equal(word('CLOSED', true, 'complete'), 'CLOSED');
+	assert.equal(word('CLOSED', true, 'none'), 'CLOSED');
+	assert.equal(word('FORCE_CLOSED', true, 'pending'), 'FORCE_CLOSING');
+	assert.equal(word('FORCE_CLOSED', true, 'complete'), 'FORCE_CLOSED');
+	// Everything else is the engine's word, which the dashboard has a wording for or shows as it is.
+	for (const state of ['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY', 'SHUTTING_DOWN', 'NEGOTIATING_CLOSING', 'SOMETHING_NEW']) assert.equal(word(state, true), state);
+	// The manager counts every state but these two as a channel the wallet still has.
+	assert.deepEqual(views.CHANNEL_OVER, ['CLOSED', 'FORCE_CLOSED']);
+});
+
+test('a channel as the dashboard lists it', () => {
+	const c = {
+		id: 'aa'.repeat(32),
+		channelId: null,
+		peerPubkey: `02${'ab'.repeat(32)}`,
+		peerAlias: null,
+		word: 'OPENING',
+		assetId: A1,
+		groupKey: null,
+		local: 600n,
+		remote: 0n,
+		sendable: 0n,
+		receivable: 0n,
+		fundingSats: 100000
+	};
+	const reg = { assetId: A1, groupKey: null, name: 'coin', type: 0, decimalDisplay: 2 };
+	assert.deepEqual(views.channelView(c, reg), {
+		channelId: 'aa'.repeat(32),
+		pendingChannelId: 'aa'.repeat(32),
+		peerPubkey: `02${'ab'.repeat(32)}`,
+		peerAlias: null,
+		state: 'OPENING',
+		asset: { key: A1, assetId: A1, name: 'coin', type: 'normal', decimalDisplay: 2 },
+		capacity: '600',
+		localBalance: '600',
+		remoteBalance: '0',
+		sendable: '0',
+		receivable: '0',
+		channelSats: 100000
+	});
+	// The engine's id once there is one, and the peer's name when the user gave one.
+	const open = views.channelView({ ...c, channelId: 'bb'.repeat(32), peerAlias: 'edge', word: 'NORMAL', local: 450n, remote: 150n, sendable: 400n, receivable: 150n }, reg);
+	assert.deepEqual(
+		[open.channelId, open.pendingChannelId, open.peerAlias, open.state, open.capacity, open.sendable, open.receivable],
+		['bb'.repeat(32), 'aa'.repeat(32), 'edge', 'NORMAL', '600', '400', '150']
+	);
+	// An asset the wallet knows only by its id is still listed.
+	assert.deepEqual(views.channelView(c, null).asset, { key: A1, assetId: A1, name: null, type: 'normal', decimalDisplay: 0 });
+});
+
+test('a peer\'s price as a sentence, and none for one unit to the sat', () => {
+	const coin = { name: 'coin', decimalDisplay: 2 };
+	const rate = (coefficient, scale = 0) => ({ coefficient: BigInt(coefficient), scale });
+	// One unit to the sat is the absence of a price, however it is written.
+	assert.equal(views.isNominal(rate(100_000_000)), true);
+	assert.equal(views.isNominal(rate(100_000_000_000, 3)), true);
+	assert.equal(views.isNominal(rate(4_000_000)), false);
+	assert.equal(views.isNominal(null), false);
+	assert.equal(views.rateText(coin, rate(100_000_000)), '');
+	assert.equal(views.rateText(coin, null), '');
+	assert.equal(views.rateText(coin, rate(0)), '');
+	// 4,000,000 units a bitcoin is 25 sats a unit, and a coin is a hundred units.
+	assert.equal(views.rateText(coin, rate(4_000_000)), '1 coin = 2,500 sats');
+	assert.equal(views.rateText(coin, rate(4_000_000_000, 3)), '1 coin = 2,500 sats');
+	assert.equal(views.rateText({ name: 'x', decimalDisplay: 0 }, rate(300_000_000)), '1 x = 0.333 sats');
+	assert.equal(views.rateText({ name: 'usd', decimalDisplay: 2 }, rate(6_500_000)), '1 usd = 1,538.461 sats');
+	assert.equal(views.rateText({ name: 'penny', decimalDisplay: 0 }, rate(50_000_000)), '1 penny = 2 sats');
+	assert.equal(views.rateText(null, rate(200_000_000)), '1 unit = 0.5 sats');
+	// Millisatoshis as the sats they cost: never rounded to less.
+	assert.deepEqual([0n, 1n, 999n, 1000n, 1001n, 150000n].map(views.satsOf), [0, 1, 1, 1, 2, 150]);
+});
+
+test('a Lightning row carries its payment hash', () => {
+	const hash = 'ef'.repeat(32);
+	const row = views.newRow({ id: `ln-send-${hash}`, kind: 'ln-send', ref: hash, created: T0, paymentHash: hash, clientRef: 'pay-key', assets: [{ key: A1, amount: '50' }] });
+	const view = views.rowView(row, { cfg: regtest, now: T0 });
+	assert.deepEqual([view.kind, view.state, view.paymentHash, view.clientRef, view.txid, view.stuck, view.watching], ['ln-send', 'pending', hash, 'pay-key', null, false, null]);
+	// Every other row says it has none.
+	assert.equal(views.rowView(views.newRow({ id: 'send-1', kind: 'send', ref: '1', created: T0 }), { cfg: regtest, now: T0 }).paymentHash, null);
+});
+
+test('status: lightning is full only when the host says so', () => {
+	const of = (lightning) => views.statusView({ cfg: regtest, phase: 'ready', lightning }).lightning;
+	assert.deepEqual(of({ mode: 'full', usableChannels: 2 }), { mode: 'full', usableChannels: 2 });
+	assert.deepEqual(of({ mode: 'off', usableChannels: 1 }), { mode: 'off', usableChannels: 1 });
+	assert.deepEqual(of({ mode: 'FULL' }), { mode: 'off', usableChannels: 0 });
+	assert.deepEqual(of(undefined), { mode: 'off', usableChannels: 0 });
+});
+
 test('status: every field the dashboard reads, with lightning off', () => {
 	const status = views.statusView({ cfg: regtest, phase: 'starting' });
 	assert.deepEqual(Object.keys(status), [

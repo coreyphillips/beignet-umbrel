@@ -1034,7 +1034,9 @@ async function importBackup(host, body) {
 module.exports = {
 	parseUnits,
 	replay,
+	journal,
 	journalKey,
+	lookupAndLearn,
 	balances,
 	assetDetail,
 	activity,

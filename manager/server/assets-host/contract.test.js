@@ -24,11 +24,11 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { ROUTES, routeKey } = require('./routes');
-const { STATES, loadLibrary, createLib, buildAdapter } = require('./adapter');
+const { STATES, loadLibrary, createLib, buildAdapter, loadLightning, createLightning } = require('./adapter');
 const { parseConfig } = require('./config');
 const { mapError } = require('./errors');
 const { memoryStorage, createHostLock } = require('./store');
-const { extensionsAvailable } = require('../engine');
+const { extensionsAvailable, assetChannelsAvailable } = require('../engine');
 
 const PREFIX = process.env.ASSETS_ENGINE_PREFIX ? path.resolve(process.env.ASSETS_ENGINE_PREFIX) : null;
 const MODULES = PREFIX ? path.join(PREFIX, 'node_modules') : null;
@@ -40,6 +40,9 @@ const skip = PREFIX ? false : 'set ASSETS_ENGINE_PREFIX to run this against the 
 // that only need the library still run.
 const ENGINE_BIN = MODULES ? path.join(MODULES, 'beignet', 'dist', 'cli', 'cli.js') : null;
 const skipEngine = skip || (extensionsAvailable(ENGINE_BIN) ? false : 'the engine in this prefix predates the host extension contract');
+// Whether this engine and this adapter can carry assets in channels, as the
+// manager asks before it turns asset Lightning on for a wallet (engine.js).
+const CHANNELS = !skip && assetChannelsAvailable(ENGINE_BIN);
 // The well-known test phrase. It holds nothing, on a chain of its own.
 const MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 const STATUS_KEYS = [
@@ -147,6 +150,29 @@ test('the library\'s stores are the ones the host reads, kept in the node\'s dat
 	assert.equal(typeof stores.assets.getGroup, 'function');
 });
 
+test('the Lightning entry of the installed adapter is one this host can use, or is not there', { skip }, () => {
+	const entry = loadLightning(MODULES);
+	const cfg = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: MODULES });
+	if (!entry) {
+		// An adapter from before asset channels: the host has no Lightning side, and nothing was loaded for one.
+		assert.equal(fs.existsSync(path.join(MODULES, '@ts-tap', 'beignet', 'dist', 'lightning.js')), false);
+		assert.equal(createLightning({ entry, storage: memoryStorage().storage, cfg }), null);
+		assert.equal(CHANNELS, false);
+		return;
+	}
+	const support = entry.assetLightningSupport();
+	assert.equal(typeof support.supported, 'boolean');
+	assert.ok(Array.isArray(support.missing));
+	// The provider is there exactly when the engine can carry asset channels, and writes only under its own prefix.
+	const mem = memoryStorage();
+	const ln = createLightning({ entry, storage: mem.storage, cfg });
+	assert.equal(!!ln, support.supported);
+	if (!ln) return;
+	assert.deepEqual(['auxiliaryChannels', 'bind', 'fixedOutputFees'].filter((name) => !(name in ln.attachment)), []);
+	assert.equal(ln.ready(), false);
+	assert.deepEqual([...mem.data.keys()].filter((key) => !key.startsWith('l/')), []);
+});
+
 /** Run `fn({ port, backupFile })` against a real daemon of a wallet on `network`, with the host loaded. */
 async function withDaemon(network, fn) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-contract-'));
@@ -169,7 +195,9 @@ async function withDaemon(network, fn) {
 			BEIGNET_ASSETS_MODULES: MODULES,
 			BEIGNET_ASSETS_NETWORK_MODE: 'clearnet',
 			BEIGNET_ASSETS_BACKUP_FILE: backupFile,
-			BEIGNET_ASSETS_LIGHTNING: 'off'
+			// Asked for, as the manager asks for a wallet that can have them.
+			// A wallet that cannot says off all the same.
+			BEIGNET_ASSETS_LIGHTNING: 'full'
 		}
 	});
 	let out = '';
@@ -225,7 +253,15 @@ test('a real daemon loads the host, lists it and serves its routes', { skip: ski
 		assert.deepEqual([status.phase, status.ready, status.error, status.network, status.hrp], ['starting', false, null, 'regtest', 'taprt']);
 		assert.deepEqual([status.chain.name, status.chain.minConfirmations], ['regtest', 1]);
 		assert.equal(status.startup.waiting, "The wallet's Electrum server has not said which chain it is on");
-		assert.deepEqual(status.lightning, { mode: 'off', usableChannels: 0 });
+		assert.deepEqual(status.lightning, { mode: CHANNELS ? 'full' : 'off', usableChannels: 0 });
+		if (!CHANNELS) {
+			// An engine or an adapter without asset channels: no channels, said
+			// plainly to the manager that counts them, and nothing to open.
+			const channels = await call(port, 'GET', '/x/assets/channels');
+			assert.deepEqual([channels.status, channels.json.result], [200, { channels: [] }]);
+			const quote = await call(port, 'POST', '/x/assets/channels/quote', {});
+			assert.deepEqual([quote.status, quote.json.error.extension.code], [409, 'LIGHTNING_UNAVAILABLE']);
+		}
 		assert.deepEqual(status.limits, { maxFeeRate: 500, maxFeeSats: 250000 });
 		assert.deepEqual([status.holdsAssets, status.anchorCount, status.lockedSats], [false, 0, 0]);
 
