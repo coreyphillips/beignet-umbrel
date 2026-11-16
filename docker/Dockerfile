@@ -31,14 +31,25 @@ RUN npm install --omit=dev --no-audit --no-fund
 # to build an image against unreleased engine work. Release builds never have
 # one, so they install exactly BEIGNET_VERSION from npm.
 COPY vendor/ /vendor/
+COPY scripts/check-engine-prefix.js /usr/local/lib/check-engine-prefix.js
+# Taproot Assets (docs/ASSETS.md): ts-tap is not on npm, so it comes from the
+# two tarballs committed under vendor/ (scripts/vendor-ts-tap.sh). They are
+# held to the checksums committed beside them before anything installs them.
+RUN cd /vendor && sha256sum -c SHA256SUMS
 # better-sqlite3 needs its install script (a prebuilt binary, or node-gyp with
 # the toolchain above). The npm in node:24 runs dependency install scripts that
 # no `allowScripts` entry covers but warns about them, and skips them once
 # strict-allow-scripts is on, so approve it by name before installing.
 RUN mkdir -p /opt/beignet && echo '{"private":true,"allowScripts":{"better-sqlite3":true}}' > /opt/beignet/package.json
-RUN if [ -f /vendor/beignet-local.tgz ]; then       npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet /vendor/beignet-local.tgz;     else       npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet "beignet@${BEIGNET_VERSION}";     fi
-# Fail the build, not the first wallet start, if the native module is missing.
-RUN node -e "const D = require(require.resolve('better-sqlite3', { paths: ['/opt/beignet/node_modules/beignet'] })); new D(':memory:').prepare('select 1').get()"
+# One install for the engine and the assets packages, so npm resolves a single
+# copy of the engine for both: the adapter takes values from the engine at run
+# time, and a second copy would hand it a different one. An engine release
+# outside the range the vendored adapter was built for fails here, on purpose.
+RUN if [ -f /vendor/beignet-local.tgz ]; then ENGINE=/vendor/beignet-local.tgz; else ENGINE="beignet@${BEIGNET_VERSION}"; fi; \
+    npm install --omit=dev --no-audit --no-fund --prefix /opt/beignet "$ENGINE" $(awk '{ print "/vendor/" $2 }' /vendor/SHA256SUMS)
+# Fail the build, not the first wallet start, if the native module is missing,
+# the prefix holds two engines, or the assets packages do not load on this one.
+RUN node /usr/local/lib/check-engine-prefix.js /opt/beignet
 
 # ---- runtime ----
 FROM ${NODE_IMAGE}
@@ -59,6 +70,11 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /opt/beignet /opt/beignet
 COPY manager/package.json ./package.json
 COPY manager/server ./server
+# Each wallet's daemon loads the assets host from here, and refuses a module
+# its group or anyone else could write (the engine's docs/EXTENSIONS.md). The
+# modes a checkout carries depend on the umask it was made under, so they are
+# set here and not left to the build machine.
+RUN chmod -R go-w /app/server/assets-host
 COPY --from=ui /public ./public
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

@@ -36,7 +36,22 @@ jobs:
           cache: npm
           cache-dependency-path: manager/package-lock.json
       - run: npm ci
+      # Taproot Assets (docs/ASSETS.md): the two ts-tap tarballs the image
+      # installs are committed, so they are held to their committed checksums
+      # here too, and installed beside the engine the way the image installs
+      # them. The assets host's contract tests then load the real packages;
+      # without the prefix they are skipped, and on a bundled engine from
+      # before the host extension contract so are the ones that need the
+      # engine to load the host.
+      - name: Vendored ts-tap tarballs match their checksums
+        working-directory: vendor
+        run: sha256sum -c SHA256SUMS
+      - name: Engine prefix with the assets packages
+        working-directory: .
+        run: scripts/engine-prefix.sh "$RUNNER_TEMP/engine-prefix"
       - run: npm test
+        env:
+          ASSETS_ENGINE_PREFIX: ${{ runner.temp }}/engine-prefix
 
   ui:
     name: dashboard tests and build
