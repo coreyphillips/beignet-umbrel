@@ -23,6 +23,7 @@ const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { harness, refused, fakeInvoice } = require('./test-fakes');
 const lightning = require('./lightning');
+const backup = require('./backup');
 
 const COIN = { name: 'coin', type: 'normal', amount: '1000', decimalDisplay: 2, meta: null, group: { mode: 'none' } };
 const PEER = { pubkey: `02${'ab'.repeat(32)}`, host: 'peer.example.com', port: 9735, alias: 'edge' };
@@ -1101,4 +1102,74 @@ test('the library is handed the adapter, the proof server and the host callbacks
 	assert.deepEqual(seen, [false]);
 	// An event is a reason to look, and never throws back into the library.
 	for (const event of [{ type: 'channel' }, { type: 'invoice' }, { type: 'payment' }, { type: 'recovery' }, {}, null]) options.onEvent(event);
+});
+
+/* ------------------------------------------------------------------ backup */
+
+test('the backup leaves out what only this machine can honour, and keeps the activity', async () => {
+	const { h, asset, id } = await channelled({ remote: 200n });
+	const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+	const invoice = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+	await h.call('POST /invoices/quote', { key: asset.key, amount: '10' });
+	// What the library keeps of its own, as the real one would.
+	for (const key of ['l/tap/quotes/aa', 'l/lightning/invoice/bb', 'l/native-lightning/v1/destination/cc', 'l/native-recovery/v1/job/dd']) h.storage.set(key, 'x');
+	const kept = backup.collectRows(h.storage).map(([key]) => key);
+	assert.ok(kept.includes(`h/row/ln-receive-${invoice.paymentHash}`));
+	assert.ok(kept.includes('l/native-lightning/v1/destination/cc'));
+	assert.ok(kept.includes('l/native-recovery/v1/job/dd'));
+	for (const gone of [`h/chan/${id}`, `h/committed/funding:${id}`, `h/inv/${invoice.paymentHash}`, 'l/tap/quotes/aa', 'l/lightning/invoice/bb']) {
+		assert.equal(kept.includes(gone), false, gone);
+	}
+	assert.equal(kept.some((key) => key.startsWith('h/l-quote/') || key.startsWith('h/idem/')), false);
+	// The marker of a mint is not a channel's, and stays.
+	assert.equal(kept.filter((key) => key.startsWith('h/committed/')).length, 1);
+});
+
+test('a backup is never restored over an asset channel, and never replaces a Lightning row', async () => {
+	const { h, id, channel } = await channelled();
+	const file = { format: backup.FORMAT, version: backup.VERSION, network: 'regtest', chain: 'regtest', wallet: await h.host.fingerprint(), exportedAt: 1, rows: backup.collectRows(h.storage) };
+	file.rowsHash = backup.hashRows(file.rows);
+	const live = await refused(h.call('POST /backup/import', { backup: file }));
+	assert.deepEqual([live.extensionCode, live.status], ['ASSET_CHANNELS_OPEN', 409]);
+	assert.equal(live.message, 'This wallet has an asset channel, and a backup is never restored over one. Close its asset channels first.');
+
+	// Once it is closed and its assets are home, a backup is taken again.
+	await h.call('POST /channels/close', { channelId: channel.channelId, force: false });
+	assert.deepEqual(await codeOf(h.call('POST /backup/import', { backup: file })), ['ASSET_CHANNELS_OPEN', 409]);
+	h.ln.recover(id);
+	await h.host.pass({ block: true });
+	const now = { ...file, rows: backup.collectRows(h.storage) };
+	now.rowsHash = backup.hashRows(now.rows);
+	assert.deepEqual(await h.call('POST /backup/import', { backup: now }), { imported: 0, same: true });
+
+	// A Lightning row the wallet has is its own. One it lacks is taken.
+	h.storage.set('l/native-recovery/v1/job/aa', 'mine');
+	const rows = [...backup.collectRows(h.storage).filter(([key]) => !key.startsWith('l/')), ['l/native-recovery/v1/job/aa', 'theirs'], ['l/native-recovery/v1/job/bb', 'new'], ['l/tap/quotes/cc', 'a price']].sort(([a], [b]) => (a < b ? -1 : 1));
+	const res = backup.importBackup({ storage: h.storage, cfg: h.cfg, fingerprint: await h.host.fingerprint(), backup: { ...file, rows, rowsHash: backup.hashRows(rows) } });
+	assert.equal(res.imported, 1);
+	assert.equal(h.storage.get('l/native-recovery/v1/job/aa'), 'mine');
+	assert.equal(h.storage.get('l/native-recovery/v1/job/bb'), 'new');
+	assert.equal(h.storage.get('l/tap/quotes/cc'), null);
+});
+
+test('a backup left for a wallet with Lightning rows of its own is not restored before its node can be asked', async () => {
+	const fs = require('fs');
+	const os = require('os');
+	const path = require('path');
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-ln-'));
+	try {
+		const source = await funded();
+		const file = { format: backup.FORMAT, version: backup.VERSION, network: 'regtest', chain: 'regtest', wallet: await source.h.host.fingerprint(), exportedAt: 1, rows: backup.collectRows(source.h.storage) };
+		file.rowsHash = backup.hashRows(file.rows);
+		const importFile = path.join(dir, 'import.json');
+		fs.writeFileSync(importFile, JSON.stringify(file));
+		const h = world({ lightning: true, env: { BEIGNET_ASSETS_IMPORT_FILE: importFile } });
+		h.storage.set('l/native-lightning/v1/channel/aa', 'a channel');
+		await h.boot();
+		assert.match((await h.get('/status')).backup.importError, /^This wallet has Lightning records of its own, so the backup was left alone\./);
+		assert.equal(fs.existsSync(importFile), true);
+		assert.deepEqual((await h.get('/balances')).assets, []);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });

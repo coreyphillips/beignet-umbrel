@@ -1021,6 +1021,9 @@ async function importBackup(host, body) {
 	const source = body && body.backup && typeof body.backup === 'object' ? body.backup : null;
 	if (!source && !host.cfg.importFile) throw refusal('BAD_BACKUP', 'There is no assets backup waiting to be restored.', 404);
 	const res = await host.lock.run(async () => {
+		// Only reads, and the node's word on its channels: nothing of the
+		// Lightning service that could call back is asked under the lock.
+		require('./lightning').refuseImportWhileLive(host);
 		const out = await host.importNow(source || backup.readBackupFile(host.cfg.importFile));
 		host.mem.importError = null;
 		return out;

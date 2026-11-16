@@ -15,6 +15,15 @@
  * means anything on another machine. So is the wallet's note of its chain,
  * which the file states itself.
  *
+ * Of asset channels the file carries what brings a closed channel's assets
+ * back on-chain (the library's funding, destination and recovery rows) and
+ * the activity. It leaves out what only this machine's node can honour: a
+ * price given, an invoice made, and the host's own notes of its channels,
+ * with the marker that would have another machine open one again. A
+ * channel itself is the node's, in its own backup. So a backup is never
+ * restored over an asset channel, and a Lightning row a wallet already has
+ * is never replaced by a file's.
+ *
  * Everything here is synchronous, so an export reads one consistent set of
  * rows and nothing can change underneath it.
  */
@@ -27,9 +36,21 @@ const FORMAT = 'beignet-assets-backup';
 const VERSION = 1;
 const MAX_FILE_BYTES = 512 * 1024 * 1024;
 // Rows that stay on this machine.
-const LEFT_OUT = ['h/idem/', 'h/preview', 'h/backup', 'h/chain'];
+const LEFT_OUT = [
+	'h/idem/',
+	'h/preview',
+	'h/backup',
+	'h/chain',
+	'h/chan/',
+	'h/committed/funding:',
+	'h/l-quote/',
+	'h/inv/',
+	'l/tap/quotes/',
+	'l/lightning/invoice/'
+];
 const COUNTER = 't/keyindex/';
 const ASSET_RECORDS = 't/asset/';
+const LIGHTNING = 'l/';
 
 const leftOut = (key) => LEFT_OUT.some((prefix) => key.startsWith(prefix));
 
@@ -175,7 +196,7 @@ function importBackup({ storage, cfg, fingerprint, backup }) {
 	if (!fingerprint || b.wallet !== fingerprint) {
 		throw refusal('WRONG_WALLET', 'That assets backup belongs to another wallet: its recovery phrase is not this one.');
 	}
-	const incoming = new Map(b.rows.filter(([key]) => /^[tTh]\//.test(key) && key.length <= 512 && !leftOut(key)));
+	const incoming = new Map(b.rows.filter(([key]) => /^[tThl]\//.test(key) && key.length <= 512 && !leftOut(key)));
 	const existing = storage.list('');
 	if (existing.some((row) => row.key.startsWith(ASSET_RECORDS))) {
 		for (const row of existing) {
@@ -191,6 +212,8 @@ function importBackup({ storage, cfg, fingerprint, backup }) {
 			const current = storage.get(key);
 			if (current === value) continue;
 			if (key.startsWith(COUNTER) && current !== null && counterValue(current) >= counterValue(value)) continue;
+			// The wallet's own record of a channel is newer than any file's.
+			if (key.startsWith(LIGHTNING) && current !== null) continue;
 			storage.set(key, value);
 			imported += 1;
 		}

@@ -1282,6 +1282,30 @@ function startOptions(host) {
 	};
 }
 
+/* ------------------------------------------------------------------ backup */
+
+const noRestore = (why) => refusal('ASSET_CHANNELS_OPEN', why, 409);
+
+/**
+ * A backup is never restored over an asset channel: what it says the wallet
+ * holds on-chain is from before the channel, and the two would not agree.
+ * For the route, which can ask the node.
+ */
+function refuseImportWhileLive(host) {
+	if (!host.ln) return;
+	if (!host.ln.ready()) throw starting();
+	if (channelList(host).some((c) => !c.over)) {
+		throw noRestore('This wallet has an asset channel, and a backup is never restored over one. Close its asset channels first.');
+	}
+}
+
+/** The same, before there is a node to ask: a wallet with Lightning rows of its own is left alone. */
+function refuseImportUnasked(host) {
+	if (host.storage.list('l/').length > 0) {
+		throw noRestore('This wallet has Lightning records of its own, so the backup was left alone. Restore it from the dashboard once the wallet is running.');
+	}
+}
+
 module.exports = {
 	modeOf,
 	channelList,
@@ -1305,6 +1329,8 @@ module.exports = {
 	acceptIncoming,
 	fetchProof,
 	onEvent,
+	refuseImportWhileLive,
+	refuseImportUnasked,
 	MAX_INBOUND_PENDING,
 	FORCE_CLOSED_SHOWN_MS
 };

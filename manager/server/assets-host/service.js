@@ -963,6 +963,10 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 			return;
 		}
 		try {
+			// There is no node yet to say whether a channel is open, and a
+			// backup is never restored over one. A wallet with Lightning rows
+			// restores from the dashboard, once its node can be asked.
+			lightning().refuseImportUnasked(host);
 			const res = await host.importNow(backup.readBackupFile(cfg.importFile));
 			fs.renameSync(cfg.importFile, `${cfg.importFile}.imported`);
 			say('info', `assets: restored the assets backup (${res.imported} rows written)`);
