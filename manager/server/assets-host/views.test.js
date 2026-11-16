@@ -410,6 +410,14 @@ test('a channel as the dashboard lists it', () => {
 	);
 	// An asset the wallet knows only by its id is still listed.
 	assert.deepEqual(views.channelView(c, null).asset, { key: A1, assetId: A1, name: null, type: 'normal', decimalDisplay: 0 });
+	// A payment in flight is on neither side, and the channel is no smaller for it:
+	// its capacity is what it was funded with, over every issuance.
+	const paying = views.channelView({ ...c, word: 'NORMAL', assets: [{ assetId: A1, amount: 600n }], local: 400n, remote: 150n, sendable: 400n, receivable: 150n }, reg);
+	assert.deepEqual([paying.capacity, paying.localBalance, paying.remoteBalance], ['600', '400', '150']);
+	const two = views.channelView({ ...c, word: 'NORMAL', assets: [{ assetId: A1, amount: 600n }, { assetId: 'cd'.repeat(32), amount: 250n }], local: 700n, remote: 100n }, reg);
+	assert.equal(two.capacity, '850');
+	// With no funding on record it is the sum of the last balances.
+	assert.equal(views.channelView({ ...c, assets: [], local: 450n, remote: 150n }, reg).capacity, '600');
 });
 
 test('a peer\'s price as a sentence, and none for one unit to the sat', () => {

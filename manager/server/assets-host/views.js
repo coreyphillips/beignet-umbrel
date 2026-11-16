@@ -326,6 +326,18 @@ function channelWord({ state, confirmed, recovery, engine, signed }) {
 	return state;
 }
 
+/**
+ * The units a channel holds: what it was funded with, over every issuance.
+ * The two balances add up to less while a payment is in flight, since its
+ * units are on neither side until it settles or fails, and a channel does
+ * not shrink for that. An entry with no funding on record (a channel only
+ * the host's notes still know) is the sum of its last balances.
+ */
+function channelCapacity(c) {
+	const funded = (c.assets || []).reduce((sum, a) => sum + BigInt(a.amount || 0), 0n);
+	return funded > 0n ? funded : c.local + c.remote;
+}
+
 /** A channel as GET /channels lists it. `c` is one of the host's entries, `reg` what it knows of the asset. */
 function channelView(c, reg) {
 	return {
@@ -336,7 +348,7 @@ function channelView(c, reg) {
 		peerAlias: c.peerAlias || null,
 		state: c.word,
 		asset: brief(reg || { assetId: c.assetId, groupKey: c.groupKey, name: null, type: 'normal', decimalDisplay: 0 }),
-		capacity: (c.local + c.remote).toString(),
+		capacity: channelCapacity(c).toString(),
 		localBalance: c.local.toString(),
 		remoteBalance: c.remote.toString(),
 		sendable: c.sendable.toString(),
