@@ -228,214 +228,316 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  * sees it: it works against the facade `createLightning` returns, which
  * deals in plain values (ids, keys and hashes as lower-case hex, amounts of
  * an asset as bigint, sats as numbers, millisatoshis as bigint, times in
- * milliseconds), so a test replaces it whole (test-fakes.js `fakeLightning`).
+ * milliseconds). The tests run the host through this same facade, over a
+ * stand-in for the entry that has its exported names and shapes
+ * (test-fakes.js `fakeLightning`).
  *
- * WHAT THIS SECTION ASSUMES OF THE ENTRY AND OF THE ENGINE
+ * WHAT THIS SECTION LEANS ON
  *
- * Nothing below has run against a real entry: it was written before one
- * existed, to this list. A name or a shape that turns out different is
- * changed here and nowhere else in the host.
+ * Read from the entry's source (ts-tap branch asset-lightning-7-reservations,
+ * packages/beignet/src/lightning*.ts, and docs/beignet.md). The entry has
+ * run against a fake node only, and the host against a stand-in for the
+ * entry only: nothing here has met an engine that carries asset channels.
+ * A name or a shape that turns out different is changed here and nowhere
+ * else in the host.
  *
  * The entry's exports
  *
- *  1. assetLightningSupport() returns { supported: boolean, missing: string[] }.
- *     Synchronous, never throws, and touches nothing an engine without
- *     auxiliary channels lacks.
- *  2. lightningStore(backend, prefix) returns the store the host is built
- *     over. `backend` is the engine's IExtensionStorage as it is (get, set,
- *     delete, list, transaction, all synchronous). Every key the store
- *     writes starts with `prefix` and is at most 512 characters. It never
- *     opens a transaction inside another.
- *  3. createAssetLightningHost({ store, hrp, fixedOutputFees }) returns
- *     { attachment, start }. Synchronous. It needs no adapter and no node,
- *     so it can be called before the wallet's chain is known.
+ *  1. assetLightningSupport() returns { supported, engineVersion?, missing }.
+ *     Synchronous, never throws. It looks at what the installed engine
+ *     exposes and never at its version, and is false on every release up to
+ *     0.42.0.
+ *  2. lightningStore(backend, prefix) returns the store everything else is
+ *     built over. `backend` is the engine's IExtensionStorage as it is (get,
+ *     set, delete, list, transaction, all synchronous). Every key is written
+ *     under `prefix`, which is lower-case segments ending in "/". A
+ *     transaction of the store is one of the backend, and one opened inside
+ *     another is refused.
+ *  3. createAssetLightningHost({ store, hrp, fixedOutputFees, now?, onError? })
+ *     returns { attachment, start, service, close }. Synchronous. It needs
+ *     no adapter and no node, so it is called at attach, before the wallet's
+ *     chain is known. On an engine without auxiliary channels it refuses
+ *     with UNSUPPORTED, so 1 is asked first.
  *  4. `attachment` is { auxiliaryChannels, fixedOutputFees, bind(node) }.
- *     `fixedOutputFees` is the object createAssetLightningHost was given.
- *     The engine calls bind(node) once it has built its node. Every hook
- *     that needs the adapter fails closed until `start` has run.
- *  5. start(adapter, options) returns the service, or a promise of it.
- *     `adapter` is what createBeignetAdapter returned. The options:
+ *     `fixedOutputFees` is the value createAssetLightningHost was given,
+ *     untouched. The engine calls bind(node) once it has built its node, and
+ *     a second, different node is refused. The provider works from that
+ *     moment, whether or not the service runs, so a channel is enforceable
+ *     either way. The hooks that need the wallet refuse until `start` has
+ *     run: a peer's open is turned down and its quote request refused.
+ *  5. start(adapter, options) is synchronous and returns the service.
+ *     `adapter` is what createBeignetAdapter returned. It refuses with
+ *     NOT_READY until the node is bound, and with INVALID when a service
+ *     already runs, when `fetchProvenance` is missing and when `forwarding`
+ *     is true. The host is ready to start before the engine has a node, so
+ *     the facade keeps what it was given and starts once both are there.
+ *     The options given:
  *       fetchProvenance(proof)   a decoded proof in, a promise of its
  *                                decoded proof file out (ts-tap's proof.Proof
  *                                and proof.File)
- *       acceptIncoming(p)        p is { pendingChannelId: Buffer, peer:
- *                                Buffer, assets: [{ assetId: Buffer, amount:
- *                                bigint }], groupKey?: Buffer }; a promise
- *                                of true takes the channel
- *       forwarding               false: this wallet routes for nobody
- *       onEvent(event)           see 20; called outside any storage
- *                                transaction, its return ignored
- *       price                    left out, the service prices as a plain
- *                                wallet does: it answers a request only from
- *                                a peer it has a NORMAL asset channel with,
- *                                for that channel's asset, at one unit a sat
- *                                ({ coefficient: 100000000n, scale: 0 }).
- *                                Given, it is asked instead, and a throw
- *                                refuses the request.
+ *       acceptIncoming(p)        p is { peer, pendingChannelId, expiresAt,
+ *                                assets: [{ assetId, amount }], inputProofs,
+ *                                outputs, groupKey? }, called once the
+ *                                peer's assets are verified; true, or a
+ *                                promise of it, takes the channel
+ *       confirmationDepth        how many confirmations bury a transaction
+ *                                for good: the wallet's own (6 if left out)
+ *       price                    left out, the service prices as a wallet
+ *                                that only pays and is paid: it answers a
+ *                                request to be paid over a channel the two
+ *                                share, for that channel's asset, at one
+ *                                unit a sat. Given, it is asked instead, and
+ *                                a throw refuses the request.
+ *       onEvent(event)           see 25
+ *       onError(error)           what went wrong where nobody was waiting
+ *       now()                    unix seconds as a bigint
+ *     `forwarding` is left out: the entry routes for nobody.
+ *  6. close() of the host closes the service and the quote transport and
+ *     lets go of the node: for when the node stops. close() of the service
+ *     stops the service alone, and the provider stays. After either, every
+ *     call of the service refuses with NOT_READY.
  *
- * The service. Ids, keys and hashes are Buffers, amounts of an asset and
- * millisatoshis are bigint, sats are bigint, and a time is unix seconds as a
- * number or a bigint.
+ * The service. Ids, keys and hashes are Buffers, amounts of an asset, sats
+ * and millisatoshis are bigint, and a time is unix seconds as a bigint.
  *
- *  6. channels() is synchronous and lists every asset channel and every
- *     unfinished open, whichever side began it:
- *       { pendingChannelId, channelId?, peer, initiator, phase, signed,
- *         confirmed, state?, fundingSatoshis, reserveSatoshis?,
- *         assets: [{ assetId, local, remote }], groupKey?, reserved,
- *         recovery }
- *     `phase` is the funding phase (accepted, negotiated, funding-created,
- *     committed, broadcasting, broadcast, active, rejected, failed).
- *     `signed` says the funding transaction has been signed, which is when
- *     cancelChannel starts to refuse. `confirmed` says confirmChannel has
- *     completed. `state` is the engine's ChannelState word, absent until the
- *     engine has the channel. `reserveSatoshis` is what the peer has to keep
- *     on its side. `reserved` is the local units live quotes and payments
- *     hold. A flow whose funding transaction is signed is always listed,
- *     with `signed` true, whatever became of its negotiation: its inputs
- *     have left the wallet's on-chain records, and it may confirm.
- *     `recovery` is 'none' while the channel is open, 'pending' from
- *     its close until every asset of this wallet's is back in its on-chain
- *     records, then 'complete'. A closed channel never says 'none': the
+ *  7. channels() is synchronous and lists every asset channel, every
+ *     unfinished open whichever side began it, and every closed channel
+ *     still on record:
+ *       { pendingChannelId, channelId?, peer, initiator, phase, engine,
+ *         signed, committed, confirmed, fundingTxid?, state?,
+ *         fundingSatoshis, reserveSatoshis?, assets: [{ assetId, amount,
+ *         local?, remote? }], groupKey?, decimalDisplay,
+ *         localAssetBalance, remoteAssetBalance, reserved,
+ *         fundingReservation?, fundingInputs?, recovery, error? }
+ *     `phase` is the funding phase (receiving, awaiting-ack, accepted,
+ *     negotiated, funding-created, committed, broadcasting, broadcast,
+ *     active, rejected, failed) or `cancelled`.
+ *     `engine` says whether the node holds the channel: `held`; `absent`,
+ *     for an open that has not reached the engine or ended before it did,
+ *     and for a closed channel the engine has dropped; `missing`, when the
+ *     rows say the engine held it and it holds none, with no close on
+ *     record, as after a restored backup. A missing channel has no `state`,
+ *     its balances are the last known, and it carries no payment.
+ *     `signed` says the funding transaction is signed, which is when
+ *     cancelChannel starts to refuse. `confirmed` says the funding has
+ *     confirmed and its proofs are stored. `state` is the engine's
+ *     ChannelState word, there only while the engine holds the channel or
+ *     of a closed one. `reserved` is the local units held for payments that
+ *     are not in the channel yet, and nothing to do with funding.
+ *     `assets` is what the channel was funded with. The balances are
+ *     `localAssetBalance` and `remoteAssetBalance`, for the channel as a
+ *     whole, and of a closed or missing channel the last known.
+ *     `fundingReservation` is set from the moment an open of this wallet
+ *     selects its inputs until its funding has confirmed: the wallet's
+ *     on-chain records still list those inputs, unspent, with this name
+ *     (`funding:<pending id hex>`) as their `reservedBy`. `fundingInputs`
+ *     sums them by asset. They can hold more than the channel takes: the
+ *     rest is the change of the funding.
+ *     `recovery` is 'none' while no close has begun, 'pending' from the
+ *     moment a close is asked for or seen until every asset of this
+ *     wallet's is back in its on-chain records, then 'complete', and
+ *     'complete' at once for a closed channel that held nothing of it. The
  *     host takes a closed channel to be over only on 'complete', and reads
- *     any other word as a recovery still to be done. `local` and `remote`
- *     of a closed channel are its last balances. A closed channel stays
- *     listed while its rows are kept.
- *  7. peerSupports(peer) is synchronous: whether the connected peer's
+ *     any other word as a recovery still to be done.
+ *     A signed funding is always listed, and never as cancelled or
+ *     rejected. It is listed as `failed` in one case only: it was proven
+ *     unable to confirm (15) and given up. Its reservation is then released,
+ *     so `fundingReservation` is gone and its units are back among the
+ *     on-chain records.
+ *     An open that was cancelled before it signed stays listed until it is
+ *     forgotten (14): as `cancelled` when the cancel landed on a negotiated
+ *     channel, and as `rejected` or `failed` with `error: 'cancelled'` when
+ *     it landed before.
+ *  8. peerSupports(peer) is synchronous: whether the connected peer's
  *     features allow an asset channel. False for a peer not connected.
- *  8. quoteFunding({ assets: [{ assetId, amount }], groupKey?,
+ *  9. quoteFunding({ assets: [{ assetId, amount }], groupKey?,
  *     fundingSatoshis, feeRate }) resolves to { feeSatoshis, vsize,
- *     reserveSatoshis? } and reserves and writes nothing.
- *  9. openChannel({ peer, assets, groupKey?, decimalDisplay?,
- *     fundingSatoshis, pushMsat, feeRate, maxFee, pendingChannelId })
- *     resolves to { pendingChannelId, channelId } once the funding
- *     transaction is on its way. Given the id of a flow it already has, it
- *     carries that flow on and opens nothing second. `maxFee` is the most
- *     the funding transaction may pay in sats: one that would pay more is
- *     refused with FEE_BOUND before anything is signed. quoteFunding is an
- *     estimate, so this is the bound that holds.
- * 10. cancelChannel(pendingChannelId) resolves to true when the flow is gone
- *     and what it had set aside is released (also for an id it never had),
- *     and to false once the funding transaction is signed. An openChannel
- *     still running under the id then rejects with CANCELLED and signs
- *     nothing. The host does not lean on that alone: it believes a true
- *     only once no openChannel call of its own is out for the id
- *     (lightning.js giveUp).
- * 11. closeChannel({ channelId, force }) resolves once the engine has been
+ *     reserveSatoshis }. An estimate: nothing is selected, reserved or
+ *     written.
+ * 10. openChannel({ peer, pendingChannelId, assets, groupKey?,
+ *     decimalDisplay?, fundingSatoshis, pushMsat?, feeRate, maxFee?,
+ *     timeoutMs? }) resolves to { pendingChannelId, channelId } once the
+ *     engine holds the signed funding transaction and is publishing it.
+ *     Given the id and terms of a flow it already has, it carries that flow
+ *     on and opens nothing second. `maxFee` is the most the funding
+ *     transaction may pay in sats: one that would pay more is refused with
+ *     FEE_BOUND before anything is signed. `timeoutMs` is how long each
+ *     step waits for the peer (two minutes when left out, which the host
+ *     leaves as it is). An open that fails before the wallet signed is
+ *     cancelled by the library and its inputs released, and its id is
+ *     spent: the host opens again under a new id. After signing nothing is
+ *     released. It rejects with CANCELLED (11), FEE_BOUND,
+ *     FUNDING_REJECTED, or TIMEOUT, after which the flow is kept.
+ * 11. cancelChannel(pendingChannelId) resolves to true when nothing is left
+ *     of the open and what it had set aside is released, also for an id it
+ *     never had, and to false once the funding transaction is signed. An
+ *     openChannel still running under the id stops at its next step and
+ *     rejects with CANCELLED. When the signature wins the race, the cancel
+ *     answers false and the open rejects with what really failed, if
+ *     anything did. The host does not lean on any of that alone: it
+ *     believes a true only once no openChannel call of its own is out for
+ *     the id (lightning.js giveUp).
+ * 12. closeChannel({ channelId, force? }) resolves once the engine has been
  *     asked to close. The payout goes to keys of this wallet that the
- *     service derives itself.
- * 12. resume() carries unfinished opens on and confirms channels whose
- *     funding has confirmed. recovery.resume() brings the assets of closed
- *     channels back and resolves to [{ channelId, completed: [], pending:
- *     [], superseded: [], errors: [{ txid?, message }] }]. Each is one look
- *     at the chain with no timer left running; the host calls both from its
- *     own loop and never calls watch(). `errors` holds what went wrong in
- *     that look and is empty for a job that is only waiting: the host logs
- *     each, and says in its status when a channel's recovery has reported
- *     nothing else for an hour.
- * 13. quoteInvoice({ asset: { assetId } | { groupKey }, amount, peer? })
- *     asks a channel's peer what it gives for `amount` units and resolves
- *     to { quoteId, peer, assetAmount, milliSatoshi, assetRate: {
- *     coefficient, scale }, expiresAt }. `assetRate` is asset units per
- *     bitcoin, as in the price messages.
- * 14. createInvoice({ quoteId, description?, expirySeconds }) resolves to
+ *     service derives itself. It refuses with UNKNOWN_CHANNEL for a channel
+ *     the engine does not hold, and with CHANNEL when the engine will not
+ *     close it.
+ * 13. resume() carries unfinished opens on, publishes again a signed
+ *     funding that has not confirmed, confirms the ones that have, and
+ *     settles the wallet's own payment records (22). One look, with no timer
+ *     left running: the host calls it from its own loop. rebroadcastFunding
+ *     and confirmChannel are what it does, and the host calls neither.
+ * 14. forgetChannel(id) is synchronous and drops from the list what is over
+ *     and the engine does not hold: a closed or lost channel by its channel
+ *     id, an open that ended by its pending channel id. False while the
+ *     engine holds it, while assets of it are still coming back, and for a
+ *     signed funding that may still confirm.
+ * 15. resume() also ends a signed funding that is proven unable to confirm:
+ *     an input of it spent by another transaction that is buried
+ *     `confirmationDepth` deep. Its reservation is released, it is listed as
+ *     `failed` with the reason in `error`, and one channel event says so.
+ *     The host reads it from the list on every pass, so an event that never
+ *     came costs nothing.
+ * 16. recovery.resume() brings the assets of closed channels back and
+ *     resolves to [{ channelId, completed, pending, superseded, errors:
+ *     [{ txid?, message }] }], `channelId` being hex, or '' for a failure
+ *     of the look as a whole. It never rejects once the service runs.
+ *     `errors` holds what went wrong in that look: the host logs each, and
+ *     says in its status when a channel's recovery has reported nothing
+ *     else for an hour.
+ * 17. settleFundingReservations() settles what a funding left reserved in
+ *     the on-chain records when its flow is not on record, as after a
+ *     restore from a backup. It resolves to [{ reservation,
+ *     pendingChannelId, outcome, assets, channelId?, fundingTxid?, change?,
+ *     reason? }]. `released`: nothing spent the anchors, and the units are
+ *     free again. `moved`: the funding transaction on record spent them,
+ *     buried deep enough, so they are marked spent and the units are the
+ *     channel's; `change` is what went into that transaction and not into
+ *     the channel, and those outputs are not brought back by this call.
+ *     `kept`: left reserved, for the `reason` given, which for a funding
+ *     seen and not buried yet goes away by itself: the host asks again on
+ *     each new block for as long as anything is kept.
+ * 18. quoteInvoice({ asset: { assetId } | { groupKey }, amount, peer?,
+ *     expirySeconds? }) asks a channel's peer what it gives for `amount`
+ *     units and resolves to { quoteId, peer, assetAmount, milliSatoshi,
+ *     assetRate: { coefficient, scale }, expiresAt, priced }. `assetRate`
+ *     is asset units per bitcoin. `priced` is false for the nominal rate of
+ *     a peer that sets no price. `expirySeconds` is how long the quote is
+ *     asked to stand (an hour when left out).
+ * 19. createInvoice({ quoteId, description?, expirySeconds? }) resolves to
  *     { bolt11, paymentHash, assetAmount, milliSatoshi, expiresAt }. The
- *     host passes the time the quote has left as `expirySeconds`, so the
- *     invoice never outlives the price it was made on.
- * 15. invoices() is synchronous: [{ paymentHash, assetAmount, status }] for
- *     every asset invoice kept, `status` being 'open', 'paid' or 'expired'.
- * 16. quotePayment({ invoice, asset, amountMsat? }) resolves to { quoteId,
- *     paymentHash, peer, channelId, assetAmount, milliSatoshi, assetRate,
- *     expiresAt } and sends nothing. `amountMsat` is for an invoice that
- *     names no amount.
- * 17. payInvoice({ quoteId, maxAssetAmount }) resolves to { paymentHash,
- *     assetAmount, status, feeMsat?, failure? } once the payment is in the
- *     engine's hands, `status` being 'pending', 'complete' or 'failed'. It
- *     rejects before anything is sent when paying would take more than
- *     `maxAssetAmount` units. The host reads nothing from what it resolves
- *     to but that the payment was taken: how it ended is read from 18.
- *     A rejection with one of these codes is raised before any HTLC leaves
- *     the wallet, and means nothing was sent (errors.js PAY_NOTHING_SENT):
- *     NOT_READY, NO_QUOTE, QUOTE_EXPIRED, PRICE_BOUND,
- *     INSUFFICIENT_OUTBOUND, BAD_INVOICE, INVOICE_EXPIRED, AMOUNT_REQUIRED
- *     and ALREADY_PAID. Any other rejection, TIMEOUT and PEER_OFFLINE among
- *     them, may come after the engine has the payment, and says nothing
- *     about whether it was sent.
- * 18. payment(paymentHash) is synchronous: the same shape for a payment the
- *     engine has a record of, or undefined. This record is the only word on
- *     how a payment ended, so the host needs of it:
- *       - it exists before the first HTLC of the payment leaves, and at the
- *         latest when payInvoice settles, whichever way it settles. So a
- *         payment with no record, that no payInvoice call is still working
- *         on, was never sent;
- *       - it survives a restart of the daemon, and after one it still says
- *         'pending' for a payment that is in flight;
- *       - `failure` of a failed payment is one of the words no_route,
- *         timeout, rejected, expired and insufficient_balance. Any other
- *         text is logged and shown to nobody (errors.js PAYMENT_FAILURES);
+ *     invoice lives `expirySeconds`, or as long as the quote when that is
+ *     shorter. The host passes the time the quote has left all the same, so
+ *     the invoice never outlives the price it was made on.
+ * 20. invoices() is synchronous: [{ paymentHash, assetAmount, milliSatoshi,
+ *     expiresAt, status, bolt11?, description? }] for every asset invoice
+ *     kept, `status` being 'open', 'paid' or 'expired'. `bolt11` and
+ *     `description` are there only while the engine keeps the invoice, so
+ *     the host keeps its own row of each (`inv/<hash>`).
+ * 21. quotePayment({ invoice, asset, amountMsat?, channelId? }) resolves to
+ *     { quoteId, paymentHash, peer, channelId, assetAmount, milliSatoshi,
+ *     feeMsat, assetRate, expiresAt, priced } and sends nothing.
+ *     `amountMsat` is for an invoice that names no amount.
+ * 22. payInvoice({ quoteId, maxAssetAmount }) rejects only while nothing has
+ *     left the wallet, and only with a code of the exported
+ *     ASSET_PAYMENT_REFUSALS, PAYMENT among them for an engine that did not
+ *     take the payment. The facade hands that list on as `refusals`, and
+ *     the host keeps no copy of it. Once the payment is handed to the
+ *     engine the call resolves, to { paymentHash, assetAmount, status,
+ *     feeMsat?, failure? }, with `pending` while the end is not known.
+ *     payment(paymentHash) is synchronous and returns the same shape, or
+ *     undefined for a hash this wallet made no payment under. That record
+ *     is the wallet's own and the only word on how a payment ended:
+ *       - it is written before the payment is handed over, and taken away
+ *         again (or put back to what an earlier try left) when payInvoice
+ *         refuses. So a payment with no record was never sent;
+ *       - it survives a restart of the daemon;
+ *       - `complete` and `failed` do not change again, except that paying a
+ *         failed invoice again starts the record over;
+ *       - resume() fails a pending record only when the engine has no
+ *         payment for it, it is at least a minute old, and the engine holds
+ *         the channel with no HTLC of that hash. Its failure then reads
+ *         'the payment never left this wallet';
+ *       - `failure` is the engine's own text, or 'the payment failed'. The
+ *         host shows neither, and words a failure itself (errors.js);
  *       - before `start`, and after `close`, it throws NOT_READY and never
  *         answers undefined for a payment it would know of.
- * 19. close() stops the service. The host does not wait for what it returns.
- * 19a. paymentLimits() is synchronous: for each asset, [{ assetId? |
+ * 23. paymentLimits() is synchronous: for each asset, [{ assetId? |
  *     groupKey?, maxSend, maxReceive, sendChannelId?, receiveChannelId? }],
  *     the most ONE payment can send and receive, from the best single
- *     usable channel whose peer is connected. A payment is never split
- *     across channels, so these are never sums.
+ *     NORMAL channel whose peer is connected, less what payments under way
+ *     have set aside. A payment is never split across channels, so these
+ *     are never sums.
  *
  * Events and errors
  *
- * 20. onEvent receives { type: 'channel', pendingChannelId, channelId?,
- *     phase? }, { type: 'invoice', paymentHash, status: 'paid',
- *     assetAmount }, { type: 'payment', paymentHash, status, feeMsat?,
- *     failure? } and { type: 'recovery', channelId, status }. The host
- *     treats each as a reason to look again and reads the state itself, so
- *     an event that is missed costs time and nothing else. An event is
- *     sent when something changed, never for a look that found nothing new:
- *     the host looks again after each one, and resume() is part of a look.
- * 21. A rejection carries a string `code` (errors.js maps these):
- *       ERR_BEIGNET_LN_NOT_READY             before bind and start
- *       ERR_BEIGNET_LN_PEER_OFFLINE          the peer is not connected
- *       ERR_BEIGNET_LN_PEER_UNSUPPORTED      its features allow no asset channel
- *       ERR_BEIGNET_LN_FUNDING_REJECTED      it turned the channel down
- *       ERR_BEIGNET_LN_TIMEOUT               no answer in time; the flow is kept
- *       ERR_BEIGNET_LN_CANCELLED             the open was given up, unsigned
- *       ERR_BEIGNET_LN_FEE_BOUND             the funding would pay more than maxFee
- *       ERR_BEIGNET_LN_UNKNOWN_CHANNEL       no channel with that id
- *       ERR_BEIGNET_LN_NO_QUOTE              the peer gave no price
- *       ERR_BEIGNET_LN_QUOTE_EXPIRED         the quote is used up or too old
- *       ERR_BEIGNET_LN_PRICE_BOUND           the price is past the bound given
- *       ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND no channel can send that much
- *       ERR_BEIGNET_LN_INSUFFICIENT_INBOUND  no channel can receive that much
- *       ERR_BEIGNET_LN_BAD_INVOICE           the invoice cannot be read
- *       ERR_BEIGNET_LN_INVOICE_EXPIRED       the invoice is past its time
- *       ERR_BEIGNET_LN_AMOUNT_REQUIRED       it names no amount and none was given
- *       ERR_BEIGNET_LN_ALREADY_PAID          this wallet has paid it
- *     and the adapter's own ERR_BEIGNET_FUNDING, ERR_BEIGNET_WALLET and
- *     ERR_BEIGNET_FEE for the funding transaction, as a mint or a send.
+ * 24. A rejection carries a string `code`. errors.js words the ones a
+ *     caller can act on: ERR_BEIGNET_LN_ and UNSUPPORTED, NOT_READY,
+ *     INVALID, PEER_OFFLINE, PEER_UNSUPPORTED, FUNDING_REJECTED, TIMEOUT,
+ *     CANCELLED, FEE_BOUND, UNKNOWN_CHANNEL, NO_QUOTE, QUOTE_EXPIRED,
+ *     PRICE_BOUND, INSUFFICIENT_OUTBOUND, INSUFFICIENT_INBOUND, BAD_INVOICE,
+ *     INVOICE_EXPIRED, AMOUNT_REQUIRED, ALREADY_PAID and PAYMENT. CHANNEL,
+ *     FUNDING and RECOVERY carry the library's own account of what went
+ *     wrong inside: that goes to the log, and the caller gets a sentence of
+ *     the host's. So do the library's own ERR_LIGHTNING_* and ERR_FUNDING_*
+ *     codes. The adapter's ERR_BEIGNET_FUNDING, ERR_BEIGNET_WALLET and
+ *     ERR_BEIGNET_FEE pass through for the funding transaction, as for a
+ *     mint or a send.
+ * 25. onEvent receives { type: 'channel', pendingChannelId?, channelId?,
+ *     phase?, error? }, { type: 'invoice', paymentHash, status: 'paid',
+ *     assetAmount, channelId }, { type: 'payment', paymentHash, status,
+ *     assetAmount, channelId, feeMsat?, failure? } and { type: 'recovery',
+ *     channelId, status }, each after the change is stored and outside any
+ *     storage transaction. A peer that turns an open down after openChannel
+ *     ended is a channel event with `error`; a payment's end after
+ *     `pending` is a payment event. The host treats each as a reason to
+ *     look again and reads the state itself, so an event that is missed
+ *     costs time and nothing else.
  *
- * The engine
+ * The backup
  *
- * 22. An attachment may carry the provider as its `lightning` member, on
- *     every path including one whose routes only refuse, and the daemon
- *     refuses to boot when it holds an asset channel and no attachment
- *     brought one (engine issue 2093, step 12).
- * 23. node.connectPeer(pubkey, host, port) resolves once the peer is
- *     connected, also when it already was.
- * 24. No hook of the provider is called inside an engine storage
- *     transaction: the store is synchronous and a transaction of its own
- *     would then be one inside another.
- *
- * The store
- *
- * 25. Building the host and starting the service write nothing. The store
+ * 26. assetLightningBackup(store) is synchronous and returns { version: 1,
+ *     rows: [{ key, value }] }: exactly the rows a backup may carry (which
+ *     channels there were, the keys their payouts go to, the proofs of what
+ *     funded them, the record of each close seen) and nothing that could
+ *     sign, publish or settle something: no funding flow, quote, invoice or
+ *     payment record.
+ * 27. restoreAssetLightningBackup(store, backup) is synchronous, writes
+ *     those rows into a store that holds no Lightning row at all, and
+ *     refuses with INVALID any other store, a row a backup may not carry
+ *     and a row given twice. All of them are written, or none. The wallet
+ *     then knows its channels and lists them as not held by the engine. It
+ *     can finish bringing home the assets of a cooperative close that was on
+ *     record. It cannot run, close or sign for a channel, and it cannot by
+ *     itself bring home what was in a channel still open when the backup
+ *     was made, or in a force close.
+ * 28. Building the host and starting the service write nothing. The store
  *     holds a row only once a channel has been asked for or offered: a
  *     wallet with any row under its prefix is taken to have Lightning
- *     records of its own, and a backup the manager left for it is then not
- *     restored at start (lightning.js refuseImportUnasked).
- * 26. The rows a backup must not carry to another machine are the ones
- *     under `tap/quotes/` and `lightning/invoice/` (backup.js LEFT_OUT), as
- *     on the earlier branch. Every other row is either safe to restore into
- *     a wallet that has none (funding, destination and recovery rows) or is
- *     ignored by a node that does not hold the channel it describes.
+ *     records of its own, and a backup's are then left out
+ *     (backup.js, lightning.js refuseImportUnasked).
+ *
+ * The engine and the adapter
+ *
+ * 29. The engine reads three members of an extension's attachment, on the
+ *     attachment itself: `auxiliaryChannels` (handed to the node as it is,
+ *     and kept for the life of that node whatever becomes of the
+ *     extension), `fixedOutputFees` (read only beside it) and `bind(node)`
+ *     (called once the node exists, in the turn that built it, outside any
+ *     storage transaction and before any extension's start; synchronous).
+ *     They are handed over on every path, including one whose routes only
+ *     refuse. The daemon refuses to boot with ASSET_PROVIDER_REQUIRED when
+ *     it holds an asset channel and no attachment brought a provider. Its
+ *     own GET /channels rows carry `auxiliary: true` on an asset channel
+ *     and no such key otherwise (engine issue 2093, steps 11 and 12).
+ * 30. node.connectPeer(pubkey, host, port) resolves once the peer is
+ *     connected, also when it already was.
+ * 31. No hook of the provider is called inside an engine storage
+ *     transaction: the store is synchronous and a transaction of its own
+ *     would then be one inside another.
+ * 32. The adapter's chain can say what spent an outpoint (`spender`).
+ *     Without it no signed funding is ever proven unable to confirm (15),
+ *     and every reservation of 17 is kept.
  */
 
 // What a new asset channel is funded with, and the bitcoin each asset
@@ -457,6 +559,9 @@ function fixedOutputFees(cfg) {
 	return { maxFeeSatoshis: one, maxTotalFeeSatoshis: BigInt(Math.min(1_000_000, ceiling)), maxPreparationFeeSatoshis: one, feeCoinCount: 4 };
 }
 
+// What the entry has to export for this app to use it.
+const ENTRY_FUNCTIONS = ['assetLightningSupport', 'lightningStore', 'createAssetLightningHost', 'assetLightningBackup', 'restoreAssetLightningBackup'];
+
 /**
  * The library's Lightning entry from `modulesDir`, or null when the adapter
  * installed there does not ship one. Throws a sentence when it ships one
@@ -472,7 +577,7 @@ function loadLightning(modulesDir) {
 	} catch (err) {
 		throw new Error(`The asset channels package beside the wallet engine could not be loaded (${err.message}).`);
 	}
-	const ok = !!entry && ['assetLightningSupport', 'lightningStore', 'createAssetLightningHost'].every((name) => typeof entry[name] === 'function');
+	const ok = !!entry && ENTRY_FUNCTIONS.every((name) => typeof entry[name] === 'function') && Array.isArray(entry.ASSET_PAYMENT_REFUSALS);
 	if (!ok) throw new Error('The asset channels package beside the wallet engine is not a version this app was built for.');
 	return entry;
 }
@@ -482,31 +587,102 @@ const millis = (seconds) => Number(seconds) * 1000;
 const whole = (value) => (value === undefined || value === null ? null : Number(value));
 const specifier = ({ assetId, groupKey }) => (groupKey ? { groupKey: unhex(groupKey) } : { assetId: unhex(assetId) });
 const inUnits = (list) => list.map((a) => ({ assetId: unhex(a.assetId), amount: BigInt(a.amount) }));
+const outUnits = (list) => (list || []).map((a) => ({ assetId: asHex(a.assetId), amount: BigInt(a.amount || 0) }));
 const rateOf = (r) => ({ coefficient: BigInt(r.coefficient), scale: Number(r.scale) || 0 });
+const notReady = () => Object.assign(new Error('ERR_BEIGNET_LN_NOT_READY: asset channels have not started'), { code: 'ERR_BEIGNET_LN_NOT_READY' });
 
-/** One channel of the service's list, in plain values. A channel of several issuances is one figure a side. */
+/*
+ * WHAT THE LIBRARY IS ABOUT TO CHANGE
+ *
+ * Seven things its author has said will change. Each is read in one place
+ * here, a function that today answers what the library at 2df9663 can
+ * answer, so that the change is that function and the host rule that reads
+ * what it returns. None of them is built yet.
+ *
+ *  S1 openIsFinal(c)        `signed` will mean that the peer has signed
+ *                           this wallet's first commitment, so the open can
+ *                           no longer be cancelled. Until then an open is
+ *                           cancellable and its reservation released, also
+ *                           when the funding transaction was signed here.
+ *                           The host's rule "a signed funding is a channel
+ *                           in being" reads this flag and nothing else.
+ *  S2 paymentLost(p)        a pending payment may say that the engine no
+ *                           longer has a record of it. The host is to keep
+ *                           its row pending, say so in a sentence, and
+ *                           never pay that invoice again.
+ *  S3 attemptOf(p)          every try at a payment gets an id, and how a
+ *                           payment ended is matched to the try.
+ *  S4 receivedOf(i)         an invoice will say what was received beside
+ *                           what was invoiced. The host is to store and
+ *                           show what was received.
+ *  S5 quoteInvoice          can refuse a rate too coarse to invoice the
+ *                           amount, with a code of its own. The code gets
+ *                           its sentence in errors.js LIGHTNING_REFUSALS.
+ *                           Until then it reads as any refusal the host has
+ *                           no words for.
+ *  S6 reclaimFunding(id)    a call that spends the inputs of a funding that
+ *                           will not confirm back to the wallet. It needs a
+ *                           route of the host's.
+ *  S7 plainReservation(r)   after a restore, settleFundingReservations will
+ *                           bring a funding's change back as well, and keep
+ *                           a reservation whose funding may still confirm.
+ *                           The host's note of change that did not come
+ *                           back (lightning.js settleReservations, the rows
+ *                           l-change/<id>) goes when it does.
+ */
+
+/** S1. Whether an open has passed the point where it can be cancelled. */
+const openIsFinal = (c) => !!c.signed;
+
+/** S2. Whether the engine has lost its record of a payment the library still holds as pending. The library does not say yet. */
+const paymentLost = () => false;
+
+/** S3. The id of the try at a payment that a record speaks of. The library names none yet. */
+const attemptOf = () => null;
+
+/** S4. The units an invoice brought in, or null when the library says only what was invoiced. */
+const receivedOf = () => null;
+
+/** One entry of the service's list, in plain values. */
 function plainChannel(c) {
-	const assets = c.assets || [];
-	const sum = (side) => assets.reduce((total, a) => total + BigInt(a[side] || 0), 0n);
+	const assets = outUnits(c.assets);
+	const phase = String(c.phase || '');
+	const state = c.state ? String(c.state) : null;
 	return {
 		pendingChannelId: asHex(c.pendingChannelId),
 		channelId: c.channelId ? asHex(c.channelId) : null,
 		peerPubkey: asHex(c.peer),
 		initiator: !!c.initiator,
-		phase: String(c.phase || ''),
-		signed: !!c.signed,
+		phase,
+		// Whether the node holds it. A word this host has not met is read by
+		// whether the engine names a state for the channel.
+		engine: ['held', 'absent', 'missing'].includes(c.engine) ? c.engine : state ? 'held' : 'absent',
+		signed: openIsFinal(c),
+		committed: !!c.committed,
 		confirmed: !!c.confirmed,
-		state: c.state ? String(c.state) : null,
-		assetId: assets.length ? asHex(assets[0].assetId) : null,
+		fundingTxid: c.fundingTxid ? String(c.fundingTxid) : null,
+		state,
+		// A channel of several issuances is named by the first.
+		assetId: assets.length ? assets[0].assetId : null,
 		groupKey: c.groupKey ? asHex(c.groupKey) : null,
-		local: sum('local'),
-		remote: sum('remote'),
+		assets,
+		local: BigInt(c.localAssetBalance || 0),
+		remote: BigInt(c.remoteAssetBalance || 0),
 		reserved: BigInt(c.reserved || 0),
 		fundingSats: Number(c.fundingSatoshis || 0),
 		reserveSats: whole(c.reserveSatoshis),
+		// The name its funding inputs still sit under in the on-chain
+		// records, and what they hold, until the funding has confirmed.
+		fundingReservation: c.fundingReservation ? String(c.fundingReservation) : null,
+		fundingInputs: outUnits(c.fundingInputs),
 		// Anything but a plain 'none' or 'complete' is a recovery still to be
 		// done: a word this host has not met must never read as "nothing owed".
-		recovery: c.recovery === 'none' || c.recovery === 'complete' ? c.recovery : 'pending'
+		recovery: c.recovery === 'none' || c.recovery === 'complete' ? c.recovery : 'pending',
+		// An open this wallet gave up, however far it had got: listed as
+		// `cancelled`, or as turned down or failed with that for a reason.
+		cancelled: phase === 'cancelled' || ((phase === 'rejected' || phase === 'failed') && c.error === 'cancelled'),
+		// The library's own account. For the log, and for nobody else.
+		error: c.error ? String(c.error) : null
 	};
 }
 
@@ -515,13 +691,37 @@ const plainPayment = (p) => ({
 	assetAmount: p.assetAmount === undefined || p.assetAmount === null ? null : BigInt(p.assetAmount),
 	status: p.status === 'complete' || p.status === 'failed' ? p.status : 'pending',
 	feeMsat: p.feeMsat === undefined || p.feeMsat === null ? null : BigInt(p.feeMsat),
-	failure: p.failure ? String(p.failure) : null
+	failure: p.failure ? String(p.failure) : null,
+	attempt: attemptOf(p),
+	lost: paymentLost(p)
+});
+
+const plainInvoice = (i) => ({
+	paymentHash: asHex(i.paymentHash),
+	assetAmount: BigInt(i.assetAmount),
+	received: receivedOf(i),
+	// A status this host has no word for is an open invoice until it is paid or expired.
+	status: i.status === 'paid' || i.status === 'expired' ? i.status : 'open'
+});
+
+/** S7. One report of what became of a funding's reservation, in plain values. */
+const plainReservation = (r) => ({
+	reservation: String(r.reservation || ''),
+	pendingChannelId: r.pendingChannelId ? asHex(r.pendingChannelId) : null,
+	// Anything but a plain word that it is settled is one to ask about again.
+	outcome: r.outcome === 'released' || r.outcome === 'moved' ? r.outcome : 'kept',
+	assets: outUnits(r.assets),
+	channelId: r.channelId ? asHex(r.channelId) : null,
+	fundingTxid: r.fundingTxid ? String(r.fundingTxid) : null,
+	// Units that went into the funding transaction and not into the channel.
+	change: outUnits(r.change),
+	reason: r.reason ? String(r.reason) : null
 });
 
 function plainEvent(e) {
 	const out = { type: String((e && e.type) || '') };
 	for (const name of ['pendingChannelId', 'channelId', 'paymentHash']) if (e && e[name]) out[name] = asHex(e[name]);
-	for (const name of ['phase', 'status', 'failure']) if (e && e[name] !== undefined) out[name] = e[name];
+	for (const name of ['phase', 'status', 'failure', 'error']) if (e && e[name] !== undefined) out[name] = e[name];
 	return out;
 }
 
@@ -533,19 +733,32 @@ function plainEvent(e) {
  * Built at attach, before the wallet's chain is known and whatever else is
  * wrong with the host, because the engine has to be handed `attachment`
  * whenever it might hold an asset channel. `start` comes later, once the
- * adapter exists. Until then, and until the engine has bound its node,
- * `ready()` is false and everything else throws.
+ * adapter exists, and the service itself starts once the engine has bound
+ * its node as well. Until then `ready()` is false and everything that asks
+ * the service throws NOT_READY. `now`, when given, is the host's clock in
+ * milliseconds.
  *
- *   attachment                 what the engine is handed, as it is
- *   start(options)             { adapter, lib, quiet, fetchProof,
- *                                acceptIncoming, onEvent }
- *   stop()                     closes the service; waits for nothing
- *   ready()                    whether the node is bound and start has run
+ *   attachment                 what the engine is handed: the library's
+ *                                own, with the node noted on its way through
+ *   start(options)             { adapter, lib, quiet, confirmations,
+ *                                fetchProof, acceptIncoming, onEvent,
+ *                                onError, onStartError }. Kept until the
+ *                                node is bound, when the service starts. A
+ *                                service that will not start is said to
+ *                                onStartError, whenever that is.
+ *   stop()                     closes the service; the provider stays
+ *   close()                    closes everything, for when the node stops
+ *   ready()                    whether the node is bound and the service runs
+ *   refusals                   the codes payInvoice rejects with, each of
+ *                                which means nothing left the wallet
  *
  *   channels()                 [{ pendingChannelId, channelId, peerPubkey,
- *                                initiator, phase, signed, confirmed, state,
- *                                assetId, groupKey, local, remote, reserved,
- *                                fundingSats, reserveSats, recovery }]
+ *                                initiator, phase, engine, signed, committed,
+ *                                confirmed, fundingTxid, state, assetId,
+ *                                groupKey, assets, local, remote, reserved,
+ *                                fundingSats, reserveSats,
+ *                                fundingReservation, fundingInputs,
+ *                                recovery, cancelled, error }]
  *   connect({ pubkey, host, port })
  *   peerSupports(pubkey)       boolean
  *   quoteFunding({ assets, groupKey, fundingSats, feeRate })
@@ -556,73 +769,130 @@ function plainEvent(e) {
  *                              -> { channelId }
  *   cancelFlow(pendingChannelId)  -> boolean, true when nothing is left of it
  *   closeChannel({ channelId, force })
+ *   forgetChannel(id)          -> boolean, true when it is off the list
  *
- *   quoteInvoice({ assetId, groupKey, amount, peerPubkey })
+ *   quoteInvoice({ assetId, groupKey, amount, peerPubkey, expirySeconds })
  *                              -> { quoteId, peerPubkey, assetAmount,
- *                                   amountMsat, unitsPerBtc, expiresAt }
+ *                                   amountMsat, unitsPerBtc, expiresAt,
+ *                                   priced }
  *   createInvoice({ quoteId, description, expirySeconds })
  *                              -> { bolt11, paymentHash, assetAmount,
  *                                   amountMsat, expiresAt }
- *   invoices()                 [{ paymentHash, assetAmount, status }]
+ *   invoices()                 [{ paymentHash, assetAmount, received,
+ *                                status }], received being null until the
+ *                                library says it (S4)
  *
  *   quotePayment({ bolt11, assetId, groupKey, amountMsat })
  *                              -> { quoteId, paymentHash, peerPubkey,
  *                                   channelId, assetAmount, amountMsat,
- *                                   unitsPerBtc, expiresAt }
+ *                                   feeMsat, unitsPerBtc, expiresAt, priced }
  *   payInvoice({ quoteId, maxAssetAmount })
  *                              -> { paymentHash, assetAmount, status,
  *                                   feeMsat, failure }
- *   payment(paymentHash)       the same shape, or null
+ *   payment(paymentHash)       the same shape, or null. Both carry `attempt`
+ *                                and `lost` as well (S2, S3), null and false
+ *                                until the library says them
  *   paymentLimits()            [{ assetId, groupKey, maxSend, maxReceive,
  *                                sendChannelId, receiveChannelId }]: the
  *                                most one payment can move of each asset
  *
  *   resume()                   carries opens on and confirms channels
  *   resumeRecovery()           -> [{ channelId, completed, pending, errors }]
+ *   settleFundingReservations()
+ *                              -> [{ reservation, pendingChannelId, outcome,
+ *                                   assets, channelId, fundingTxid, change,
+ *                                   reason }]
+ *   reclaimFunding(id)         refuses: the library has no such call yet (S6)
  *
- * `assets` is [{ assetId, amount }]. `unitsPerBtc` is { coefficient, scale }.
- * The events `onEvent` is given are { type, pendingChannelId?, channelId?,
- * paymentHash?, phase?, status?, failure? }, type being 'channel',
- * 'invoice', 'payment' or 'recovery'.
+ *   backup()                   the rows a backup may carry, as the library
+ *                                gives them: { version, rows }
+ *   restore(backup)            -> how many rows were written, into a store
+ *                                that held none
+ *
+ * `assets` and `change` are [{ assetId, amount }]. `unitsPerBtc` is
+ * { coefficient, scale }. The events `onEvent` is given are { type,
+ * pendingChannelId?, channelId?, paymentHash?, phase?, status?, failure?,
+ * error? }, type being 'channel', 'invoice', 'payment' or 'recovery'.
  */
-function createLightning({ entry, storage, cfg }) {
+function createLightning({ entry, storage, cfg, now = null }) {
 	if (!entry) return null;
 	const support = entry.assetLightningSupport();
 	if (!support || support.supported !== true) return null;
 	const { backend, prefix } = lightningBackend(storage);
-	const made = entry.createAssetLightningHost({ store: entry.lightningStore(backend, prefix), hrp: cfg.hrp, fixedOutputFees: fixedOutputFees(cfg) });
+	const store = entry.lightningStore(backend, prefix);
+	const seconds = typeof now === 'function' ? () => BigInt(Math.floor(now() / 1000)) : null;
+	// Where the library says what went wrong when nobody was waiting. The
+	// host names the place once it has one.
+	let report = () => undefined;
+	const onError = (err) => {
+		try {
+			report(err);
+		} catch (_) {
+			/* a host that cannot be told is stopping */
+		}
+	};
+	const made = entry.createAssetLightningHost({ store, hrp: cfg.hrp, fixedOutputFees: fixedOutputFees(cfg), ...(seconds ? { now: seconds } : {}), onError });
 	let node = null;
 	let service = null;
+	// What `start` was given, until the node is there to start over.
+	let wanted = null;
 	const live = () => {
-		if (!node || !service) throw Object.assign(new Error('ERR_BEIGNET_LN_NOT_READY: asset channels have not started'), { code: 'ERR_BEIGNET_LN_NOT_READY' });
+		if (!node || !service) throw notReady();
 		return service;
+	};
+	const begin = () => {
+		if (!node || !wanted || service) return;
+		const { adapter, options, failed } = wanted;
+		try {
+			service = made.start(adapter, options);
+		} catch (err) {
+			wanted = null;
+			if (typeof failed !== 'function') throw err;
+			failed(err);
+		}
+	};
+	const stop = () => {
+		const closing = service;
+		service = null;
+		wanted = null;
+		if (!closing) return;
+		try {
+			const done = closing.close();
+			if (done && typeof done.catch === 'function') done.catch(() => undefined);
+		} catch (_) {
+			/* a service that will not close is being left behind anyway */
+		}
 	};
 	return {
 		attachment: {
 			...made.attachment,
 			bind(bound) {
+				made.attachment.bind(bound);
 				node = bound;
-				return made.attachment.bind(bound);
+				begin();
 			}
 		},
-		async start({ adapter, lib, quiet = false, fetchProof, acceptIncoming, onEvent }) {
+		start({ adapter, lib, quiet = false, confirmations, fetchProof, acceptIncoming, onEvent, onError: said, onStartError }) {
+			if (typeof said === 'function') report = said;
 			const options = {
 				fetchProvenance: async (p) => lib.decodeProofFile(await fetchProof(lib.proofLocator(p))),
 				acceptIncoming: (p) =>
 					acceptIncoming({
 						pendingChannelId: asHex(p.pendingChannelId),
 						peerPubkey: asHex(p.peer),
-						assets: (p.assets || []).map((a) => ({ assetId: asHex(a.assetId), amount: BigInt(a.amount) })),
+						assets: outUnits(p.assets),
 						groupKey: p.groupKey ? asHex(p.groupKey) : null
 					}),
-				forwarding: false,
 				onEvent: (e) => {
 					try {
 						onEvent(plainEvent(e));
 					} catch (_) {
 						/* the host looks again on its own */
 					}
-				}
+				},
+				onError,
+				...(Number.isInteger(confirmations) && confirmations > 0 ? { confirmationDepth: confirmations } : {}),
+				...(seconds ? { now: seconds } : {})
 			};
 			// A wallet whose Lightning side is off gives nobody a price.
 			if (quiet) {
@@ -630,20 +900,21 @@ function createLightning({ entry, storage, cfg }) {
 					throw new Error('This wallet is not taking asset payments.');
 				};
 			}
-			service = await made.start(adapter, options);
+			wanted = { adapter, options, failed: onStartError };
+			begin();
 		},
-		stop() {
-			const closing = service;
-			service = null;
-			if (!closing) return;
+		stop,
+		close() {
+			stop();
+			node = null;
 			try {
-				const done = closing.close();
-				if (done && typeof done.catch === 'function') done.catch(() => undefined);
+				made.close();
 			} catch (_) {
-				/* a service that will not close is being left behind anyway */
+				/* it is being left behind either way */
 			}
 		},
 		ready: () => !!node && !!service,
+		refusals: Object.freeze(entry.ASSET_PAYMENT_REFUSALS.map(String)),
 
 		channels: () => live().channels().map(plainChannel),
 		async connect({ pubkey, host, port }) {
@@ -680,16 +951,24 @@ function createLightning({ entry, storage, cfg }) {
 		async closeChannel({ channelId, force }) {
 			await live().closeChannel({ channelId: unhex(channelId), force: !!force });
 		},
+		forgetChannel: (id) => !!live().forgetChannel(unhex(id)),
 
-		async quoteInvoice({ assetId, groupKey, amount, peerPubkey }) {
-			const q = await live().quoteInvoice({ asset: specifier({ assetId, groupKey }), amount: BigInt(amount), ...(peerPubkey ? { peer: unhex(peerPubkey) } : {}) });
+		// S5. A rate too coarse for the amount will be refused here, with a code of its own.
+		async quoteInvoice({ assetId, groupKey, amount, peerPubkey, expirySeconds }) {
+			const q = await live().quoteInvoice({
+				asset: specifier({ assetId, groupKey }),
+				amount: BigInt(amount),
+				...(peerPubkey ? { peer: unhex(peerPubkey) } : {}),
+				...(Number.isInteger(expirySeconds) && expirySeconds > 0 ? { expirySeconds } : {})
+			});
 			return {
 				quoteId: asHex(q.quoteId),
 				peerPubkey: asHex(q.peer),
 				assetAmount: BigInt(q.assetAmount),
 				amountMsat: BigInt(q.milliSatoshi),
 				unitsPerBtc: rateOf(q.assetRate),
-				expiresAt: millis(q.expiresAt)
+				expiresAt: millis(q.expiresAt),
+				priced: !!q.priced
 			};
 		},
 		async createInvoice({ quoteId, description, expirySeconds }) {
@@ -702,14 +981,7 @@ function createLightning({ entry, storage, cfg }) {
 				expiresAt: millis(invoice.expiresAt)
 			};
 		},
-		invoices: () =>
-			live()
-				.invoices()
-				.map((i) => ({
-					paymentHash: asHex(i.paymentHash),
-					assetAmount: BigInt(i.assetAmount),
-					status: i.status === 'paid' || i.status === 'expired' ? i.status : 'open'
-				})),
+		invoices: () => live().invoices().map(plainInvoice),
 
 		async quotePayment({ bolt11, assetId, groupKey, amountMsat }) {
 			const q = await live().quotePayment({
@@ -724,8 +996,10 @@ function createLightning({ entry, storage, cfg }) {
 				channelId: asHex(q.channelId),
 				assetAmount: BigInt(q.assetAmount),
 				amountMsat: BigInt(q.milliSatoshi),
+				feeMsat: q.feeMsat === undefined || q.feeMsat === null ? null : BigInt(q.feeMsat),
 				unitsPerBtc: rateOf(q.assetRate),
-				expiresAt: millis(q.expiresAt)
+				expiresAt: millis(q.expiresAt),
+				priced: !!q.priced
 			};
 		},
 		payInvoice: async ({ quoteId, maxAssetAmount }) => plainPayment(await live().payInvoice({ quoteId: unhex(quoteId), maxAssetAmount: BigInt(maxAssetAmount) })),
@@ -751,12 +1025,23 @@ function createLightning({ entry, storage, cfg }) {
 		async resumeRecovery() {
 			const reports = (await live().recovery.resume()) || [];
 			return reports.map((r) => ({
-				channelId: asHex(r.channelId),
+				channelId: r.channelId ? asHex(r.channelId) : '',
 				completed: (r.completed || []).length,
 				pending: (r.pending || []).length,
 				errors: (r.errors || []).map((e) => String((e && e.message) || e))
 			}));
-		}
+		},
+		settleFundingReservations: async () => ((await live().settleFundingReservations()) || []).map(plainReservation),
+		// S6. The way out of an open whose funding never confirms. The library
+		// ships no call for it yet, so nothing in the host asks for it.
+		async reclaimFunding() {
+			live();
+			throw Object.assign(new Error('ERR_BEIGNET_LN_UNSUPPORTED: the funding of a channel cannot be taken back yet'), { code: 'ERR_BEIGNET_LN_UNSUPPORTED' });
+		},
+
+		// Over the store alone: neither needs the service, or a node.
+		backup: () => entry.assetLightningBackup(store),
+		restore: (backup) => Number(entry.restoreAssetLightningBackup(store, backup, seconds ? { now: seconds } : {}))
 	};
 }
 
