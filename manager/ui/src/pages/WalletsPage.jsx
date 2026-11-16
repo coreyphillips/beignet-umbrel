@@ -199,8 +199,12 @@ export default function WalletsPage() {
 									{w.status === 'restore-required' && (
 										<div className="wallet-meta">Channels waiting to be restored from guardians</div>
 									)}
-									{w.status === 'restarting' && w.lastStartError && (
-										<div className="wallet-meta">Last start failed: {w.lastStartError.message}</div>
+									{/* Kept while the wallet is stopped too: a start that was refused leaves it stopped, and this is why. */}
+									{w.lastStartError && (w.status === 'restarting' || w.status === 'stopped') && (
+										<div className="wallet-meta" data-testid="wallet-start-error" data-code={w.lastStartError.code || undefined}>
+											{w.status === 'stopped' && w.lastStartError.code ? 'Not started: ' : 'Last start failed: '}
+											{w.lastStartError.message}
+										</div>
 									)}
 									<AssetsBackupLine wallet={w} />
 									{info && (

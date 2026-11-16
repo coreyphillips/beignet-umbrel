@@ -2392,6 +2392,17 @@ function managerRequest(path, method, body) {
 		return runDemoLfbwSetup(w).then(() => publicRecord(w));
 	}
 	if (sub === 'start') {
+		// As the manager (wallet-manager.js, _refuseStartOverAssetChannels): a
+		// wallet on a channel backup kept by guardians that still has an asset
+		// channel is not started, and says why for as long as it is stopped.
+		const live = assetsMock.daemonChannels(w.id).length;
+		if (live > 0 && ['async-remote', 'quorum'].includes(w.recovery?.mode)) {
+			const message = `This wallet has ${live === 1 ? 'an asset channel' : `${live} asset channels`} open and is on a channel backup kept by guardians, which does not cover asset channels, so it was not started. Take it off the guardian backup, start it, and close the channel on the Channels tab. Once the assets are back on-chain it can go back on a guardian backup.`;
+			w.lastStartError = { code: 'ASSET_CHANNELS_OPEN', message, at: new Date().toISOString() };
+			w.status = 'stopped';
+			throw Object.assign(err(message, 'ASSET_CHANNELS_OPEN'), { status: 409 });
+		}
+		w.lastStartError = null;
 		w.status = 'starting';
 		setTimeout(() => {
 			w.status = 'running';

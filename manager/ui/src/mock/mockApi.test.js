@@ -45,7 +45,8 @@ test("every wallet record carries the manager's whole assets block", async () =>
 });
 
 test('a backup made while a wallet with assets is stopped leaves its assets out, and says so on its record', async () => {
-	const holder = (await mockRequest('/api/wallets')).find((w) => w.assets.holdsAssets && w.status === 'running');
+	// One the manager starts again: a wallet on a guardian backup with an asset channel is refused (the last test here).
+	const holder = (await mockRequest('/api/wallets')).find((w) => w.assets.holdsAssets && w.status === 'running' && !['quorum', 'async-remote'].includes(w.recovery?.mode));
 	assert.ok(holder);
 	await mockRequest(`/api/wallets/${holder.id}/stop`, { method: 'POST' });
 	try {
@@ -143,4 +144,18 @@ test('the demo daemon lists the payments and invoices an asset channel carried b
 	// A wallet with no asset channel lists neither.
 	assert.equal((await mockRequest('/wallets/demo-testnet/api/payments')).some((p) => p.auxiliary === true), false);
 	assert.equal((await mockRequest('/wallets/demo-testnet/api/invoices')).some((i) => i.auxiliary === true), false);
+});
+
+
+// Last in this file: it leaves demo-main stopped, as the manager would.
+test('a wallet on a guardian backup that still has an asset channel is not started, and its record says why while it is stopped', async () => {
+	const before = (await mockRequest('/api/wallets')).find((w) => w.id === 'demo-main');
+	assert.deepEqual([before.status, before.recovery.mode, before.lastStartError], ['running', 'quorum', null]);
+	await mockRequest('/api/wallets/demo-main/stop', { method: 'POST' });
+	const said = 'This wallet has an asset channel open and is on a channel backup kept by guardians, which does not cover asset channels, so it was not started. Take it off the guardian backup, start it, and close the channel on the Channels tab. Once the assets are back on-chain it can go back on a guardian backup.';
+	await assert.rejects(mockRequest('/api/wallets/demo-main/start', { method: 'POST' }), (e) => e.code === 'ASSET_CHANNELS_OPEN' && e.message === said);
+	const after = (await mockRequest('/api/wallets')).find((w) => w.id === 'demo-main');
+	assert.equal(after.status, 'stopped');
+	assert.deepEqual([after.lastStartError.code, after.lastStartError.message], ['ASSET_CHANNELS_OPEN', said]);
+	assert.match(after.lastStartError.at, /^\d{4}-\d\d-\d\dT/);
 });

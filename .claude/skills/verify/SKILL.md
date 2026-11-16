@@ -244,6 +244,17 @@ wallet in the address, and stick until switched back:
 | `fee-budget` | Use `demo-main` on `/w/demo-main/channels`. The budget for the miner fees of asset channels is used up: a blue note above the list (`asset-channels-warning`, `data-code="FEE_BUDGET_EXHAUSTED"`, role status), which says nothing was lost, and the same across the top of the Assets tab. Never red: the card works as ever. `ok` puts it back. |
 | `channel-missing` | Use `demo-main` on `/w/demo-main/channels`. Its BUSD channel becomes one the node does not hold, as after a restore from a backup: the badge reads "not held here" (`asset-channel` with `data-state="MISSING"`), Can send and Can receive read 0.00, there is no Close button, and a red note above the list (`asset-channels-warning`, `data-code="CHANNEL_MISSING"`) says it cannot be used or closed from this wallet. The Assets tab says the same across its top. |
 
+A start the manager refuses. `demo-main` is on a guardian backup and has an
+asset channel, which is the one wallet the manager does not start: on `/`,
+press Stop on Main and then Start. A toast gives the reason, the wallet stays
+stopped, and its row carries the line "Not started: This wallet has an asset
+channel open and is on a channel backup kept by guardians..."
+(`wallet-start-error`, `data-code="ASSET_CHANNELS_OPEN"`). A wallet that was
+only stopped has no such line. The wallet's page shows the same sentence in a
+red note with the same test id; reach it without a reload (a reload starts the
+demo afresh, with the wallet running). With its BUSD channel closed first,
+the same wallet starts.
+
 What to look at, in dark, in light (`localStorage['beignet-theme'] = 'light'`
 before load) and at 480 px wide:
 

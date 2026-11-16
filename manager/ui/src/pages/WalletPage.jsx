@@ -429,9 +429,22 @@ export default function WalletPage() {
 				</div>
 			</m.div>
 
-			{rec?.status === 'restarting' && rec.lastStartError && (
-				<div className="error-note" style={{ marginBottom: 14 }}>
-					The wallet's last start failed and it is retrying: {rec.lastStartError.message}
+			{/* Why the wallet is not running, while it retries and once it has
+			    stopped. A refusal the manager words itself (it has a code) is a
+			    whole sentence; anything else is what the daemon printed. */}
+			{rec?.lastStartError && (rec.status === 'restarting' || rec.status === 'stopped') && (
+				<div
+					className="error-note"
+					role="alert"
+					data-testid="wallet-start-error"
+					data-code={rec.lastStartError.code || undefined}
+					style={{ marginBottom: 14 }}
+				>
+					{rec.status === 'restarting'
+						? `The wallet's last start failed and it is retrying: ${rec.lastStartError.message}`
+						: rec.lastStartError.code
+							? rec.lastStartError.message
+							: `The wallet's last start failed: ${rec.lastStartError.message}`}
 				</div>
 			)}
 
