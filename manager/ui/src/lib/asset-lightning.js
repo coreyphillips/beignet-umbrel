@@ -230,6 +230,23 @@ export function invoiceStanding({ invoice, row, listed, now = Date.now() } = {})
 	return 'waiting';
 }
 
+/**
+ * What a paid invoice asked for and what it brought in, where the two
+ * differ: { asked, received, text }, with the text "asked for 250.00 BUSD,
+ * received 249.99 BUSD". A payer's price can come to a unit under what the
+ * invoice names, and the invoice is paid all the same. Null where they
+ * agree, and for an invoice that is not paid yet (`receivedAmount` is null
+ * until it is).
+ */
+export function invoiceShortfall(invoice, asset) {
+	if (!invoice) return null;
+	const got = invoice.receivedAmount;
+	if (got === null || got === undefined || got === '' || toUnits(got) === null) return null;
+	if (toUnits(invoice.assetAmount) === null || cmpUnits(got, invoice.assetAmount) === 0) return null;
+	const of = asset || invoice.asset;
+	return { asked: String(invoice.assetAmount), received: String(got), text: `asked for ${fmtAsset(invoice.assetAmount, of)}, received ${fmtAsset(got, of)}` };
+}
+
 /* --------------------------------------------------------------- refusals */
 
 const units = (value, asset) => (asset ? fmtAsset(value, asset) : `${String(value)} units`);

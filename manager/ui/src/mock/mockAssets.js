@@ -307,6 +307,27 @@ export function createAssetsMock(ctx) {
 		reclaimTxid: c.reclaimTxid || null
 	});
 
+	/**
+	 * An invoice as the host lists it on GET /invoices, key for key
+	 * (assets-host/lightning.js invoiceView). `receivedAmount` is what a paid
+	 * invoice brought in, which can be a unit under what it asked for.
+	 */
+	const pubInvoice = (i) => ({
+		bolt11: i.bolt11,
+		paymentHash: i.paymentHash,
+		assetAmount: i.assetAmount,
+		amountSats: i.amountSats,
+		rateText: i.rateText,
+		priced: i.priced,
+		expiresAt: i.expiresAt,
+		invoiceExpiresAt: i.invoiceExpiresAt,
+		description: i.description,
+		asset: i.asset,
+		status: i.status === 'PAID' ? 'PAID' : Math.min(i.expiresAt, i.invoiceExpiresAt) <= now() ? 'EXPIRED' : 'OPEN',
+		receivedAmount: i.status === 'PAID' ? i.receivedAmount || i.assetAmount : null,
+		createdAt: i.createdAt
+	});
+
 	const pubRow = (row) => {
 		const out = {};
 		for (const [k, v] of Object.entries(row)) if (!k.startsWith('_')) out[k] = v;
@@ -518,7 +539,16 @@ export function createAssetsMock(ctx) {
 			if (t < row._t0 + INVOICE_SETTLES_MS) return;
 			const invoice = s.invoices.find((i) => i.paymentHash === row.paymentHash);
 			const ch = s.channels.find((c) => c.channelId === row._channelId);
+			// Armed by `invoice-short`: the payer's price came to one unit
+			// under what the invoice asked for. The row says what arrived,
+			// as the host's does, and the invoice goes on saying what it asked.
+			const short = s.invoiceShort === true && cmpUnits(row.assets[0].amount, '1') > 0;
+			if (short) {
+				s.invoiceShort = false;
+				row.assets[0] = { ...row.assets[0], amount: subUnits(row.assets[0].amount, '1') };
+			}
 			const amount = row.assets[0].amount;
+			if (invoice) invoice.receivedAmount = amount;
 			if (ch) {
 				ch.localBalance = addUnits(ch.localBalance, amount);
 				ch.remoteBalance = subUnits(ch.remoteBalance, amount);
@@ -788,6 +818,40 @@ export function createAssetsMock(ctx) {
 				_fundingRate: 2,
 				_stuck: true
 			});
+			return true;
+		},
+		// An invoice a payer's price left one unit short: paid an hour ago, and
+		// the next one made here is paid the same way.
+		'invoice-short'(id) {
+			const s = S(id);
+			const ch = s.channels.find((c) => c.state === 'NORMAL');
+			if (!ch) return false;
+			const t = now() - HOUR;
+			const paymentHash = derivedHex(`seed-short:${id}`, 64);
+			const row = newRow(id, 'ln-receive', {
+				state: 'complete',
+				assets: [{ ...ch.asset, amount: '24999' }],
+				paymentHash,
+				_done: true
+			});
+			row.at.created = t;
+			row.at.completed = t + INVOICE_SETTLES_MS;
+			s.invoices.unshift({
+				bolt11: `lnbc885u1${derivedHex(`seed-short-invoice:${id}`, 120)}`,
+				paymentHash,
+				assetAmount: '25000',
+				amountSats: 88500,
+				rateText: '',
+				priced: true,
+				expiresAt: t + INVOICE_QUOTE_MS,
+				invoiceExpiresAt: t + HOUR,
+				description: '',
+				asset: { ...ch.asset },
+				status: 'PAID',
+				receivedAmount: '24999',
+				createdAt: t
+			});
+			s.invoiceShort = true;
 			return true;
 		},
 		// A payment the node has no record of any more: it may have been paid.
@@ -1754,7 +1818,7 @@ export function createAssetsMock(ctx) {
 			if (sub === '/activity') return activity(id, q);
 			if (sub === '/proofs/export') return exportProof(id, q.get('id'));
 			if (sub === '/channels') return { channels: S(id).channels.filter((c) => c.state !== 'CLOSED').map(pubChannel) };
-			if (sub === '/invoices') return { invoices: S(id).invoices.map((i) => ({ ...i })) };
+			if (sub === '/invoices') return { invoices: S(id).invoices.map(pubInvoice) };
 			return undefined;
 		}
 		if (method !== 'POST') return undefined;

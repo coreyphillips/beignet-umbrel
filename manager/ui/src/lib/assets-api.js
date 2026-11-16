@@ -169,6 +169,11 @@ export function assetsApi(api) {
 		invoiceQuote: ({ key, amount }) => post('/invoices/quote', { key, amount }),
 		/** { bolt11, paymentHash, assetAmount, amountSats, rateText, expiresAt, invoiceExpiresAt, row } */
 		createInvoice: ({ key, amount, description, quoteId }) => post('/invoices', { key, amount, description, quoteId }),
+		/**
+		 * { invoices: [{ bolt11, paymentHash, assetAmount, amountSats, rateText, priced, expiresAt, invoiceExpiresAt,
+		 *   description, asset, status: 'OPEN' | 'PAID' | 'EXPIRED', receivedAmount, createdAt }] }
+		 * `receivedAmount` is what a paid invoice brought in, and null until it is paid.
+		 */
 		invoices: () => get('/invoices'),
 		/** A price for paying: { quoteId, assetAmount, amountSats, rateText, peerAlias, expiresAt, sendable } */
 		payQuote: ({ bolt11, key, amountSats }) => post('/pay/quote', { bolt11, key, amountSats }),

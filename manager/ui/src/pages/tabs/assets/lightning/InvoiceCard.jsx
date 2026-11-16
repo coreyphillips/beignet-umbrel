@@ -7,7 +7,7 @@ import { Button, Card, Countdown, Empty, Field, QR, QRZoom } from '../../../../c
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { fmtAsset, isZero } from '../../../../lib/asset-amount.js';
-import { invoiceDeadline, invoiceStanding, lightningRefusal, quotePriced } from '../../../../lib/asset-lightning.js';
+import { invoiceDeadline, invoiceShortfall, invoiceStanding, lightningRefusal, quotePriced } from '../../../../lib/asset-lightning.js';
 import { copy, fmtSats } from '../../../../lib/format.js';
 import { useLightningQuote } from './useLightningQuote.js';
 
@@ -102,6 +102,10 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 		? invoiceStanding({ invoice: made, row, listed, now: ranOut === made.paymentHash && deadline ? deadline : Date.now() })
 		: null;
 	const what = made ? fmtAsset(made.assetAmount, made.asset) : '';
+	// What arrived, which a payer's price can leave a unit under what was
+	// asked for: the paid row says it, and so does the list of invoices.
+	const got = made ? (row?.state === 'complete' ? row.assets?.[0]?.amount : listed?.receivedAmount) ?? null : null;
+	const short = made ? invoiceShortfall({ assetAmount: made.assetAmount, receivedAmount: got }, made.asset) : null;
 
 	const create = async () => {
 		if (making.current || !asset || !amount) return;
@@ -320,9 +324,15 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 							</div>
 							<div className="paid-title">Received</div>
 							<div className="wallet-meta">
-								{what} received over Lightning. It is on your side of the channel now, and can be sent over Lightning
-								straight away.
+								{short ? fmtAsset(short.received, made.asset) : what} received over Lightning. It is on your side of the
+								channel now, and can be sent over Lightning straight away.
 							</div>
+							{short && (
+								<div className="wallet-meta" data-testid="asset-invoice-short">
+									The invoice {short.text}. A payer&apos;s price can come to a unit less than an invoice names, and the
+									invoice is paid all the same.
+								</div>
+							)}
 							<div className="center-actions" style={{ justifyContent: 'center', marginTop: 12 }}>
 								<Button data-testid="asset-invoice-again" onClick={again}>
 									Create another invoice

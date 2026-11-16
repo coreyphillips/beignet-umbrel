@@ -307,3 +307,52 @@ test('a peer that sets no bitcoin price: the invoice is for the asset alone, and
 		await r.unmount();
 	}
 });
+
+test('an invoice that brought in a unit less than it asked for says both, in its row, its dialog and its receipt', async () => {
+	const { invoiceShortfall } = await import('../../../../lib/asset-lightning.js');
+	const busd = { name: 'BUSD', type: 'normal', decimalDisplay: 2 };
+	assert.deepEqual(invoiceShortfall({ assetAmount: '25000', receivedAmount: '24900', asset: busd }), { asked: '25000', received: '24900', text: 'asked for 250.00 BUSD, received 249.00 BUSD' });
+	// Where they agree, or nothing has arrived yet, there is nothing to say.
+	for (const receivedAmount of ['25000', null, undefined, '', 'x']) assert.equal(invoiceShortfall({ assetAmount: '25000', receivedAmount, asset: busd }), null);
+	assert.equal(invoiceShortfall(null), null);
+
+	const backend = assetsBackend();
+	const api = backend.api('demo-main');
+	assert.equal(backend.mock.seed('demo-main', 'invoice-short'), true);
+	// The wallet's own keys, in its order: what was asked, and what arrived.
+	const listed = (await api.get('/x/assets/invoices')).invoices;
+	assert.deepEqual(Object.keys(listed[0]), ['bolt11', 'paymentHash', 'assetAmount', 'amountSats', 'rateText', 'priced', 'expiresAt', 'invoiceExpiresAt', 'description', 'asset', 'status', 'receivedAmount', 'createdAt']);
+	assert.deepEqual([listed[0].status, listed[0].assetAmount, listed[0].receivedAmount], ['PAID', '25000', '24999']);
+	const paidRow = (await api.get('/x/assets/activity?kind=ln-receive')).rows.find((x) => x.paymentHash === listed[0].paymentHash);
+	assert.equal(paidRow.assets[0].amount, '24999', 'the row says what arrived');
+
+	const r = await mountAssets(backend, 'demo-main', { at: { view: 'receive' } });
+	try {
+		await settle(60);
+		const rows = r.tests('asset-receive-row');
+		const mine = rows.find((tr) => tr.querySelector('[data-testid="asset-receive-short"]'));
+		assert.ok(mine, 'the row of that invoice says both');
+		assert.equal(mine.querySelector('[data-testid="asset-receive-short"]').textContent, 'asked for 250.00 BUSD, received 249.99 BUSD');
+		assert.equal(r.tests('asset-receive-short').length, 1, 'and no other row says anything');
+		await click(mine);
+		await settle(60);
+		assert.match(r.test('asset-invoice-short').textContent, /^The invoice asked for 250\.00 BUSD, received 249\.99 BUSD\. A payer's price can come to a unit less than an invoice names, and\s+the invoice is paid all the same\.$/);
+	} finally {
+		await r.unmount();
+	}
+
+	// The next invoice made here is paid a unit short too, and its receipt says what arrived.
+	const busdHeld = (await api.get('/x/assets/balances')).assets.find((a) => a.name === 'BUSD');
+	const quote = await api.post('/x/assets/invoices/quote', { key: busdHeld.key, amount: '2000' });
+	const made = await api.post('/x/assets/invoices', { key: busdHeld.key, amount: '2000', quoteId: quote.quoteId });
+	assert.equal((await api.get('/x/assets/invoices')).invoices.find((i) => i.paymentHash === made.paymentHash).receivedAmount, null, 'nothing has arrived yet');
+	backend.pass(13000);
+	const after = (await api.get('/x/assets/invoices')).invoices.find((i) => i.paymentHash === made.paymentHash);
+	assert.deepEqual([after.status, after.assetAmount, after.receivedAmount], ['PAID', '2000', '1999']);
+	// And the one after that arrives whole: where they agree, the list says the same figure twice.
+	const q2 = await api.post('/x/assets/invoices/quote', { key: busdHeld.key, amount: '300' });
+	const whole = await api.post('/x/assets/invoices', { key: busdHeld.key, amount: '300', quoteId: q2.quoteId });
+	backend.pass(13000);
+	const settled = (await api.get('/x/assets/invoices')).invoices.find((i) => i.paymentHash === whole.paymentHash);
+	assert.deepEqual([settled.status, settled.receivedAmount], ['PAID', '300']);
+});
