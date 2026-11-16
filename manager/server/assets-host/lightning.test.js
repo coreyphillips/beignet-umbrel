@@ -1830,3 +1830,289 @@ test('a payment the library refuses after an earlier try failed keeps the words 
 	// The codes that mean nothing was sent are the library's own list, handed on as it is.
 	assert.deepEqual([...h.host.ln.refusals], [...h.ln.entry.ASSET_PAYMENT_REFUSALS]);
 });
+
+/* ------------------------------------------------------------------ backup */
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+/** Run `fn` with a directory of its own, removed afterwards. */
+async function inDir(fn) {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-ln-'));
+	try {
+		return await fn(dir);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+/** The backup file a wallet writes, read back. */
+async function exportedFile(h, dir) {
+	h.cfg.backupFile = path.join(dir, `backup-${made.length}.json`);
+	await h.host.exportNow();
+	return JSON.parse(fs.readFileSync(h.cfg.backupFile, 'utf8'));
+}
+
+/** A file left for a wallet to restore at its next start. */
+function leftFor(dir, file) {
+	const importFile = path.join(dir, 'import.json');
+	fs.writeFileSync(importFile, JSON.stringify(file));
+	return importFile;
+}
+
+const pairs = (part) => part.rows.map((r) => [r.key, r.value]);
+const MISSING_WARNING =
+	"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known.";
+const CHANGE_WARNING =
+	"Part of an asset went into the funding transaction of a channel as change and is not in this wallet's records, so it is not in the balance shown. The wallet's log says which asset and how much.";
+
+test('the backup carries of asset channels what the library says a backup may, and nothing else of its store', async () => {
+	await inDir(async (dir) => {
+		const { h, asset, id, channel } = await channelled({ remote: 200n });
+		const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+		const invoice = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+		await h.call('POST /invoices/quote', { key: asset.key, amount: '10' });
+		const bolt11 = fakeInvoice({ msat: 50000 });
+		const price = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+		await h.call('POST /pay', { bolt11, key: asset.key, quoteId: price.quoteId, maxAssetAmount: '50' }, 'pay-key');
+		await h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 7000 }), key: asset.key });
+		// The library's store holds what only this machine can honour: a price, an invoice, the record of a payment.
+		const stored = h.storage.list('l/').map((r) => r.key);
+		for (const scope of ['l/tap/quotes/', 'l/lightning/invoice/', 'l/tap/channel/v1/sent/']) assert.equal(stored.some((key) => key.startsWith(scope)), true, scope);
+
+		const file = await exportedFile(h, dir);
+		// Of the host's rows: the activity, and nothing that would have another machine open or pay again.
+		const kept = file.rows.map(([key]) => key);
+		assert.deepEqual(kept, backup.collectRows(h.storage).map(([key]) => key));
+		assert.equal(kept.some((key) => key.startsWith('l/')), false);
+		assert.ok(kept.includes(`h/row/ln-receive-${invoice.paymentHash}`));
+		for (const gone of [`h/chan/${id}`, `h/committed/funding:${id}`, `h/inv/${invoice.paymentHash}`]) assert.equal(kept.includes(gone), false, gone);
+		assert.equal(kept.some((key) => key.startsWith('h/l-quote/') || key.startsWith('h/idem/')), false);
+		// The marker of a mint is not a channel's, and stays.
+		assert.equal(kept.filter((key) => key.startsWith('h/committed/')).length, 1);
+		// Their checksum is over them alone, as a reader that knows nothing of channels checks it.
+		assert.equal(file.rowsHash, backup.hashRows(file.rows));
+
+		// Of the library's rows: what it gave when asked, as it gave it, with a checksum of its own.
+		assert.deepEqual(file.lightning, h.host.ln.backup());
+		assert.equal(file.lightningHash, backup.hashRows(pairs(file.lightning)));
+		assert.deepEqual(file.lightning.rows.map((r) => r.key).sort(), [`tap/channel/v1/channel/${channel.channelId}`, `tap/channel/v1/last/${channel.channelId}`]);
+
+		// Written again only when something changed, a channel's last known balance included.
+		assert.equal((await h.host.exportNow()).changed, false);
+		h.ln.move(channel.channelId, -10n);
+		assert.equal((await h.host.exportNow()).changed, true);
+
+		// A wallet that has never had to do with a channel writes the file it always wrote.
+		const plain = await funded();
+		const before = await exportedFile(plain.h, dir);
+		assert.equal('lightning' in before, false);
+		assert.equal('lightningHash' in before, false);
+	});
+});
+
+test('a wallet restored from a backup knows its channels and cannot run them: listed as missing, counted, and never usable', async () => {
+	await inDir(async (dir) => {
+		const source = await channelled({ remote: 200n });
+		const file = await exportedFile(source.h, dir);
+		const importFile = leftFor(dir, file);
+		// Another machine: nothing in its store, and a node that holds no channel.
+		const h = world({ lightning: true, env: { BEIGNET_ASSETS_IMPORT_FILE: importFile } });
+		await h.boot();
+		assert.equal((await h.get('/status')).backup.importError, undefined);
+		assert.equal(fs.existsSync(importFile), false);
+		// The library was handed its rows back and wrote them itself.
+		for (const row of file.lightning.rows) assert.equal(h.storage.get(`l/${row.key}`), row.value, row.key);
+
+		// The channel is on record, with its last known balance, and the node does not hold it.
+		const listed = (await h.get('/channels')).channels;
+		assert.deepEqual(
+			listed.map((c) => [c.channelId, c.pendingChannelId, c.peerPubkey, c.state, c.localBalance, c.remoteBalance, c.sendable, c.receivable, c.asset.name]),
+			[[source.channel.channelId, source.id, PEER.pubkey, 'MISSING', '400', '200', '0', '0', 'coin']]
+		);
+		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: MISSING_WARNING });
+		// It counts as a channel for the manager, and its units are in the books.
+		assert.equal(h.host.mem.summary.channels, 1);
+		const { balance } = (await h.get('/balances')).assets[0];
+		assert.deepEqual([balance.channelLocal, balance.lightningSendable, balance.lightningReceivable], ['400', '0', '0']);
+		// Nothing can be done with it from here.
+		assert.deepEqual(await codeOf(h.call('POST /channels/close', { channelId: source.channel.channelId, force: true })), ['CHANNEL_MISSING', 409]);
+		assert.deepEqual(named(h, 'closeChannel'), []);
+		assert.deepEqual(await codeOf(h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 1000 }), key: source.asset.key })), ['INSUFFICIENT_OUTBOUND', 409]);
+		assert.deepEqual(await codeOf(h.call('POST /invoices/quote', { key: source.asset.key, amount: '1' })), ['INSUFFICIENT_INBOUND', 409]);
+		// What a funding may have left set aside was asked about, once, after the restore.
+		assert.equal(named(h, 'settleFundingReservations').length, 1);
+
+		// It is no channel to restore over. The same file is taken again from
+		// the dashboard, and the wallet's own Lightning rows stand.
+		const rows = h.storage.list('l/');
+		const second = await h.call('POST /backup/import', { backup: file });
+		assert.equal(typeof second.imported, 'number');
+		assert.deepEqual(h.storage.list('l/'), rows);
+		assert.equal(named(h, 'settleFundingReservations').length, 1);
+		await h.host.pass({ block: true });
+		// A restore may have brought records a funding set aside: asked again after it.
+		assert.equal(named(h, 'settleFundingReservations').length, 2);
+
+		// And it is the same after a restart.
+		const again = h.restart();
+		made.push(again);
+		await again.boot();
+		assert.deepEqual((await again.get('/channels')).channels.map((c) => [c.channelId, c.state, c.localBalance]), [[source.channel.channelId, 'MISSING', '400']]);
+		assert.deepEqual(events(again, 'error'), []);
+	});
+});
+
+test('after a restore, what a channel funding had set aside is settled from the chain: kept for now, released, or moved into the channel', async () => {
+	await inDir(async (dir) => {
+		const source = await channelled();
+		const file = await exportedFile(source.h, dir);
+		const h = world({ lightning: true, env: { BEIGNET_ASSETS_IMPORT_FILE: leftFor(dir, file) } });
+		// The on-chain records as an older backup had them: the input of the
+		// channel's funding still set aside under its name, and one more set
+		// aside for a funding that never came to anything.
+		const like = source.h.tap.records[0];
+		const record = (amount, reservedBy, n) => ({ ...like, spent: false, amount: String(amount), reservedBy, anchorOutPoint: `${String(n).repeat(64)}:0` });
+		const never = 'ee'.repeat(32);
+		h.tap.records.push(record(1000, `funding:${source.id}`, 5), record(70, `funding:${never}`, 6));
+		// The funding transaction is seen and not buried yet.
+		h.ln.opts.settleKeeps = 'the funding transaction is not buried deep enough yet: look again later';
+		await h.boot();
+		const books = async () => {
+			const { balance } = (await h.get('/balances')).assets[0];
+			return [balance.total, balance.onchain, balance.channelLocal];
+		};
+		// Kept for now. The channel's 600 are counted in the channel and not on-chain a second time.
+		assert.equal(named(h, 'settleFundingReservations').length, 1);
+		assert.deepEqual(await books(), ['1070', '470', '600']);
+		assert.equal(h.logs.filter(([, text]) => /stays set aside for now: the funding transaction is not buried deep enough yet/i.test(text)).length, 2);
+		// Asked again on a new block, and not before. The same reason is not logged again.
+		await h.host.pass();
+		assert.equal(named(h, 'settleFundingReservations').length, 1);
+		await h.host.pass({ block: true });
+		assert.equal(named(h, 'settleFundingReservations').length, 2);
+		assert.equal(h.logs.filter(([, text]) => /stays set aside for now/.test(text)).length, 2);
+		assert.deepEqual(await books(), ['1070', '470', '600']);
+
+		// Buried. Nothing spent the one: it is free again. The funding spent
+		// the other: 600 went into the channel, and 400 into an output of that
+		// transaction this wallet has no record of.
+		h.ln.opts.settleKeeps = null;
+		const said = events(h, 'balance').length;
+		await h.host.pass({ block: true });
+		assert.equal(named(h, 'settleFundingReservations').length, 3);
+		assert.deepEqual(h.tap.records.filter((r) => !r.spent).map((r) => [r.amount, r.reservedBy]), [['70', undefined]]);
+		assert.deepEqual(await books(), ['670', '70', '600']);
+		assert.equal(events(h, 'balance').length > said, true);
+		const fundingTxid = h.ln.flow(source.id).fundingTxid;
+		assert.deepEqual(h.host.rows.list('l-change/').map((r) => r.value), [
+			{ id: source.id, channelId: source.channel.channelId, fundingTxid, change: [{ assetId: source.asset.assetId, amount: '400' }], at: h.clock.t }
+		]);
+		// The status says so in a sentence, and the log says which asset and how much.
+		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: `${MISSING_WARNING} ${CHANGE_WARNING}` });
+		assert.equal(h.logs.some(([level, text]) => level === 'warn' && text.includes(`400 of ${source.asset.assetId}`)), true);
+		assert.equal(h.logs.some(([, text]) => text.includes('is free again') && text.includes(`70 of ${source.asset.assetId}`)), true);
+		// Settled: not asked again, by a block or by a restart of the loop's look.
+		await h.host.pass({ block: true });
+		assert.equal(named(h, 'settleFundingReservations').length, 3);
+
+		// The note of it is carried in a backup, and goes once a record of that transaction turns up.
+		assert.equal(backup.collectRows(h.storage).some(([key]) => key === `h/l-change/${source.id}`), true);
+		h.tap.records.push({ ...like, spent: false, reservedBy: undefined, amount: '400', anchorOutPoint: `${fundingTxid}:1` });
+		await h.host.pass({ block: true });
+		assert.deepEqual(h.host.rows.list('l-change/'), []);
+		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: MISSING_WARNING });
+		assert.deepEqual(await books(), ['1070', '470', '600']);
+	});
+});
+
+test('a backup is never restored over a channel the node holds, and its record of asset channels goes into an empty store or nowhere', async () => {
+	await inDir(async (dir) => {
+		const { h, id, channel } = await channelled();
+		const file = await exportedFile(h, dir);
+		const live = await refused(h.call('POST /backup/import', { backup: file }));
+		assert.deepEqual([live.extensionCode, live.status], ['ASSET_CHANNELS_OPEN', 409]);
+		assert.equal(live.message, 'This wallet has an asset channel, and a backup is never restored over one. Close its asset channels first.');
+
+		// Once it is closed and its assets are home, a backup is taken again.
+		await h.call('POST /channels/close', { channelId: channel.channelId, force: false });
+		assert.deepEqual(await codeOf(h.call('POST /backup/import', { backup: file })), ['ASSET_CHANNELS_OPEN', 409]);
+		h.ln.recover(id);
+		await h.host.pass({ block: true });
+		const now = await exportedFile(h, dir);
+		assert.deepEqual(await h.call('POST /backup/import', { backup: now }), { imported: 0, same: true });
+		// The wallet has Lightning rows of its own, and they stand whatever a file says of asset channels.
+		const mine = h.storage.list('l/');
+		assert.equal(mine.length > 0, true);
+		const other = { version: 1, rows: [{ key: `tap/channel/v1/last/${'ee'.repeat(32)}`, value: 'another channel' }] };
+		assert.deepEqual(await h.call('POST /backup/import', { backup: { ...now, lightning: other, lightningHash: backup.hashRows(pairs(other)) } }), { imported: 0, same: true });
+		assert.deepEqual(h.storage.list('l/'), mine);
+
+		// A wallet with nothing: a file whose record of asset channels is damaged, or is not one the library takes, restores nothing at all.
+		const fresh = world({ lightning: true });
+		await fresh.boot();
+		const into = (changes) => refused(fresh.call('POST /backup/import', { backup: { ...file, ...changes } }));
+		const nothing = () => assert.deepEqual([fresh.storage.list('l/'), keys(fresh, 'row/'), keys(fresh, 'reg/')], [[], [], []]);
+		const damaged = 'That assets backup is damaged: its record of asset channels does not match its checksum.';
+		for (const changes of [{ lightningHash: 'ab'.repeat(32) }, { lightningHash: undefined }, { lightning: { version: 1, rows: [['a', 'b']] } }, { lightning: 'rows' }]) {
+			const err = await into(changes);
+			assert.deepEqual([err.extensionCode, err.status, err.message], ['BAD_BACKUP', 400, damaged], JSON.stringify(changes));
+			nothing();
+		}
+		// A funding flow is a row no backup may carry: restored, it could sign again.
+		const flow = { version: 1, rows: [...file.lightning.rows, { key: `tap/funding/v1/flow/${id}`, value: '{}' }] };
+		const foreign = await into({ lightning: flow, lightningHash: backup.hashRows(pairs(flow)) });
+		assert.deepEqual(
+			[foreign.extensionCode, foreign.status, foreign.message],
+			['BAD_BACKUP', 400, 'That assets backup holds a record of asset channels that this app cannot read, so nothing was restored.']
+		);
+		nothing();
+		// A row of the library's store among the host's own rows is written nowhere.
+		const rows = [...file.rows, ['l/tap/funding/v1/flow/aa', '{}']].sort(([a], [b]) => (a < b ? -1 : 1));
+		const taken = await fresh.call('POST /backup/import', { backup: { ...file, rows, rowsHash: backup.hashRows(rows) } });
+		assert.equal(taken.imported > 0, true);
+		assert.equal(fresh.storage.get('l/tap/funding/v1/flow/aa'), null);
+		assert.deepEqual(fresh.storage.list('l/').map((r) => r.key).filter((key) => !key.endsWith('/restored')).sort(), file.lightning.rows.map((r) => `l/${r.key}`).sort());
+
+		// A wallet that cannot have asset channels takes the rest of the file and leaves that part alone.
+		const without = world({});
+		await without.boot();
+		assert.equal((await without.call('POST /backup/import', { backup: file })).imported > 0, true);
+		assert.deepEqual(without.storage.list('l/'), []);
+	});
+});
+
+test('a backup left for a wallet is restored, its record of asset channels included, before its Lightning service is started', async () => {
+	await inDir(async (dir) => {
+		const source = await channelled();
+		const importFile = leftFor(dir, await exportedFile(source.h, dir));
+		const h = world({ lightning: true, env: { BEIGNET_ASSETS_IMPORT_FILE: importFile } });
+		// What the wallet's store held when its Lightning service was handed the adapter.
+		const held = [];
+		const start = h.host.ln.start;
+		h.host.ln.start = (options) => {
+			held.push([h.storage.list('h/row/').length, h.storage.list('l/').length > 0, named(h, 'start').length]);
+			return start(options);
+		};
+		await h.boot();
+		assert.equal((await h.get('/status')).backup.importError, undefined);
+		assert.equal(fs.existsSync(importFile), false);
+		// The mint the backup carried and the channel's record were already there, and the service was not running.
+		assert.deepEqual(held, [[1, true, 0]]);
+		assert.equal(named(h, 'start').length, 1);
+	});
+});
+
+test('a backup left for a wallet with Lightning rows of its own is not restored before its node can be asked', async () => {
+	await inDir(async (dir) => {
+		const source = await funded();
+		const importFile = leftFor(dir, await exportedFile(source.h, dir));
+		const h = world({ lightning: true, env: { BEIGNET_ASSETS_IMPORT_FILE: importFile } });
+		h.storage.set(`l/tap/channel/v1/channel/${'aa'.repeat(32)}`, 'a channel');
+		await h.boot();
+		assert.match((await h.get('/status')).backup.importError, /^This wallet has Lightning records of its own, so the backup was left alone\./);
+		assert.equal(fs.existsSync(importFile), true);
+		assert.deepEqual((await h.get('/balances')).assets, []);
+	});
+});
