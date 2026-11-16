@@ -32,6 +32,22 @@ function tapError(code, message) {
 
 const encodeFake = (fields, hrp = 'taprt') => `${hrp}1${Buffer.from(JSON.stringify(fields)).toString('hex')}`;
 
+/**
+ * A stand-in for a proof file: the facts of its last proof as JSON, and
+ * whether the fake library will find it valid.
+ */
+const fakeProof = (fields) => Buffer.from(JSON.stringify({ proof: 1, valid: true, ...fields }));
+function readFakeProof(bytes) {
+	let f = null;
+	try {
+		f = JSON.parse(Buffer.from(bytes).toString('utf8'));
+	} catch (_) {
+		/* not one of ours */
+	}
+	if (!f || f.proof !== 1) throw tapError('ERR_PROOF_INVALID_RECORD', 'not a proof file');
+	return f;
+}
+
 function fakeLib() {
 	return {
 		AssetType: { Normal: 0, Collectible: 1 },
@@ -54,7 +70,8 @@ function fakeLib() {
 				hrp: m[1],
 				assetId: f.assetId,
 				groupKey: f.groupKey || null,
-				scriptKey: '02' + 'ab'.repeat(32),
+				// One key per address, as a V1 address has.
+				scriptKey: `02${sha256Hex(`rk:${encoded}`)}`,
 				amount: BigInt(f.amount),
 				courier: f.courier
 			};
@@ -70,6 +87,10 @@ function fakeLib() {
 		metaReveal: (meta, decimals) => (meta || decimals ? { text: meta ? meta.data : '', decimalDisplay: decimals } : undefined),
 		metaView: () => null,
 		fileFacts: () => ({ timestamp: null, depth: 1 }),
+		proofFacts(bytes) {
+			const f = readFakeProof(bytes);
+			return { assetId: f.assetId, groupKey: null, scriptKey: f.scriptKey, anchorOutPoint: f.anchorOutPoint, amount: BigInt(f.amount || 0), depth: 1 };
+		},
 		makeCourier: () => {
 			throw new Error('the fake host is given couriers by its harness');
 		}
@@ -79,7 +100,7 @@ function fakeLib() {
 /**
  * The fake adapter. `opts` switches failures on: mintFee, parcelFee,
  * fundFails, mintBroadcastFails, storeFails, sendBroadcastFails,
- * courierDown, courierRefuses (the server's words), proofMissing.
+ * courierDown, courierRefuses (the server's words), proofMissing, notBuried.
  * `chain.confirm(txid, height)` puts a transaction in a block.
  */
 function fakeTap({ now = () => Date.now(), wallet } = {}) {
@@ -262,6 +283,10 @@ function fakeTap({ now = () => Date.now(), wallet } = {}) {
 					const total = coins.reduce((sum, r) => sum + BigInt(r.amount), 0n);
 					for (const r of coins) Object.assign(r, { spent: true, reservedBy: undefined });
 					if (total > want.amount) records.push({ ...coins[0], spent: false, reservedBy: undefined, amount: (total - want.amount).toString(), anchorOutPoint: `${p.signedTx}:1` });
+					if (!p.burn) {
+						const to = lib.decodeAddress(p.addresses[0]);
+						p.proofs = [{ locator: { assetId: to.assetId, scriptKey: to.scriptKey, anchorOutPoint: `${p.signedTx}:0` }, address: to.encoded }];
+					}
 					p.state = 9;
 				} else if (p.state === 9) {
 					if (opts.courierDown) throw Object.assign(tapError('ERR_COURIER_HTTP', 'Courier returned HTTP 503'), { status: 503 });
@@ -288,24 +313,34 @@ function fakeTap({ now = () => Date.now(), wallet } = {}) {
 			if (!p) throw tapError('ERR_TAPFREIGHTER_PARCEL_NOT_FOUND', parcelId);
 			return p;
 		},
-		async receive(raw) {
+		async receive(raw, target = 3) {
 			log('freighter.receive', raw.encoded);
 			const r = receives.get(raw.encoded);
 			if (!r) throw tapError('ERR_TAPFREIGHTER_ADDRESS_NOT_FOUND');
-			if (r.state === 0) {
+			if (r.state === 0 && target > 0) {
 				if (!paid.has(raw.encoded)) throw tapError('ERR_BEIGNET_TIMEOUT', 'confirmation wait timed out');
-				r.locator = { anchorOutPoint: `${paid.get(raw.encoded)}:0` };
+				r.locator = { assetId: raw.assetId, scriptKey: lib.decodeAddress(raw.encoded).scriptKey, anchorOutPoint: `${paid.get(raw.encoded)}:0` };
 				r.state = 1;
 			}
-			if (r.state === 1) {
-				if (opts.proofMissing) throw tapError('ERR_COURIER_PROOF_NOT_FOUND');
+			if (r.state === 1 && target > 1) {
+				// As the real library does: the proof comes from the courier it
+				// was given, and is checked against the payment it found.
+				if (tap.courierFor) {
+					const proof = readFakeProof(await tap.courierFor(raw.courier).receiveProof(r.locator));
+					if (!proof.valid || proof.anchorOutPoint !== r.locator.anchorOutPoint) throw tapError('ERR_TAPFREIGHTER_INVALID_PROOF', 'proof does not match receive address');
+				} else if (opts.proofMissing) throw tapError('ERR_COURIER_PROOF_NOT_FOUND');
+				if (opts.notBuried) throw tapError('ERR_TAPGARDEN_NOT_BURIED', 'the anchor is not buried yet');
 				r.state = 2;
 			}
-			if (r.state === 2) {
+			if (r.state === 2 && target > 2) {
 				records.push({ assetId: raw.assetId, scriptKey: `02${sha256Hex(`rk:${raw.encoded}`)}`, name: 'received', type: 0, amount: String(raw.amount), anchorOutPoint: r.locator.anchorOutPoint });
 				r.state = 3;
 			}
 			return r;
+		},
+		async exportProof(assetId, scriptKey, anchorOutPoint) {
+			log('freighter.exportProof', anchorOutPoint);
+			return fakeProof({ assetId: Buffer.from(assetId).toString('hex'), scriptKey: Buffer.from(scriptKey).toString('hex'), anchorOutPoint });
 		},
 		async resume() {
 			throw new Error('the host must never resume everything');
@@ -358,7 +393,7 @@ function fakeTap({ now = () => Date.now(), wallet } = {}) {
  * starts no timers of its own unless `timers` is set.
  */
 function harness({ env = {}, network = 'regtest', shared, timers = false, chainCheck = null } = {}) {
-	const world = shared || { clock: { t: 1_700_000_000_000 }, mem: memoryStorage(), events: [], delivered: [], net: { down: false } };
+	const world = shared || { clock: { t: 1_700_000_000_000 }, mem: memoryStorage(), events: [], delivered: [], fetched: [], net: { down: false } };
 	const now = () => world.clock.t;
 	const cfg = parseConfig(network, { BEIGNET_ASSETS_MODULES: MODULES, BEIGNET_ASSETS_UNIVERSES: JSON.stringify(UNIVERSES), ...env });
 	const wallet =
@@ -374,6 +409,11 @@ function harness({ env = {}, network = 'regtest', shared, timers = false, chainC
 		async deliverProof(locator) {
 			if (world.net.down) throw Object.assign(new Error('Could not reach universe.example.com'), { code: 'PROOF_SERVER_UNREACHABLE' });
 			world.delivered.push({ uri, locator });
+		},
+		async receiveProof(locator) {
+			if (tap.opts.proofMissing) throw tapError('ERR_COURIER_PROOF_NOT_FOUND');
+			world.fetched.push({ uri, locator });
+			return fakeProof({ ...locator });
 		}
 	});
 	const net = {
@@ -384,6 +424,7 @@ function harness({ env = {}, network = 'regtest', shared, timers = false, chainC
 	const events = world.events;
 	const host = createHost({ cfg, storage: world.mem.storage, wallet, lib, net, emit: (name, data) => events.push([name, data]), logger: null, tap, chainCheck, now, timers });
 	tap.proofPublisher = host.proofPublisher;
+	tap.courierFor = host.courierFor;
 	const handlers = bind(host);
 	const call = (route, body, key) => handlers[route]({ body: body || {}, query: new URLSearchParams(), idempotencyKey: key });
 	const get = (route, query) => handlers[`GET ${route}`]({ body: {}, query: new URLSearchParams(query || '') });
@@ -426,4 +467,4 @@ async function refused(promise) {
 	throw new Error('expected a refusal');
 }
 
-module.exports = { MODULES, UNIVERSES, tapError, encodeFake, fakeLib, fakeTap, harness, refused };
+module.exports = { MODULES, UNIVERSES, tapError, encodeFake, fakeProof, fakeLib, fakeTap, harness, refused };

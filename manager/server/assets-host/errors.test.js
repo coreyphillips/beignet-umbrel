@@ -8,7 +8,7 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { refusal, isRefusal, isFenced, isNotYet, isCourierTrouble, isProofMissing, plainMessage, mapError, workingSats } = require('./errors');
+const { refusal, isRefusal, isFenced, isNotYet, isCourierTrouble, isProofMissing, isProofInvalid, plainMessage, mapError, workingSats } = require('./errors');
 
 const coded = (code, message = 'the detail of what went wrong', extra = {}) => Object.assign(new Error(`${code}: ${message}`), { code, ...extra });
 
@@ -139,4 +139,31 @@ test('a message loses its code and starts with a capital', () => {
 	assert.equal(plainMessage(new Error('ERR_X_Y the thing broke')), 'The thing broke');
 	assert.equal(plainMessage(new Error(''), 'it did not answer'), 'It did not answer');
 	assert.equal(plainMessage(null), 'Something went wrong');
+	// A caller that has its own sentence asks for nothing when there is no reason to add.
+	assert.equal(plainMessage(Object.assign(new Error('ERR_PROOF_INVALID_PREV'), { code: 'ERR_PROOF_INVALID_PREV' }), ''), '', 'an error that is its code alone');
+	assert.equal(plainMessage(new Error(''), ''), '');
+});
+
+test('a proof that does not verify is told apart from trouble reaching anything', () => {
+	// What the library says when a proof is wrong, or is not for this payment.
+	for (const code of [
+		'ERR_PROOF_INVALID_PREV',
+		'ERR_VM_INVALID_TRANSFER',
+		'ERR_COMMITMENT_MISMATCH',
+		'ERR_ASSET_INVALID_AMOUNT',
+		'ERR_MSSMT_INVALID_PROOF',
+		'ERR_TLV_TRUNCATED',
+		'ERR_CRYPTO_INVALID_SIGNATURE',
+		'ERR_TAPFREIGHTER_INVALID_PROOF',
+		'ERR_TAPFREIGHTER_INVALID_ANCHOR',
+		'ERR_TAPFREIGHTER_NOT_OWNED'
+	]) {
+		assert.equal(isProofInvalid(coded(code)), true, code);
+	}
+	// None of these says anything about the proof: a file is kept through them.
+	for (const code of ['ERR_BEIGNET_TIMEOUT', 'ERR_TAPGARDEN_NOT_BURIED', 'ERR_COURIER_HTTP', 'ERR_COURIER_PROOF_NOT_FOUND', 'ERR_BEIGNET_WALLET', 'ERR_TAPFREIGHTER_PROOF_NOT_FOUND']) {
+		assert.equal(isProofInvalid(coded(code)), false, code);
+	}
+	assert.equal(isProofInvalid(new Error('socket hang up')), false);
+	assert.equal(isProofInvalid(null), false);
 });

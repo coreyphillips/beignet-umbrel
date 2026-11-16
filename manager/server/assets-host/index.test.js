@@ -72,6 +72,9 @@ test('the routes: these and no others', () => {
 		'POST /addresses/decode',
 		'POST /addresses/check',
 		'POST /proofs/retry',
+		'GET /proofs/export',
+		'POST /proofs/import',
+		'POST /proofs/handed-over',
 		'POST /send/prepare',
 		'POST /send/commit',
 		'POST /send/cancel',
@@ -100,8 +103,10 @@ test('the routes: reading is for a read-only key, everything else for the admin 
 test('the routes: every one that moves money takes a request key, and only those', () => {
 	assert.deepEqual(ROUTES.filter((r) => r.idempotent).map(routeKey), MONEY);
 	const sized = ROUTES.filter((r) => r.maxBodyBytes !== undefined);
-	assert.deepEqual(sized.map(routeKey), ['POST /backup/import']);
-	assert.ok(sized[0].maxBodyBytes <= 32 * 1024 * 1024);
+	assert.deepEqual(sized.map(routeKey), ['POST /proofs/import', 'POST /backup/import']);
+	// A proof file of up to 4 MB as base64, and a whole backup.
+	assert.ok(sized[0].maxBodyBytes > (4 * 1024 * 1024 * 4) / 3 && sized[0].maxBodyBytes < 6 * 1024 * 1024);
+	assert.ok(sized[1].maxBodyBytes <= 32 * 1024 * 1024);
 });
 
 test('no lightning route is declared, and the status says lightning is off', async () => {

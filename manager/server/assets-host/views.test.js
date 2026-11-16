@@ -83,7 +83,7 @@ test('a row of every kind in every state has the fields the dashboard reads', ()
 	states.burn = states.mint;
 	const keys = [
 		'id', 'kind', 'state', 'failed', 'failure', 'assets', 'txid', 'feeSats', 'satsPerVbyte', 'vbytes', 'anchorSats', 'address', 'courier',
-		'paymentHash', 'confirmations', 'confirmationsRequired', 'blockHeight', 'stuck', 'watching', 'at', 'clientRef'
+		'paymentHash', 'confirmations', 'confirmationsRequired', 'blockHeight', 'stuck', 'watching', 'handedOver', 'at', 'clientRef'
 	];
 	for (const [kind, list] of Object.entries(states)) {
 		for (const state of list) {
@@ -97,7 +97,11 @@ test('a row of every kind in every state has the fields the dashboard reads', ()
 			assert.equal(row.confirmationsRequired, 1);
 			assert.deepEqual(row.at, { created: T0, broadcast: null, confirmed: null, proof: null, completed: null });
 			assert.equal(row.stuck, false);
+			assert.equal(row.handedOver, null);
 			assert.equal('ref' in row, false);
+			// The sender's word that a proof was handed over as a file is a send's alone.
+			const marked = views.rowView({ ...stored, handedOver: T0 + 5 }, { tip: 100, cfg: regtest, now: T0 });
+			assert.equal(marked.handedOver, kind === 'send' ? T0 + 5 : null, `${kind} ${state}`);
 		}
 	}
 });

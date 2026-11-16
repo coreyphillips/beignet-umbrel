@@ -112,6 +112,8 @@ function rowView(row, { tip = 0, cfg, now = Date.now(), watched = null }) {
 		blockHeight: row.blockHeight || null,
 		stuck,
 		watching,
+		// When the sender said they gave the recipient the proof as a file.
+		handedOver: row.kind === 'send' && row.handedOver ? row.handedOver : null,
 		at: { ...row.at },
 		clientRef: row.clientRef || null
 	};

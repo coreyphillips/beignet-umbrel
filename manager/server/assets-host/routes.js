@@ -14,6 +14,8 @@ const { refusal, mapError, isFenced } = require('./errors');
 
 const READ = ['readonly'];
 const MAX_IMPORT_BYTES = 32 * 1024 * 1024;
+// A proof file as base64 in a JSON body, with room for the wrapping.
+const MAX_PROOF_BODY_BYTES = Math.ceil(ops.MAX_PROOF_FILE_BYTES / 3) * 4 + 4096;
 
 const ROUTES = Object.freeze([
 	{ method: 'GET', path: '/status', scopes: READ, summary: 'Whether assets are up, what is in progress, the proof server and the backup' },
@@ -27,6 +29,9 @@ const ROUTES = Object.freeze([
 	{ method: 'POST', path: '/addresses/decode', summary: 'Read a Taproot Assets address' },
 	{ method: 'POST', path: '/addresses/check', summary: 'Look for the payment of an address now' },
 	{ method: 'POST', path: '/proofs/retry', summary: 'Ask the proof server again for a late proof' },
+	{ method: 'GET', path: '/proofs/export', scopes: READ, summary: "The proof file of a send's payment, to hand to the recipient" },
+	{ method: 'POST', path: '/proofs/import', maxBodyBytes: MAX_PROOF_BODY_BYTES, summary: 'Take the proof file of a payment to this wallet from the sender' },
+	{ method: 'POST', path: '/proofs/handed-over', summary: "Mark a send's proof as given to the recipient as a file, or take that back" },
 	{ method: 'POST', path: '/send/prepare', idempotent: true, summary: 'Fund and price a send without sending it' },
 	{ method: 'POST', path: '/send/commit', idempotent: true, summary: 'Send what was previewed' },
 	{ method: 'POST', path: '/send/cancel', summary: 'Drop a send preview' },
@@ -58,6 +63,9 @@ function bind(host) {
 		'POST /addresses/decode': (body) => ops.decodeAddress(host, body),
 		'POST /addresses/check': (body) => ops.checkAddress(host, body),
 		'POST /proofs/retry': (body) => ops.retryProof(host, body),
+		'GET /proofs/export': (body, query) => ops.exportProof(host, query),
+		'POST /proofs/import': (body) => ops.importProof(host, body),
+		'POST /proofs/handed-over': (body) => ops.markProofHandedOver(host, body),
 		'POST /send/prepare': (body, query, key) => ops.prepareSend(host, body, key),
 		'POST /send/commit': (body, query, key) => ops.commit(host, 'send', body, key),
 		'POST /send/cancel': (body) => ops.cancelPreview(host, 'send', body),

@@ -52,6 +52,19 @@ function isProofMissing(err) {
 	return code === 'ERR_COURIER_HTTP' && [404, 500].includes(Number(err.status));
 }
 
+/**
+ * A proof the library read and would not accept: it does not verify, or it
+ * is not for the payment it was offered for. Not trouble reaching the chain
+ * or a proof server, which says nothing about the proof.
+ */
+function isProofInvalid(err) {
+	const code = codeOf(err);
+	return (
+		/^ERR_(PROOF|VM|COMMITMENT|ASSET|MSSMT|TLV|ENCODING|SCRIPT|TAPSCRIPT|CRYPTO)_/.test(code) ||
+		['ERR_TAPFREIGHTER_INVALID_PROOF', 'ERR_TAPFREIGHTER_INVALID_ANCHOR', 'ERR_TAPFREIGHTER_NOT_OWNED'].includes(code)
+	);
+}
+
 /** A sentence for a person from whatever was thrown, without the library's code prefix. */
 function plainMessage(err, fallback = 'Something went wrong') {
 	const raw = String((err && err.message) || '').replace(/^ERR_[A-Z0-9_]+:?\s*/, '').trim();
@@ -141,4 +154,4 @@ function mapError(err, context = {}) {
 	return err;
 }
 
-module.exports = { refusal, isRefusal, codeOf, isFenced, isNotYet, isCourierTrouble, isProofMissing, plainMessage, mapError, workingSats };
+module.exports = { refusal, isRefusal, codeOf, isFenced, isNotYet, isCourierTrouble, isProofMissing, isProofInvalid, plainMessage, mapError, workingSats };

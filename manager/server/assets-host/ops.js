@@ -24,7 +24,7 @@ const crypto = require('crypto');
 const { sha256Hex } = require('./store');
 const { STATES, ANCHOR_SATS, unhex } = require('./adapter');
 const { NETWORKS, parseCourier, restFor } = require('./config');
-const { refusal, mapError, isFenced, isCourierTrouble, plainMessage, codeOf, workingSats } = require('./errors');
+const { refusal, mapError, isFenced, isNotYet, isCourierTrouble, isProofInvalid, plainMessage, codeOf, workingSats } = require('./errors');
 const views = require('./views');
 const { QUOTE_ID } = require('./service');
 
@@ -36,6 +36,8 @@ const MAX_DECIMALS = 12;
 const MINT_VBYTES_GUESS = 154;
 const SEND_VBYTES_GUESS = 250;
 const TAP_HRPS = ['tapbc', 'taptb', 'taprt', 'tapsb'];
+// The largest proof file taken by hand. One transfer adds a few kilobytes.
+const MAX_PROOF_FILE_BYTES = 4 * 1024 * 1024;
 
 const isHex = (text, length) => typeof text === 'string' && text.length === length && /^[0-9a-f]+$/.test(text);
 const hexKey = (value) => String(value || '').trim().toLowerCase();
@@ -547,6 +549,180 @@ async function look(host, body, { publish = false } = {}) {
 const checkAddress = (host, body) => look(host, body);
 const retryProof = (host, body) => look(host, body, { publish: true });
 
+/* ------------------------------------------------- proofs handed over by file */
+
+/*
+ * A transfer is complete for the person receiving once they hold its proof.
+ * A proof server is the usual way it reaches them, and not the only one: the
+ * sender's wallet has the file, and can hand it over by any means. These two
+ * are that hand-over. Nothing about a file is trusted for where it came
+ * from: the library verifies an imported one against the chain and against
+ * the address it pays, exactly as it does one a server gave it.
+ */
+
+/** The proof file of a send's payment, for the sender to give to the recipient. */
+async function exportProof(host, query) {
+	const { tap, cfg } = host;
+	const S = STATES.Send;
+	host.requireUp();
+	const row = host.findRow(query && query.get ? query.get('id') : '');
+	if (row.kind !== 'send') throw refusal('NO_PROOF_FILE', 'Only a send has a proof file to hand to someone.', 400);
+	const parcel = await tap.freighter.getParcel(row.ref);
+	const built = parcel.state >= S.TransferProofs && parcel.state !== S.Cancelled ? (parcel.proofs || []).filter((p) => p.address) : [];
+	const out = built.find((p) => p.address === row.address) || built[0];
+	if (!out) {
+		const n = cfg.minConfirmations;
+		throw refusal('PROOF_NOT_READY', `The proof file exists once the transaction is ${n} block${n === 1 ? '' : 's'} deep.`, 409);
+	}
+	const l = out.locator;
+	let bytes;
+	try {
+		bytes = Buffer.from(await tap.freighter.exportProof(unhex(l.assetId), unhex(l.scriptKey), l.anchorOutPoint));
+	} catch (err) {
+		if (isFenced(err)) throw err;
+		throw refusal('PROOF_NOT_READY', 'This wallet does not have that proof file any more.', 404);
+	}
+	const txid = l.anchorOutPoint.split(':')[0];
+	return {
+		id: row.id,
+		fileName: `proof-${l.assetId.slice(0, 8)}-${txid.slice(0, 8)}.assetproof`,
+		file: bytes.toString('base64'),
+		bytes: bytes.length,
+		assetId: l.assetId,
+		address: out.address,
+		txid
+	};
+}
+
+/**
+ * The sender's word that the recipient was given a send's proof as a file,
+ * or that word taken back (`handedOver: false`). It changes how the send
+ * reads and nothing else: the wallet cannot know what the recipient did
+ * with a file, and goes on offering the proof to the proof server.
+ */
+async function markProofHandedOver(host, body) {
+	return host.lock.run(async () => {
+		host.requireReady();
+		const row = host.findRow(body.id);
+		if (row.kind !== 'send') throw refusal('NO_PROOF_FILE', 'Only a send has a proof file to hand to someone.', 400);
+		if (row.state === 'complete') return { row: host.view(row) };
+		if (row.state !== 'proofs') {
+			const n = host.cfg.minConfirmations;
+			throw refusal('PROOF_NOT_READY', `The proof file exists once the transaction is ${n} block${n === 1 ? '' : 's'} deep.`, 409);
+		}
+		const at = body.handedOver === false ? null : row.handedOver || host.now();
+		if ((row.handedOver || null) === at) return { row: host.view(row) };
+		const next = { ...row, handedOver: at };
+		host.rows.put(`row/${row.id}`, next);
+		host.markDirty();
+		host.emitRow(next);
+		// The count beside the tab's name is worked out on the loop's next pass.
+		host.nudge();
+		return { row: host.view(next) };
+	});
+}
+
+function proofFileBytes(body) {
+	const text = typeof body.file === 'string' ? body.file.trim() : '';
+	if (!text) throw refusal('BAD_PROOF_FILE', 'A proof file is needed.');
+	// Four characters of base64 carry three bytes.
+	if (text.length > Math.ceil(MAX_PROOF_FILE_BYTES / 3) * 4) {
+		throw refusal('BAD_PROOF_FILE', `That file is larger than a proof file this wallet takes (${MAX_PROOF_FILE_BYTES / 1024 / 1024} MB).`, 413);
+	}
+	if (!/^[A-Za-z0-9+/]+={0,2}$/.test(text)) throw refusal('BAD_PROOF_FILE', 'That file is not a Taproot Assets proof file this wallet can read.');
+	return Buffer.from(text, 'base64');
+}
+
+/**
+ * Take the proof file of a payment to one of this wallet's addresses. The
+ * answer says what became of it: `complete` (verified and the asset is
+ * held), `kept` (it will be verified once the payment is deep enough, or
+ * once what the check needs can be reached), or `already`.
+ */
+async function importProof(host, body) {
+	const { tap, lib } = host;
+	const R = STATES.Receive;
+	host.requireReady();
+	const bytes = proofFileBytes(body || {});
+	let facts;
+	try {
+		facts = lib.proofFacts(bytes);
+	} catch (err) {
+		if (isFenced(err)) throw err;
+		throw refusal('BAD_PROOF_FILE', 'That file is not a Taproot Assets proof file this wallet can read.');
+	}
+	const xOnly = (key) => String(key).slice(-64);
+	return host.lock.run(async () => {
+		host.requireReady();
+		let addr = null;
+		for (const r of await tap.stores.receives.listReceives()) {
+			let candidate;
+			try {
+				candidate = lib.decodeAddress(r.id);
+			} catch (_) {
+				continue;
+			}
+			if (xOnly(candidate.scriptKey) === xOnly(facts.scriptKey)) {
+				addr = candidate;
+				break;
+			}
+		}
+		if (!addr) {
+			throw refusal('PROOF_NOT_OURS', 'This proof is not for an address this wallet made. It has to be the file of a payment to this wallet.', 404);
+		}
+		const encoded = addr.encoded;
+		const rowId = host.receiveRowId(encoded);
+		const answer = async (extra) => {
+			const row = (await host.refreshReceive(encoded)) || host.getRow(rowId);
+			host.nudge();
+			return { ...extra, row: row ? host.view(row) : null };
+		};
+		let record = await tap.stores.receives.getReceive(encoded);
+		if (record.state >= R.Complete) return answer({ result: 'already' });
+		if (record.state === R.Registered) {
+			// The payment is found first. A proof is only ever taken for an
+			// output this wallet has itself seen on the chain.
+			try {
+				await tap.freighter.receive(addr.raw, R.Located);
+			} catch (err) {
+				if (isFenced(err)) throw err;
+				if (isNotYet(err)) {
+					throw refusal('PAYMENT_NOT_SEEN', 'The payment this proof is for is not in a block yet. Import the file once its transaction has confirmed.', 409);
+				}
+				throw mapError(err);
+			}
+			record = await tap.stores.receives.getReceive(encoded);
+		}
+		const l = record.locator || {};
+		if (l.anchorOutPoint !== facts.anchorOutPoint || l.assetId !== facts.assetId) {
+			throw refusal('PROOF_OTHER_PAYMENT', 'This proof is for a different payment than the one this wallet found for that address.', 409);
+		}
+		if (record.state === R.Located) host.keepHanded(l, bytes.toString('hex'), encoded);
+		let error = null;
+		try {
+			await tap.freighter.receive(addr.raw);
+		} catch (err) {
+			if (isFenced(err)) throw err;
+			error = err;
+		}
+		if (error && isProofInvalid(error)) {
+			host.dropHanded(l);
+			// The library's reason when it gives one; some of its errors are a code alone.
+			const why = plainMessage(error, '');
+			throw refusal('PROOF_INVALID', `This proof file did not pass verification, so nothing was taken from it${why ? `: ${why}` : ''}.`.replace(/\.\.$/, '.'), 422);
+		}
+		// Whatever the proof server said about this payment before is over.
+		host.mem.failures.delete(rowId);
+		host.mem.retries.delete(rowId);
+		if (!error) {
+			host.dropHanded(l);
+			return answer({ result: 'complete' });
+		}
+		// Kept: the loop finishes it from the file, with no server asked.
+		return answer({ result: 'kept', waitingFor: isNotYet(error) ? 'confirmations' : 'check', reason: isNotYet(error) ? null : plainMessage(error) });
+	});
+}
+
 /* ------------------------------------------------------------ send and burn */
 
 function insufficientAsset(needed, held) {
@@ -869,6 +1045,10 @@ module.exports = {
 	decodeAddress,
 	checkAddress,
 	retryProof,
+	exportProof,
+	importProof,
+	markProofHandedOver,
+	MAX_PROOF_FILE_BYTES,
 	prepareSend,
 	prepareBurn,
 	commit,

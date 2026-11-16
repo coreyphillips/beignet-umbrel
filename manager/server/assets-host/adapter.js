@@ -158,6 +158,23 @@ function createLib(tap) {
 				return { timestamp: null, depth: null };
 			}
 		},
+		/**
+		 * What a proof file proves last: which asset, how much of it, the key it
+		 * is held under and the output it sits in. Throws when the bytes are not
+		 * a proof file. Reading it verifies nothing.
+		 */
+		proofFacts(fileBytes) {
+			const file = tap.proof.decodeFile(Buffer.from(fileBytes));
+			const last = tap.proof.fileLastProof(file);
+			return {
+				assetId: hex(tap.asset.genesisId(last.asset.genesis)),
+				groupKey: last.asset.groupKey ? hex(last.asset.groupKey.groupPubKey) : null,
+				scriptKey: hex(last.asset.scriptKey),
+				anchorOutPoint: tap.asset.formatOutPoint(tap.proof.proofOutPoint(last)),
+				amount: BigInt(last.asset.amount),
+				depth: file.proofs.length
+			};
+		},
 		/** A courier for a proof server. One attempt per call: the service loop is the retry. */
 		makeCourier: (uri, { fetch, resolveEndpoint }) =>
 			new tap.courier.UniverseRpcCourier(uri, { fetch, resolveEndpoint, retry: { attempts: 1 } })

@@ -30,7 +30,7 @@ const fs = require('fs');
 const { hostRows, createHostLock, sha256Hex } = require('./store');
 const { STATES, ANCHOR_SATS, TAP_KEY_FAMILY, hex, unhex } = require('./adapter');
 const { restFor, parseCourier } = require('./config');
-const { refusal, isFenced, isNotYet, isCourierTrouble, isProofMissing, plainMessage, codeOf } = require('./errors');
+const { refusal, isFenced, isNotYet, isCourierTrouble, isProofMissing, isProofInvalid, plainMessage, codeOf } = require('./errors');
 const views = require('./views');
 const backup = require('./backup');
 
@@ -54,6 +54,7 @@ const SERVER_TROUBLE = new Set(['PROOF_REFUSED', 'COURIER_UNREACHABLE', 'PROOF_U
 
 const EVENT_OF = { mint: 'mint', send: 'transfer', burn: 'transfer', receive: 'receive' };
 const receiveRowId = (encoded) => `recv-${sha256Hex(encoded).slice(0, 32)}`;
+const handedKey = (l) => `handed/${sha256Hex(JSON.stringify([l.assetId, l.scriptKey, l.anchorOutPoint])).slice(0, 40)}`;
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const transport = (err) => ['PROOF_SERVER_UNREACHABLE', 'PROOF_SERVER_TIMEOUT', 'TOR_UNAVAILABLE'].includes(codeOf(err));
@@ -366,15 +367,48 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 
 	/* ------------------------------------------------------- proof servers */
 
+	/*
+	 * A proof file the sender handed to the person receiving (ops.importProof)
+	 * is kept in a row until its receive is complete. The library asks its
+	 * courier for the proof of a payment it has found on the chain; the
+	 * courier it is given answers from these rows before it asks a server.
+	 * So a file is checked by the same code, against the same chain and the
+	 * same address, as a proof a server hands over, and nothing that came
+	 * from a file is believed before that.
+	 */
+	host.handed = (locator) => (locator && locator.anchorOutPoint ? rows.get(handedKey(locator)) : null);
+	host.keepHanded = (locator, fileHex, address) => rows.put(handedKey(locator), { locator: { ...locator }, file: fileHex, address, at: now() });
+	host.dropHanded = (locator) => {
+		if (!host.handed(locator)) return false;
+		rows.del(handedKey(locator));
+		return true;
+	};
+
+	const handedFirst = (courier) =>
+		new Proxy(courier, {
+			get(target, prop) {
+				if (prop === 'receiveProof') {
+					return async (locator) => {
+						const handed = host.handed(locator);
+						return handed ? Buffer.from(handed.file, 'hex') : target.receiveProof(locator);
+					};
+				}
+				const value = target[prop];
+				return typeof value === 'function' ? value.bind(target) : value;
+			}
+		});
+
 	host.courierFor = (uri) => {
 		const key = String(uri);
 		if (!mem.couriers.has(key)) {
 			mem.couriers.set(
 				key,
-				lib.makeCourier(key, {
-					fetch: net.courierFetch,
-					resolveEndpoint: (u, hostPort) => restFor(cfg, String(u || key)) || restFor(cfg, String(hostPort || '')) || undefined
-				})
+				handedFirst(
+					lib.makeCourier(key, {
+						fetch: net.courierFetch,
+						resolveEndpoint: (u, hostPort) => restFor(cfg, String(u || key)) || restFor(cfg, String(hostPort || '')) || undefined
+					})
+				)
 			);
 		}
 		return mem.couriers.get(key);
@@ -525,7 +559,11 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 	host.stepReceive = async (encoded, { force = false } = {}) => {
 		const R = STATES.Receive;
 		const record = await host.tap.stores.receives.getReceive(encoded);
-		if (!record || record.state >= R.Complete) return;
+		if (!record) return;
+		if (record.state >= R.Complete) {
+			host.dropHanded(record.locator);
+			return;
+		}
 		const rowId = receiveRowId(encoded);
 		if (!force && record.state === R.Located && record.locator && record.locator.anchorOutPoint) {
 			// The proof is asked for once the transaction is deep enough, not on
@@ -534,15 +572,30 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 			const tip = host.tip();
 			if (!height || !tip || tip - height + 1 < cfg.minConfirmations) return;
 		}
-		await step(rowId, 'receive', () => host.tap.freighter.receive(lib.decodeAddress(encoded).raw), { force });
-		if (record.state === R.Registered) {
-			const after = await host.tap.stores.receives.getReceive(encoded);
-			// Trouble before anything was seen on-chain is not the sender's news,
-			// and no reason to look for the payment less often.
-			if (after && after.state === R.Registered) {
-				mem.failures.delete(rowId);
-				mem.retries.delete(rowId);
-			}
+		await step(
+			rowId,
+			'receive',
+			async () => {
+				try {
+					await host.tap.freighter.receive(lib.decodeAddress(encoded).raw);
+				} catch (err) {
+					// A file that does not verify is not kept, or the proof server
+					// would never be asked again for the real one.
+					if (isProofInvalid(err) && host.dropHanded(record.locator)) {
+						say('warn', `assets: the proof file imported for ${rowId} did not verify and was dropped: ${plainMessage(err)}`);
+					}
+					throw err;
+				}
+			},
+			{ force }
+		);
+		const after = await host.tap.stores.receives.getReceive(encoded);
+		if (after && after.state >= R.Complete) host.dropHanded(after.locator);
+		// Trouble before anything was seen on-chain is not the sender's news,
+		// and no reason to look for the payment less often.
+		if (record.state === R.Registered && after && after.state === R.Registered) {
+			mem.failures.delete(rowId);
+			mem.retries.delete(rowId);
 		}
 	};
 
@@ -741,7 +794,10 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 			}
 		}
 		const stored = host.listRows();
-		const active = (kind) => stored.filter((r) => r.kind === kind && !views.isTerminal(r.state) && r.state !== 'waiting').length;
+		// A send whose proof the sender handed over as a file is not something
+		// still happening, though the proof server has not taken its proof.
+		const settled = (r) => r.kind === 'send' && r.state === 'proofs' && !!r.handedOver;
+		const active = (kind) => stored.filter((r) => r.kind === kind && !views.isTerminal(r.state) && r.state !== 'waiting' && !settled(r)).length;
 		mem.summary = {
 			holdsAssets: live.length > 0,
 			anchorCount: anchors.length,
@@ -1015,6 +1071,10 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 			for (const r of active) {
 				if (mem.stopped) return;
 				await lock.run(() => host.stepReceive(r.id));
+			}
+			// A file kept for an address this wallet no longer waits on.
+			for (const { key, value } of rows.list('handed/')) {
+				if (!receives.some((r) => r.id === value.address)) await lock.run(() => rows.del(key));
 			}
 			if (block) {
 				for (const repair of [() => host.tap.minter.repairProofs(), () => host.tap.freighter.repairProofs(), () => host.tap.freighter.reconcile()]) {
