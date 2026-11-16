@@ -92,6 +92,12 @@ const LIGHTNING_REFUSALS = {
 	ERR_BEIGNET_LN_PEER_OFFLINE: ['PEER_UNREACHABLE', 'The peer is not connected, so nothing was done. Try again once it is back.', 502],
 	ERR_BEIGNET_LN_PEER_UNSUPPORTED: ['PEER_NO_ASSET_CHANNELS', 'That peer does not open asset channels, so nothing was opened and nothing was spent.', 409],
 	ERR_BEIGNET_LN_FUNDING_REJECTED: ['PEER_NO_ASSET_CHANNELS', 'The peer turned the channel down, so nothing was opened and nothing was spent.', 409],
+	ERR_BEIGNET_LN_CANCELLED: ['CHANNEL_CANCELLED', 'This channel open was cancelled before anything was signed, so nothing was opened and nothing was spent.', 409],
+	ERR_BEIGNET_LN_FEE_BOUND: [
+		'FEE_TOO_HIGH',
+		'Opening would pay more to miners than this wallet allows for an asset transaction, so nothing was opened and nothing was spent.',
+		400
+	],
 	ERR_BEIGNET_LN_UNKNOWN_CHANNEL: ['CHANNEL_NOT_FOUND', 'This wallet has no asset channel with that id.', 404],
 	ERR_BEIGNET_LN_NO_QUOTE: ['PEER_GAVE_NO_PRICE', "The channel's peer did not give a price, so nothing was done. Try again in a moment.", 502],
 	ERR_BEIGNET_LN_QUOTE_EXPIRED: ['QUOTE_EXPIRED', 'That price has expired. Ask for a new one.', 410],
@@ -137,6 +143,24 @@ const PAYMENT_FAILED = 'The payment did not go through, so nothing was paid.';
 function paymentFailure(word) {
 	const known = typeof word === 'string' && Object.prototype.hasOwnProperty.call(PAYMENT_FAILURES, word);
 	return { known, message: known ? PAYMENT_FAILURES[word] : PAYMENT_FAILED };
+}
+
+// What mapError words with the library's own text.
+const WORDED_BY_THE_LIBRARY = new Set(['WALLET_ERROR', 'TOR_UNAVAILABLE']);
+
+/**
+ * As mapError, for what a call into the Lightning service threw: a refusal
+ * in the host's own words, or null when the host has none for it. What the
+ * library wrote is never part of it. The caller logs that, and answers with
+ * a sentence of its own.
+ */
+function mapLightning(err, context = {}) {
+	if (isRefusal(err)) return err;
+	if (FEE_CODES.has(codeOf(err))) {
+		return refusal('FEE_TOO_HIGH', 'The miner fee would be above what this wallet allows for an asset transaction, so nothing was done.', 400);
+	}
+	const mapped = mapError(err, context);
+	return isRefusal(mapped) && !WORDED_BY_THE_LIBRARY.has(mapped.extensionCode) ? mapped : null;
 }
 
 // The vbytes' worth of fee the library funds an anchor transaction around.
@@ -224,6 +248,7 @@ module.exports = {
 	isProofInvalid,
 	plainMessage,
 	mapError,
+	mapLightning,
 	workingSats,
 	LIGHTNING_REFUSALS,
 	PAY_NOTHING_SENT,

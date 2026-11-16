@@ -398,11 +398,39 @@ test('an open that fails after its funding transaction is signed is kept, for th
 	assert.deepEqual(keys(h, 'chan/'), [`h/chan/${id}`]);
 	assert.equal((await h.get('/channels')).channels[0].state, 'OPENING');
 	assert.deepEqual(events(h, 'error'), []);
+	// Its units left the on-chain records for the channel, and are in the books there.
+	const total = async (w) => {
+		const { balance } = (await w.get('/balances')).assets[0];
+		return [balance.total, balance.onchain, balance.channelLocal];
+	};
+	assert.deepEqual(await total(h), ['1000', '400', '600']);
+
+	// Whatever the flow's phase says, a signed funding transaction is a channel in being.
+	h.ln.set(id, { phase: 'failed' });
+	await h.host.pass({ block: true });
+	assert.deepEqual((await h.get('/channels')).channels.map((c) => [c.pendingChannelId, c.state, c.localBalance]), [[id, 'OPENING', '600']]);
+	assert.deepEqual(await total(h), ['1000', '400', '600']);
+	assert.equal(h.host.mem.summary.channels, 1);
+	assert.equal((await h.get('/status')).holdsAssets, true);
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.deepEqual(events(h, 'error'), []);
+	// It cannot be closed yet, and a backup is not restored over it.
+	const close = await refused(h.call('POST /channels/close', { channelId: id }));
+	assert.deepEqual([close.extensionCode, close.status], ['CHANNEL_OPENING', 409]);
+	assert.equal(close.message, 'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain.');
+	assert.deepEqual(named(h, 'cancelFlow').length, 1);
+	const file = { format: backup.FORMAT, version: backup.VERSION, network: 'regtest', chain: 'regtest', wallet: await h.host.fingerprint(), exportedAt: 1, rows: backup.collectRows(h.storage) };
+	file.rowsHash = backup.hashRows(file.rows);
+	assert.deepEqual(await codeOf(h.call('POST /backup/import', { backup: file })), ['ASSET_CHANNELS_OPEN', 409]);
+
 	// And a restart does not open it a second time: the library has it.
 	const again = h.restart();
 	made.push(again);
 	await again.boot();
+	await again.host.pass({ block: true });
 	assert.equal(named(again, 'openChannel').length, 1);
+	assert.deepEqual(await total(again), ['1000', '400', '600']);
+	assert.deepEqual(keys(again, 'committed/funding:'), [`h/committed/funding:${id}`]);
 });
 
 test('the same request key opens one channel, also after a restart', async () => {
@@ -555,6 +583,245 @@ test('an open that was confirmed is undone at start when asset channels are off 
 	assert.deepEqual(keys(off, 'committed/funding:'), []);
 	assert.deepEqual(keys(off, 'chan/'), []);
 	assert.deepEqual(await off.get('/channels'), { channels: [] });
+});
+
+test('an open cancelled while a restart is starting it again opens nothing, and its key then opens one channel', async () => {
+	const { h, asset } = await funded();
+	h.ln.opts.openHangs = true;
+	h.cfg.openWaitMs = 10;
+	const first = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	const id = first.pendingChannelId;
+	h.ln.opts.openHangs = false;
+	// The next start finds the marker, and the peer takes its time to connect.
+	let release;
+	h.ln.opts.connectGate = new Promise((resolve) => (release = resolve));
+	const again = h.restart();
+	made.push(again);
+	await again.boot();
+	for (let i = 0; i < 100 && named(again, 'connect').length < 2; i += 1) await new Promise((r) => setTimeout(r, 5));
+	assert.equal(named(again, 'connect').length, 2);
+	// Cancelled during the reconnect: the close waits for the start to be over.
+	const closing = again.call('POST /channels/close', { channelId: id });
+	await new Promise((r) => setTimeout(r, 20));
+	again.ln.opts.connectGate = null;
+	release();
+	assert.deepEqual(await closing, { channelId: id, closing: true, force: false });
+	await new Promise((r) => setTimeout(r, 20));
+	// Nothing was opened for it, and nothing of it is left.
+	assert.equal(named(again, 'openChannel').length, 1);
+	assert.equal(again.ln.flows.size, 0);
+	assert.deepEqual([keys(again, 'committed/funding:'), keys(again, 'chan/'), keys(again, 'idem/channels/')], [[], [], []]);
+	assert.deepEqual(events(again, 'error'), []);
+
+	// The same key again is a new open: one channel, and never two.
+	const second = await again.call('POST /channels/open', openBody(asset), 'open-key');
+	assert.notEqual(second.pendingChannelId, id);
+	assert.deepEqual([...again.ln.flows.keys()], [second.pendingChannelId]);
+	await again.host.pass({ block: true });
+	const later = again.restart();
+	made.push(later);
+	await later.boot();
+	await new Promise((r) => setTimeout(r, 20));
+	assert.equal(later.ln.flows.size, 1);
+	assert.deepEqual(await later.call('POST /channels/open', openBody(asset), 'open-key'), second);
+});
+
+test('a cancel that the library answers for an open it has not heard of yet is not believed while that open is being started', async () => {
+	const { h, asset } = await funded();
+	let release;
+	h.ln.opts.openGate = new Promise((resolve) => (release = resolve));
+	// The worst a library could do: say yes to the cancel, and open all the same.
+	h.ln.opts.cancelMissed = true;
+	const opening = h.call('POST /channels/open', openBody(asset), 'open-key');
+	for (let i = 0; i < 100 && named(h, 'openChannel').length === 0; i += 1) await new Promise((r) => setTimeout(r, 5));
+	const id = keys(h, 'chan/')[0].slice('h/chan/'.length);
+	const closing = refused(h.call('POST /channels/close', { channelId: id }));
+	await new Promise((r) => setTimeout(r, 20));
+	// Nothing is forgotten while the open is out.
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.equal(keys(h, 'idem/channels/').length, 1);
+	release();
+	const err = await closing;
+	assert.deepEqual([err.extensionCode, err.status], ['CHANNEL_OPENING', 409]);
+	assert.equal(err.message, 'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain.');
+	const answer = await opening;
+	assert.deepEqual(answer, { pendingChannelId: id, phase: 'funding' });
+	// One channel, with its marker and the answer to its key.
+	assert.deepEqual([...h.ln.flows.keys()], [id]);
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.deepEqual(await h.call('POST /channels/open', openBody(asset), 'open-key'), answer);
+	assert.equal(named(h, 'openChannel').length, 1);
+	assert.deepEqual(events(h, 'error'), []);
+	// The wish to drop it does not outlive the answer: the channel stays.
+	await h.host.pass({ block: true });
+	assert.equal((await h.get('/channels')).channels.length, 1);
+});
+
+test('an open cancelled while the library works on it: the request is told so, and nothing is left', async () => {
+	const { h, asset } = await funded();
+	let release;
+	h.ln.opts.openGate = new Promise((resolve) => (release = resolve));
+	const opening = refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	for (let i = 0; i < 100 && named(h, 'openChannel').length === 0; i += 1) await new Promise((r) => setTimeout(r, 5));
+	const id = keys(h, 'chan/')[0].slice('h/chan/'.length);
+	const closing = h.call('POST /channels/close', { channelId: id });
+	await new Promise((r) => setTimeout(r, 20));
+	release();
+	assert.deepEqual(await closing, { channelId: id, closing: true, force: false });
+	const err = await opening;
+	assert.deepEqual([err.extensionCode, err.status], ['CHANNEL_CANCELLED', 409]);
+	assert.equal(err.message, 'This channel open was cancelled before anything was signed, so nothing was opened and nothing was spent.');
+	assert.equal(h.ln.flows.size, 0);
+	assert.deepEqual([keys(h, 'committed/funding:'), keys(h, 'chan/'), keys(h, 'idem/channels/')], [[], [], []]);
+	// Dropped because it was asked for: that is no error.
+	assert.deepEqual(events(h, 'error'), []);
+	assert.deepEqual(events(h, 'channel').map((e) => e.state), ['OPENING', 'CLOSED']);
+	assert.equal((await h.get('/balances')).assets[0].balance.onchain, '1000');
+});
+
+test('an open that cannot be stopped in time is not forgotten, and is dropped or kept once it is over', async () => {
+	const { h, asset } = await funded();
+	let release;
+	h.ln.opts.openGate = new Promise((resolve) => (release = resolve));
+	h.ln.opts.cancelMissed = true;
+	h.cfg.openWaitMs = 30;
+	const answer = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	const id = answer.pendingChannelId;
+	const err = await refused(h.call('POST /channels/close', { channelId: id }));
+	assert.deepEqual([err.extensionCode, err.status], ['CHANNEL_OPENING', 409]);
+	assert.equal(err.message, 'This channel is still being opened, and the open could not be stopped yet. Try again in a moment.');
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.equal(keys(h, 'idem/channels/').length, 1);
+	// The loop does not undo an open that is still out, however often it looks.
+	h.clock.t += 60000;
+	await h.host.pass({ block: true });
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	release();
+	for (let i = 0; i < 100 && h.ln.flows.size === 0; i += 1) await new Promise((r) => setTimeout(r, 5));
+	await h.host.pass({ block: true });
+	// It signed: one channel, kept.
+	assert.deepEqual([...h.ln.flows.keys()], [id]);
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.equal((await h.get('/channels')).channels[0].pendingChannelId, id);
+	assert.deepEqual(events(h, 'error'), []);
+});
+
+test('an open kept after no answer in time is settled by the loop, and not only by the next start', async () => {
+	const { h, asset } = await funded();
+	h.ln.opts.openTimesOut = true;
+	const answer = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	const id = answer.pendingChannelId;
+	assert.equal(answer.phase, 'funding');
+	// No answer is not a no: the flow is the library's to carry on.
+	assert.deepEqual(named(h, 'cancelFlow'), []);
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	h.clock.t += 60000;
+	await h.host.pass({ block: true });
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.deepEqual(events(h, 'error'), []);
+
+	// Then the peer turns it down, with nobody waiting on the open.
+	h.ln.set(id, { phase: 'rejected' });
+	await h.host.pass({ block: true });
+	assert.deepEqual(named(h, 'cancelFlow').map((c) => c[1]), [id]);
+	assert.deepEqual([keys(h, 'committed/funding:'), keys(h, 'chan/'), keys(h, 'idem/channels/')], [[], [], []]);
+	assert.deepEqual(events(h, 'error'), [
+		{ code: 'CHANNEL_OPEN_FAILED', message: 'The channel could not be opened, and nothing was spent.', channelId: id }
+	]);
+	assert.deepEqual(events(h, 'channel').map((e) => e.state), ['OPENING', 'CLOSED']);
+	assert.deepEqual(await h.get('/channels'), { channels: [] });
+	assert.equal(named(h, 'openChannel').length, 1);
+});
+
+test('an open the library has lost all record of is undone once it has had its time, and one that signed is kept', async () => {
+	const { h, asset } = await funded();
+	h.ln.opts.openTimesOut = true;
+	const lost = (await h.call('POST /channels/open', openBody(asset, '100'), 'lost-key')).pendingChannelId;
+	const kept = (await h.call('POST /channels/open', openBody(asset, '100'), 'kept-key')).pendingChannelId;
+	h.ln.opts.openTimesOut = false;
+	h.ln.flows.delete(lost);
+	h.ln.set(kept, { signed: true, phase: 'failed' });
+	await h.host.pass({ block: true });
+	// Not at once: an open is given the time it takes to be told to the library.
+	assert.deepEqual(keys(h, 'committed/funding:').sort(), [`h/committed/funding:${kept}`, `h/committed/funding:${lost}`].sort());
+	h.clock.t += 31000;
+	await h.host.pass({ block: true });
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${kept}`]);
+	assert.deepEqual(events(h, 'error').map((e) => [e.code, e.channelId]), [['CHANNEL_OPEN_FAILED', lost]]);
+	assert.deepEqual((await h.get('/channels')).channels.map((c) => [c.pendingChannelId, c.state]), [[kept, 'OPENING']]);
+	// And never opened a second time, by the loop or by a start.
+	assert.equal(named(h, 'openChannel').length, 2);
+});
+
+test('the open itself is bound to the fee the wallet allows, and one that would pay more is refused before it is signed', async () => {
+	const { h, asset } = await funded();
+	h.ln.opts.openFee = 300000;
+	const err = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([err.extensionCode, err.status], ['FEE_TOO_HIGH', 400]);
+	assert.equal(err.message, 'Opening would pay more to miners than this wallet allows for an asset transaction, so nothing was opened and nothing was spent.');
+	assert.deepEqual([keys(h, 'committed/funding:'), keys(h, 'chan/'), keys(h, 'idem/channels/')], [[], [], []]);
+	assert.equal((await h.get('/balances')).assets[0].balance.onchain, '1000');
+	h.ln.opts.openFee = null;
+	const { pendingChannelId: id } = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	assert.equal(h.ln.flow(id).request.maxFeeSats, h.cfg.limits.maxFeeSats);
+});
+
+test('what the library says of a failed open or close goes to the log, and the caller gets a sentence of the host', async () => {
+	const { h, asset } = await funded();
+	const logged = [];
+	h.host.say = (level, text) => logged.push(text);
+	h.ln.opts.openFails = 'ERR_SOMETHING_NEW';
+	const open = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([open.extensionCode, open.status, open.message], ['CHANNEL_OPEN_FAILED', 502, 'The channel could not be opened, and nothing was spent.']);
+	assert.deepEqual(events(h, 'error'), [{ code: 'CHANNEL_OPEN_FAILED', message: 'The channel could not be opened, and nothing was spent.', channelId: events(h, 'error')[0].channelId }]);
+	assert.equal(logged.some((line) => /the peer said no/i.test(line)), true);
+
+	h.ln.opts.openFails = null;
+	const { pendingChannelId: id } = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	h.ln.confirm(id);
+	await h.host.pass({ block: true });
+	h.ln.opts.closeFails = 'ERR_BEIGNET_LN_CHANNEL';
+	const close = await refused(h.call('POST /channels/close', { channelId: id }));
+	assert.deepEqual([close.extensionCode, close.status, close.message], ['CHANNEL_CLOSE_FAILED', 502, 'The channel could not be closed. Try again in a moment.']);
+	assert.equal(logged.some((line) => line.includes('2 htlcs in flight')), true);
+	assert.equal(JSON.stringify([open.message, close.message, h.events]).includes('htlcs'), false);
+});
+
+test('a funding flow nobody confirmed that cannot be cancelled at start is not carried on in that pass', async () => {
+	const { h, asset } = await funded();
+	const id = 'aa'.repeat(32);
+	h.ln.flows.set(id, {
+		pendingChannelId: id,
+		channelId: null,
+		peerPubkey: PEER.pubkey,
+		initiator: true,
+		phase: 'accepted',
+		signed: false,
+		confirmed: false,
+		state: null,
+		assetId: asset.assetId,
+		groupKey: null,
+		local: 100n,
+		remote: 0n,
+		reserved: 0n,
+		fundingSats: 100000,
+		reserveSats: null,
+		recovery: 'none'
+	});
+	h.ln.opts.cancelFails = true;
+	const again = h.restart();
+	made.push(again);
+	const before = named(again, 'resume').length;
+	await again.boot();
+	await again.host.pass({ block: true });
+	// It could sign if it were carried on, so nothing is, and nothing new is begun.
+	assert.equal(named(again, 'resume').length, before);
+	assert.deepEqual(await codeOf(again.call('POST /channels/quote', openBody(asset))), ['ASSETS_STARTING', 503]);
+	again.ln.opts.cancelFails = false;
+	await again.host.pass({ block: true });
+	assert.equal(again.ln.flows.has(id), false);
+	assert.equal(named(again, 'resume').length > before, true);
+	assert.equal((await again.call('POST /channels/quote', openBody(asset))).channelSats, 100000);
 });
 
 /* ------------------------------------------------------------------- close */

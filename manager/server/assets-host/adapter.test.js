@@ -214,7 +214,7 @@ test('the provider is built over its own rows before there is an adapter or a no
 	assert.equal(entry.seen.made.store.backend, storage);
 	assert.equal(entry.seen.made.store.prefix, 'l/');
 	assert.equal(entry.seen.made.hrp, 'taprt');
-	assert.deepEqual(entry.seen.made.fixedOutputFees, { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 1000000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4 });
+	assert.deepEqual(entry.seen.made.fixedOutputFees, { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 250000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4 });
 	// What the engine is handed is the library's own, with the node noted on its way through.
 	assert.deepEqual(Object.keys(ln.attachment).sort(), ['auxiliaryChannels', 'bind', 'fixedOutputFees']);
 	assert.deepEqual(ln.attachment.auxiliaryChannels, { the: 'hooks' });
@@ -230,10 +230,13 @@ test('the provider is built over its own rows before there is an adapter or a no
 	assert.throws(() => ln.peerSupports(hexOf(PEER)), { code: 'ERR_BEIGNET_LN_NOT_READY' });
 });
 
-test('one transaction of a channel never pays more than the wallet lets an asset transaction pay', () => {
-	assert.deepEqual(fixedOutputFees(cfg), { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 1000000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4 });
+test('neither one transaction of a channel nor all of them pay more than the wallet lets an asset transaction pay', () => {
+	// The wallet's ceiling is 250,000 sats unless it was given another.
+	assert.deepEqual(fixedOutputFees(cfg), { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 250000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4 });
 	const tight = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules', BEIGNET_ASSETS_MAX_FEE_SATS: '4000' });
-	assert.deepEqual([fixedOutputFees(tight).maxFeeSatoshis, fixedOutputFees(tight).maxPreparationFeeSatoshis], [4000n, 4000n]);
+	assert.deepEqual(fixedOutputFees(tight), { maxFeeSatoshis: 4000n, maxTotalFeeSatoshis: 4000n, maxPreparationFeeSatoshis: 4000n, feeCoinCount: 4 });
+	const loose = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules', BEIGNET_ASSETS_MAX_FEE_SATS: '5000000' });
+	assert.deepEqual([fixedOutputFees(loose).maxFeeSatoshis, fixedOutputFees(loose).maxTotalFeeSatoshis], [10000n, 1000000n]);
 	assert.deepEqual([CHANNEL_SATS, CARRIER_SATS, { ...NOMINAL_RATE }], [100000, 354, { coefficient: 100000000n, scale: 0 }]);
 });
 
@@ -338,10 +341,11 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 	assert.deepEqual(await ln.quoteFunding({ assets, groupKey: null, fundingSats: 100000, feeRate: 2 }), { feeSats: 420, vbytes: 210, reserveSats: null });
 	assert.deepEqual(calls('quoteFunding'), [{ assets: [{ assetId: ASSET, amount: 600n }], fundingSatoshis: 100000n, feeRate: 2 }]);
 
-	const opened = await ln.openChannel({ pendingChannelId: 'aa'.repeat(32), peerPubkey: hexOf(PEER), assets, groupKey: null, decimalDisplay: 2, fundingSats: 100000, pushSats: 1708, feeRate: 2 });
+	const opened = await ln.openChannel({ pendingChannelId: 'aa'.repeat(32), peerPubkey: hexOf(PEER), assets, groupKey: null, decimalDisplay: 2, fundingSats: 100000, pushSats: 1708, feeRate: 2, maxFeeSats: 250000 });
 	assert.deepEqual(opened, { channelId: 'bb'.repeat(32) });
+	// The most the funding transaction may pay goes with the open itself.
 	assert.deepEqual(calls('openChannel'), [
-		{ peer: PEER, assets: [{ assetId: ASSET, amount: 600n }], decimalDisplay: 2, fundingSatoshis: 100000n, pushMsat: 1708000n, feeRate: 2, pendingChannelId: buf(0xaa) }
+		{ peer: PEER, assets: [{ assetId: ASSET, amount: 600n }], decimalDisplay: 2, fundingSatoshis: 100000n, pushMsat: 1708000n, feeRate: 2, maxFee: 250000n, pendingChannelId: buf(0xaa) }
 	]);
 	// A grouped asset is opened by its group key as well.
 	const group = `03${'cd'.repeat(32)}`;

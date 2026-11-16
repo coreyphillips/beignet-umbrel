@@ -290,7 +290,10 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     completed. `state` is the engine's ChannelState word, absent until the
  *     engine has the channel. `reserveSatoshis` is what the peer has to keep
  *     on its side. `reserved` is the local units live quotes and payments
- *     hold. `recovery` is 'none' while the channel is open, 'pending' from
+ *     hold. A flow whose funding transaction is signed is always listed,
+ *     with `signed` true, whatever became of its negotiation: its inputs
+ *     have left the wallet's on-chain records, and it may confirm.
+ *     `recovery` is 'none' while the channel is open, 'pending' from
  *     its close until every asset of this wallet's is back in its on-chain
  *     records, then 'complete'. `local` and `remote` of a closed channel are
  *     its last balances. A closed channel stays listed while its rows are
@@ -301,13 +304,20 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     fundingSatoshis, feeRate }) resolves to { feeSatoshis, vsize,
  *     reserveSatoshis? } and reserves and writes nothing.
  *  9. openChannel({ peer, assets, groupKey?, decimalDisplay?,
- *     fundingSatoshis, pushMsat, feeRate, pendingChannelId }) resolves to
- *     { pendingChannelId, channelId } once the funding transaction is on its
- *     way, as on the earlier branch. Given the id of a flow it already has,
- *     it carries that flow on and opens nothing second.
+ *     fundingSatoshis, pushMsat, feeRate, maxFee, pendingChannelId })
+ *     resolves to { pendingChannelId, channelId } once the funding
+ *     transaction is on its way. Given the id of a flow it already has, it
+ *     carries that flow on and opens nothing second. `maxFee` is the most
+ *     the funding transaction may pay in sats: one that would pay more is
+ *     refused with FEE_BOUND before anything is signed. quoteFunding is an
+ *     estimate, so this is the bound that holds.
  * 10. cancelChannel(pendingChannelId) resolves to true when the flow is gone
  *     and what it had set aside is released (also for an id it never had),
- *     and to false once the funding transaction is signed.
+ *     and to false once the funding transaction is signed. An openChannel
+ *     still running under the id then rejects with CANCELLED and signs
+ *     nothing. The host does not lean on that alone: it believes a true
+ *     only once no openChannel call of its own is out for the id
+ *     (lightning.js giveUp).
  * 11. closeChannel({ channelId, force }) resolves once the engine has been
  *     asked to close. The payout goes to keys of this wallet that the
  *     service derives itself.
@@ -375,6 +385,8 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *       ERR_BEIGNET_LN_PEER_UNSUPPORTED      its features allow no asset channel
  *       ERR_BEIGNET_LN_FUNDING_REJECTED      it turned the channel down
  *       ERR_BEIGNET_LN_TIMEOUT               no answer in time; the flow is kept
+ *       ERR_BEIGNET_LN_CANCELLED             the open was given up, unsigned
+ *       ERR_BEIGNET_LN_FEE_BOUND             the funding would pay more than maxFee
  *       ERR_BEIGNET_LN_UNKNOWN_CHANNEL       no channel with that id
  *       ERR_BEIGNET_LN_NO_QUOTE              the peer gave no price
  *       ERR_BEIGNET_LN_QUOTE_EXPIRED         the quote is used up or too old
@@ -424,12 +436,13 @@ const NOMINAL_RATE = Object.freeze({ coefficient: 100_000_000n, scale: 0 });
 /**
  * What the engine may spend from the wallet on the fees of a channel's
  * fixed outputs: for one transaction, for all of them, and for the coins it
- * sets aside to pay with. One transaction never passes the wallet's own
- * ceiling for an asset transaction.
+ * sets aside to pay with. Neither one transaction nor all of them together
+ * pass the wallet's own ceiling for an asset transaction.
  */
 function fixedOutputFees(cfg) {
-	const one = BigInt(Math.min(10_000, cfg.limits.maxFeeSats));
-	return { maxFeeSatoshis: one, maxTotalFeeSatoshis: 1_000_000n, maxPreparationFeeSatoshis: one, feeCoinCount: 4 };
+	const ceiling = cfg.limits.maxFeeSats;
+	const one = BigInt(Math.min(10_000, ceiling));
+	return { maxFeeSatoshis: one, maxTotalFeeSatoshis: BigInt(Math.min(1_000_000, ceiling)), maxPreparationFeeSatoshis: one, feeCoinCount: 4 };
 }
 
 /**
@@ -524,7 +537,8 @@ function plainEvent(e) {
  *   quoteFunding({ assets, groupKey, fundingSats, feeRate })
  *                              -> { feeSats, vbytes, reserveSats }
  *   openChannel({ pendingChannelId, peerPubkey, assets, groupKey,
- *                 decimalDisplay, fundingSats, pushSats, feeRate })
+ *                 decimalDisplay, fundingSats, pushSats, feeRate,
+ *                 maxFeeSats })
  *                              -> { channelId }
  *   cancelFlow(pendingChannelId)  -> boolean, true when nothing is left of it
  *   closeChannel({ channelId, force })
@@ -629,7 +643,7 @@ function createLightning({ entry, storage, cfg }) {
 			});
 			return { feeSats: Number(q.feeSatoshis), vbytes: whole(q.vsize), reserveSats: whole(q.reserveSatoshis) };
 		},
-		async openChannel({ pendingChannelId, peerPubkey, assets, groupKey, decimalDisplay, fundingSats, pushSats, feeRate }) {
+		async openChannel({ pendingChannelId, peerPubkey, assets, groupKey, decimalDisplay, fundingSats, pushSats, feeRate, maxFeeSats }) {
 			const opened = await live().openChannel({
 				peer: unhex(peerPubkey),
 				assets: inUnits(assets),
@@ -638,6 +652,9 @@ function createLightning({ entry, storage, cfg }) {
 				fundingSatoshis: BigInt(fundingSats),
 				pushMsat: BigInt(pushSats) * 1000n,
 				feeRate,
+				// Refused by the library before anything is signed when the
+				// funding transaction it builds would pay more.
+				...(Number.isInteger(maxFeeSats) ? { maxFee: BigInt(maxFeeSats) } : {}),
 				pendingChannelId: unhex(pendingChannelId)
 			});
 			return { channelId: asHex(opened.channelId) };

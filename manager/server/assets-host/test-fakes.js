@@ -402,8 +402,15 @@ const fakeInvoice = ({ msat, hash } = {}) =>
  *
  * `opts` switches behaviour: supports (the peer takes asset channels),
  * connectFails, fundFails, fundingFee, reserveSats, openHangs (the open
- * never answers), openFails (a code the open rejects with, nothing signed),
- * openFailsSigned (the same, after the funding transaction is signed),
+ * never answers), openGate (a promise the open waits on before the service
+ * has heard of it), openFails (a code the open rejects with, nothing
+ * signed), openTimesOut (it rejects with a timeout and the flow is kept),
+ * openFailsSigned (a code it rejects with after the funding transaction is
+ * signed), openFee (what the funding transaction really costs, when that
+ * is not what the quote said), connectGate (a promise a connect waits on),
+ * cancelFails (a cancel throws), cancelMissed (a cancel of an open the
+ * service has no record of yet answers true and stops nothing), closeFails
+ * (a code a close rejects with),
  * rate, quoteMs, quoteFails, payStatus, payFailure (the word a failed
  * payment's record carries), payFails (a code the payment rejects with
  * before anything is sent), payThrowsAfter (a code it rejects with once the
@@ -425,8 +432,15 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		fundingFee: 420,
 		reserveSats: undefined,
 		openHangs: false,
+		openGate: null,
 		openFails: null,
+		openTimesOut: false,
 		openFailsSigned: null,
+		openFee: null,
+		connectGate: null,
+		cancelFails: false,
+		cancelMissed: false,
+		closeFails: null,
 		rate: { coefficient: 100_000_000n, scale: 0 },
 		quoteMs: 60_000,
 		quoteFails: null,
@@ -438,6 +452,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		payFeeMsat: 2000n
 	};
 	const flows = new Map();
+	// Opens given up, by id: one still running stops at its next step, and
+	// the id is spent. Kept by the running service, so a restart forgets it.
+	const cancelled = new Set();
+	const hung = new Map();
 	const quotes = new Map();
 	const invoices = new Map();
 	const payments = new Map();
@@ -501,6 +519,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	};
 	ln.start = async (options) => {
 		log('start', { quiet: !!options.quiet });
+		cancelled.clear();
+		hung.clear();
 		state.options = options;
 		state.started = true;
 	};
@@ -518,6 +538,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	ln.connect = async (peer) => {
 		reaches('connect');
 		log('connect', peer);
+		if (opts.connectGate) await opts.connectGate;
 		if (opts.connectFails) throw new Error('connection refused');
 	};
 	ln.peerSupports = (pubkey) => {
@@ -534,7 +555,16 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	ln.openChannel = async (request) => {
 		reaches('openChannel');
 		log('openChannel', request.pendingChannelId, storage ? storage.list('h/').map((r) => r.key) : []);
-		if (opts.openHangs) return new Promise(() => undefined);
+		const live = () => {
+			if (cancelled.has(request.pendingChannelId)) throw tapError('ERR_BEIGNET_LN_CANCELLED', 'the channel open was cancelled');
+		};
+		live();
+		if (opts.openHangs) return new Promise((_, reject) => hung.set(request.pendingChannelId, reject));
+		// Asked to open, and not yet anything the service has a record of.
+		if (opts.openGate) {
+			await opts.openGate;
+			live();
+		}
 		const known = flows.get(request.pendingChannelId);
 		if (known && known.channelId) return { channelId: known.channelId };
 		const flow = known || {
@@ -561,6 +591,14 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			flow.phase = 'rejected';
 			throw tapError(opts.openFails, 'the peer said no');
 		}
+		// No answer in time: the flow is kept, for resume to carry on.
+		if (opts.openTimesOut) throw tapError('ERR_BEIGNET_LN_TIMEOUT', 'no answer from the peer in time');
+		// The transaction built costs more than the open may pay: refused before anything is signed.
+		const fee = opts.openFee === null ? opts.fundingFee : opts.openFee;
+		if (request.maxFeeSats !== undefined && fee > request.maxFeeSats) {
+			flow.phase = 'cancelled';
+			throw tapError('ERR_BEIGNET_LN_FEE_BOUND', 'the funding fee is above the bound: 99000 > 250000 at input 3');
+		}
 		const txid = id('funding');
 		for (const a of request.assets) spend(a.assetId, a.amount, txid);
 		flow.signed = true;
@@ -573,15 +611,21 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	ln.cancelFlow = async (pendingChannelId) => {
 		reaches('cancelFlow');
 		log('cancelFlow', pendingChannelId);
+		if (opts.cancelFails) throw new Error('the database is busy');
 		const flow = flows.get(pendingChannelId);
-		if (!flow) return true;
-		if (flow.signed) return false;
+		if (flow && flow.signed) return false;
+		if (!flow && opts.cancelMissed) return true;
+		cancelled.add(pendingChannelId);
 		flows.delete(pendingChannelId);
+		const stop = hung.get(pendingChannelId);
+		hung.delete(pendingChannelId);
+		if (stop) stop(tapError('ERR_BEIGNET_LN_CANCELLED', 'the channel open was cancelled'));
 		return true;
 	};
 	ln.closeChannel = async ({ channelId, force }) => {
 		reaches('closeChannel');
 		log('closeChannel', channelId, !!force);
+		if (opts.closeFails) throw tapError(opts.closeFails, 'commitment 41 has 2 htlcs in flight');
 		const flow = byChannel(channelId);
 		if (!flow) throw tapError('ERR_BEIGNET_LN_UNKNOWN_CHANNEL', 'no such channel');
 		flow.state = force ? 'FORCE_CLOSED' : 'CLOSED';
