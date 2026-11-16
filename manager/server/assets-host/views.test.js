@@ -445,10 +445,10 @@ test('a Lightning row carries its payment hash', () => {
 
 test('status: lightning is full only when the host says so', () => {
 	const of = (lightning) => views.statusView({ cfg: regtest, phase: 'ready', lightning }).lightning;
-	assert.deepEqual(of({ mode: 'full', usableChannels: 2 }), { mode: 'full', usableChannels: 2 });
-	assert.deepEqual(of({ mode: 'off', usableChannels: 1 }), { mode: 'off', usableChannels: 1 });
-	assert.deepEqual(of({ mode: 'FULL' }), { mode: 'off', usableChannels: 0 });
-	assert.deepEqual(of(undefined), { mode: 'off', usableChannels: 0 });
+	assert.deepEqual(of({ mode: 'full', usableChannels: 2, feeCoins: null }), { mode: 'full', usableChannels: 2, feeCoins: null });
+	assert.deepEqual(of({ mode: 'off', usableChannels: 1, feeCoins: null }), { mode: 'off', usableChannels: 1, feeCoins: null });
+	assert.deepEqual(of({ mode: 'FULL' }), { mode: 'off', usableChannels: 0, feeCoins: null });
+	assert.deepEqual(of(undefined), { mode: 'off', usableChannels: 0, feeCoins: null });
 });
 
 test('status: every field the dashboard reads, with lightning off', () => {
@@ -464,7 +464,7 @@ test('status: every field the dashboard reads, with lightning off', () => {
 	assert.equal(views.statusView({ cfg: { ...regtest, network: 'testnet', tapNetwork: null }, phase: 'starting' }).chain.name, null);
 	assert.equal(views.statusView({ cfg: { ...regtest, network: 'testnet', tapNetwork: 'testnet4' }, phase: 'ready' }).chain.name, 'testnet4');
 	assert.deepEqual(status.pending, { mints: 0, sends: 0, receives: 0, burns: 0 });
-	assert.deepEqual(status.lightning, { mode: 'off', usableChannels: 0 });
+	assert.deepEqual(status.lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
 	assert.deepEqual(status.proofServer, {
 		host: 'universe.example.com:10029',
 		courier: 'universerpc://universe.example.com:10029',

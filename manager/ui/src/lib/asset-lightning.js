@@ -263,6 +263,17 @@ const units = (value, asset) => (asset ? fmtAsset(value, asset) : `${String(valu
  * that. A bare code is never what the reader is shown.
  */
 /**
+ * Whether the wallet has no bitcoin to pay the miner fee of an on-chain
+ * claim with, by the host's `status.lightning.feeCoins`: the node could not
+ * prepare a fee coin now, for want of a confirmed coin and not because its
+ * fee budget is used up. A wallet in that state should keep `neededSats`
+ * on-chain beside whatever a channel takes.
+ */
+export function feeCoinsShort(feeCoins) {
+	return !!feeCoins && feeCoins.possible === false && feeCoins.reason === 'FEE_FUNDS_UNAVAILABLE' && /^\d+$/.test(String(feeCoins.neededSats ?? ''));
+}
+
+/**
  * The most of an asset that can go into one new channel. A channel is
  * funded with units of one issuance, so for an asset this wallet holds
  * several issuances of it is what it holds on-chain of the largest one

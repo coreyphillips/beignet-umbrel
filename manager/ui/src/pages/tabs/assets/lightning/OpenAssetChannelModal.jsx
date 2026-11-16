@@ -6,7 +6,7 @@ import { Button, Empty, FeeField, Field, Modal, Skeleton } from '../../../../com
 import { useAssetBalances, useAssetQuote, useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { cmpUnits, decimalsOf, fmtAsset, isZero, unitsToInput } from '../../../../lib/asset-amount.js';
-import { channelAssets, lightningRefusal, parsePeer, channelableOf } from '../../../../lib/asset-lightning.js';
+import { channelAssets, lightningRefusal, parsePeer, channelableOf, feeCoinsShort } from '../../../../lib/asset-lightning.js';
 import { submitOnce } from '../../../../lib/assets.js';
 import { idempotencyKey } from '../../../../lib/assets-api.js';
 import { FEE_CAP_MULTIPLE } from '../../../../lib/fees.js';
@@ -31,7 +31,7 @@ const OTHER_PEER = '__other__';
  *
  * `assetKey` is the asset to start on, for arriving from an asset's page.
  */
-export default function OpenAssetChannelModal({ id, api, assetKey, origin, onClose, onDone }) {
+export default function OpenAssetChannelModal({ id, api, assetKey, feeCoins, origin, onClose, onDone }) {
 	const toast = useToast();
 	const assets = useAssetsApi(api);
 	const { holdings, btc } = useAssetBalances(api, 0);
@@ -286,6 +286,14 @@ export default function OpenAssetChannelModal({ id, api, assetKey, origin, onClo
 											? `The bitcoin in the channel stays yours and comes back when the channel is closed, all but the ${fmtSats(quote.pushSats)} that start on the peer's side: those are the peer's. The miner fee is spent.`
 											: 'The bitcoin in the channel stays yours and comes back when the channel is closed. The miner fee is spent.'}
 									</div>
+									{/* Not a refusal: the channel can be opened. What it says is what else the wallet should hold. */}
+									{feeCoinsShort(feeCoins) && (
+										<div className="info-note" role="status" data-testid="asset-channel-fee-coins">
+											Keep about {fmtSats(Number(feeCoins.neededSats))} of bitcoin on-chain as well, apart from what this channel takes. A payment caught in a
+											channel that has to be closed without the peer is claimed with an on-chain transaction, and its miner fee comes from the wallet's own
+											bitcoin.
+										</div>
+									)}
 								</>
 							) : amountOk && !quoteError ? (
 								<div className="wallet-meta" data-testid="asset-channel-cost-pending">

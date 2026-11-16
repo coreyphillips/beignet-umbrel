@@ -166,7 +166,7 @@ export function lightningHeld(status) {
 }
 
 // A warning that is a wait or a thing said, not a loss: shown blue.
-const CHANNEL_NOTES = new Set(['RECOVERY_STUCK', 'FEE_BUDGET_EXHAUSTED']);
+const CHANNEL_NOTES = new Set(['RECOVERY_STUCK', 'FEE_BUDGET_EXHAUSTED', 'FEE_COINS_UNAVAILABLE']);
 
 export function channelWarnings(status) {
 	const ln = status && status.lightning;

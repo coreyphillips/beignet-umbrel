@@ -129,7 +129,7 @@ test('the ten lightning routes are declared for every wallet, and one without as
 	assert.deepEqual(ROUTES.filter((r) => /channel|invoice|pay|lightning/.test(r.path)).map(routeKey), LIGHTNING);
 	const h = harness();
 	await h.boot();
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'off', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
 	// What the manager counts before it lets a wallet be changed: none, said plainly.
 	assert.deepEqual(await h.get('/channels'), { channels: [] });
 	const err = await refusedBy(() => h.call('POST /channels/quote', {}));
@@ -453,7 +453,7 @@ test('a host that runs is handed its provider, starts it once the library is bui
 			assert.equal(options[0].confirmations, cfg.minConfirmations);
 			// A wallet that was not asked for asset channels gives nobody a price.
 			assert.equal(options[0].quiet, quiet);
-			assert.deepEqual(attachment.status().lightning, { mode: wish, usableChannels: 0 });
+			assert.deepEqual(attachment.status().lightning, { mode: wish, usableChannels: 0, feeCoins: null });
 			await attachment.stop('shutdown');
 			// The host closes its service, and the node's stop lets go of the rest.
 			assert.deepEqual([ln.seen.stopped, ln.seen.closed], [1, 1]);
@@ -476,10 +476,10 @@ test('a provider that will not start leaves a host that runs, with lightning off
 			const attachment = await attach(cfg, ctx, { lightningFor: () => ln, ask: async () => ({ answered: true, genesis: null, chain: 'regtest' }) });
 			assert.equal(attachment.status().phase, 'starting', when);
 			if (later) {
-				assert.deepEqual(attachment.status().lightning, { mode: 'full', usableChannels: 0 });
+				assert.deepEqual(attachment.status().lightning, { mode: 'full', usableChannels: 0, feeCoins: null });
 				later(new Error('this engine is older than the package'));
 			}
-			assert.deepEqual(attachment.status().lightning, { mode: 'off', usableChannels: 0 }, when);
+			assert.deepEqual(attachment.status().lightning, { mode: 'off', usableChannels: 0, feeCoins: null }, when);
 			// The engine is still handed it: a channel it holds is not this failure's to give up.
 			assert.equal(attachment.auxiliaryChannels, ln.attachment.auxiliaryChannels);
 			assert.ok(ctx.logged.some((line) => /^assets: asset channels could not start: This engine is older than the package/.test(line)), when);

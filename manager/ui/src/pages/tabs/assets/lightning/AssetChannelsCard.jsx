@@ -145,6 +145,7 @@ export default function AssetChannelsCard({ id, api, tick, bump, route, go, stat
 					id={id}
 					api={api}
 					assetKey={modal.assetKey}
+					feeCoins={status?.lightning?.feeCoins || null}
 					origin={modal.origin}
 					onClose={() => setModal(null)}
 					onDone={() => {

@@ -94,7 +94,7 @@ test('a wallet that cannot have asset channels says lightning is off, whatever i
 	const h = world({ env: { BEIGNET_ASSETS_LIGHTNING: 'full' } });
 	await h.boot();
 	assert.equal(h.cfg.lightning, 'full');
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'off', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
 	// It has none, and says so: the manager counts what this lists.
 	assert.deepEqual(await h.get('/channels'), { channels: [] });
 	for (const route of LIGHTNING_ROUTES.filter((r) => r !== 'GET /channels')) {
@@ -107,7 +107,7 @@ test('a wallet that cannot have asset channels says lightning is off, whatever i
 test('a wallet that can have asset channels and was asked for them says full', async () => {
 	const h = world({ lightning: true });
 	await h.boot();
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, feeCoins: null });
 	assert.deepEqual(named(h, 'start'), [['start', { quiet: false }]]);
 	assert.deepEqual(await h.get('/channels'), { channels: [] });
 	assert.deepEqual(await h.get('/invoices'), { invoices: [] });
@@ -116,7 +116,7 @@ test('a wallet that can have asset channels and was asked for them says full', a
 test('one that was not asked says off and refuses, with its provider started all the same', async () => {
 	const h = world({ lightning: true, env: { BEIGNET_ASSETS_LIGHTNING: 'off' } });
 	await h.boot();
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'off', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
 	// Started, and told to give nobody a price.
 	assert.deepEqual(named(h, 'start'), [['start', { quiet: true }]]);
 	assert.deepEqual(await h.get('/channels'), { channels: [] });
@@ -134,7 +134,7 @@ test('a Lightning service that will not start leaves the wallet its assets and n
 	// The service starts as the engine binds its node, and its failure is the
 	// host's to hear: the engine's bind does not throw.
 	await h.boot();
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'off', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
 	assert.equal(h.logs.some(([level, text]) => level === 'warn' && /asset channels could not start: the node is too old for this/i.test(text)), true);
 	assert.deepEqual(await codeOf(h.call('POST /channels/quote', {})), ['LIGHTNING_UNAVAILABLE', 409]);
 	const mint = await h.call('POST /mint', { seedlings: [COIN], feeRate: 2 }, 'mint-key');
@@ -144,7 +144,7 @@ test('a Lightning service that will not start leaves the wallet its assets and n
 test('before the engine has handed over its node, nothing is read as "no channels"', async () => {
 	const h = world({ lightning: 'unbound' });
 	await h.boot();
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, feeCoins: null });
 	for (const route of ['GET /channels', 'POST /channels/quote', 'POST /channels/close', 'POST /channels/reclaim', 'POST /invoices/quote', 'POST /pay/quote']) {
 		const err = await refused(ask(h, route, {}, undefined));
 		assert.deepEqual([err.extensionCode, err.status, err.message], ['ASSETS_STARTING', 503, 'Lightning is still starting. Try again in a moment.'], route);
@@ -279,7 +279,7 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 	// funding's change, and stays on-chain: the same total, held two ways.
 	const balance = { total: '1000', onchain: '400', channelable: '400', pendingIn: '0', pendingOut: '0', channelLocal: '600', lightningSendable: '0', lightningReceivable: '0' };
 	assert.deepEqual((await h.get('/balances')).assets[0].balance, balance);
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, feeCoins: null });
 	// It confirms: the input is spent, the change is a record of its own, and the books read the same.
 	h.ln.confirm(id);
 	await h.host.pass({ block: true });
@@ -300,7 +300,7 @@ test('a channel is OPENING until the library has confirmed it, and usable from t
 	assert.equal(await state(), 'NORMAL');
 	const channel = (await h.get('/channels')).channels[0];
 	assert.deepEqual([channel.sendable, channel.receivable], ['600', '0']);
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 1 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 1, feeCoins: null });
 	assert.deepEqual((await h.get('/balances')).assets[0].balance.lightningSendable, '600');
 	// What a live quote or payment holds is not sendable.
 	h.ln.set(id, { reserved: 150n });
@@ -883,7 +883,7 @@ test('a wallet whose asset channels are off still lists, closes and recovers a c
 	h.host.ln.close();
 	const off = world({ lightning: true, shared: h.world, env: { BEIGNET_ASSETS_LIGHTNING: 'off' } });
 	await off.boot();
-	assert.deepEqual((await off.get('/status')).lightning, { mode: 'off', usableChannels: 1 });
+	assert.deepEqual((await off.get('/status')).lightning, { mode: 'off', usableChannels: 1, feeCoins: null });
 	const listed = (await off.get('/channels')).channels;
 	assert.deepEqual(listed.map((c) => [c.channelId, c.state]), [[channel.channelId, 'NORMAL']]);
 	// Nothing new: no invoice, no payment, no open.
@@ -1140,7 +1140,7 @@ test('a recovery that keeps failing is logged, and after a while the status says
 	// Said once, not on every look, and not yet a warning.
 	await h.host.pass({ block: true });
 	assert.equal(logged.filter((line) => line.includes('bad-txns-inputs-missingorspent')).length, 1);
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, feeCoins: null });
 
 	// Three blocks on (an hour, where blocks are not mined by hand) it is stuck.
 	h.wallet.data.header.height += 3;
@@ -1148,7 +1148,7 @@ test('a recovery that keeps failing is logged, and after a while the status says
 	const status = await h.get('/status');
 	assert.deepEqual(status.lightning, {
 		mode: 'full',
-		usableChannels: 0,
+		usableChannels: 0, feeCoins: null,
 		warning: 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.',
 		// The same said with its code, so the dashboard can tell a wait from a loss.
 		warnings: [{ code: 'RECOVERY_STUCK', text: 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.' }]
@@ -1164,7 +1164,7 @@ test('a recovery that keeps failing is logged, and after a while the status says
 	h.ln.opts.recoveryErrors = [];
 	h.ln.recover(id);
 	await h.host.pass({ block: true });
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, feeCoins: null });
 });
 
 test('what one payment can move is the most one channel can, never the sum of several', async () => {
@@ -1995,14 +1995,14 @@ test('an open that fails after this wallet signed its funding and before the pee
 
 test('a node that does not offer asset channels says why in the status, begins nothing new, and still lists and closes what there is', async () => {
 	const { h, asset, channel } = await channelled({ remote: 200n });
-	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 1 });
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 1, feeCoins: null });
 	// A feature the overlay depends on is off in the node's settings.
 	h.ln.opts.advertisement = { advertised: false, reason: 'option_simple_taproot is not signalled by this node' };
 	const said =
 		"This wallet's node does not offer asset channels to its peers: a Lightning feature they depend on is turned off in the node's settings. Nothing new can be opened, invoiced or paid over asset channels until it is turned on. The channels there already are stay listed and can still be closed.";
 	assert.deepEqual((await h.get('/status')).lightning, {
 		mode: 'off',
-		usableChannels: 1,
+		usableChannels: 1, feeCoins: null,
 		unavailable: { code: 'NOT_ADVERTISED', message: said, reason: 'option_simple_taproot is not signalled by this node' }
 	});
 	for (const [route, body, key] of [
@@ -2322,7 +2322,7 @@ test('a wallet restored from a backup knows its channels and cannot run them: li
 			listed.map((c) => [c.channelId, c.pendingChannelId, c.peerPubkey, c.state, c.localBalance, c.remoteBalance, c.sendable, c.receivable, c.asset.name]),
 			[[source.channel.channelId, source.id, PEER.pubkey, 'MISSING', '400', '200', '0', '0', 'coin']]
 		);
-		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: MISSING_WARNING, warnings: [{ code: 'CHANNEL_MISSING', text: MISSING_WARNING }] });
+		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, feeCoins: null, warning: MISSING_WARNING, warnings: [{ code: 'CHANNEL_MISSING', text: MISSING_WARNING }] });
 		// It counts as a channel for the manager, and its units are in the books.
 		assert.equal(h.host.mem.summary.channels, 1);
 		const { balance } = (await h.get('/balances')).assets[0];
@@ -2406,7 +2406,7 @@ test('after a restore, what a channel funding had set aside is settled from the 
 		// The status says so in a sentence, and the log says which asset and how much.
 		assert.deepEqual((await h.get('/status')).lightning, {
 			mode: 'full',
-			usableChannels: 0,
+			usableChannels: 0, feeCoins: null,
 			warning: `${MISSING_WARNING} ${CHANGE_WARNING}`,
 			warnings: [
 				{ code: 'CHANNEL_MISSING', text: MISSING_WARNING },
@@ -2424,7 +2424,7 @@ test('after a restore, what a channel funding had set aside is settled from the 
 		h.tap.records.push({ ...like, spent: false, reservedBy: undefined, amount: '400', anchorOutPoint: `${fundingTxid}:1` });
 		await h.host.pass({ block: true });
 		assert.deepEqual(h.host.rows.list('l-change/'), []);
-		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: MISSING_WARNING, warnings: [{ code: 'CHANNEL_MISSING', text: MISSING_WARNING }] });
+		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, feeCoins: null, warning: MISSING_WARNING, warnings: [{ code: 'CHANNEL_MISSING', text: MISSING_WARNING }] });
 		assert.deepEqual(await books(), ['1070', '470', '600']);
 	});
 });
@@ -2701,4 +2701,90 @@ test('bitcoin on addresses a channel cannot be funded from is said with the figu
 	assert.deepEqual(await codeOf(h.call('POST /channels/open', openBody(asset), 'open-key')), ['FUNDING_INPUTS', 409]);
 	assert.equal(named(h, 'openChannel').length, 0);
 	assert.deepEqual(keys(h, 'chan/'), []);
+});
+
+/* ---------------------------------------------------------- the fee coins */
+
+/** What the engine says of its fee coin pool, as the library hands it on. */
+const feePool = ({ possible = true, reason, needed = 1500n, largest = 400000n, ready = 2, remaining = 25000n } = {}) => ({
+	available: true,
+	budget: { totalSatoshis: 25000n, reservedSatoshis: 0n, spentSatoshis: 25000n - remaining, remainingSatoshis: remaining },
+	feeCoins: { ready, readySatoshis: BigInt(ready) * 1000n, unconfirmed: 0 },
+	actions: [],
+	splits: [],
+	preparation: { possible, forFeeSatoshis: 1000n, neededSatoshis: needed, largestConfirmedSatoshis: largest, ...(reason ? { reason } : {}) }
+});
+const KEEP_BITCOIN =
+	'Keep at least 1500 sats of confirmed bitcoin on-chain in this wallet. A payment caught in an asset channel that has to be closed without the peer is claimed with an on-chain transaction, and its miner fee comes from the wallet\'s own bitcoin. The wallet has no confirmed coin large enough for that now, so such a claim could come too late.';
+
+test('the status says whether a fee coin could be prepared, and a wallet with a channel and no bitcoin for one is told how much to keep', async () => {
+	const { h, asset } = await channelled();
+	// An engine that cannot say: nothing is said, and nothing is warned of.
+	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 1, feeCoins: null });
+
+	h.ln.opts.feeStatus = feePool();
+	assert.deepEqual((await h.get('/status')).lightning, {
+		mode: 'full',
+		usableChannels: 1,
+		feeCoins: { possible: true, neededSats: '1500', largestConfirmedSats: '400000', ready: 2, budgetRemainingSats: '25000', reason: null }
+	});
+
+	// No confirmed coin to make one from: the figure to keep, and why.
+	h.ln.opts.feeStatus = feePool({ possible: false, reason: 'FEE_FUNDS_UNAVAILABLE', largest: 0n, ready: 0 });
+	let ln = (await h.get('/status')).lightning;
+	assert.deepEqual(ln.feeCoins, { possible: false, neededSats: '1500', largestConfirmedSats: '0', ready: 0, budgetRemainingSats: '25000', reason: 'FEE_FUNDS_UNAVAILABLE' });
+	assert.deepEqual(ln.warnings, [{ code: 'FEE_COINS_UNAVAILABLE', text: KEEP_BITCOIN }]);
+	assert.equal(ln.warning, KEEP_BITCOIN);
+	// A new channel is not refused for it.
+	assert.equal((await h.call('POST /channels/quote', { key: asset.key, amount: '100', feeRate: 2 })).sufficient, true);
+
+	// A budget that is used up is the note the loop's own refusal has, the once, whoever met it.
+	h.ln.opts.feeStatus = feePool({ possible: false, reason: 'FEE_BUDGET_EXHAUSTED', remaining: 0n });
+	ln = (await h.get('/status')).lightning;
+	assert.deepEqual([ln.feeCoins.possible, ln.feeCoins.reason, ln.feeCoins.budgetRemainingSats], [false, 'FEE_BUDGET_EXHAUSTED', '0']);
+	assert.deepEqual(ln.warnings.map((w) => w.code), ['FEE_BUDGET_EXHAUSTED']);
+	h.ln.opts.resumeFails = 'FEE_BUDGET_EXHAUSTED';
+	await h.host.pass({ block: true });
+	assert.deepEqual((await h.get('/status')).lightning.warnings.map((w) => w.code), ['FEE_BUDGET_EXHAUSTED']);
+	h.ln.opts.resumeFails = null;
+});
+
+test('a wallet with no asset channel is not warned about fee coins, and is still told what the node has', async () => {
+	const { h } = await funded();
+	h.ln.opts.feeStatus = feePool({ possible: false, reason: 'FEE_FUNDS_UNAVAILABLE', largest: 0n, ready: 0 });
+	const ln = (await h.get('/status')).lightning;
+	assert.equal(ln.feeCoins.possible, false);
+	assert.equal(ln.warnings, undefined);
+});
+
+test('a node that refused its fee settings opens no new asset channel, is logged once, and keeps the channels it has', async () => {
+	const { h, asset } = await channelled();
+	h.ln.opts.feeStatus = { available: false, error: { code: 'FEE_POLICY_REFUSED', remedy: 'operator', message: 'the fee coin value 120 is below the dust limit' } };
+	const ln = (await h.get('/status')).lightning;
+	assert.equal(ln.feeCoins, null);
+	assert.deepEqual(ln.warnings.map((w) => w.code), ['FEE_POLICY_REFUSED']);
+	assert.match(ln.warnings[0].text, /did not take the settings this app gives it for the miner fees of asset channels, so no new asset channel is opened\. The channels there already are keep working\./);
+
+	const said = await refused(h.call('POST /channels/quote', { key: asset.key, amount: '100', feeRate: 2 }));
+	assert.deepEqual([said.extensionCode, said.status, said.message], ['FEE_POLICY_REFUSED', 409, ln.warnings[0].text]);
+	const before = keys(h, '').length;
+	assert.deepEqual(await codeOf(h.call('POST /channels/open', openBody(asset, '100'), 'open-two')), ['FEE_POLICY_REFUSED', 409]);
+	assert.equal(keys(h, '').length, before, 'nothing was written');
+	assert.equal(named(h, 'openChannel').length, 1, 'only the channel that was there');
+	assert.equal(named(h, 'quoteFunding').length, 1);
+
+	await h.get('/status');
+	await h.host.pass({ block: true });
+	const logged = h.logs.filter(([, text]) => /the node refused the fee settings/.test(text));
+	assert.equal(logged.length, 1);
+	assert.match(logged[0][1], /\(FEE_POLICY_REFUSED: the fee coin value 120 is below the dust limit\)$/);
+
+	// The channel that is there still carries a payment.
+	const quote = await h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 50000 }), key: asset.key });
+	assert.equal(quote.assetAmount, '50');
+
+	// Put right, and a new channel is quoted again.
+	h.ln.opts.feeStatus = feePool();
+	assert.equal((await h.call('POST /channels/quote', { key: asset.key, amount: '100', feeRate: 2 })).sufficient, true);
+	assert.equal((await h.get('/status')).lightning.warnings, undefined);
 });

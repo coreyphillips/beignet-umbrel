@@ -253,7 +253,7 @@ test('a real daemon loads the host, lists it and serves its routes', { skip: ski
 		assert.deepEqual([status.phase, status.ready, status.error, status.network, status.hrp], ['starting', false, null, 'regtest', 'taprt']);
 		assert.deepEqual([status.chain.name, status.chain.minConfirmations], ['regtest', 1]);
 		assert.equal(status.startup.waiting, "The wallet's Electrum server has not said which chain it is on");
-		assert.deepEqual(status.lightning, { mode: CHANNELS ? 'full' : 'off', usableChannels: 0 });
+		assert.deepEqual(status.lightning, { mode: CHANNELS ? 'full' : 'off', usableChannels: 0, feeCoins: null });
 		if (!CHANNELS) {
 			// An engine or an adapter without asset channels: no channels, said
 			// plainly to the manager that counts them, and nothing to open.

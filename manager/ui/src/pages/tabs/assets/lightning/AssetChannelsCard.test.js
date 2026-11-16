@@ -539,7 +539,7 @@ test('a node that does not offer asset channels: said above the card, nothing ne
 	assert.equal(backend.mock.seed('demo-main', 'not-advertised'), true);
 	const status = await api.get('/x/assets/status');
 	// The wallet's shape: off, with the reason beside it, and its channels still counted.
-	assert.deepEqual(Object.keys(status.lightning), ['mode', 'usableChannels', 'unavailable']);
+	assert.deepEqual(Object.keys(status.lightning), ['mode', 'usableChannels', 'feeCoins', 'unavailable']);
 	assert.deepEqual([status.lightning.mode, status.lightning.usableChannels], ['off', 1]);
 	assert.deepEqual(Object.keys(status.lightning.unavailable), ['code', 'message', 'reason']);
 	assert.deepEqual([status.lightning.unavailable.code, status.lightning.unavailable.message], ['NOT_ADVERTISED', NOT_OFFERED]);
@@ -625,6 +625,60 @@ test('bitcoin on addresses a channel cannot be funded from is said in the open d
 			note.textContent,
 			'The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has 40,000 sats on those, and this needs about 104,320 sats. Another 250,000 sats are on addresses of other types, which cannot be used for it. Nothing was done and nothing was spent.'
 		);
+		assert.equal(r.test('asset-channel-submit').disabled, true);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a wallet with a channel and no bitcoin for a fee coin is told how much to keep, in blue, and can still open a channel', async () => {
+	const backend = assetsBackend();
+	backend.mock.seed('demo-main', 'no-fee-coins');
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	const r = await mount(backend, { status });
+	try {
+		assert.deepEqual(status.lightning.feeCoins, { possible: false, neededSats: '1500', largestConfirmedSats: '0', ready: 0, budgetRemainingSats: '25000', reason: 'FEE_FUNDS_UNAVAILABLE' });
+		const notes = r.tests('asset-channels-warning');
+		assert.deepEqual(notes.map((n) => n.getAttribute('data-code')), ['FEE_COINS_UNAVAILABLE'], 'the one note, and not the fee budget beside it');
+		assert.match(notes[0].className, /info-note/);
+		assert.match(notes[0].textContent, /^Keep at least 1500 sats of confirmed bitcoin on-chain in this wallet\. A payment caught in an asset channel that has to be closed without the peer is claimed with an on-chain transaction, and its miner fee comes from the wallet's own bitcoin\./);
+
+		await filled(r);
+		assert.match(r.test('asset-channel-fee-coins').textContent, /^Keep about 1,500 sats of bitcoin on-chain as well, apart from what this channel takes\./);
+		assert.equal(r.test('asset-channel-refusal'), null, 'the open is not refused for it');
+		assert.equal(r.test('asset-channel-submit').disabled, false);
+	} finally {
+		await r.unmount();
+	}
+	// A wallet whose node can prepare a fee coin is told nothing.
+	const fine = assetsBackend();
+	const fineStatus = await fine.api('demo-main').get('/x/assets/status');
+	const quiet = await mount(fine, { status: fineStatus });
+	try {
+		assert.equal(fineStatus.lightning.feeCoins.possible, true);
+		assert.equal(quiet.tests('asset-channels-warning').length, 0);
+		await filled(quiet);
+		assert.equal(quiet.test('asset-channel-fee-coins'), null);
+	} finally {
+		await quiet.unmount();
+	}
+});
+
+test('a node that refused its fee settings is said in red, and the open dialog holds a new channel with the reason', async () => {
+	const backend = assetsBackend();
+	backend.mock.seed('demo-main', 'fee-policy');
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	const r = await mount(backend, { status });
+	try {
+		assert.equal(status.lightning.feeCoins, null);
+		const notes = r.tests('asset-channels-warning');
+		assert.deepEqual(notes.map((n) => n.getAttribute('data-code')), ['FEE_POLICY_REFUSED']);
+		assert.match(notes[0].className, /error-note/);
+		assert.equal(r.tests('asset-channel').length, 1, 'the channel there is stays');
+		await filled(r);
+		const refusal = r.test('asset-channel-refusal');
+		assert.equal(refusal.getAttribute('data-code'), 'FEE_POLICY_REFUSED');
+		assert.match(refusal.textContent, /did not take the settings this app gives it for the miner fees of asset channels, so no new asset channel is opened\./);
 		assert.equal(r.test('asset-channel-submit').disabled, true);
 	} finally {
 		await r.unmount();

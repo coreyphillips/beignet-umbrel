@@ -883,6 +883,19 @@ export function createAssetsMock(ctx) {
 			S(id).draining = true;
 			return true;
 		},
+		// The node has no confirmed bitcoin to prepare a fee coin from: a
+		// wallet with an asset channel is told how much to keep, in blue, and
+		// an open is not refused for it. `ok` puts it back.
+		'no-fee-coins'(id) {
+			S(id).noFeeCoins = true;
+			return true;
+		},
+		// The node refused the fee settings it was given: no new channel, and
+		// the channels there keep working. `ok` puts it back.
+		'fee-policy'(id) {
+			S(id).feePolicyRefused = true;
+			return true;
+		},
 		// A payment the node has no record of any more: it may have been paid.
 		'pay-unaccounted'(id) {
 			return plantNotice(id, 'PAYMENT_UNACCOUNTED');
@@ -948,12 +961,31 @@ export function createAssetsMock(ctx) {
 	const FEE_BUDGET_TEXT =
 		'The budget this app sets for the miner fees of asset channels is used up, so nothing was done. Nothing was lost: the channels and what is in them are as they were.';
 
+	// The fee coin pool, in the host's sentences. A fee coin is a small
+	// confirmed coin of the wallet's own bitcoin that pays the miner fee of
+	// an on-chain claim; the demo's node needs 1,500 sats to prepare one.
+	const FEE_COINS_NEEDED_SATS = '1500';
+	const FEE_COINS_TEXT = `Keep at least ${FEE_COINS_NEEDED_SATS} sats of confirmed bitcoin on-chain in this wallet. A payment caught in an asset channel that has to be closed without the peer is claimed with an on-chain transaction, and its miner fee comes from the wallet's own bitcoin. The wallet has no confirmed coin large enough for that now, so such a claim could come too late.`;
+	const FEE_POLICY_TEXT =
+		"The wallet's node did not take the settings this app gives it for the miner fees of asset channels, so no new asset channel is opened. The channels there already are keep working. This is for whoever runs the wallet to put right, and the wallet's log says what the node refused.";
+	function feeCoinsOf(id, s) {
+		if (s.feePolicyRefused) return null;
+		return s.noFeeCoins
+			? { possible: false, neededSats: FEE_COINS_NEEDED_SATS, largestConfirmedSats: '0', ready: 0, budgetRemainingSats: '25000', reason: 'FEE_FUNDS_UNAVAILABLE' }
+			: { possible: true, neededSats: FEE_COINS_NEEDED_SATS, largestConfirmedSats: String(Math.max(0, Math.floor(ctx.spendable(id)))), ready: 2, budgetRemainingSats: '25000', reason: null };
+	}
+
 	// The host's own sentence for it, as its status says it.
 	const CHANNEL_MISSING_TEXT =
 		"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known. This wallet cannot bring the assets in it back by itself.";
 	const channelWarningsOf = (s) => {
 		const said = s.channels.some((c) => c.state === 'MISSING') ? [{ code: 'CHANNEL_MISSING', text: CHANNEL_MISSING_TEXT }] : [];
 		if (s.feeBudgetOut) said.push({ code: 'FEE_BUDGET_EXHAUSTED', text: FEE_BUDGET_TEXT });
+		// The fee coin pool, as the host warns of it: a refused policy whatever
+		// the wallet holds, and no bitcoin for a fee coin only while there is a
+		// channel that is not over.
+		if (s.feePolicyRefused) said.push({ code: 'FEE_POLICY_REFUSED', text: FEE_POLICY_TEXT });
+		else if (s.noFeeCoins && s.channels.some((c) => c.state !== 'CLOSED' && c.state !== 'MISSING')) said.push({ code: 'FEE_COINS_UNAVAILABLE', text: FEE_COINS_TEXT });
 		return said.length ? { warning: said.map((w) => w.text).join(' '), warnings: said } : {};
 	};
 
@@ -974,7 +1006,7 @@ export function createAssetsMock(ctx) {
 			const want = m && new URLSearchParams(loc.search || '').get('assets-demo');
 			if (!want) return;
 			const s = S(decodeURIComponent(m[1]));
-			const before = `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}`;
+			const before = `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}:${!!s.noFeeCoins}:${!!s.feePolicyRefused}`;
 			if (want === 'ok') {
 				s.host = null;
 				s.proofServerDown = false;
@@ -983,9 +1015,12 @@ export function createAssetsMock(ctx) {
 				s.feeBudgetOut = false;
 				s.fundingShort = false;
 				s.draining = false;
+				s.noFeeCoins = false;
+				s.feePolicyRefused = false;
 				if (s.seeded) {
 					delete s.seeded['not-advertised'];
 					delete s.seeded['fee-budget'];
+					for (const name of ['funding-inputs', 'draining', 'no-fee-coins', 'fee-policy']) delete s.seeded[name];
 				}
 			} else if (want === 'proof-server-down') {
 				s.host = null;
@@ -995,7 +1030,7 @@ export function createAssetsMock(ctx) {
 			} else if (SEEDS[want]) {
 				putState(decodeURIComponent(m[1]), want);
 			}
-			if (before !== `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}`) save();
+			if (before !== `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}:${!!s.noFeeCoins}:${!!s.feePolicyRefused}`) save();
 		} catch (_) {
 			/* no address to read, nothing switched */
 		}
@@ -1048,6 +1083,7 @@ export function createAssetsMock(ctx) {
 			lightning: {
 				mode: mode !== 'off' && s.notAdvertised ? 'off' : mode,
 				usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL').length,
+				feeCoins: mode === 'off' ? null : feeCoinsOf(id, s),
 				...(mode !== 'off' && s.notAdvertised ? { unavailable: { ...NOT_ADVERTISED } } : {}),
 				...(mode === 'off' ? {} : channelWarningsOf(s))
 			},
@@ -1508,6 +1544,8 @@ export function createAssetsMock(ctx) {
 
 	function channelQuote(id, body) {
 		requireLightning(id);
+		// As the host: no new channel while the node has refused its fee settings.
+		if (S(id).feePolicyRefused) throw fail(FEE_POLICY_TEXT, 'FEE_POLICY_REFUSED', { status: 409 });
 		const identity = identityFor(id, String(body?.key || '').toLowerCase());
 		const wanted = requireAmount(body?.amount, identity);
 		// As the host: one issuance a channel, said when all the wallet holds would have been enough.

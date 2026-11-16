@@ -203,6 +203,7 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 			return { txid: Buffer.from(`${'00'.repeat(31)}ab`, 'hex'), transaction: { txIn: [], txOut: [] }, feeSat: 321n };
 		},
 		advertisement: () => seen.advertisement,
+		fixedOutputFeeStatus: () => seen.feeStatus,
 		close: () => {
 			seen.closed += 1;
 			return Promise.reject(new Error('already closing'));
@@ -620,6 +621,36 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 	assert.equal(ln.advertisement(), null);
 	delete entry.service.advertisement;
 	assert.equal(ln.advertisement(), null);
+
+	// The fee coin pool, as the engine says it, in plain values.
+	assert.equal(ln.feeStatus(), null, 'a node with no fee policy says nothing');
+	seen.feeStatus = {
+		available: true,
+		budget: { totalSatoshis: 25000n, reservedSatoshis: 1000n, spentSatoshis: 2000n, remainingSatoshis: 22000n },
+		feeCoins: { ready: 2, readySatoshis: 2000n, unconfirmed: 1 },
+		actions: [{}],
+		splits: [{}, {}],
+		preparation: { possible: false, forFeeSatoshis: 1000n, neededSatoshis: 1500n, largestConfirmedSatoshis: 0n, reason: 'FEE_FUNDS_UNAVAILABLE' },
+		lastRefusal: { code: 'FEE_FUNDS_UNAVAILABLE', remedy: 'fund', at: 1700000000000 }
+	};
+	assert.deepEqual(ln.feeStatus(), {
+		available: true,
+		budget: { totalSats: '25000', reservedSats: '1000', spentSats: '2000', remainingSats: '22000' },
+		feeCoins: { ready: 2, readySats: '2000', unconfirmed: 1 },
+		actions: 1,
+		splits: 2,
+		preparation: { possible: false, forFeeSats: '1000', neededSats: '1500', largestConfirmedSats: '0', reason: 'FEE_FUNDS_UNAVAILABLE' },
+		lastRefusal: { code: 'FEE_FUNDS_UNAVAILABLE', remedy: 'fund', at: 1700000000000 }
+	});
+	// A pool that can prepare a fee coin has no reason and no refusal to say.
+	seen.feeStatus = { ...seen.feeStatus, preparation: { possible: true, forFeeSatoshis: 1000n, neededSatoshis: 1500n, largestConfirmedSatoshis: 90000n }, lastRefusal: undefined };
+	assert.deepEqual([ln.feeStatus().preparation, ln.feeStatus().lastRefusal], [{ possible: true, forFeeSats: '1000', neededSats: '1500', largestConfirmedSats: '90000', reason: null }, null]);
+	// A policy the engine refused is said as it is.
+	seen.feeStatus = { available: false, error: { code: 'FEE_POLICY_REFUSED', remedy: 'operator', message: 'the fee coin value is below dust' } };
+	assert.deepEqual(ln.feeStatus(), { available: false, error: { code: 'FEE_POLICY_REFUSED', remedy: 'operator', message: 'the fee coin value is below dust' } });
+	// A library with no such call says nothing.
+	delete entry.service.fixedOutputFeeStatus;
+	assert.equal(ln.feeStatus(), null);
 });
 
 test('invoices and payments: amounts as bigint, times in milliseconds, a status the host knows', async () => {
@@ -773,7 +804,7 @@ test(
 			for (const name of ['auxiliaryChannels', 'fixedOutputFees', 'bind']) assert.equal(name in attachment, false, name);
 			assert.deepEqual(Object.keys(attachment).sort(), Object.keys(without).sort());
 			assert.deepEqual(Object.keys(attachment.handlers).sort(), Object.keys(without.handlers).sort());
-			assert.deepEqual(attachment.status().lightning, { mode: 'off', usableChannels: 0 });
+			assert.deepEqual(attachment.status().lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
 			assert.deepEqual({ ...attachment.status(), startup: null }, { ...without.status(), startup: null });
 		} finally {
 			await attachment.stop('shutdown');

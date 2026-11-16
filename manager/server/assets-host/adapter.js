@@ -686,7 +686,72 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     as the cause, and FEE_BUDGET_EXHAUSTED, for a fee pool of a channel's
  *     fixed outputs that is used up, comes as it is. errors.js
  *     ENGINE_REFUSALS is the one place that knows those names.
+ * 37. fixedOutputFeeStatus(forFeeSatoshis?) is a synchronous method of the
+ *     object createAssetLightningHost returns. It hands on what the
+ *     engine's node says of its fee coin pool (getFixedOutputFeeStatus),
+ *     unchanged, and changes nothing by being asked: undefined before the
+ *     node is bound and for a node with no fee policy; { available: false,
+ *     error: { code: 'FEE_POLICY_REFUSED', remedy: 'operator', message } }
+ *     when the engine refused the policy it was given, and such a node
+ *     neither opens nor accepts an asset channel; and otherwise
+ *     { available: true, budget: { totalSatoshis, reservedSatoshis,
+ *     spentSatoshis, remainingSatoshis }, feeCoins: { ready,
+ *     readySatoshis, unconfirmed }, actions: [...], splits: [...],
+ *     preparation: { possible, forFeeSatoshis, neededSatoshis,
+ *     largestConfirmedSatoshis, reason?: 'FEE_FUNDS_UNAVAILABLE' |
+ *     'FEE_BUDGET_EXHAUSTED' }, lastRefusal?: { code, remedy, at } }, the
+ *     amounts bigints. A fee coin is a small confirmed coin of ordinary
+ *     bitcoin that pays the miner fee of claiming an output of a force
+ *     closed asset channel, and preparing one takes a block: a wallet with
+ *     an asset channel and no confirmed bitcoin to make one from could
+ *     miss a deadline. A library that has no such method is one that
+ *     cannot say, and nothing is said for it.
  */
+
+/**
+ * What the engine says of its fee coin pool (37) as plain values: amounts
+ * as strings of sats, counts as numbers, and the lists as how many they
+ * hold. Null for nothing said.
+ */
+function plainFeeStatus(said) {
+	if (!said || typeof said !== 'object') return null;
+	const sats = (value) => {
+		try {
+			const n = BigInt(value);
+			return n >= 0n ? n.toString() : '0';
+		} catch (_) {
+			return '0';
+		}
+	};
+	const count = (value) => {
+		const n = Number(value);
+		return Number.isSafeInteger(n) && n >= 0 ? n : 0;
+	};
+	const name = (value) => (typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : null);
+	if (said.available === false) {
+		const e = said.error && typeof said.error === 'object' ? said.error : {};
+		return { available: false, error: { code: name(e.code) || 'FEE_POLICY_REFUSED', remedy: name(e.remedy), message: typeof e.message === 'string' ? e.message : '' } };
+	}
+	const budget = said.budget || {};
+	const coins = said.feeCoins || {};
+	const preparation = said.preparation || {};
+	const last = said.lastRefusal && typeof said.lastRefusal === 'object' ? said.lastRefusal : null;
+	return {
+		available: true,
+		budget: { totalSats: sats(budget.totalSatoshis), reservedSats: sats(budget.reservedSatoshis), spentSats: sats(budget.spentSatoshis), remainingSats: sats(budget.remainingSatoshis) },
+		feeCoins: { ready: count(coins.ready), readySats: sats(coins.readySatoshis), unconfirmed: count(coins.unconfirmed) },
+		actions: Array.isArray(said.actions) ? said.actions.length : 0,
+		splits: Array.isArray(said.splits) ? said.splits.length : 0,
+		preparation: {
+			possible: preparation.possible === true,
+			forFeeSats: sats(preparation.forFeeSatoshis),
+			neededSats: sats(preparation.neededSatoshis),
+			largestConfirmedSats: sats(preparation.largestConfirmedSatoshis),
+			reason: name(preparation.reason)
+		},
+		lastRefusal: last ? { code: name(last.code), remedy: name(last.remedy), at: Number.isFinite(Number(last.at)) ? Number(last.at) : null } : null
+	};
+}
 
 // What a new asset channel is funded with, and the bitcoin each asset
 // payment through it travels with.
@@ -969,6 +1034,15 @@ function plainEvent(e) {
  *                                conflicts with the funding (S6)
  *   advertisement()            { advertised, reason } or null: whether the
  *                                node offers asset channels to its peers
+ *   feeStatus()                what the engine says of its fee coin pool
+ *                                (37), amounts as strings of sats:
+ *                                { available: true, budget, feeCoins,
+ *                                actions, splits, preparation: { possible,
+ *                                forFeeSats, neededSats,
+ *                                largestConfirmedSats, reason },
+ *                                lastRefusal }, or { available: false,
+ *                                error: { code, remedy, message } }, or
+ *                                null when nobody can say
  *
  *   backup()                   the rows a backup may carry, as the library
  *                                gives them: { version, rows }
@@ -1215,6 +1289,13 @@ function createLightning({ entry, storage, cfg, now = null }) {
 			const said = typeof service.advertisement === 'function' ? service.advertisement() : undefined;
 			if (!said || typeof said !== 'object') return null;
 			return { advertised: said.advertised === true, reason: typeof said.reason === 'string' && said.reason ? said.reason : null };
+		},
+		// The engine's fee coin pool, which pays the miner fees of an asset
+		// channel's on-chain claims, in plain values. Null for a library or
+		// an engine that cannot say, and for a node with no fee policy.
+		feeStatus() {
+			const service = live();
+			return plainFeeStatus(typeof service.fixedOutputFeeStatus === 'function' ? service.fixedOutputFeeStatus() : undefined);
 		},
 
 		// Over the store alone: neither needs the service, or a node.

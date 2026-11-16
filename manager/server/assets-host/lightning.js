@@ -390,16 +390,77 @@ function statusOf(host) {
 	} catch (_) {
 		usableChannels = 0;
 	}
-	const warnings = warningsOf(host);
+	const fees = feeStatusOf(host);
+	const warnings = warningsOf(host, fees);
 	// Off by the node's own word: said with the node's reason, so that it
 	// is not taken for a wallet that has no Lightning for its assets.
 	const quiet = wanted(host) ? notAdvertised(host) : null;
 	return {
 		mode: modeOf(host),
 		usableChannels,
+		feeCoins: feeCoinsOf(fees),
 		...(quiet ? { unavailable: { code: 'NOT_ADVERTISED', message: NOT_ADVERTISED, reason: quiet.reason } } : {}),
 		...(warnings.length ? { warning: warnings.map((w) => w.text).join(' '), warnings } : {})
 	};
+}
+
+/* ---------------------------------------------------- the fee coin pool */
+
+// Claiming a payment on chain after a channel is closed without its peer
+// takes a small confirmed coin of the wallet's own bitcoin for the miner
+// fee, and a block to prepare it. The engine says whether it could prepare
+// one now (the adapter's feeStatus), and the status hands that on.
+const FEE_POLICY_REFUSED =
+	"The wallet's node did not take the settings this app gives it for the miner fees of asset channels, so no new asset channel is opened. The channels there already are keep working. This is for whoever runs the wallet to put right, and the wallet's log says what the node refused.";
+const feeCoinsText = (neededSats) =>
+	`Keep at least ${neededSats} sats of confirmed bitcoin on-chain in this wallet. A payment caught in an asset channel that has to be closed without the peer is claimed with an on-chain transaction, and its miner fee comes from the wallet's own bitcoin. The wallet has no confirmed coin large enough for that now, so such a claim could come too late.`;
+
+/**
+ * What the engine says of its fee coin pool, or null when nobody can say.
+ * A policy the engine refused is logged the once, in the host's words, and
+ * again only if it is refused anew after it was taken. Never throws.
+ */
+function feeStatusOf(host) {
+	try {
+		if (!host.ln || !host.ln.ready() || typeof host.ln.feeStatus !== 'function') return null;
+		const said = host.ln.feeStatus() || null;
+		const refused = said && said.available === false ? said.error || {} : null;
+		const why = refused
+			? `${refused.code || 'FEE_POLICY_REFUSED'}: ${String(refused.message || '')
+					.replace(/[\u0000-\u001f\u007f]+/g, ' ')
+					.replace(/\s+/g, ' ')
+					.trim()
+					.slice(0, 300)}`
+			: null;
+		if (why !== (host.mem.feePolicySaid || null)) {
+			host.mem.feePolicySaid = why;
+			if (why) host.say('warn', `assets: asset channels: the node refused the fee settings this app gives it for asset channels, so no new asset channel is opened until that is put right (${why})`);
+		}
+		return said;
+	} catch (_) {
+		return null;
+	}
+}
+
+/** `status.lightning.feeCoins`: whether a fee coin could be prepared now, and from what. Null when nobody can say. */
+function feeCoinsOf(fees) {
+	if (!fees || fees.available !== true) return null;
+	const p = fees.preparation;
+	return {
+		possible: p.possible,
+		neededSats: p.neededSats,
+		largestConfirmedSats: p.largestConfirmedSats,
+		ready: fees.feeCoins.ready,
+		budgetRemainingSats: fees.budget.remainingSats,
+		// Why not, in the engine's word: FEE_FUNDS_UNAVAILABLE or FEE_BUDGET_EXHAUSTED.
+		reason: p.possible ? null : p.reason
+	};
+}
+
+/** No new channel while the node has refused its fee settings: said before anything is read or written. */
+function requireFeePolicy(host) {
+	const fees = feeStatusOf(host);
+	if (fees && fees.available === false) throw refusal('FEE_POLICY_REFUSED', FEE_POLICY_REFUSED, 409);
 }
 
 const CHANNEL_MISSING =
@@ -417,13 +478,26 @@ const RECOVERY_STUCK = 'The assets of a closed channel have not come back on-cha
  * budget for channel fees is used up: said while a pass meets it, and gone
  * with the first pass that does not. Never throws: the status must not.
  */
-function warningsOf(host) {
+function warningsOf(host, fees = feeStatusOf(host)) {
 	const said = [];
 	try {
 		if (channelList(host).some((c) => c.missing)) said.push({ code: 'CHANNEL_MISSING', text: CHANNEL_MISSING });
 		if (host.rows.list('l-change/').length > 0) said.push({ code: 'CHANGE_NOT_BACK', text: CHANGE_NOT_BACK });
 		if (recoveryStuck(host)) said.push({ code: 'RECOVERY_STUCK', text: RECOVERY_STUCK });
 		if (host.mem.feeBudgetOut === true) said.push({ code: 'FEE_BUDGET_EXHAUSTED', text: ENGINE_REFUSALS.FEE_BUDGET_EXHAUSTED[1] });
+		// The fee coin pool. A refused policy stops new channels, whatever the
+		// wallet holds. A pool that cannot prepare a fee coin matters to a
+		// wallet with a channel that is not over: for want of bitcoin it is
+		// said with the figure to keep, and for a used-up budget by the note
+		// the loop's own refusal has, the once.
+		if (fees && fees.available === false) {
+			said.push({ code: 'FEE_POLICY_REFUSED', text: FEE_POLICY_REFUSED });
+		} else if (fees && fees.preparation.possible === false && channelList(host).some((c) => !c.over && !c.missing)) {
+			if (fees.preparation.reason === 'FEE_FUNDS_UNAVAILABLE') said.push({ code: 'FEE_COINS_UNAVAILABLE', text: feeCoinsText(fees.preparation.neededSats) });
+			else if (fees.preparation.reason === 'FEE_BUDGET_EXHAUSTED' && !said.some((w) => w.code === 'FEE_BUDGET_EXHAUSTED')) {
+				said.push({ code: 'FEE_BUDGET_EXHAUSTED', text: ENGINE_REFUSALS.FEE_BUDGET_EXHAUSTED[1] });
+			}
+		}
 	} catch (_) {
 		/* what could not be read is not said */
 	}
@@ -568,6 +642,7 @@ function insufficientAsset(needed, total, free) {
  * library what the funding transaction would cost; changes nothing.
  */
 async function planOpen(host, body, feeRate) {
+	requireFeePolicy(host);
 	const amount = ops.parseUnits(body.amount);
 	const key = hexKey(body.key);
 	const registry = host.registry();
@@ -2014,6 +2089,11 @@ async function pass(host, { block = false } = {}) {
 	// anything the library reported since the pass before, met it used up.
 	const out = host.mem.feeBudgetMet === true;
 	host.mem.feeBudgetMet = false;
+	// What the engine says of its fee coins is told when it changes.
+	const feeNow = JSON.stringify([feeCoinsOf(feeStatusOf(host)), host.mem.feePolicySaid || null]);
+	const feeMoved = host.mem.feeSeen !== undefined && host.mem.feeSeen !== feeNow;
+	host.mem.feeSeen = feeNow;
+	if (feeMoved) host.emitStatus();
 	if (out !== (host.mem.feeBudgetOut === true)) {
 		host.mem.feeBudgetOut = out;
 		host.emitStatus();

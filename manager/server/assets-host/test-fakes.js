@@ -514,6 +514,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		changeRestorable: true,
 		// What the node says of offering asset channels. Undefined for an engine that cannot say.
 		advertisement: { advertised: true },
+		// What the engine says of its fee coin pool. Undefined is an engine with no fee policy.
+		feeStatus: undefined,
 		openFee: null,
 		connectGate: null,
 		cancelFails: false,
@@ -995,6 +997,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				flow.reclaimed = txid;
 				// As the wire has it: the reverse of what a person is shown.
 				return { txid: Buffer.from(txid, 'hex').reverse(), transaction: { txIn: [], txOut: [] }, feeSat: BigInt(opts.reclaimFee) };
+			},
+			fixedOutputFeeStatus() {
+				reads('fixedOutputFeeStatus');
+				return opts.feeStatus || undefined;
 			},
 			advertisement() {
 				reads('advertisement');

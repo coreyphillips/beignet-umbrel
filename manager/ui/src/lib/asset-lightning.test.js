@@ -257,3 +257,16 @@ test('the most that goes into one channel is what the wallet holds of a single i
 	assert.doesNotMatch(saidOf({ code: 'FUNDING_INPUTS', message: 'x', details: { eligibleSats: '0', neededSats: '360', otherSats: '0' } }).text, /Another/);
 	assert.equal(saidOf({ code: 'FUNDING_INPUTS', message: 'As the host said it.', details: {} }).text, 'As the host said it.');
 });
+
+import { feeCoinsShort as shortOfFeeCoins } from './asset-lightning.js';
+
+test('a wallet is short of fee coins only when the node says it has no bitcoin to prepare one from', () => {
+	const said = (extra) => ({ possible: false, neededSats: '1500', largestConfirmedSats: '0', ready: 0, budgetRemainingSats: '25000', reason: 'FEE_FUNDS_UNAVAILABLE', ...extra });
+	assert.equal(shortOfFeeCoins(said()), true);
+	assert.equal(shortOfFeeCoins(said({ possible: true, reason: null })), false);
+	// A used-up budget is another matter, with a note of its own.
+	assert.equal(shortOfFeeCoins(said({ reason: 'FEE_BUDGET_EXHAUSTED' })), false);
+	assert.equal(shortOfFeeCoins(said({ neededSats: undefined })), false);
+	assert.equal(shortOfFeeCoins(null), false);
+	assert.equal(shortOfFeeCoins(undefined), false);
+});

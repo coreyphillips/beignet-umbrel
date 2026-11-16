@@ -377,6 +377,21 @@ function rateText(reg, rate) {
 const satsOf = (msat) => Number((BigInt(msat) + 999n) / 1000n);
 
 /** The status object, for GET /status, GET /extensions and the status event. */
+/** `status.lightning.feeCoins` as the dashboard reads it: amounts as strings of sats, or null. */
+function feeCoinsView(said) {
+	if (!said || typeof said !== 'object') return null;
+	const sats = (value) => (/^\d+$/.test(String(value)) ? String(value) : '0');
+	const possible = said.possible === true;
+	return {
+		possible,
+		neededSats: sats(said.neededSats),
+		largestConfirmedSats: sats(said.largestConfirmedSats),
+		ready: Number.isSafeInteger(said.ready) && said.ready >= 0 ? said.ready : 0,
+		budgetRemainingSats: sats(said.budgetRemainingSats),
+		reason: !possible && typeof said.reason === 'string' ? said.reason : null
+	};
+}
+
 function statusView({ cfg, phase, error = null, tip = 0, summary = {}, startup = null, proofServer = {}, backup = {}, lightning = {} }) {
 	const universe = cfg.defaultUniverse;
 	return {
@@ -405,9 +420,14 @@ function statusView({ cfg, phase, error = null, tip = 0, summary = {}, startup =
 		// there when the mode is off for a reason of the node's own, such as
 		// its not offering asset channels to its peers: { code, message,
 		// reason }, the reason being the node's word for it, or null.
+		// `feeCoins` is whether the node could prepare, now, the coin that
+		// pays the miner fee of an on-chain claim of an asset channel, and
+		// from what: { possible, neededSats, largestConfirmedSats, ready,
+		// budgetRemainingSats, reason }, or null when nobody can say.
 		lightning: {
 			mode: lightning.mode === 'full' ? 'full' : 'off',
 			usableChannels: lightning.usableChannels || 0,
+			feeCoins: feeCoinsView(lightning.feeCoins),
 			...(lightning.unavailable && lightning.mode !== 'full'
 				? {
 						unavailable: {
