@@ -4,7 +4,7 @@ A wallet can create, receive, send and burn [Taproot Assets](https://docs.lightn
 
 This release covers assets on-chain. Assets in Lightning channels are built in the dashboard and stay hidden until the engine can carry them (see [Not covered](#not-covered)).
 
-**Read [Before you use this on mainnet](#before-you-use-this-on-mainnet) first.** The short version: the recovery phrase alone does not bring assets back, none of this code has had an independent security review, and a transfer only arrives if the proof server accepts its proof, which the public testnet3 server did not when this was tested (see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers)).
+**Read [Before you use this on mainnet](#before-you-use-this-on-mainnet) first.** The short version: the recovery phrase alone does not bring assets back, none of this code has had an independent security review, and a transfer normally reaches its recipient through a proof server, which has to accept its proof. The public testnet3 server did not when this was tested; such a transfer is finished by handing the proof over as a file (see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers)).
 
 ## What you can do
 
@@ -12,6 +12,7 @@ This release covers assets on-chain. Assets in Lightning channels are built in t
 - **Receive.** Pick an asset you hold, or look one up by its asset ID or group key, and enter an amount. The wallet makes an address for that one payment and shows it as a QR code. The row moves from waiting, to seen on chain, to verified, by itself. **Use each address once:** a second payment to the same address is not credited. An address nobody has paid is checked automatically for seven days; after that its row says so and offers **Check now**.
 - **Send.** Paste a Taproot Assets address. The wallet reads it and shows the asset, the amount the address asks for, where the proof will be delivered and the exact fee, and nothing is broadcast until you confirm.
 - **Burn.** Destroy an amount of an asset for good. The dialog asks for the amount twice.
+- **Hand a proof over as a file.** When a proof server will not carry a transfer's proof, the sender saves it as a file and the recipient imports it. See [Handing a proof over as a file](#handing-a-proof-over-as-a-file).
 - **See it all.** Holdings with their bitcoin locked beside them, every mint, receive, send and burn with its progress, and the details of each asset: its ID, metadata, where it was issued, how much this wallet created.
 
 An asset address pasted into the ordinary Send tab is recognised and handed to the Assets tab.
@@ -72,7 +73,7 @@ Addresses are made in the **version 1** format, which is what a universe running
 
 ## Transfers and the public universe servers
 
-A transfer reaches its recipient only when a universe server takes its proof and hands it on. What the default servers did with what this app produced, when it was tested in November 2026:
+A transfer is complete for its recipient once their wallet holds its proof. A universe server is how the proof usually gets there: the sender's wallet gives it to the server the address names, and the recipient's wallet fetches it. What the default servers did with what this app produced, when it was tested in November 2026:
 
 | Server | Issuance proofs (create) | Transfer proofs (send) |
 | --- | --- | --- |
@@ -90,9 +91,31 @@ What is known about the testnet3 refusal:
 What a refusal means for you:
 
 - **Creating, holding and burning are not affected.** Your own assets never wait on a universe.
-- **A send goes out and confirms, and the recipient does not have the asset until the server takes its proof.** The amount is not lost: it sits in the recipient's output on chain, the sending wallet keeps the proof (it is in the assets backup) and goes on offering it, and what is left over stays with the sender. But nothing in this release can hand a proof over any other way, so until the server takes it the recipient cannot use what was sent.
+- **A send goes out and confirms, and the recipient's wallet waits for a proof the server does not have.** The amount is not lost: it sits in the recipient's output on chain, the sending wallet keeps the proof (it is in the assets backup) and goes on offering it, and what is left over stays with the sender.
+- **The sender can hand the proof over as a file instead**, and the recipient has the asset as soon as they import it. See below. Both transfers the testnet3 server refused were finished this way.
 - **Try a small amount first**, on any network, and wait for the recipient to see it.
 - **A universe server of your own avoids it.** Both wallets name the same server under Assets, Settings (see [Where the requests go](#where-the-requests-go)): a `tapd` whose universe takes proofs from outside (`tapcli universe federation config global --proof_type issuance --allow_insert true --allow_export true`, and the same for `transfer`). That is the setup every regtest scenario here runs on.
+
+### Handing a proof over as a file
+
+A proof is a file: the asset's whole history, from its creation to the payment. A server is one way to move it. When the server refuses it, or cannot be reached, move it yourself.
+
+1. **The sender saves it.** A send whose proof was not delivered says so in red (refused) or blue (server away) under In progress, with **Save the proof file**. The same button is in the send's details, also after it completes. The file is named `proof-<asset>-<transaction>.assetproof`. It exists once the transaction is 6 blocks deep (1 on regtest).
+2. **The sender gives it to the recipient**, any way a file travels. It holds no key and cannot move anything. It does show the asset's history to whoever reads it, as a universe server would.
+3. **The recipient imports it.** Assets, Receive, **Import a proof file**, or **Import the proof file** on the receive that is waiting. The asset is in their holdings when the wallet says the proof checks out.
+4. **The sender marks it as handed over**, so the send stops reading as waiting. This is the sender's own note and changes nothing else: the wallet cannot know what the recipient did with a file, and it goes on offering the proof to the server from time to time. **Undo** in the send's details takes the mark back.
+
+What the recipient's wallet does with a file, which is what it does with a proof from a server:
+
+- It takes a proof only for a payment **it found on the chain itself, at an address it made**. A file for anything else is refused, and a file imported before the payment is in a block is refused with the reason.
+- The proof has to be for that exact output, asset and amount, and **every step of its history is verified against the chain**. A file that fails is dropped, nothing is taken from it, and the wallet goes on asking the proof server as before.
+- A proof that names a block the chain does not have, as one does after a reorganisation, is not taken at its word: the wallet reads the block that really holds the transaction from the chain, and verifies the proof against that.
+- A file imported before the payment is 6 blocks deep is kept, and used by itself when it is.
+- Importing the same file twice changes nothing. A file can be up to 4 MB.
+
+So a file from someone you do not trust can waste a moment and cannot give you a false balance, any more than a dishonest proof server could. What [Before you use this on mainnet](#before-you-use-this-on-mainnet) says about the Electrum server applies to a file exactly as it does to a server's proof.
+
+Both ends need a wallet that can take a file. This app can. Lightning Labs' `tapd` can verify one (`tapcli proofs verify`) and receives proofs through a universe server, so a payment to a `tapd` address still depends on the server that address names.
 
 ## Fees
 
@@ -136,7 +159,7 @@ Mainnet is on by default, with no extra step. That is a choice for convenience, 
 1. **No independent security review.** Neither ts-tap nor the path the engine loads it through has been audited. `tapd` itself is described by its authors as alpha software. A bug can lose assets, and the bitcoin anchoring them.
 2. **The phrase is not enough.** See above. Without the app backup, lost data means lost assets.
 3. **No fee bumping.** See [Fees](#fees).
-4. **You depend on a universe server, and it has to accept the proof.** A recipient needs the proof to credit a transfer. If the server is down, a send's proof delivery waits and is retried, and a receive waits. If the server refuses the proof, the recipient does not get the asset until it changes its mind, and the public testnet3 server refused every transfer proof from this app when it was tested. The mainnet server has not been tried. Read [Transfers and the public universe servers](#transfers-and-the-public-universe-servers) and send a small amount first.
+4. **You depend on a universe server, and it has to accept the proof.** A recipient needs the proof to credit a transfer. If the server is down, a send's proof delivery waits and is retried, and a receive waits. If the server refuses the proof, the recipient's wallet does not get it from there, and the public testnet3 server refused every transfer proof from this app when it was tested. The mainnet server has not been tried. The way through is to [hand the proof over as a file](#handing-a-proof-over-as-a-file), which needs the recipient to be someone you can send a file to, using a wallet that can import one. Read [Transfers and the public universe servers](#transfers-and-the-public-universe-servers) and send a small amount first.
 5. **Your Electrum server is trusted more than usual.** It tells the wallet which block is at which height and whether an anchor is unspent. The wallet checks each proof's merkle path and header, not proof of work. A dishonest server working with a dishonest sender could make the wallet accept a proof that is not on the real chain. Use an Electrum server you run.
 6. **A name is not an identity.** Anyone can create an asset called USDT. An asset is identified by its ID (or group key), which is what the coloured avatar is drawn from, and the Send and Receive forms show it. Check the ID with whoever issued the asset.
 7. **Privacy.** A universe server is public by design, and proofs carry an asset's history.
@@ -148,7 +171,7 @@ Mainnet is on by default, with no extra step. That is a choice for convenience, 
 - **Version 2 addresses**, to receive or to pay.
 - **One address, several payments.** An address is for one payment of one amount. A second payment to it sits on chain uncredited, and this app has no way to claim it yet.
 - Sending to several addresses in one transaction, choosing coins by hand, and merging small asset outputs.
-- Exporting a proof as a file, or importing one by hand. Proofs travel through the proof server only.
+- Importing a proof file for anything but a payment to one of this wallet's own addresses (an asset somebody holds for you, say), and exporting the proof of an asset this wallet holds without sending it. A proof file here is a transfer's, saved by its sender for its recipient.
 - Running a universe server, or syncing with a federation of them.
 - Hardware signing, multi-signature and scripted asset keys.
 
@@ -157,9 +180,9 @@ Mainnet is on by default, with no extra step. That is a choice for convenience, 
 Three layers, each of which can be run again.
 
 - **Unit tests.** The assets host, the manager's part and the dashboard each have tests beside the code (`cd manager && npm test`, `cd manager/ui && npm test`). With `ASSETS_ENGINE_PREFIX` pointing at an engine prefix, the manager's tests also load the real vendored packages into a real daemon and exercise the contract between them.
-- **Regtest, end to end.** `scripts/assets-regtest/` drives a real manager and real wallet daemons against a regtest chain and `tapd`, Lightning Labs' daemon. `tapd` verifies every proof it is given, so an issuance it stores and a transfer it credits are its word that what this app produced is valid, and the app in turn receives what `tapd` mints and sends. The scenarios cover: every kind of mint, with refusals; both directions with `tapd`; wallet to wallet with change, and burn; previews that are cancelled, replaced or abandoned; restarts and outright kills of the daemon in the middle of a mint, a preview, a send and a receive; a request repeated with its key; a reorganisation that takes the mint's block out of the chain; archive, wipe and restore; changing the proof server; and switching assets off and on for one wallet.
+- **Regtest, end to end.** `scripts/assets-regtest/` drives a real manager and real wallet daemons against a regtest chain and `tapd`, Lightning Labs' daemon. `tapd` verifies every proof it is given, so an issuance it stores and a transfer it credits are its word that what this app produced is valid, and the app in turn receives what `tapd` mints and sends. The scenarios cover: every kind of mint, with refusals; both directions with `tapd`; wallet to wallet with change, and burn; previews that are cancelled, replaced or abandoned; restarts and outright kills of the daemon in the middle of a mint, a preview, a send and a receive; a request repeated with its key; a reorganisation that takes the mint's block out of the chain; archive, wipe and restore; changing the proof server; switching assets off and on for one wallet; and a proof server that refuses transfer proofs, where the proof goes by file instead, `tapd` verifies each exported file with its own `tapcli proofs verify`, forged files with every checksum right (ten times the amount, a larger issuance, a history cut short) are refused by verification, and what arrived by file is sent on by file and then to `tapd`, which credits it.
 - **Testnet4,** against `testnet4.universe.lightning.finance`. Two mints (a normal asset with two decimals and a collectible in one transaction, a grouped asset in another), six confirmations, all three issuances found on the public universe, a second wallet that learned the asset from that universe alone, and a transfer to it that completed on both sides with its proof delivered through the public server. Then the second wallet sent part of it back, the first burned some, both wallets were archived, erased and restored from the archive, held what they held before, and the restored wallets sent and received again. Every proof went through the public server.
-- **Testnet3,** against `testnet.universe.lightning.finance`. The same mints, six confirmations, the issuances found on the public universe and learned from it by a second wallet, and a transfer that confirmed. Its proof was refused by the server, so the transfer did not complete: see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers).
+- **Testnet3,** against `testnet.universe.lightning.finance`. The same mints, six confirmations, the issuances found on the public universe and learned from it by a second wallet, and a transfer that confirmed. Its proof was refused by the server, so the transfer did not complete through it: see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers). Both refused transfers (an asset with a group and one without) were then completed by saving their proof files from the sending wallet and importing them into the receiving one, which verified each against the chain and credited it. The receiving wallet then sent part of it back, the server refused that proof too, and the first wallet took it by file the same way.
 
 The regtest stack runs its `tapd` with today's proof rules in force from the first block (`--proofactivationheight=1`), so the scenarios exercise what mainnet, testnet3 and testnet4 require of a proof and not the older rules a stock regtest `tapd` keeps.
 

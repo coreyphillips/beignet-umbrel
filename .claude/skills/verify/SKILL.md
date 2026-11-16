@@ -126,6 +126,28 @@ Flows:
 - Burn: an asset's page, Burn, an amount and the asset's name typed exactly.
 - Settings: the Settings button at the end of the views bar. Test, Custom,
   and Advanced for the lookup by ID.
+- Proof files (a proof handed over as a file, for when the proof server
+  will not carry it). Sender: `assets-demo=send-refused` on `demo-main`
+  gives a send with the red note, whose buttons are Offer it again now,
+  Save the proof file (`asset-proof-save`, a download named
+  `proof-<8 hex>-<8 hex>.assetproof`) and Mark as handed over
+  (`asset-proof-handed`). Marked, the send leaves In progress and the count
+  beside the tab; on the asset's page its history row reads "handed over" in
+  green, and its dialog has the blue `asset-proof-handed-over` note with
+  Save the file again and Undo. Recipient: every Receive view ends its
+  Recent receives card with the quiet line `asset-proof-handover` and Import
+  a proof file (`asset-proof-import`, over a hidden
+  `asset-proof-import-file` input). The whole round trip: put
+  `assets-demo=proof-server-down` on `demo-witness`, make an address there,
+  pay it from `demo-main`, wait about 10 s for the blue undelivered note
+  under `demo-main`'s In progress and on its Sent card, save the file
+  (`page.waitForEvent('download')`), then on `demo-witness` wait for the
+  receive to read "proof late", open it and give the saved file to
+  `asset-proof-late-import-file` with `setInputFiles`. Expect the toast "The
+  proof checks out, and the asset is in your holdings." and the asset under
+  Holdings. Any other
+  file is refused in a sentence, and the same file on `demo-savings` says it
+  is not for an address that wallet made.
 
 Lightning (asset channels). Real wallets hide all of it until the engine can
 carry asset channels: the manager answers `assetChannelsAvailable: false` and
