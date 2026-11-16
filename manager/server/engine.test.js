@@ -235,3 +235,95 @@ test('Electrum certificate verification needs the env parser and the option wiri
 	}
 	assert.equal(electrumTlsVerifyAvailable(undefined), false);
 });
+
+// Taproot Assets (docs/ASSETS.md): the engine's host extension contract, and
+// the two packages the assets host is built on, installed beside the engine.
+function assetsInstall({ contract = true, loader = true, packages = ['ts-tap', '@ts-tap/beignet'], lightning = false } = {}) {
+	const install = fakeInstall('0.42.0');
+	const cli = path.join(install.root, 'node_modules', 'beignet', 'dist', 'cli');
+	if (contract) {
+		fs.writeFileSync(
+			path.join(cli, 'extension.js'),
+			`exports.EXTENSION_API = 'beignet-extension-api/1';${lightning ? ' /* auxiliaryChannels */' : ''}`
+		);
+	}
+	fs.writeFileSync(path.join(cli, 'cli.js'), loader ? 'process.env.BEIGNET_EXTENSIONS' : '');
+	for (const name of packages) {
+		const dir = path.join(install.root, 'node_modules', ...name.split('/'));
+		fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+		fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, version: '0.0.1' }));
+		if (lightning && name === '@ts-tap/beignet') fs.writeFileSync(path.join(dir, 'dist', 'lightning.js'), '');
+	}
+	return install;
+}
+
+test('assets need the extension contract in the engine and both packages installed beside it', () => {
+	const { extensionsAvailable, assetsAvailable, assetsModulesDir, enginePackageDir } = require('./engine');
+	const cases = [
+		[{}, true, true],
+		[{ contract: false }, false, false],
+		[{ loader: false }, false, false],
+		[{ packages: ['ts-tap'] }, true, false],
+		[{ packages: ['@ts-tap/beignet'] }, true, false],
+		[{ packages: [] }, true, false]
+	];
+	for (const [options, extensions, available] of cases) {
+		const { root, bin } = assetsInstall(options);
+		try {
+			assert.equal(extensionsAvailable(bin), extensions, JSON.stringify(options));
+			assert.equal(assetsAvailable(bin), available, JSON.stringify(options));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	}
+	const { root, bin } = assetsInstall();
+	try {
+		const real = fs.realpathSync(root);
+		assert.equal(enginePackageDir(bin), path.join(real, 'node_modules', 'beignet'));
+		assert.equal(assetsModulesDir(bin), path.join(real, 'node_modules'));
+		// A link to the binary is followed to the package it belongs to.
+		const link = path.join(root, 'beignet');
+		fs.symlinkSync(bin, link);
+		assert.equal(assetsModulesDir(link), path.join(real, 'node_modules'));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	assert.equal(assetsAvailable(undefined), false);
+	assert.equal(assetsModulesDir(''), null);
+});
+
+test('an engine run from a bare checkout has no packages beside it, so no assets', () => {
+	const { assetsAvailable, assetsModulesDir } = require('./engine');
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'beignet-engine-'));
+	try {
+		const cli = path.join(root, 'beignet', 'dist', 'cli');
+		fs.mkdirSync(cli, { recursive: true });
+		fs.writeFileSync(path.join(root, 'beignet', 'package.json'), JSON.stringify({ name: 'beignet', version: '0.42.0' }));
+		fs.writeFileSync(path.join(cli, 'extension.js'), "'beignet-extension-api/1'");
+		fs.writeFileSync(path.join(cli, 'cli.js'), 'BEIGNET_EXTENSIONS');
+		assert.equal(assetsModulesDir(path.join(cli, 'cli.js')), null);
+		assert.equal(assetsAvailable(path.join(cli, 'cli.js')), false);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('asset channels need the Lightning half of both the engine contract and the adapter', () => {
+	const { assetChannelsAvailable } = require('./engine');
+	const onChain = assetsInstall();
+	const both = assetsInstall({ lightning: true });
+	try {
+		assert.equal(assetChannelsAvailable(onChain.bin), false);
+		assert.equal(assetChannelsAvailable(both.bin), true);
+		// The adapter's entry alone is not enough.
+		fs.writeFileSync(path.join(onChain.root, 'node_modules', '@ts-tap', 'beignet', 'dist', 'lightning.js'), '');
+		assert.equal(assetChannelsAvailable(onChain.bin), false);
+		// Nor is the engine's half alone.
+		fs.rmSync(path.join(both.root, 'node_modules', '@ts-tap', 'beignet', 'dist', 'lightning.js'));
+		assert.equal(assetChannelsAvailable(both.bin), false);
+	} finally {
+		fs.rmSync(onChain.root, { recursive: true, force: true });
+		fs.rmSync(both.root, { recursive: true, force: true });
+	}
+	assert.equal(assetChannelsAvailable(undefined), false);
+});

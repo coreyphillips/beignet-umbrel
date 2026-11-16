@@ -102,6 +102,16 @@ const TOR_PROXY_SCOPE_MARKERS = ['BEIGNET_TOR_PROXY_ONION_ONLY'];
 // is where the parsed settings reach the node.
 const ELECTRUM_TLS_VERIFY_MARKERS = ['BEIGNET_ELECTRUM_TLS_VERIFY', 'BEIGNET_ELECTRUM_TLS_FINGERPRINTS'];
 
+// Host extensions (beignet's docs/EXTENSIONS.md): the daemon loads a module
+// the manager names and serves its routes under /x/<id>. The contract's
+// version is a literal in the module that defines it, which a release
+// without the contract does not ship at all.
+const EXTENSION_API_MARKERS = ['beignet-extension-api/1'];
+// The two packages the assets host is built on. They are installed beside
+// the engine, in the same node_modules, so the adapter resolves the one
+// engine copy the daemon runs (docs/ASSETS.md).
+const ASSETS_PACKAGES = ['ts-tap', '@ts-tap/beignet'];
+
 /** The text of a module beside the daemon binary, or null when absent. */
 function siblingModule(bin, file) {
 	if (!bin) return null;
@@ -198,7 +208,78 @@ function irohRelayOnlyAvailable(bin = process.env.BEIGNET_BIN) {
 		&& probe(bin, 'beignet-node.js', ['irohRelayOnlyMode']);
 }
 
+/** The directory of the beignet package `bin` belongs to, or null. */
+function enginePackageDir(bin = process.env.BEIGNET_BIN) {
+	if (!bin) return null;
+	let dir;
+	try {
+		// The image's `beignet` is a link into the package; walk from the file.
+		dir = path.dirname(fs.realpathSync(path.resolve(bin)));
+	} catch (_) {
+		return null;
+	}
+	for (let i = 0; i < 8; i++) {
+		try {
+			const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+			if (parsed && parsed.name === 'beignet') return dir;
+		} catch (_) {
+			/* no manifest here, keep walking */
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return null;
+}
+
+/**
+ * The node_modules directory the engine is installed in, when the packages
+ * the assets host needs are installed there with it. Null otherwise: a bare
+ * checkout run through BEIGNET_BIN has no such directory, and an install
+ * that carries only the engine has no assets.
+ */
+function assetsModulesDir(bin = process.env.BEIGNET_BIN) {
+	const pkg = enginePackageDir(bin);
+	if (!pkg) return null;
+	const modules = path.dirname(pkg);
+	if (path.basename(modules) !== 'node_modules') return null;
+	for (const name of ASSETS_PACKAGES) {
+		if (!fs.existsSync(path.join(modules, ...name.split('/'), 'package.json'))) return null;
+	}
+	return modules;
+}
+
+/** True when the engine behind `bin` loads host extensions. */
+function extensionsAvailable(bin = process.env.BEIGNET_BIN) {
+	// The contract, and the start command that reads the list of modules.
+	return probe(bin, 'extension.js', EXTENSION_API_MARKERS) && probe(bin, 'cli.js', ['BEIGNET_EXTENSIONS']);
+}
+
+/** True when the engine behind `bin` can run the assets host: the contract, and the packages beside it. */
+function assetsAvailable(bin = process.env.BEIGNET_BIN) {
+	return extensionsAvailable(bin) && assetsModulesDir(bin) !== null;
+}
+
+/**
+ * True when the engine and the bundled library can carry assets in
+ * Lightning channels. Both halves have to say so: the engine's contract
+ * hands an extension the node, and the adapter ships its Lightning entry.
+ */
+function assetChannelsAvailable(bin = process.env.BEIGNET_BIN) {
+	const modules = assetsModulesDir(bin);
+	if (!modules || !extensionsAvailable(bin)) return false;
+	if (!probe(bin, 'extension.js', ['auxiliaryChannels'])) return false;
+	return fs.existsSync(path.join(modules, '@ts-tap', 'beignet', 'dist', 'lightning.js'));
+}
+
 module.exports = {
+	extensionsAvailable,
+	assetsAvailable,
+	assetChannelsAvailable,
+	assetsModulesDir,
+	enginePackageDir,
+	EXTENSION_API_MARKERS,
+	ASSETS_PACKAGES,
 	irohAvailable,
 	irohRelayOnlyAvailable,
 	concurrentOfflineReceiveAvailable,
