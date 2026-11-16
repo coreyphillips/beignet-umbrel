@@ -69,6 +69,135 @@ Use Playwright (chromium) headless. Install into the scratchpad, not the repo.
   absent backend and 500s; always use the `/w/...` routes.
 - Demo mock state is per-page-load module state; a reload resets balances.
 
+## Assets
+
+The Assets tab is `/w/:id/assets`. Its place is in the address: `?view=receive`,
+`?view=send`, `?view=create`, and `?asset=<key>` for one asset's page (the key
+is the `data-key` of its row on Holdings). The demo's assets backend keeps its
+state in sessionStorage (`beignet-demo-assets-v1`), so it survives a reload
+within one browser context, and its rows move by the clock: a mint or a
+receive gains a confirmation about every 5 s, a send completes in about 11 s,
+a prepared send or burn expires after 60 s.
+
+Wallets and what each one is for:
+
+- `demo-main`: the rich mainnet wallet. Three normal assets, two collectibles
+  as tiles, the stale-backup note. The Pico row reads
+  `90,071,992.54740993`, a balance above 2^53: the last digit must be 3.
+- `demo-testnet`: a receive waiting on confirmations and one whose proof is
+  late (`[data-testid="asset-proof-late"]`, with Try again now). tUSD is a
+  grouped asset.
+- `demo-fresh`: the first-run empty state (`assets-empty`) with the limits list.
+- `demo-savings`: on-chain only, with a mint found at 2 of 6 confirmations
+  (`asset-progress-item`). Watch it across one confirmation: the row must
+  not change height.
+- `demo-lfbw`: lightning-first, no on-chain bitcoin, so a send is refused for
+  sats. `demo-witness` holds no assets: use it as the other party.
+
+Flows:
+
+- Send: make an address on `demo-witness` (Receive, Another asset, paste
+  the `data-key` from `demo-main`, an amount, Create address, read
+  `asset-address-full`), then paste it into `demo-main`'s Send. Expect
+  `asset-send-preview` to reach `data-state="read"`, then `asset-send-cost`,
+  then Send, then `asset-send-status` to walk to `data-state="complete"`.
+- Send refusals (`asset-send-refusal`, with `data-code`): the address cut
+  short (it fails its checksum, and so does one whose prefix was edited),
+  an address made on `demo-testnet` (wrong network), an amount above the
+  balance, a fee rate of 9999, the address pasted into the wallet that made
+  it (own address), into `demo-savings` (asset not held) and into
+  `demo-lfbw` (no sats). A bitcoin address gets a blue note instead, and so
+  does a Lightning invoice on an on-chain only wallet (elsewhere in the demo
+  it opens the pay flow, see Lightning below). A refusal is always a
+  sentence, never a bare code.
+- Receive: under a new address, the line that it takes one payment
+  (`asset-address-once`), and in the Status card the quiet line that the
+  wallet checks it by itself, with Check now (`asset-watched`).
+- Create: a name of 60 characters and one of 60 with no space in it, minted
+  together. Then look at the Creating card, the In progress row, the
+  Holdings row, the asset's page and the Receive chips at 480 px.
+- Burn: an asset's page, Burn, an amount and the asset's name typed exactly.
+- Settings: the Settings button at the end of the views bar. Test, Custom,
+  and Advanced for the lookup by ID.
+
+Lightning (asset channels). Real wallets hide all of it until the engine can
+carry asset channels: the manager answers `assetChannelsAvailable: false` and
+the host `status.lightning.mode: 'off'`. The demo answers true, so it shows on
+every demo wallet that has Lightning. Use `demo-main`, which has one open BUSD
+channel with "Lightning Labs edge" (2,400.00 yours, 3,100.00 theirs).
+
+- Channels, `/w/demo-main/channels`: the "Asset channels" card
+  (`asset-channels`) sits under the bitcoin channels on the Open view only.
+  Open asset channel (`asset-channel-open`) gives the dialog
+  (`asset-channel-open-dialog`): an asset, an amount, a peer, a fee rate,
+  then the cost table (`asset-channel-cost`: 100,000 sats go in with the
+  asset, 4,320 sats of miner fee at 18 sat/vB). The new row reads "opening"
+  for about 15 s, then "open". A typed peer whose key starts `0200000000` is
+  refused (`asset-channel-refusal`, `PEER_NO_ASSET_CHANNELS`). Close on a row
+  gives the cooperative page, with force close behind a second page. The same
+  dialog opens from an asset's page (`asset-action-open-channel`) with that
+  asset already chosen.
+- Receive, `/w/demo-main/assets?view=receive`: pick BUSD and type 250. The
+  "Lightning invoice" card (`asset-invoice-card`) prices it
+  (`data-state="priced"`), Create invoice shows the QR and a 60 s countdown,
+  and about 12 s later the QR gives way to `asset-invoice-paid`. An amount of
+  5000 is refused in words (more than the 3,100.00 the peer holds).
+- Pay, `/w/demo-main/assets?view=send`: paste a BOLT11 invoice (copy one from
+  `asset-invoice-full`, or build one in the page with `bech32Encode` from
+  `src/lib/payment-uri.js` and an hrp like `lnbc50u`; the checksum must be
+  right). `asset-pay` shows what the invoice asks for, the assets that can pay
+  it and a price held for 30 s; the button reads "Pay 3.57 BUSD" and the
+  receipt is `asset-pay-receipt`. Left alone for 30 s the button becomes "Get
+  a new price" (`asset-pay-renew`) and nothing is paid. A price that moved is
+  only reachable when the wallet's clock is ahead of the page's: in the same
+  `page.evaluate`, replace `Date.now` with one 31 s ahead and click
+  `asset-pay-submit`. Expect `asset-pay-changed` (about 1% more), no receipt,
+  the button showing the new amount and held disabled for a second.
+- `demo-testnet` has Lightning and no asset channel: an empty Asset channels
+  card, an invoice card that says nothing can be received, and `asset-pay-none`
+  for a pasted `lntb` invoice. `demo-savings` (on-chain only) must show none of
+  this: no Channels tab, no invoice card, no "Open channel" on an asset's page.
+
+States a healthy wallet never shows are switched from the address, for the
+wallet in the address, and stick until switched back:
+`/w/demo-main/assets?assets-demo=<state>`.
+
+| `assets-demo=` | What to expect |
+| --- | --- |
+| `failed` | One card, `assets-unavailable`: the reason, and that the bitcoin wallet is unaffected. No views bar, no warnings, no toast, no skeleton. |
+| `unloaded` | The same card, from a route answering 503 `EXTENSION_UNAVAILABLE`. |
+| `starting` | `assets-starting`: quiet, with a count (3 of 12) and no spinner. |
+| `restarting` | `assets-restarting`: a wait, not a failure. |
+| `proof-server-down` | The red `PROOF_SERVER_DOWN` warning above every view, `asset-send-waits` on Send and `asset-receive-waits` on Receive. |
+| `ok` | Back to normal (the three rows below stay until they are dealt with). |
+| `stuck` | A send two hours without a block: the blue `STUCK` note says fees cannot be bumped, with Broadcast again (`asset-rebroadcast`). Pressing it clears the note and the send goes on to confirm. |
+| `proof-refused` | Use `demo-testnet`. Its finished mint carries a blue note, `asset-proof-unpublished`, in the In progress list and on the asset's page: created and held, the proof server has not taken its proof. Never red, never "failed". Try again clears it. |
+| `send-refused` | A send six blocks deep whose proof the proof server answered "no" to. Its In progress row carries a red note, `asset-proof-undelivered` (`data-code="PROOF_REFUSED"`): the server answered, the recipient does not have the asset yet, nothing is lost. The timeline's proof step gives the server's reason and never says "not answering". Offer it again now clears it and the send completes. |
+| `unwatched` | Use `demo-testnet` with `view=receive`. An address nine days unpaid reads "not checked" in Recent receives, and its dialog has `asset-not-watched` with Check now, which finds the payment. |
+
+What to look at, in dark, in light (`localStorage['beignet-theme'] = 'light'`
+before load) and at 480 px wide:
+
+- Nothing scrolls sideways and nothing leaves its card. Asset IDs, addresses
+  and transaction IDs are shortened or wrap inside their box; a full address
+  is only ever shown inside `asset-address-full`. To check by measurement:
+  `document.documentElement.scrollWidth` must not exceed `clientWidth`. The
+  connector lines of a timeline (`li.tl-step`) report a scroll width wider
+  than their box by design; that one is not an overflow.
+- Right after a mint, send or burn is broadcast there must be no "no
+  bitcoin on-chain" banner: the wallet's balance reads zero for a moment
+  and the page waits for the first block before saying so.
+- At 480 px the receive and history tables become two-line rows, and the
+  stat tiles take one line each (the app's convention on a phone).
+- Figures line up on the right in Holdings and keep their decimals; the unit
+  beside a figure is smaller and muted.
+- Hover and keyboard focus on asset rows, tiles and chips: the focus ring is
+  the orange outline, fully visible, not clipped by the card.
+- The timeline (`.tl-step`) in a progress row, in the Sent card and in the
+  transfer dialog: marks aligned on one line, the current step distinct.
+- Notes in both themes: red for what is blocked, blue for what is only
+  said, both readable on the light background.
+
 ## Gotchas
 
 - Polling hooks (`usePoll`) mean some UI (wallet dropdown, channel gating

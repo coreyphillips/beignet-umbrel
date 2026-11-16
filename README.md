@@ -45,6 +45,14 @@ Hover or tap the **?** beside a setting in the dashboard for what it does.
 - **Activity**: on-chain and Lightning history, coins, and fee bumping (RBF or CPFP) for unconfirmed transactions.
 - **Notifications** when money arrives, a payment settles or fails, or a channel opens or closes.
 
+### Taproot Assets
+
+- **Create** your own assets: a normal asset with a supply and decimals, or a collectible, with metadata and the choice of minting more later. The cost in sats is shown before you confirm.
+- **Receive** by picking an asset you hold, or looking one up by its ID, and sharing the address as text or a QR. The row follows the payment from the chain to a verified proof by itself.
+- **Send** by pasting an asset address: the asset, the amount, where the proof goes and the exact fee are shown first, and nothing is broadcast until you confirm. **Burn** an amount for good from the asset's page.
+- **On mainnet, testnet and regtest**, for Lightning and on-chain only wallets, interoperable with Lightning Labs' `tapd`. Assets in Lightning channels come in a later release.
+- **Know the limits first**: a recovery phrase alone does not restore assets (the box backup does), there is no fee bumping for asset transactions yet, and none of it has had an independent security review. See [docs/ASSETS.md](docs/ASSETS.md).
+
 ### Channels and peers
 
 - **Open** a channel to any node or to one of your own wallets (zero-conf between your own), **splice** funds in or out where the peer supports it, **close** cooperatively or by force, and set each channel's routing fees.
@@ -66,7 +74,7 @@ Every role is off until you switch it on for a wallet, except that a wallet pick
 ### Backups
 
 - **Channel backup** per wallet: seed only, checkpoints via peer storage, or three guardians (async or strict quorum), with guardian rotation and restore. See [docs/CHANNEL-BACKUP.md](docs/CHANNEL-BACKUP.md).
-- **One encrypted backup of the whole box** (every wallet's seed, API token, settings and roles), with a restore flow on a fresh install. Settings shows when it was last written and which wallets changed since. See [docs/BACKUP.md](docs/BACKUP.md).
+- **One encrypted backup of the whole box** (every wallet's seed, API token, settings and roles), with a restore flow on a fresh install. It carries each wallet's Taproot Assets too, which a recovery phrase alone cannot bring back. Settings shows when it was last written and which wallets changed since. See [docs/BACKUP.md](docs/BACKUP.md).
 - **Recovery phrase** of any wallet, shown again on request from the wallet's Edit dialog, behind a warning, so a lost note of it can be written out again.
 
 ### Tools
@@ -103,10 +111,13 @@ Repository layout:
 
 - `umbrel-app-store.yml`: the community store manifest.
 - `beignet-wallet/`: the Umbrel app (manifest, compose, Tor config, icon and gallery).
-- `manager/`: the manager service (`server/`) and the dashboard UI source (`ui/`).
+- `manager/`: the manager service (`server/`) and the dashboard UI source (`ui/`). `manager/server/assets-host/` is the Taproot Assets module each wallet's daemon loads.
+- `vendor/`: the two ts-tap tarballs the image installs beside the engine, with their checksums and the commit they were built from (`scripts/vendor-ts-tap.sh`).
 - `docker/`: Dockerfile and entrypoint for the app image.
 - `docs/`: feature documentation.
 - `scripts/lfbw-regtest/`: end-to-end scenarios against real daemons on regtest.
+- `scripts/assets-regtest/`: end-to-end Taproot Assets scenarios against real daemons, a regtest chain and `tapd`.
+- `scripts/engine-prefix.sh`: installs an engine and the vendored packages side by side, the way the image does, for development and CI.
 - `.github/workflows/`: `build-image.yml` (multi-arch image to GHCR), `tests.yml`, `check-release.yml` (see Releasing).
 
 ## Development
@@ -162,6 +173,8 @@ docker buildx build \
 ```
 
 CI builds and pushes multi-arch images to GHCR on any `v*` tag. The engine version it bundles is pinned as `BEIGNET_VERSION` in `.github/workflows/build-image.yml`.
+
+The image also installs the two ts-tap tarballs in `vendor/` beside the engine, after checking them against `vendor/SHA256SUMS`, and fails the build if that leaves two copies of the engine or an engine outside the range the adapter was built for. Bumping `BEIGNET_VERSION` past that range therefore needs a ts-tap build for the new engine first: `scripts/vendor-ts-tap.sh <ts-tap checkout> <commit>` rebuilds both tarballs from one commit and rewrites the checksums and `vendor/ts-tap.lock.json`. See [docs/ASSETS.md](docs/ASSETS.md#for-operators-and-developers).
 
 ## Releasing
 
