@@ -42,7 +42,7 @@ browser ──> manager ──> /wallets/:id/api/x/assets/*  ──> the wallet'
 - On **every network**, a server that turns out to be on another chain (a mainnet wallet given a testnet server) leaves assets off until that is put right. Asset records checked against the wrong chain would all look spent.
 - A server that does not answer is asked again. Until it has answered, nothing is spent.
 
-**Where the code comes from.** ts-tap is not published to npm. Two tarballs built from one ts-tap commit are committed under `vendor/`, with their checksums and the commit they came from (`vendor/ts-tap.lock.json`). The image build checks the checksums and installs them beside the engine in one step, so the adapter and the daemon share a single copy of the engine.
+**Where the code comes from.** ts-tap is not published to npm. Two tarballs built from one ts-tap commit are committed under `vendor/`, with their checksums and the commit they came from (`vendor/ts-tap.lock.json`). They hold the compiled library, its type declarations and source maps that name each source file and line. They do not hold ts-tap's TypeScript sources. The image build checks the checksums and installs them beside the engine in one step, so the adapter and the daemon share a single copy of the engine.
 
 **When the tab appears.** Assets need an engine release that carries the host extension contract. Beignet 0.42.0 is the first, and it is the one this app bundles. The manager looks at the engine it is bundled with: on an older engine the Assets tab is simply absent and every wallet runs as before. `BEIGNET_ASSETS=off` in the app's environment switches assets off for the whole box.
 
@@ -179,6 +179,6 @@ What is covered by unit tests only, because the regtest stack cannot produce it:
 
 A wallet's record carries `assets: { enabled, universe }`, set with `PATCH /api/wallets/:id`, and reports `holdsAssets`, the host's `phase` and `error`, whether its backup file exists (`backupFile`) and why the last archive left its assets out (`notArchived`). `GET /api/config` reports `assetsAvailable`, `assetChannelsAvailable` and the `universeServers` the app knows.
 
-- **Updating ts-tap.** `scripts/vendor-ts-tap.sh <ts-tap checkout> [commit]` rebuilds both tarballs from one commit and rewrites `vendor/SHA256SUMS` and `vendor/ts-tap.lock.json`; `--verify` rebuilds and compares. The adapter names the engine releases it was built for, and the image build fails if the bundled engine is outside that range, so an engine bump past it needs a ts-tap build for the new engine first.
+- **Updating ts-tap.** `scripts/vendor-ts-tap.sh <ts-tap checkout> [commit]` rebuilds both tarballs from one commit and rewrites `vendor/SHA256SUMS` and `vendor/ts-tap.lock.json`; `--verify` rebuilds and compares. It refuses a build whose source maps carry the text of the sources. The adapter names the engine releases it was built for, and the image build fails if the bundled engine is outside that range, so an engine bump past it needs a ts-tap build for the new engine first.
 - **A development engine.** `scripts/engine-prefix.sh <dir> [engine]` installs an engine and the vendored packages side by side, as the image does, and says whether assets are available on it.
 - **End to end.** `scripts/assets-regtest/` drives a real manager and real daemons against a regtest chain and `tapd`.
