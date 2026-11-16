@@ -8,7 +8,19 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { refusal, isRefusal, isFenced, isNotYet, isCourierTrouble, isProofMissing, isProofInvalid, plainMessage, mapError, workingSats } = require('./errors');
+const {
+	refusal,
+	isRefusal,
+	isFenced,
+	isNotYet,
+	isCourierTrouble,
+	isProofMissing,
+	isProofInvalid,
+	plainMessage,
+	mapError,
+	workingSats,
+	LIGHTNING_REFUSALS
+} = require('./errors');
 
 const coded = (code, message = 'the detail of what went wrong', extra = {}) => Object.assign(new Error(`${code}: ${message}`), { code, ...extra });
 
@@ -70,6 +82,39 @@ test('each library error becomes the code the dashboard knows', () => {
 		assert.equal(mapped.message.includes(String.fromCharCode(0x2014)), false, code);
 		assert.match(mapped.message, /^[A-Z]/, code);
 	}
+});
+
+test('each refusal of the Lightning service becomes the code the dashboard words', () => {
+	const table = [
+		['ERR_BEIGNET_LN_NOT_READY', 'ASSETS_STARTING', 503],
+		['ERR_BEIGNET_LN_PEER_OFFLINE', 'PEER_UNREACHABLE', 502],
+		['ERR_BEIGNET_LN_PEER_UNSUPPORTED', 'PEER_NO_ASSET_CHANNELS', 409],
+		['ERR_BEIGNET_LN_FUNDING_REJECTED', 'PEER_NO_ASSET_CHANNELS', 409],
+		['ERR_BEIGNET_LN_UNKNOWN_CHANNEL', 'CHANNEL_NOT_FOUND', 404],
+		['ERR_BEIGNET_LN_NO_QUOTE', 'PEER_GAVE_NO_PRICE', 502],
+		['ERR_BEIGNET_LN_QUOTE_EXPIRED', 'QUOTE_EXPIRED', 410],
+		['ERR_BEIGNET_LN_PRICE_BOUND', 'QUOTE_CHANGED', 409],
+		['ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_OUTBOUND', 409],
+		['ERR_BEIGNET_LN_INSUFFICIENT_INBOUND', 'INSUFFICIENT_INBOUND', 409],
+		['ERR_BEIGNET_LN_BAD_INVOICE', 'BAD_INVOICE', 400],
+		['ERR_BEIGNET_LN_INVOICE_EXPIRED', 'BAD_INVOICE', 400],
+		['ERR_BEIGNET_LN_AMOUNT_REQUIRED', 'AMOUNT_REQUIRED', 400],
+		['ERR_BEIGNET_LN_ALREADY_PAID', 'ALREADY_PAID', 409]
+	];
+	assert.deepEqual(Object.keys(LIGHTNING_REFUSALS).sort(), table.map((row) => row[0]).sort());
+	for (const [code, as, status] of table) {
+		const mapped = mapError(coded(code));
+		assert.deepEqual([mapped.extensionCode, mapped.status], [as, status], code);
+		// A sentence of the host's own, never the library's text or its code.
+		assert.match(mapped.message, /^[A-Z].*\.$/, code);
+		assert.equal(mapped.message.includes('ERR_'), false, code);
+		assert.equal(mapped.message.includes('the detail of what went wrong'), false, code);
+		assert.equal(mapped.message.includes(String.fromCharCode(0x2014)), false, code);
+		assert.equal('details' in mapped, false, code);
+	}
+	// What only the caller knows travels with the refusal.
+	const short = mapError(coded('ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND'), { details: { sendable: '40' } });
+	assert.deepEqual(short.details, { sendable: '40' });
 });
 
 test('a wallet that is short of bitcoin says what was needed', () => {

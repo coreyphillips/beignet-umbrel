@@ -84,6 +84,26 @@ const PARAM_MESSAGES = {
 	ERR_ASSET_INVALID_NAME: 'An asset needs a name of up to 64 bytes, with no line breaks.'
 };
 
+// What the library's Lightning service rejects with, as the dashboard's code,
+// a sentence and a status. The caller adds what only it knows: how much a
+// channel can send or receive, or a new price (lightning.js).
+const LIGHTNING_REFUSALS = {
+	ERR_BEIGNET_LN_NOT_READY: ['ASSETS_STARTING', 'Lightning is still starting. Try again in a moment.', 503],
+	ERR_BEIGNET_LN_PEER_OFFLINE: ['PEER_UNREACHABLE', 'The peer is not connected, so nothing was done. Try again once it is back.', 502],
+	ERR_BEIGNET_LN_PEER_UNSUPPORTED: ['PEER_NO_ASSET_CHANNELS', 'That peer does not open asset channels, so nothing was opened and nothing was spent.', 409],
+	ERR_BEIGNET_LN_FUNDING_REJECTED: ['PEER_NO_ASSET_CHANNELS', 'The peer turned the channel down, so nothing was opened and nothing was spent.', 409],
+	ERR_BEIGNET_LN_UNKNOWN_CHANNEL: ['CHANNEL_NOT_FOUND', 'This wallet has no asset channel with that id.', 404],
+	ERR_BEIGNET_LN_NO_QUOTE: ['PEER_GAVE_NO_PRICE', "The channel's peer did not give a price, so nothing was done. Try again in a moment.", 502],
+	ERR_BEIGNET_LN_QUOTE_EXPIRED: ['QUOTE_EXPIRED', 'That price has expired. Ask for a new one.', 410],
+	ERR_BEIGNET_LN_PRICE_BOUND: ['QUOTE_CHANGED', 'The price moved before the payment was made, so nothing was paid.', 409],
+	ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND: ['INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409],
+	ERR_BEIGNET_LN_INSUFFICIENT_INBOUND: ['INSUFFICIENT_INBOUND', 'No asset channel of this wallet can receive that much.', 409],
+	ERR_BEIGNET_LN_BAD_INVOICE: ['BAD_INVOICE', 'That is not a Lightning invoice this wallet can read.', 400],
+	ERR_BEIGNET_LN_INVOICE_EXPIRED: ['BAD_INVOICE', 'That invoice has expired. Ask whoever made it for a new one.', 400],
+	ERR_BEIGNET_LN_AMOUNT_REQUIRED: ['AMOUNT_REQUIRED', 'This invoice names no amount, so one is needed.', 400],
+	ERR_BEIGNET_LN_ALREADY_PAID: ['ALREADY_PAID', 'This wallet has already paid that invoice.', 409]
+};
+
 // The vbytes' worth of fee the library funds an anchor transaction around.
 const WORKING_VBYTES = 2000;
 
@@ -98,8 +118,8 @@ const workingSats = (feeRate, feeSats = 0) => (feeRate > 0 ? Math.ceil(feeRate *
 /**
  * The refusal the dashboard should see for `err`, or `err` itself when it is
  * not one a caller can act on. `context` supplies what only the caller
- * knows: `spendable` sats, an estimate of what was `needed`, and the
- * `feeRate` it was built at.
+ * knows: `spendable` sats, an estimate of what was `needed`, the `feeRate`
+ * it was built at, and the `details` of a Lightning refusal.
  */
 function mapError(err, context = {}) {
 	if (isRefusal(err)) return err;
@@ -107,6 +127,10 @@ function mapError(err, context = {}) {
 	if (!code) return err;
 	if (code === 'ERR_TAPFREIGHTER_INSUFFICIENT_BALANCE') {
 		return refusal('INSUFFICIENT_ASSET_BALANCE', 'This wallet does not hold that much of the asset on-chain.', 409);
+	}
+	if (LIGHTNING_REFUSALS[code]) {
+		const [as, sentence, status] = LIGHTNING_REFUSALS[code];
+		return refusal(as, sentence, status, context.details);
 	}
 	if (code === 'ERR_TAPFREIGHTER_RESERVATION_CONFLICT' || code === 'ERR_TAPFREIGHTER_INPUT_UNAVAILABLE') {
 		return refusal('ASSET_IN_USE', 'Another send that has not confirmed yet is using this asset. Wait for it to confirm, then try again.', 409);
@@ -154,4 +178,17 @@ function mapError(err, context = {}) {
 	return err;
 }
 
-module.exports = { refusal, isRefusal, codeOf, isFenced, isNotYet, isCourierTrouble, isProofMissing, isProofInvalid, plainMessage, mapError, workingSats };
+module.exports = {
+	refusal,
+	isRefusal,
+	codeOf,
+	isFenced,
+	isNotYet,
+	isCourierTrouble,
+	isProofMissing,
+	isProofInvalid,
+	plainMessage,
+	mapError,
+	workingSats,
+	LIGHTNING_REFUSALS
+};

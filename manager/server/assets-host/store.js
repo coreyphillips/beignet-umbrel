@@ -13,6 +13,9 @@
  *   h/          the host's own: what the user confirmed, the answers to
  *               money requests (so a repeat is answered and not acted on
  *               again), the open preview, the activity rows, known assets
+ *   l/          the library's Lightning records, once a wallet has asset
+ *               channels: funding flows, quotes, invoices, and what brings
+ *               a closed channel's assets back on-chain
  *
  * Every write here is one synchronous call or one transaction, durable when
  * it returns. After the node's database is replaced, every call throws; the
@@ -29,6 +32,7 @@ const HEAD = 160;
 const SHORT = 't/';
 const LONG = 'T/';
 const HOST = 'h/';
+const LIGHTNING = 'l/';
 
 const sha256Hex = (text) => crypto.createHash('sha256').update(text).digest('hex');
 const longKey = (key) => `${LONG}${key.slice(0, HEAD)}/${sha256Hex(key)}`;
@@ -68,6 +72,16 @@ function tapBackend(storage) {
 			});
 		}
 	};
+}
+
+/**
+ * The storage the library's Lightning store is built over: the extension's
+ * own view, as it is. That store is synchronous and puts every key under the
+ * prefix it is given (LIGHTNING), so nothing is wrapped here. It is a
+ * function so the one place that names the prefix is this file.
+ */
+function lightningBackend(storage) {
+	return { backend: storage, prefix: LIGHTNING };
 }
 
 /** The host's own rows: JSON values under h/. */
@@ -157,7 +171,8 @@ function createScopeLock() {
  * shape the library takes for its own stages: a library call made from
  * inside `run` continues without waiting (its scopes nest, and a second wait
  * on the same lock would never end), and one made from outside waits its
- * turn like anything else.
+ * turn like anything else. `outside(fn)` runs `fn` as if nothing were held,
+ * and `held()` says whether the caller is inside a section.
  */
 function createHostLock() {
 	const inside = new AsyncLocalStorage();
@@ -183,7 +198,13 @@ function createHostLock() {
 	// through the lock. Timers are made through here, holding nothing, so
 	// what they call always waits its turn.
 	const outside = (fn) => inside.exit(fn);
-	return { run, flowLock: (_scope, fn) => run(fn), outside };
+	// Whether the caller is inside a section. What may call back into the
+	// node is never called from one (lightning.js), and tests check it here.
+	const held = () => {
+		const token = inside.getStore();
+		return !!(token && token.active);
+	};
+	return { run, flowLock: (_scope, fn) => run(fn), outside, held };
 }
 
 /** A Map-backed stand-in for the extension storage view, for tests. */
@@ -237,4 +258,4 @@ function memoryStorage(data = new Map()) {
 	return { storage, data, fence: () => (fenced = true) };
 }
 
-module.exports = { tapBackend, hostRows, dumpRows, createMutex, createScopeLock, createHostLock, memoryStorage, sha256Hex, LONG_KEY };
+module.exports = { tapBackend, lightningBackend, hostRows, dumpRows, createMutex, createScopeLock, createHostLock, memoryStorage, sha256Hex, LONG_KEY };
