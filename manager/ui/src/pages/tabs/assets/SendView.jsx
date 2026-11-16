@@ -13,7 +13,7 @@ import { FEE_CAP_MULTIPLE } from '../../../lib/fees.js';
 import { fmtSats, shortId } from '../../../lib/format.js';
 import { parsePayment } from '../../../lib/payment-uri.js';
 import PayInvoice from './lightning/PayInvoice.jsx';
-import { FeePresets, NoBumpNote, RowTimeline } from './shared.jsx';
+import { FeePresets, NoBumpNote, ProofLateNote, RowTimeline } from './shared.jsx';
 
 /** The form as it starts, and as a finished send leaves it. */
 export const EMPTY_SEND = { input: '', feeRate: '', sent: null };
@@ -349,6 +349,8 @@ export default function SendView({ api, state, patch, holdings, rows, network, f
 					<div data-testid="asset-send-status" data-state={sentRow.state}>
 						<RowTimeline row={sentRow} network={network} host={sentRow.courier} />
 					</div>
+					{/* A proof the server has not taken: what it means, and the file to hand over instead. */}
+					<ProofLateNote row={sentRow} host={sentRow.courier} />
 					<div className="field-hint" style={{ marginTop: 12 }}>
 						The recipient sees it once it has confirmed and their wallet has the proof. You can leave this page: the
 						progress is under Holdings whenever you come back.

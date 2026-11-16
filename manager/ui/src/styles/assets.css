@@ -133,6 +133,29 @@
 	flex: none;
 }
 
+/* Two things to do about one note stay together, and wrap as a pair. */
+.note-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.note-actions:empty {
+	display: none;
+}
+
+/* With two or more, they take a line of their own under the text, so the
+   text keeps the note's full width. */
+.note-with-action .note-actions:has(> button:nth-of-type(2)) {
+	flex-basis: 100%;
+}
+
+.detail-hint {
+	margin-left: 10px;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
 /* A disclosure inside a card: the summary reads as a quiet link. */
 .asset-details > summary {
 	cursor: pointer;
@@ -1529,4 +1552,9 @@ pre.asset-meta {
 		width: 44px;
 		height: 44px;
 	}
+}
+
+/* The quiet line under Recent receives that takes a proof file by hand. */
+.asset-handover {
+	margin-top: 14px;
 }

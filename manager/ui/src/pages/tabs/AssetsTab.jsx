@@ -3,8 +3,8 @@ import { AnimatePresence, m } from 'motion/react';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, ErrorNote, Segmented, Skeleton } from '../../components/ui.jsx';
 import { useAssetActivity, useAssetBalances, useAssetSummary, useAssetsApi } from '../../hooks/useAssets.js';
-import { assetWarnings, explorerNetwork, hostState, sentence } from '../../lib/assets.js';
-import { openBackup } from '../../lib/backup.js';
+import { assetWarnings, explorerNetwork, hostState, proofFileBytes, proofTaken, sentence, MAX_PROOF_FILE_BYTES } from '../../lib/assets.js';
+import { fileToBase64, openBackup, saveFile } from '../../lib/backup.js';
 import AssetDetail from './assets/AssetDetail.jsx';
 import AssetSettingsModal from './assets/AssetSettingsModal.jsx';
 import CreateView, { EMPTY_CREATE, EMPTY_SEEDLING, isBlank } from './assets/CreateView.jsx';
@@ -12,7 +12,7 @@ import HoldingsView from './assets/HoldingsView.jsx';
 import HostNotice from './assets/HostNotice.jsx';
 import ReceiveView, { EMPTY_RECEIVE } from './assets/ReceiveView.jsx';
 import SendView, { EMPTY_SEND } from './assets/SendView.jsx';
-import { ExplorerNetwork, Parts, useFees } from './assets/shared.jsx';
+import { ExplorerNetwork, Parts, ProofFiles, useFees } from './assets/shared.jsx';
 
 const VIEWS = [
 	['holdings', 'Holdings'],
@@ -157,6 +157,66 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 			}
 		},
 		[assets, bump, toast]
+	);
+
+	// A proof handed over as a file, for when no proof server carries it: the
+	// sender saves it, the recipient imports it, and the wallet verifies it
+	// as it would one a server gave it.
+	const [fileBusy, setFileBusy] = useState(null);
+	const saveProof = useCallback(
+		async (row) => {
+			setFileBusy(`save:${row.id}`);
+			try {
+				const out = await assets.exportProof(row.id);
+				saveFile(new Blob([proofFileBytes(out.file)], { type: 'application/octet-stream' }), out.fileName);
+				toast('Proof file saved. Give it to the recipient to import on their Receive page.', 'info', { duration: 7000 });
+			} catch (e) {
+				toast(sentence(e.message || 'The proof file could not be saved'), 'error');
+			} finally {
+				setFileBusy(null);
+			}
+		},
+		[assets, toast]
+	);
+	const takeProof = useCallback(
+		async (file) => {
+			setFileBusy('take');
+			try {
+				if (file.size > MAX_PROOF_FILE_BYTES) throw new Error('That file is larger than a proof file this wallet takes (4 MB).');
+				const answer = await assets.importProof(await fileToBase64(file));
+				const said = proofTaken(answer);
+				toast(said.text, said.tone, { duration: 7000 });
+				bump();
+			} catch (e) {
+				toast(sentence(e.message || 'The proof file could not be read'), 'error', { duration: 7000 });
+			} finally {
+				setFileBusy(null);
+			}
+		},
+		[assets, bump, toast]
+	);
+	// The sender's word that the recipient has the file. The send then reads
+	// as done; the wallet goes on offering the proof to the server.
+	const markHandedOver = useCallback(
+		async (row, on) => {
+			setFileBusy(`mark:${row.id}`);
+			try {
+				await assets.markProofHandedOver(row.id, on);
+				toast(on ? 'Marked as handed over. The recipient has the asset once they import the file.' : 'No longer marked as handed over', 'info', {
+					duration: on ? 7000 : 3600
+				});
+				bump();
+			} catch (e) {
+				toast(sentence(e.message || 'That could not be changed'), 'error');
+			} finally {
+				setFileBusy(null);
+			}
+		},
+		[assets, bump, toast]
+	);
+	const proofFiles = useMemo(
+		() => ({ save: saveProof, take: takeProof, mark: markHandedOver, busy: fileBusy }),
+		[saveProof, takeProof, markHandedOver, fileBusy]
 	);
 
 	// The same transaction, sent to the network once more. It is not a fee
@@ -325,6 +385,7 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 
 	return (
 		<ExplorerNetwork.Provider value={explorerNetwork(network, status)}>
+			<ProofFiles.Provider value={ready ? proofFiles : null}>
 			<div className="assets" data-testid="assets-tab" data-view={assetKey ? 'asset' : view} data-host={standing.kind}>
 				{warnings.map((w) => (
 					<div
@@ -393,6 +454,7 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 					/>
 				)}
 			</div>
+			</ProofFiles.Provider>
 		</ExplorerNetwork.Provider>
 	);
 }

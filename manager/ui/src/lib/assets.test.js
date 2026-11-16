@@ -30,7 +30,10 @@ import {
 	submitOnce,
 	tapPrefix,
 	universeToForm,
-	onHandShortage
+	onHandShortage,
+	proofFileBytes,
+	proofTaken,
+	MAX_PROOF_FILE_BYTES
 } from './assets.js';
 
 const NOW = 1_800_000_000_000;
@@ -473,4 +476,27 @@ test('a refusal the page has no words of its own for is said in the wallet\'s wo
 		assert.ok(!said.text.includes(code), 'the code is not what is read');
 	}
 	assert.equal(hostState({ error: { code: 'ASSETS_STARTING' }, status: null }).kind, 'starting');
+});
+
+test('a proof file taken by hand is answered in a sentence that says what became of it', () => {
+	const received = { id: 'r1', kind: 'receive', state: 'complete', failed: false, failure: null, assets: [{ ...BUSD, amount: '25000' }], at: {} };
+	assert.deepEqual(proofTaken({ result: 'complete', row: received }), { text: 'The proof checks out, and the asset is in your holdings.', tone: 'success' });
+	assert.deepEqual(proofTaken({ result: 'already', row: received }), { text: 'This wallet already has that payment. Nothing changed.', tone: 'info' });
+	// Kept is not taken: it says what the wallet is waiting for, and that no server is.
+	assert.deepEqual(proofTaken({ result: 'kept', waitingFor: 'confirmations', row: { ...received, state: 'confirming', confirmationsRequired: 6 } }), {
+		text: 'The proof file is kept. The asset arrives once its transaction is 6 blocks deep, with no proof server needed.',
+		tone: 'info'
+	});
+	assert.deepEqual(proofTaken({ result: 'kept', waitingFor: 'check', reason: 'The chain could not be read.' }), {
+		text: 'The proof file is kept, and could not be checked just now (The chain could not be read). The wallet tries again by itself.',
+		tone: 'info'
+	});
+	assert.equal(proofTaken({ result: 'kept', waitingFor: 'check' }).text, 'The proof file is kept, and could not be checked just now. The wallet tries again by itself.');
+});
+
+test('a proof file is saved as the bytes the wallet gave, and the size it takes is the host\'s', () => {
+	const bytes = Uint8Array.from([0x54, 0x41, 0x50, 0x46, 0x00, 0xff, 0x80]);
+	assert.deepEqual(proofFileBytes(btoa(String.fromCharCode(...bytes))), bytes);
+	assert.deepEqual(proofFileBytes(''), new Uint8Array(0));
+	assert.equal(MAX_PROOF_FILE_BYTES, 4 * 1024 * 1024);
 });

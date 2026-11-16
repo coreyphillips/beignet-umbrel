@@ -27,7 +27,16 @@ const TERMINAL = new Set(['complete', 'failed', 'cancelled']);
 
 /** Still going: worth polling for, and worth a line under "In progress". */
 export function isPending(row) {
-	return !!row && !TERMINAL.has(row.state) && !row.failed;
+	return !!row && !TERMINAL.has(row.state) && !row.failed && !handedOver(row);
+}
+
+/**
+ * A send whose proof the sender gave to the recipient as a file, and said
+ * so. The proof server has still not taken it, and the wallet still offers
+ * it, but nothing is left for the reader to wait for.
+ */
+export function handedOver(row) {
+	return !!row && row.kind === 'send' && row.state === 'proofs' && !isFailed(row) && !!row.handedOver;
 }
 
 /** Stopped without finishing, and kept on screen until the reader has seen why. */
@@ -273,6 +282,8 @@ export function sendSteps(row, { network, host } = {}) {
 	// A server that answers "no" is not one that is down: waiting for it to
 	// come back is not what the reader should be told.
 	const refused = late && row.failure.code === 'PROOF_REFUSED';
+	// Given to the recipient as a file: the proof step is behind us, by hand.
+	const byHand = handedOver(row);
 	const why = refused ? String(row.failure.message || '').replace(/^The proof server did not (take|accept) the proof:?\s*/i, '').replace(/\.$/, '') : '';
 	const steps = [
 		{
@@ -293,21 +304,23 @@ export function sendSteps(row, { network, host } = {}) {
 		},
 		{
 			key: 'proof',
-			label: 'Proof delivered',
-			at: row.at?.proof,
+			label: byHand ? 'Proof handed over' : 'Proof delivered',
+			at: byHand ? row.handedOver : row.at?.proof,
 			current: refused
 				? `${where} did not take the proof${why ? `: ${why}` : ''}. The asset has moved, and the recipient cannot receive it until the server takes its proof. This wallet keeps the proof and offers it again from time to time.`
 				: late
 					? `${where} is not answering. The asset has moved, and the proof is delivered once it can be reached.`
 					: `Delivering it through ${where}…`,
-			done: `Delivered through ${where}.`,
+			done: byHand ? 'Given to the recipient as a file.' : `Delivered through ${where}.`,
 			failed: () => failureText(row, `The proof could not be delivered through ${where}.`)
 		},
 		{
 			key: 'complete',
 			label: 'Complete',
 			at: row.at?.completed,
-			current: 'Finishing…',
+			current: byHand
+				? `The recipient has the asset once they import the file. This wallet still offers the proof to ${where} from time to time.`
+				: 'Finishing…',
 			done: 'The recipient has the asset and its proof.',
 			failed: () => failureText(row, 'The send could not be finished.')
 		}
@@ -315,7 +328,7 @@ export function sendSteps(row, { network, host } = {}) {
 	let reached = 0;
 	if (past('broadcast', 'confirming', 'proofs', 'complete')) reached = 1;
 	if (conf >= 1 || past('confirming', 'proofs', 'complete')) reached = 2;
-	if (row.at?.proof && reached >= 2) reached = 3;
+	if ((row.at?.proof || byHand) && reached >= 2) reached = 3;
 	return layout(steps, reached, row);
 }
 
@@ -405,6 +418,7 @@ export function headline(row, { network } = {}) {
 			if (s === 'complete') return `Sent ${what}`;
 			if (s === 'pending') return `Sending ${what}: broadcasting`;
 			if (s === 'broadcast') return `Sending ${what}: waiting for a block`;
+			if (handedOver(row)) return `Sent ${what}: its proof was handed over as a file`;
 			if (proofRefused(row)) return `Sending ${what}: the proof server did not take the proof`;
 			return row.failure ? `Sending ${what}: the proof is waiting to be delivered` : `Sending ${what}: delivering the proof`;
 		case 'burn':
@@ -437,6 +451,7 @@ export function statusOf(row, { network } = {}) {
 		const need = confirmationsNeeded(row, network);
 		return { text: `${Math.min(need, Number(row.confirmations) || 0)} of ${need}`, tone: 'yellow' };
 	}
+	if (handedOver(row)) return { text: 'handed over', tone: 'green' };
 	if (proofRefused(row)) return { text: 'proof refused', tone: 'red' };
 	return { text: row.failure ? 'proof late' : 'proof', tone: 'yellow' };
 }
@@ -447,7 +462,9 @@ export function statusOf(row, { network } = {}) {
  * either: the server is there, and the recipient is waiting on its answer.
  */
 export function proofRefused(row) {
-	return !!row && row.kind === 'send' && row.state === 'proofs' && !isFailed(row) && !!row.failure && row.failure.code === 'PROOF_REFUSED';
+	return (
+		!!row && row.kind === 'send' && row.state === 'proofs' && !isFailed(row) && !row.handedOver && !!row.failure && row.failure.code === 'PROOF_REFUSED'
+	);
 }
 
 const KIND_WORD = {

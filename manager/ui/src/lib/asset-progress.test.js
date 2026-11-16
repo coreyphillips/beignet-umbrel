@@ -14,6 +14,7 @@ import {
 	burnSteps,
 	confirmationsNeeded,
 	etaText,
+	handedOver,
 	headline,
 	isFailed,
 	isPending,
@@ -154,6 +155,32 @@ test('a send is broadcast, confirmed, its proof delivered, then complete', () =>
 	assert.match(bare[2].detail, /^u\.example:10029 did not take the proof\. The asset has moved/);
 	const stopped = sendSteps(row('send', 'failed', { failed: true, failure: { message: 'rejected by the mempool.' } }), ctx);
 	assert.equal(stopped[0].detail, 'Nothing was sent: rejected by the mempool.');
+});
+
+test('a send whose proof was handed over as a file reads as done, and says the server is still offered it', () => {
+	const ctx = { network: 'mainnet', host: 'u.example:10029' };
+	const refused = { code: 'PROOF_REFUSED', message: 'x', retrying: true };
+	const settled = row('send', 'proofs', { txid: TXID, confirmations: 6, failure: refused, handedOver: 5000 });
+	assert.equal(handedOver(settled), true);
+	assert.equal(isPending(settled), false, 'nothing is left for the reader to wait for');
+	assert.equal(isFailed(settled), false);
+	assert.equal(headline(settled), 'Sent 100.00 BUSD: its proof was handed over as a file');
+	assert.deepEqual(statusOf(settled), { text: 'handed over', tone: 'green' });
+	const steps = sendSteps(settled, ctx);
+	assert.equal(states(steps), 'broadcast:done confirmed:done proof:done complete:current');
+	assert.deepEqual([steps[2].label, steps[2].detail, steps[2].at], ['Proof handed over', 'Given to the recipient as a file.', 5000]);
+	assert.equal(
+		steps[3].detail,
+		'The recipient has the asset once they import the file. This wallet still offers the proof to u.example:10029 from time to time.'
+	);
+	// It is the sender's word about one state: it means nothing before the proof exists or once the server has it.
+	assert.equal(handedOver(row('send', 'confirming', { handedOver: 5000 })), false);
+	assert.equal(handedOver(row('send', 'complete', { handedOver: 5000 })), false);
+	assert.equal(handedOver(row('receive', 'proofs', { handedOver: 5000 })), false);
+	const done = sendSteps(row('send', 'complete', { txid: TXID, handedOver: 5000, at: { created: 1000, proof: 6000, completed: 7000 } }), ctx);
+	assert.deepEqual([done[2].label, done[2].detail], ['Proof delivered', 'Delivered through u.example:10029.']);
+	// With no answer from the server on record (after a restart, say), the mark still stands.
+	assert.equal(headline(row('send', 'proofs', { handedOver: 5000 })), 'Sent 100.00 BUSD: its proof was handed over as a file');
 });
 
 test('a burn ends by saying the units no longer exist', () => {

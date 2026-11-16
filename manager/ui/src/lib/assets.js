@@ -434,6 +434,39 @@ export function sentence(text) {
 	return /[.!?…]$/.test(t) ? t : `${t}.`;
 }
 
+/* ------------------------------------------------------------ proof files */
+
+/** The largest proof file the wallet takes by hand. */
+export const MAX_PROOF_FILE_BYTES = 4 * 1024 * 1024;
+
+/** A proof file as the wallet hands it over (base64), as bytes to save. */
+export function proofFileBytes(base64) {
+	const binary = atob(String(base64 || ''));
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+	return bytes;
+}
+
+/**
+ * What to say once the wallet has taken a proof file: { text, tone }. A file
+ * is `complete` when it verified and the asset is held, `kept` when the
+ * wallet will verify it later by itself, and `already` when there was
+ * nothing left to do.
+ */
+export function proofTaken(answer) {
+	const a = answer || {};
+	const row = a.row || null;
+	// What arrived is said by the wallet's own event; this says the file was good.
+	if (a.result === 'complete') return { text: 'The proof checks out, and the asset is in your holdings.', tone: 'success' };
+	if (a.result === 'already') return { text: 'This wallet already has that payment. Nothing changed.', tone: 'info' };
+	if (a.waitingFor === 'confirmations') {
+		const need = row && row.confirmationsRequired ? `${row.confirmationsRequired} blocks deep` : 'deep enough';
+		return { text: `The proof file is kept. The asset arrives once its transaction is ${need}, with no proof server needed.`, tone: 'info' };
+	}
+	const why = a.reason ? ` (${String(a.reason).replace(/\.$/, '')})` : '';
+	return { text: `The proof file is kept, and could not be checked just now${why}. The wallet tries again by itself.`, tone: 'info' };
+}
+
 /* ----------------------------------------------------------------- events */
 
 /**

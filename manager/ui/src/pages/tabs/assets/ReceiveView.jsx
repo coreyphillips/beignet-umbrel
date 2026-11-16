@@ -10,7 +10,7 @@ import { proofServerWait, sentence } from '../../../lib/assets.js';
 import { railOf, unwatched } from '../../../lib/asset-progress.js';
 import { copy, fmtDate } from '../../../lib/format.js';
 import InvoiceCard from './lightning/InvoiceCard.jsx';
-import { AssetTransferDetail, ProofLateNote, RowAssets, RowStatus, RowTimeline, WatchNote, useRowDetail } from './shared.jsx';
+import { ImportProofFile, AssetTransferDetail, ProofLateNote, RowAssets, RowStatus, RowTimeline, WatchNote, useRowDetail } from './shared.jsx';
 
 /** The form as it starts, and as "Create another address" leaves it. */
 export const EMPTY_RECEIVE = { picker: NO_ASSET, text: '', units: null, created: null };
@@ -310,6 +310,16 @@ export default function ReceiveView({ api, state, patch, holdings, rows, network
 							</table>
 						</div>
 					)}
+					{/* A proof can also arrive by hand: see ProofFiles in shared.jsx. */}
+					<div className="field-hint note-with-action asset-handover" data-testid="asset-proof-handover">
+						<span>
+							A sender can give you the proof file of a payment to this wallet. Import it here: the wallet verifies it
+							before it takes anything from it, and no proof server is needed.
+						</span>
+						<div className="note-actions">
+							<ImportProofFile />
+						</div>
+					</div>
 				</Card>
 			</div>
 

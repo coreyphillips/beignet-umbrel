@@ -772,7 +772,10 @@ export function createAssetsMock(ctx) {
 				limits: { ...FEE_LIMITS }
 			};
 		}
-		const active = (kind) => s.rows.filter((r) => r.kind === kind && !r._done && !r.failed && r.state !== 'waiting' && r.state !== 'cancelled').length;
+		// A send whose proof was handed over as a file is not still happening.
+		const settled = (r) => r.kind === 'send' && r.state === 'proofs' && !!r.handedOver;
+		const active = (kind) =>
+			s.rows.filter((r) => r.kind === kind && !r._done && !r.failed && r.state !== 'waiting' && r.state !== 'cancelled' && !settled(r)).length;
 		const anchors = Object.values(s.assets).reduce((n, a) => n + a.anchors, 0);
 		const mode = lightningMode(id);
 		return {
@@ -1098,6 +1101,8 @@ export function createAssetsMock(ctx) {
 		incoming._paidAt = t;
 		incoming._firstAt = RECEIVE.firstAtFromSibling;
 		incoming.txid = row.txid;
+		// A proof the server never got is one the recipient cannot fetch.
+		if (row._courierDown) incoming._proofLate = true;
 
 		ctx.emit(id, 'assets:transfer', { row: pubRow(row) });
 		ctx.emit(id, 'assets:balance', { key: rec.key });
@@ -1124,6 +1129,7 @@ export function createAssetsMock(ctx) {
 			confirmations: 0,
 			confirmationsRequired: required(id),
 			stuck: false,
+			handedOver: null,
 			at: { created: t, broadcast: null, confirmed: null, proof: null, completed: null },
 			clientRef: null,
 			_t0: t
@@ -1404,6 +1410,78 @@ export function createAssetsMock(ctx) {
 		});
 	}
 
+	/* --------------------------------------------- proofs handed over by file */
+
+	// The demo's proof file says who it pays and with what, and only the demo
+	// can read it. A real one is the asset's whole history, which the wallet
+	// verifies against the chain before it takes anything from it.
+	function exportProof(id, rowId) {
+		const row = findRow(id, rowId);
+		if (row.kind !== 'send') throw fail('Only a send has a proof file to hand to someone.', 'NO_PROOF_FILE');
+		if (!['proofs', 'complete'].includes(row.state)) {
+			throw fail(`The proof file exists once the transaction is ${row.confirmationsRequired} blocks deep.`, 'PROOF_NOT_READY', { status: 409 });
+		}
+		const a = row.assets[0];
+		const text = JSON.stringify({ demoProof: 1, address: row.address || null, txid: row.txid, assetId: a.assetId, amount: a.amount });
+		return {
+			id: row.id,
+			fileName: `proof-${a.assetId.slice(0, 8)}-${row.txid.slice(0, 8)}.assetproof`,
+			file: btoa(text),
+			bytes: text.length,
+			assetId: a.assetId,
+			address: row.address || null,
+			txid: row.txid
+		};
+	}
+
+	function importProof(id, body) {
+		const text = typeof body?.file === 'string' ? body.file.trim() : '';
+		if (!text) throw fail('A proof file is needed.', 'BAD_PROOF_FILE');
+		let proof = null;
+		try {
+			proof = JSON.parse(atob(text));
+		} catch {
+			/* not one of the demo's */
+		}
+		if (!proof || proof.demoProof !== 1) throw fail('That file is not a Taproot Assets proof file this wallet can read.', 'BAD_PROOF_FILE');
+		advance(id);
+		const s = S(id);
+		const mine = s.rows.filter((r) => r.kind === 'receive' && proof.address && r.address === proof.address);
+		if (!mine.length) {
+			throw notFound('This proof is not for an address this wallet made. It has to be the file of a payment to this wallet.', 'PROOF_NOT_OURS');
+		}
+		const row = mine.find((r) => r.txid === proof.txid && r.state !== 'waiting');
+		if (!row) {
+			if (mine.some((r) => r.state === 'waiting')) {
+				throw fail('The payment this proof is for is not in a block yet. Import the file once its transaction has confirmed.', 'PAYMENT_NOT_SEEN', {
+					status: 409
+				});
+			}
+			throw fail('This proof is for a different payment than the one this wallet found for that address.', 'PROOF_OTHER_PAYMENT', { status: 409 });
+		}
+		if (row.state === 'complete') return { result: 'already', row: pubRow(row) };
+		if (row.state === 'confirming') {
+			// Kept, and used when the transaction is deep enough.
+			delete row._proofLate;
+			row._handed = true;
+			save();
+			return { result: 'kept', waitingFor: 'confirmations', reason: null, row: pubRow(row) };
+		}
+		const t = now();
+		delete row._proofLate;
+		row.failure = null;
+		row.state = 'complete';
+		row.at.proof = row.at.proof || t;
+		row.at.completed = t;
+		credit(id, row._identity || row.assets[0], row.assets[0].amount, { at: t });
+		row._done = true;
+		s.backup.dirty = true;
+		save();
+		ctx.emit(id, 'assets:receive', { row: pubRow(row) });
+		ctx.emit(id, 'assets:balance', { key: row.assets[0].key });
+		return { result: 'complete', row: pubRow(row) };
+	}
+
 	/* ----------------------------------------------------------- dispatch */
 
 	const IDEMPOTENT = new Set(['/mint', '/send/prepare', '/send/commit', '/burn/prepare', '/burn/commit', '/channels/open', '/pay']);
@@ -1414,6 +1492,7 @@ export function createAssetsMock(ctx) {
 			if (sub === '/balances') return balances(id);
 			if (sub === '/asset') return assetDetail(id, String(q.get('key') || '').toLowerCase());
 			if (sub === '/activity') return activity(id, q);
+			if (sub === '/proofs/export') return exportProof(id, q.get('id'));
 			if (sub === '/channels') return { channels: S(id).channels.filter((c) => c.state !== 'CLOSED').map(pubRow) };
 			if (sub === '/invoices') return { invoices: S(id).invoices.map((i) => ({ ...i })) };
 			return undefined;
@@ -1458,6 +1537,25 @@ export function createAssetsMock(ctx) {
 					row._t0 = now() - SEND.proofAt;
 					save();
 				}
+				// A server that was down and is back takes the proof it missed.
+				if (row._courierDown && !S(id).proofServerDown) {
+					delete row._courierDown;
+					save();
+				}
+				return { row: pubRow(row) };
+			}
+			case '/proofs/import':
+				return importProof(id, body);
+			case '/proofs/handed-over': {
+				const row = findRow(id, body?.id);
+				if (row.kind !== 'send') throw fail('Only a send has a proof file to hand to someone.', 'NO_PROOF_FILE');
+				if (row.state === 'complete') return { row: pubRow(row) };
+				if (row.state !== 'proofs') {
+					throw fail(`The proof file exists once the transaction is ${row.confirmationsRequired} blocks deep.`, 'PROOF_NOT_READY', { status: 409 });
+				}
+				row.handedOver = body?.handedOver === false ? null : row.handedOver || now();
+				save();
+				ctx.emit(id, 'assets:transfer', { row: pubRow(row) });
 				return { row: pubRow(row) };
 			}
 			case '/send/prepare':

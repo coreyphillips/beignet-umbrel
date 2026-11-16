@@ -105,6 +105,27 @@ export function assetsApi(api) {
 		/** Ask the proof server again for a receive whose proof is late. */
 		retryProof: (id) => post('/proofs/retry', { id }),
 
+		/* ------------------------------------------------------ proof files */
+		/**
+		 * The proof file of a send's payment, for the sender to hand to the
+		 * recipient: { id, fileName, file (base64), bytes, assetId, address, txid }.
+		 * PROOF_NOT_READY until the transaction is deep enough.
+		 */
+		exportProof: (id) => get('/proofs/export', { id }),
+		/**
+		 * Take a proof file (base64) for a payment to this wallet. { result, row }
+		 * where result is 'complete', 'already', or 'kept' with
+		 * { waitingFor: 'confirmations' | 'check', reason }. The wallet verifies
+		 * it as it would a proof from a server; PROOF_INVALID when it does not pass.
+		 */
+		importProof: (file) => post('/proofs/import', { file }),
+		/**
+		 * Say that a send's proof was given to the recipient as a file, or take
+		 * that back. It changes how the send reads; the wallet goes on offering
+		 * the proof to the proof server. { row }.
+		 */
+		markProofHandedOver: (id, handedOver = true) => post('/proofs/handed-over', { id, handedOver }),
+
 		/* ------------------------------------------------------------- send */
 		/** A Preview for paying a Taproot Assets address. Supersedes this wallet's open one. */
 		prepareSend: ({ address, feeRate }, key) => once('/send/prepare', { address, feeRate }, key),
