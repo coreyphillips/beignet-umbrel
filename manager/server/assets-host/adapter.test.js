@@ -313,7 +313,7 @@ test('the provider is built over its own rows before there is an adapter or a no
 	assert.equal(entry.seen.made.store.backend, storage);
 	assert.equal(entry.seen.made.store.prefix, 'l/');
 	assert.equal(entry.seen.made.hrp, 'taprt');
-	assert.deepEqual(entry.seen.made.fixedOutputFees, { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 250000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4 });
+	assert.deepEqual(entry.seen.made.fixedOutputFees, { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 100000000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4, preparationFeeRatePerVbyte: 1 });
 	// What the engine is handed is the library's own, with the node noted on its way through.
 	assert.deepEqual(Object.keys(ln.attachment).sort(), ['auxiliaryChannels', 'bind', 'fixedOutputFees']);
 	assert.deepEqual(ln.attachment.auxiliaryChannels, { the: 'hooks' });
@@ -334,13 +334,21 @@ test('the provider is built over its own rows before there is an adapter or a no
 	entry.seen.made.onError(new Error('nobody is listening'));
 });
 
-test('neither one transaction of a channel nor all of them pay more than the wallet lets an asset transaction pay', () => {
+test('no one transaction of a channel pays more than the wallet lets an asset transaction pay, and the budget for all of them is many transactions deep', () => {
 	// The wallet's ceiling is 250,000 sats unless it was given another.
-	assert.deepEqual(fixedOutputFees(cfg), { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 250000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4 });
+	assert.deepEqual(fixedOutputFees(cfg), { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 100000000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4, preparationFeeRatePerVbyte: 1 });
+	// A lower ceiling lowers what one transaction and one split may pay. The
+	// budget for all of them stays: held to the ceiling for one, it would be
+	// spent after a handful of claims.
 	const tight = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules', BEIGNET_ASSETS_MAX_FEE_SATS: '4000' });
-	assert.deepEqual(fixedOutputFees(tight), { maxFeeSatoshis: 4000n, maxTotalFeeSatoshis: 4000n, maxPreparationFeeSatoshis: 4000n, feeCoinCount: 4 });
+	assert.deepEqual(fixedOutputFees(tight), { maxFeeSatoshis: 4000n, maxTotalFeeSatoshis: 100000000n, maxPreparationFeeSatoshis: 4000n, feeCoinCount: 4, preparationFeeRatePerVbyte: 1 });
 	const loose = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules', BEIGNET_ASSETS_MAX_FEE_SATS: '5000000' });
-	assert.deepEqual([fixedOutputFees(loose).maxFeeSatoshis, fixedOutputFees(loose).maxTotalFeeSatoshis], [10000n, 1000000n]);
+	assert.deepEqual([fixedOutputFees(loose).maxFeeSatoshis, fixedOutputFees(loose).maxTotalFeeSatoshis], [10000n, 100000000n]);
+	// Each chain has its own figures: mainnet pays for a block soon, and budgets about a hundred claims.
+	const mainnet = parseConfig('mainnet', { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules' });
+	assert.deepEqual(fixedOutputFees(mainnet), { maxFeeSatoshis: 25000n, maxTotalFeeSatoshis: 2500000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4, preparationFeeRatePerVbyte: 10 });
+	const testnet = parseConfig('testnet', { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules' });
+	assert.deepEqual(fixedOutputFees(testnet), { maxFeeSatoshis: 10000n, maxTotalFeeSatoshis: 1000000n, maxPreparationFeeSatoshis: 10000n, feeCoinCount: 4, preparationFeeRatePerVbyte: 1 });
 	assert.deepEqual([CHANNEL_SATS, CARRIER_SATS, { ...NOMINAL_RATE }], [100000, 354, { coefficient: 100000000n, scale: 0 }]);
 });
 

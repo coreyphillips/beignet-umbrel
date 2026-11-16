@@ -547,16 +547,39 @@ const CARRIER_SATS = 354;
 // The nominal price: one unit of an asset to the sat, as units per bitcoin.
 const NOMINAL_RATE = Object.freeze({ coefficient: 100_000_000n, scale: 0 });
 
+// What the engine's fee pool for fixed outputs is given, by chain, in sats.
+// On mainnet 25,000 is about 100 sat/vB for the transaction that claims an
+// HTLC output with one fee coin beside it (some 250 vB), and the split that
+// makes four fee coins (about 235 vB) is paid at 10 sat/vB so it does not
+// wait on the transaction that spends from it. The total is a budget the
+// pool charges a whole cap at a time and does not give back: about a
+// hundred claims on mainnet, and on regtest more than any test closes.
+const FIXED_OUTPUT_FEES = Object.freeze({
+	mainnet: Object.freeze({ one: 25_000, preparation: 10_000, total: 2_500_000, preparationRate: 10 }),
+	testnet: Object.freeze({ one: 10_000, preparation: 10_000, total: 1_000_000, preparationRate: 1 }),
+	regtest: Object.freeze({ one: 10_000, preparation: 10_000, total: 100_000_000, preparationRate: 1 })
+});
+
 /**
  * What the engine may spend from the wallet on the fees of a channel's
- * fixed outputs: for one transaction, for all of them, and for the coins it
- * sets aside to pay with. Neither one transaction nor all of them together
- * pass the wallet's own ceiling for an asset transaction.
+ * fixed outputs. `maxFeeSatoshis` bounds what one such transaction may burn
+ * and `maxPreparationFeeSatoshis` what one split into fee coins may pay,
+ * and neither passes the wallet's own ceiling for an asset transaction.
+ * `maxTotalFeeSatoshis` is the pool's budget for all of them, many
+ * transactions' worth, so it is not held to the ceiling for one: held to
+ * it, a wallet would run out after a handful of claims and could then not
+ * bring an HTLC home.
  */
 function fixedOutputFees(cfg) {
 	const ceiling = cfg.limits.maxFeeSats;
-	const one = BigInt(Math.min(10_000, ceiling));
-	return { maxFeeSatoshis: one, maxTotalFeeSatoshis: BigInt(Math.min(1_000_000, ceiling)), maxPreparationFeeSatoshis: one, feeCoinCount: 4 };
+	const f = FIXED_OUTPUT_FEES[cfg.network] || FIXED_OUTPUT_FEES.testnet;
+	return {
+		maxFeeSatoshis: BigInt(Math.min(f.one, ceiling)),
+		maxTotalFeeSatoshis: BigInt(f.total),
+		maxPreparationFeeSatoshis: BigInt(Math.min(f.preparation, ceiling)),
+		feeCoinCount: 4,
+		preparationFeeRatePerVbyte: f.preparationRate
+	};
 }
 
 // What the entry has to export for this app to use it.
