@@ -110,6 +110,13 @@ Flows:
   does a Lightning invoice on an on-chain only wallet (elsewhere in the demo
   it opens the pay flow, see Lightning below). A refusal is always a
   sentence, never a bare code.
+- Short of bitcoin: a transaction is built around 2,000 vbytes' worth of
+  fee, so the wallet has to hold more than the transaction costs. On
+  `demo-fresh` (about 1,023,000 sats), Create with a fee rate of 500 shows
+  `mint-refusal`: "Minting costs 78,000 sats, but the wallet has to hold
+  about 1,077,000 sats on-chain to build the transaction. What is not spent
+  comes straight back." with the wallet's balance, and the button waits.
+  Send and Burn word it the same way.
 - Receive: under a new address, the line that it takes one payment
   (`asset-address-once`), and in the Status card the quiet line that the
   wallet checks it by itself, with Check now (`asset-watched`).
@@ -172,7 +179,7 @@ wallet in the address, and stick until switched back:
 | `ok` | Back to normal (the three rows below stay until they are dealt with). |
 | `stuck` | A send two hours without a block: the blue `STUCK` note says fees cannot be bumped, with Broadcast again (`asset-rebroadcast`). Pressing it clears the note and the send goes on to confirm. |
 | `proof-refused` | Use `demo-testnet`. Its finished mint carries a blue note, `asset-proof-unpublished`, in the In progress list and on the asset's page: created and held, the proof server has not taken its proof. Never red, never "failed". Try again clears it. |
-| `send-refused` | A send six blocks deep whose proof the proof server answered "no" to. Its In progress row carries a red note, `asset-proof-undelivered` (`data-code="PROOF_REFUSED"`): the server answered, the recipient does not have the asset yet, nothing is lost. The timeline's proof step gives the server's reason and never says "not answering". Offer it again now clears it and the send completes. |
+| `send-refused` | A send six blocks deep whose proof the proof server answered "no" to. Its In progress row carries a red note, `asset-proof-undelivered` (`data-code="PROOF_REFUSED"`): the server answered, the recipient does not have the asset yet, nothing is lost. The headline reads "the proof server did not take the proof", the In progress tile and the dialog's pill read "proof refused" (red), and the timeline's proof step gives the server's reason and never says "not answering". Offer it again now clears it and the send completes. |
 | `unwatched` | Use `demo-testnet` with `view=receive`. An address nine days unpaid reads "not checked" in Recent receives, and its dialog has `asset-not-watched` with Check now, which finds the payment. |
 
 What to look at, in dark, in light (`localStorage['beignet-theme'] = 'light'`
