@@ -856,12 +856,12 @@ function harness({ env = {}, network = 'regtest', shared, timers = false, chainC
 		clock: world.clock,
 		storage: world.mem.storage,
 		fence: world.mem.fence,
-		// In the order the engine and index.js do it: the adapter is handed to
-		// the Lightning service, a backup left for the wallet is restored, the
-		// engine builds its node and binds it, and the host starts.
+		// In the order the engine and index.js do it: a backup left for the
+		// wallet is restored, the adapter is handed to the Lightning service,
+		// the engine builds its node and binds it, and the host starts.
 		boot: async () => {
-			await host.startLightning();
 			await host.attach();
+			await host.startLightning();
 			if (ln && lightning !== 'unbound') ln.attachment.bind({ the: 'node' });
 			await host.startup();
 		},

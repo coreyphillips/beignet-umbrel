@@ -226,10 +226,13 @@ async function attachHost(base, context, { ask, ln = null } = {}) {
 				courierFor: host.courierFor,
 				proofPublisher: host.proofPublisher
 			});
+			// A backup the manager left for this wallet is restored first, while
+			// nothing of the wallet's is running: the Lightning service is never
+			// started over rows that are about to be replaced.
+			await host.attach();
 			// The provider was built before the adapter existed. Now it is
 			// told of it, and its hooks stop failing closed.
 			await host.startLightning();
-			await host.attach();
 		} catch (err) {
 			const message = `Assets could not start: ${plainMessage(err, 'the wallet could not be read')}.`.replace(/\.\.$/, '.');
 			warn(context, `assets: ${message}`);

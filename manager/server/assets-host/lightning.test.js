@@ -1702,6 +1702,35 @@ test('a backup is never restored over an asset channel, and never replaces a Lig
 	assert.equal(h.storage.get('l/tap/quotes/cc'), null);
 });
 
+test('a backup left for a wallet is restored before its Lightning service is started', async () => {
+	const fs = require('fs');
+	const os = require('os');
+	const path = require('path');
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-ln-'));
+	try {
+		const source = await funded();
+		const file = { format: backup.FORMAT, version: backup.VERSION, network: 'regtest', chain: 'regtest', wallet: await source.h.host.fingerprint(), exportedAt: 1, rows: backup.collectRows(source.h.storage) };
+		file.rowsHash = backup.hashRows(file.rows);
+		const importFile = path.join(dir, 'import.json');
+		fs.writeFileSync(importFile, JSON.stringify(file));
+		const h = world({ lightning: true, env: { BEIGNET_ASSETS_IMPORT_FILE: importFile } });
+		// What the wallet's rows held when its Lightning service was started.
+		const held = [];
+		const start = h.ln.start;
+		h.ln.start = async (options) => {
+			held.push(h.storage.list('h/row/').length);
+			return start(options);
+		};
+		await h.boot();
+		assert.equal((await h.get('/status')).backup.importError, undefined);
+		assert.equal(fs.existsSync(importFile), false);
+		// The mint the backup carried was already there.
+		assert.deepEqual(held, [1]);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test('a backup left for a wallet with Lightning rows of its own is not restored before its node can be asked', async () => {
 	const fs = require('fs');
 	const os = require('os');
