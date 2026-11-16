@@ -3787,11 +3787,17 @@ function walletRequest(id, path, method, body, headers) {
 			return { txid: newTxid, hex: hex(400), boostType: 'cpfp', feeSats, originalTxid: body.txid };
 		}
 		case '/channels':
-			return st.channels.map((c) => ({
-				...c,
-				localReserveSats: c.localReserveSats ?? mockChannelReserve(c),
-				maxSendableSats: mockMaxSendable(c)
-			}));
+			// An asset channel is listed beside the bitcoin ones, marked
+			// `auxiliary`, as the daemon lists it. It is in no other answer
+			// here: the daemon leaves it out of /liquidity and /balance, and
+			// the bitcoin screens leave it out of this one (lib/channels.js).
+			return st.channels
+				.map((c) => ({
+					...c,
+					localReserveSats: c.localReserveSats ?? mockChannelReserve(c),
+					maxSendableSats: mockMaxSendable(c)
+				}))
+				.concat(assetsMock.daemonChannels(w.id).map((c) => ({ ...c, localReserveSats: mockChannelReserve(c), maxSendableSats: 0 })));
 		case '/channel/diagnostics': {
 			const cid = new URLSearchParams(query).get('channelId');
 			const c = st.channels.find((x) => x.channelId === cid);

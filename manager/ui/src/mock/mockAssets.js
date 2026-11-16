@@ -1873,8 +1873,40 @@ export function createAssetsMock(ctx) {
 		save();
 	}
 
+	// The daemon's word for each state of an asset channel on GET /channels.
+	const DAEMON_STATE = { OPENING: 'AWAITING_FUNDING_CONFIRMED', NORMAL: 'NORMAL', CLOSING: 'NEGOTIATING_CLOSING', FORCE_CLOSING: 'FORCE_CLOSED' };
+
+	/**
+	 * This wallet's asset channels as its daemon lists them on GET /channels:
+	 * beside the bitcoin ones, marked `auxiliary`, with the sats that carry
+	 * the asset. Reading it moves nothing and marks nothing as seen.
+	 */
+	function daemonChannels(id) {
+		if (!state.wallets[id]) return [];
+		return state.wallets[id].channels
+			.filter((c) => c.state !== 'CLOSED')
+			.map((c) => {
+				const capacitySats = Number(c.channelSats) || 0;
+				const remoteBalanceSats = Math.min(capacitySats, CHANNEL_PUSH_SATS);
+				const daemonState = DAEMON_STATE[c.state] || c.state;
+				return {
+					channelId: c.channelId,
+					peerPubkey: c.peerPubkey,
+					alias: c.peerAlias || null,
+					capacitySats,
+					localBalanceSats: capacitySats - remoteBalanceSats,
+					remoteBalanceSats,
+					state: daemonState,
+					htlcUsable: daemonState === 'NORMAL',
+					isPrivate: true,
+					auxiliary: true
+				};
+			});
+	}
+
 	return {
 		request,
+		daemonChannels,
 		/** What the wallet record's `assets` block says, for the manager routes. */
 		recordOf: (id) => ({
 			enabled: true,

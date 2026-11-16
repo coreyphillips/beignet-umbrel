@@ -754,3 +754,26 @@ test('a wallet with asset channels has them in a card of their own, under the bi
 		restore();
 	}
 });
+
+test('an asset channel the daemon lists is not shown among the bitcoin channels', async () => {
+	const restoreFetch = stubManagerFetch();
+	const ASSET_PEER = '03' + 'e'.repeat(64);
+	const r = await render(
+		wrapped,
+		tabProps({
+			channels: [
+				{ channelId: 'a'.repeat(64), peerPubkey: '02' + 'a'.repeat(64), capacitySats: 1_000_000, localBalanceSats: 500_000, remoteBalanceSats: 500_000, state: 'NORMAL' },
+				{ channelId: 'e'.repeat(64), peerPubkey: ASSET_PEER, capacitySats: 100_000, localBalanceSats: 98_292, remoteBalanceSats: 1_708, state: 'NORMAL', auxiliary: true }
+			]
+		})
+	);
+	try {
+		await settle(50);
+		assert.equal(r.$$('tr.row-clickable').length, 1);
+		assert.doesNotMatch(r.text(), /98,292/);
+		assert.doesNotMatch(r.text(), /03eeee/);
+	} finally {
+		await r.unmount();
+		restoreFetch();
+	}
+});

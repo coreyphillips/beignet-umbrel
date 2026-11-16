@@ -6,6 +6,7 @@ import PaykitCard from '../../components/Paykit.jsx';
 import { usePoll } from '../../hooks/usePoll.js';
 import { shortId } from '../../lib/format.js';
 import { parsePayment } from '../../lib/payment-uri.js';
+import { bitcoinChannels } from '../../lib/channels.js';
 import { channelSendableSats } from '../../lib/sendable.js';
 
 /**
@@ -44,7 +45,7 @@ function LnurlCard({ id, api, rec, bump, lastReceive }) {
 	const lnurl = parsed.kind === 'lnurl' ? parsed : carried;
 	const { link, error, resolving } = useLnurlResolve(id, lnurl?.input || null);
 	const { data: channels } = usePoll(
-		() => (rec?.onchainOnly ? Promise.resolve([]) : api.get('/channels').catch(() => null)),
+		() => (rec?.onchainOnly ? Promise.resolve([]) : api.get('/channels').then(bitcoinChannels).catch(() => null)),
 		15000,
 		[id]
 	);

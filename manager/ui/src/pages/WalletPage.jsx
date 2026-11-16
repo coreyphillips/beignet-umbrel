@@ -28,7 +28,7 @@ import { describeAssetEvent, pendingCount } from '../lib/assets.js';
 import { assetsShown } from '../lib/wallet-assets.js';
 import { isOwnPayment } from '../lib/own-payments.js';
 
-import { isClosedChannel } from '../lib/channels.js';
+import { bitcoinChannels, isClosedChannel } from '../lib/channels.js';
 import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
 import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
@@ -302,7 +302,7 @@ export default function WalletPage() {
 	// The channel the epoch runs on: a force close leaves the epoch ACTIVE
 	// on the record, so the channel's state decides between the two badges.
 	const { data: fforChannels } = usePoll(
-		() => (liveEpoch ? api.get('/channels').catch(() => null) : Promise.resolve(null)),
+		() => (liveEpoch ? api.get('/channels').then(bitcoinChannels).catch(() => null) : Promise.resolve(null)),
 		10000,
 		[id, tick, !!liveEpoch]
 	);

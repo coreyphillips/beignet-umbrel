@@ -90,3 +90,24 @@ test("a wallet's history has the transactions its asset operations made, and its
 	const offered = new Set([...boostable.rbf, ...boostable.cpfp].map((t) => t.txid));
 	for (const row of onChain.filter((r) => !r.at.confirmed)) assert.ok(offered.has(row.txid));
 });
+
+test("the demo daemon lists a wallet's asset channel beside its bitcoin ones, marked auxiliary, and counts it in no bitcoin figure", async () => {
+	const { channels: assetChannels } = await mockRequest('/wallets/demo-main/api/x/assets/channels');
+	assert.ok(assetChannels.length >= 1);
+	const listed = await mockRequest('/wallets/demo-main/api/channels');
+	const marked = listed.filter((c) => c.auxiliary === true);
+	assert.deepEqual(marked.map((c) => c.channelId).sort(), assetChannels.map((c) => c.channelId).sort());
+	for (const c of marked) {
+		assert.equal(c.maxSendableSats, 0);
+		assert.equal(c.localBalanceSats + c.remoteBalanceSats, c.capacitySats);
+	}
+	// No other row carries the key at all, as on a daemon.
+	for (const c of listed.filter((x) => x.auxiliary !== true)) assert.equal('auxiliary' in c, false);
+	// What the wallet can send as bitcoin is what its bitcoin channels can send.
+	const liquidity = await mockRequest('/wallets/demo-main/api/liquidity');
+	const bitcoinSendable = listed.filter((c) => c.auxiliary !== true).reduce((sum, c) => sum + (c.maxSendableSats || 0), 0);
+	assert.equal(liquidity.maxSendableSats, bitcoinSendable);
+	// A wallet with no asset channel lists no such row.
+	const none = await mockRequest('/wallets/demo-testnet/api/channels');
+	assert.equal(none.some((c) => c.auxiliary === true), false);
+});

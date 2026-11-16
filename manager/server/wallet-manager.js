@@ -76,6 +76,7 @@ const { normalizeElectrumTls, electrumTlsEnv } = require('./electrum-tls');
 const { electrumRequests, cachedProbe, discoverServers } = require('./electrum-probe');
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
+const { bitcoinChannels } = require('./channels');
 const assets = require('./assets');
 const netmode = require('./network-mode');
 const { createOutbound } = require('./outbound');
@@ -1788,6 +1789,17 @@ class WalletManager {
 	}
 
 	/**
+	 * A running wallet's bitcoin channels: what its daemon lists, less its
+	 * asset channels (see channels.js). Lightning-first and offline receives
+	 * choose, count, close and wait on channels from this read, so neither
+	 * ever picks up a channel that carries an asset. It rejects as the
+	 * daemon call does, for the caller to decide what an unanswered list means.
+	 */
+	async _bitcoinChannels(rec) {
+		return bitcoinChannels(await this._daemonCall(rec, 'GET', '/channels'));
+	}
+
+	/**
 	 * How many asset channels a running wallet still has, closing ones
 	 * included, or null when its assets host cannot be asked.
 	 */
@@ -3464,7 +3476,7 @@ class WalletManager {
 		const managed = this.offlineReceiveAvailable() ? await this._daemonCall(rec, 'GET', '/receive/status') : null;
 		const owned = new Set((managed?.requests || []).filter(j => !j.done).map((j) => j.channelId));
 		if (!ffor.returnJobs(epochs).length) return;
-		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+		const channels = await this._bitcoinChannels(rec).catch(() => null);
 		for (const job of ffor.returnJobs(epochs, channels, true).filter((job) => !owned.has(job.channelId) && (!concurrentOnly || job.concurrentVersion) && (!peer || channels?.some(ch => ch.channelId === job.channelId && ch.peerPubkey === peer)))) {
 			await this.fforReturn(id, { ...job, waitForPeer: true }).catch(() => {});
 		}
@@ -3513,7 +3525,7 @@ class WalletManager {
 			if (result && !epoch?.concurrent && result.action !== 'synced' && (result.action !== 'nothing' || (epoch && epoch.state === 'DRAINING'))) {
 				epoch = (await this._waitEpochSettled(rec, channelId)) || epoch;
 			}
-			const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+			const channels = await this._bitcoinChannels(rec).catch(() => null);
 			const ch = Array.isArray(channels) ? channels.find((c) => c.channelId === channelId) : null;
 			const channelState = ch ? ch.state : null;
 			const outcome = ffor.returnOutcome({ action: result && result.action, epoch, channelState });
@@ -3681,7 +3693,7 @@ class WalletManager {
 		if (!rt.proc) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
 		if (!channelId || typeof channelId !== 'string') throw httpError(400, 'INVALID_PARAMS', 'channelId is required');
 		if (rt.fforSetup && rt.fforSetup.running) throw httpError(409, 'FFOR_SETUP_IN_PROGRESS', 'An epoch setup is already running');
-		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => []);
+		const channels = await this._bitcoinChannels(rec).catch(() => []);
 		const ch = (channels || []).find((c) => c.channelId === channelId);
 		// Request the chosen profile explicitly. The engine negotiates it with the peer;
 		// automatic receive quotes impose additional capacity policy on manual books.
@@ -3856,7 +3868,7 @@ class WalletManager {
 		let toS = null;
 		const deadline = Date.now() + ffor.SETUP_ACTIVE_TIMEOUT_MS;
 		while (!toS && Date.now() < deadline) {
-			const wChannels = await this._daemonCall(issuerRec, 'GET', '/channels').catch(() => []);
+			const wChannels = await this._bitcoinChannels(issuerRec).catch(() => []);
 			toS = (wChannels || []).find((c) => c.peerPubkey === view.peerNodeId && c.state === 'NORMAL' && c.shortChannelId) || null;
 			if (!toS) {
 				const any = (wChannels || []).some((c) => c.peerPubkey === view.peerNodeId && !ffor.CLOSED_CHANNEL_STATES.includes(c.state));
@@ -3963,7 +3975,7 @@ class WalletManager {
 		const deadline = Date.now() + timeoutMs;
 		while (Date.now() < deadline) {
 			if (!this.runtimeState(rec.id).proc) return false;
-			const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+			const channels = await this._bitcoinChannels(rec).catch(() => null);
 			const ch = Array.isArray(channels) ? channels.find((c) => c.channelId === channelId) : null;
 			if (ch && ch.state === 'NORMAL') return true;
 			await sleep(ffor.RETURN_POLL_MS);
@@ -4020,14 +4032,14 @@ class WalletManager {
 			const onchainSats = balance.onchain || 0;
 			if (onchainSats < lfbw.CHANNELIZE_FLOOR_SATS) {
 				if (lf.previousPrimary) {
-					const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+					const channels = await this._bitcoinChannels(rec).catch(() => null);
 					if (channels) this._forgetPreviousPrimary(rec, channels);
 				}
 				return decided({ action: 'wait', reason: 'below-floor' });
 			}
 			const [utxos, channels] = await Promise.all([
 				this._daemonCall(rec, 'GET', '/utxos').catch(() => null),
-				this._daemonCall(rec, 'GET', '/channels').catch(() => null)
+				this._bitcoinChannels(rec).catch(() => null)
 			]);
 			// An unanswered channel list says nothing about the previous
 			// primary: only a list that was read can show its channel gone.
@@ -4151,7 +4163,7 @@ class WalletManager {
 		if (!rt.proc || !rt.healthy) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
 		const previous = rec.lfbw.previousPrimary;
 		if (!previous) throw httpError(409, 'NO_PREVIOUS_PRIMARY', 'This wallet has not changed its primary node');
-		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+		const channels = await this._bitcoinChannels(rec).catch(() => null);
 		if (!channels) throw httpError(503, 'WALLET_UNRESPONSIVE', 'The wallet did not answer');
 		if (this._forgetPreviousPrimary(rec, channels)) {
 			throw httpError(409, 'NO_PREVIOUS_CHANNEL', 'There is no channel with the previous primary left to move');

@@ -6,7 +6,7 @@ import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { withPeerHint } from '../../lib/hints.js';
-import { isClosedChannel, isClosedChannelState } from '../../lib/channels.js';
+import { bitcoinChannels, isClosedChannel, isClosedChannelState } from '../../lib/channels.js';
 import { closeStory, rebroadcastAlreadyDone } from '../../lib/close-story.js';
 import { watchChannelOpen } from '../../lib/channel-open.js';
 import { nodeNames } from '../../lib/node-names.js';
@@ -42,7 +42,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump, config, route, g
 	const assetChannels = assetChannelsOffered({ config, rec, status: assets?.status });
 	const { data: channels, refresh } = usePoll(
 		async () => {
-			const list = await api.get('/channels').catch(() => []);
+			const list = await api.get('/channels').then(bitcoinChannels).catch(() => []);
 			// The channel list carries no alias; resolve each peer's from the gossip
 			// graph, the same lookup the Peers tab uses. The names are remembered
 			// (lib/node-names), so a peer is asked about once, not once per channel

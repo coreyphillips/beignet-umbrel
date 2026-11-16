@@ -20,7 +20,7 @@ import { AssetAmount } from '../../components/AssetAmount.jsx';
 import { useAssetBalances } from '../../hooks/useAssets.js';
 import { assetsShown } from '../../lib/wallet-assets.js';
 import { fmtSats, pct } from '../../lib/format.js';
-import { isClosedChannel } from '../../lib/channels.js';
+import { bitcoinChannels, isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
 
 import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
@@ -107,7 +107,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 				api.get('/liquidity').catch(() => null),
 				api.get('/fees').catch(() => null),
 				api.get('/fees/estimates').catch(() => null),
-				api.get('/channels').catch(() => null)
+				api.get('/channels').then(bitcoinChannels).catch(() => null)
 			]);
 
 			return { balance, liquidity, fees, feeEst, channels };
