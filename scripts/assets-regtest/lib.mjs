@@ -135,6 +135,28 @@ export async function tapdMint({ name, amount, type = 'normal', decimals = 0, gr
 	return minted;
 }
 
+/**
+ * tapd's own verdict on a proof file, read from its command line: it checks
+ * every proof in the file's history against its chain. { valid, ... }.
+ */
+export function tapdVerifies(fileBytes) {
+	let out;
+	try {
+		out = compose(['exec', '-T', 'tapd', 'tapcli', '--network=regtest', 'proofs', 'verify', '--proof_file', '-'], {
+			input: Buffer.from(fileBytes),
+			stdio: ['pipe', 'pipe', 'pipe']
+		});
+	} catch (err) {
+		// A file it will not have ends the command with an error, not an answer.
+		return { valid: false, said: String(err.stderr || err.message).trim().slice(0, 300) };
+	}
+	try {
+		return JSON.parse(out);
+	} catch (_) {
+		return { valid: false, said: out };
+	}
+}
+
 /** Whether tapd's universe holds the issuance of an asset: it stores one only after verifying it. */
 export const tapdKnows = (assetId) => Object.values(tapcli('universe', 'roots').universe_roots || {}).some((r) => r.id && r.id.asset_id === assetId);
 

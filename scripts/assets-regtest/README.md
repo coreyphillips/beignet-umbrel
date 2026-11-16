@@ -91,7 +91,14 @@ node 05-backup.mjs     # archive, purge both wallets, restore, spend the restore
 node 06-crash.mjs      # daemons killed outright mid-mint, mid-preview, mid-send and mid-receive
 node 07-reorg.mjs      # the mint's block leaves the chain; tapd then judges the rebuilt proofs
 node 08-settings.mjs   # broadcast again, test and change the proof server, assets off and on
+node 09-proof-files.mjs  # the server refuses transfer proofs: the proof goes by file, twice, then to tapd
 ```
+
+`09-proof-files.mjs` turns transfer proof inserts off in the stack's tapd
+while it runs (`tapcli universe federation config global --proof_type
+transfer --allow_insert=false`) and back on when it ends, whatever happened.
+Run it by itself: any other scenario sending at the same time would have its
+proofs refused too.
 
 Every script leaves its wallets running, to be looked at afterwards, and each
 one holds a connection to the stack's Electrum server. Past a few dozen, that
