@@ -7,6 +7,7 @@ import { Button, CopyText, Countdown, Field } from '../../../../components/ui.js
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
 import { lightningRefusal, payFailure, payLabel, payableAssets, quoteChange, quoteExpired, quotePriced } from '../../../../lib/asset-lightning.js';
+import { noticeOf } from '../../../../lib/asset-progress.js';
 import { submitOnce } from '../../../../lib/assets.js';
 import { idempotencyKey } from '../../../../lib/assets-api.js';
 import { fmtSats, shortId } from '../../../../lib/format.js';
@@ -109,7 +110,10 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 			// A payment whose answer was lost and then found among the rows.
 			const row = answer.recovered ? answer.row : null;
 			const status = row ? (row.failed ? 'FAILED' : row.state === 'complete' ? 'COMPLETED' : 'PENDING') : String(answer.status || '').toUpperCase();
-			if (status === 'FAILED') {
+			// The wallet cannot vouch for how this one ended, and says so: it is
+			// shown with that note, and neither as paid nor as failed.
+			const notice = noticeOf(row || answer);
+			if (status === 'FAILED' && !notice) {
 				setFailure(row ? payFailure({ failureDescription: row.failure?.message }) : payFailure(answer));
 				// The price that payment was made at is spent: a new one for another try.
 				setRanOut(null);
@@ -125,11 +129,12 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 					priced: quotePriced(shown),
 					feeSats: (row ? row.feeSats : answer.feeSats) ?? null,
 					paymentHash: (row ? row.paymentHash : answer.paymentHash) || null,
-					settled: DONE.has(status),
+					settled: DONE.has(status) && !notice,
+					notice,
 					asset: { key: asset.key, assetId: asset.assetId, groupKey: asset.groupKey, name: asset.name, type: asset.type, decimalDisplay: asset.decimalDisplay }
 				}
 			});
-			if (DONE.has(status)) toast(`Paid ${fmtAsset(paid ?? shown.assetAmount, asset)} over Lightning`, 'success');
+			if (DONE.has(status) && !notice) toast(`Paid ${fmtAsset(paid ?? shown.assetAmount, asset)} over Lightning`, 'success');
 			if (bump) bump();
 		} catch (e) {
 			const fresh = e?.code === 'QUOTE_CHANGED' ? e.details?.quote : null;
@@ -160,20 +165,35 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 		// An invoice a peer made for the asset alone has no bitcoin amount worth repeating.
 		const forWhat = receipt.priced === false ? '' : `, for an invoice of ${fmtSats(receipt.amountSats)}`;
 		return (
-			<div className="paid-receipt asset-pay-receipt" role="status" data-testid="asset-pay-receipt" data-settled={receipt.settled ? 'yes' : 'no'}>
+			<div
+				className={`paid-receipt asset-pay-receipt${receipt.notice ? ' noted' : ''}`}
+				role="status"
+				data-testid="asset-pay-receipt"
+				data-settled={receipt.settled ? 'yes' : 'no'}
+				data-notice={receipt.notice ? receipt.notice.code : undefined}
+			>
 				<div className="paid-check" aria-hidden="true">
-					{receipt.settled ? '✓' : '…'}
+					{receipt.notice ? '?' : receipt.settled ? '✓' : '…'}
 				</div>
-				<div className="paid-title">{receipt.settled ? 'Paid' : 'On its way'}</div>
+				<div className="paid-title">
+					{receipt.notice ? (receipt.notice.code === 'PAYMENT_UNACCOUNTED' ? 'Not known' : 'Not confirmed') : receipt.settled ? 'Paid' : 'On its way'}
+				</div>
 				<div className="wallet-meta">
-					{receipt.settled
-						? `${paidWhat} paid over Lightning${forWhat}.`
-						: `${paidWhat} is on its way over Lightning${forWhat}. Its outcome shows under Holdings.`}
+					{receipt.notice
+						? `${paidWhat} was sent over Lightning${forWhat}. The wallet cannot say how it ended.`
+						: receipt.settled
+							? `${paidWhat} paid over Lightning${forWhat}.`
+							: `${paidWhat} is on its way over Lightning${forWhat}. Its outcome shows under Holdings.`}
 				</div>
+				{receipt.notice && (
+					<div className="info-note" role="status" data-testid="asset-pay-notice" data-code={receipt.notice.code} style={{ textAlign: 'left' }}>
+						{receipt.notice.message}
+					</div>
+				)}
 				<table className="kv asset-pay-facts">
 					<tbody>
 						<tr>
-							<td>Asset paid</td>
+							<td>{receipt.notice ? 'Asset sent' : 'Asset paid'}</td>
 							<td>{paidWhat}</td>
 						</tr>
 						{receipt.feeSats !== null && (

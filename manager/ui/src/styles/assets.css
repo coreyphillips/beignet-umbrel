@@ -1558,3 +1558,29 @@ pre.asset-meta {
 .asset-handover {
 	margin-top: 14px;
 }
+
+/* A receipt the wallet has a note on is not a success: how the payment
+   ended is not known. It takes the blue of something said, not the green
+   of something done. */
+.paid-receipt.noted {
+	border-color: rgba(110, 168, 255, 0.3);
+	background: rgba(110, 168, 255, 0.06);
+}
+
+.paid-receipt.noted .paid-check,
+.paid-receipt.noted .paid-title {
+	color: #bcd4ff;
+}
+
+.paid-receipt.noted .paid-check {
+	border-color: currentColor;
+}
+
+:root[data-theme='light'] .paid-receipt.noted .paid-check,
+:root[data-theme='light'] .paid-receipt.noted .paid-title {
+	color: #2b579a;
+}
+
+.paid-receipt.noted .info-note {
+	margin: 12px 0 4px;
+}

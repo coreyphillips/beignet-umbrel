@@ -790,6 +790,14 @@ export function createAssetsMock(ctx) {
 			});
 			return true;
 		},
+		// A payment the node has no record of any more: it may have been paid.
+		'pay-unaccounted'(id) {
+			return plantNotice(id, 'PAYMENT_UNACCOUNTED');
+		},
+		// A payment the node took without confirming that it went out as an asset payment.
+		'pay-unconfirmed'(id) {
+			return plantNotice(id, 'PAYMENT_UNCONFIRMED');
+		},
 		// A channel on the wallet's record that its node does not hold: what a
 		// restore from a backup leaves. It carries nothing from then on.
 		'channel-missing'(id) {
@@ -801,6 +809,38 @@ export function createAssetsMock(ctx) {
 			return true;
 		}
 	};
+
+	// What the host says of a payment whose end it cannot vouch for, word for
+	// word (assets-host/lightning.js): on the activity row and on the answer
+	// of POST /pay, as `notice`.
+	const PAY_NOTICES = {
+		PAYMENT_UNACCOUNTED: {
+			code: 'PAYMENT_UNACCOUNTED',
+			message: 'The node no longer has a record of this payment, so how it ended cannot be known. It may have been paid. This wallet will not pay the invoice again.'
+		},
+		PAYMENT_UNCONFIRMED: {
+			code: 'PAYMENT_UNCONFIRMED',
+			message: 'The node took this payment without confirming that it went out as an asset payment. It ends as the node reports, and its units are not known to have left the channel.'
+		}
+	};
+
+	// A payment made a while ago that carries one of them, and the next
+	// payment made here ending the same way, so that the receipt can be seen.
+	function plantNotice(id, code) {
+		const s = S(id);
+		const ch = s.channels.find((c) => c.state === 'NORMAL');
+		if (!ch) return false;
+		const row = newRow(id, 'ln-send', {
+			state: 'pending',
+			assets: [{ ...ch.asset, amount: '357' }],
+			paymentHash: derivedHex(`seed-notice:${code}:${id}`, 64),
+			notice: { ...PAY_NOTICES[code] },
+			_done: true
+		});
+		row.at.created = now() - 20 * MINUTE;
+		s.payNotice = code;
+		return true;
+	}
 
 	// The host's own sentence for it, as its status says it.
 	const CHANNEL_MISSING_TEXT =
@@ -1517,6 +1557,8 @@ export function createAssetsMock(ctx) {
 		// No digits before the separator is an invoice that names no amount.
 		const m = /^ln(?:bcrt|bc|tb)(\d*)([munp]?)1/i.exec(String(body?.bolt11 || ''));
 		if (!m) throw fail('That is not a Lightning invoice', 'BAD_INVOICE');
+		// As the host: an invoice this wallet has paid, or may have, is not priced again.
+		if (S(id).lost && S(id).lost[String(body.bolt11)]) throw fail('This wallet has already paid that invoice, or is paying it now.', 'ALREADY_PAID', { status: 409 });
 		const perBtc = { '': 1e8, m: 1e5, u: 100, n: 0.1, p: 0.0001 };
 		const amountSats = m[1] ? Math.round(Number(m[1]) * perBtc[m[2].toLowerCase()]) : Number(body.amountSats) || 0;
 		if (!(amountSats > 0)) throw fail('This invoice names no amount, so one is needed', 'AMOUNT_REQUIRED');
@@ -1566,11 +1608,44 @@ export function createAssetsMock(ctx) {
 		if (body.maxAssetAmount != null && cmpUnits(quote.assetAmount, body.maxAssetAmount) > 0) {
 			throw fail('The price changed before the payment was made', 'QUOTE_CHANGED', { details: { quote: pubRow(quote) } });
 		}
+		// Nothing can say how the payment of this invoice ended, so it may have been paid.
+		if (s.lost && s.lost[String(body.bolt11)]) throw fail(PAY_NOTICES.PAYMENT_UNACCOUNTED.message, 'PAYMENT_UNACCOUNTED', { status: 409 });
 		const identity = identityFor(id, quote._key);
 		const ch = s.channels.find((c) => c.channelId === quote._channelId);
 		delete s.quotes[quote.quoteId];
 		return new Promise((resolve) => {
 			setTimeout(() => {
+				// Armed by `pay-unaccounted` or `pay-unconfirmed`: this payment is
+				// one the wallet cannot vouch for. Nothing is known to have left
+				// the channel, so its balances stay as they were.
+				const armed = s.payNotice && PAY_NOTICES[s.payNotice] ? s.payNotice : null;
+				if (armed) {
+					const lost = armed === 'PAYMENT_UNACCOUNTED';
+					const hash = derivedHex(`pay:${id}:${quote.quoteId}`, 64);
+					const noted = newRow(id, 'ln-send', {
+						state: lost ? 'pending' : 'complete',
+						assets: [brief(identity, quote.assetAmount)],
+						paymentHash: hash,
+						feeSats: lost ? null : 2,
+						clientRef: key || null,
+						notice: { ...PAY_NOTICES[armed] },
+						_done: true
+					});
+					if (!lost) noted.at.completed = now();
+					s.payNotice = null;
+					if (lost) s.lost = { ...(s.lost || {}), [String(body.bolt11)]: true };
+					save();
+					ctx.emit(id, 'assets:payment', { row: pubRow(noted) });
+					resolve({
+						status: lost ? 'PENDING' : 'COMPLETED',
+						paymentHash: hash,
+						assetAmount: quote.assetAmount,
+						feeSats: lost ? null : 2,
+						failureDescription: null,
+						notice: { ...PAY_NOTICES[armed] }
+					});
+					return;
+				}
 				ch.localBalance = subUnits(ch.localBalance, quote.assetAmount);
 				ch.remoteBalance = addUnits(ch.remoteBalance, quote.assetAmount);
 				ch.sendable = subUnits(ch.sendable, quote.assetAmount);

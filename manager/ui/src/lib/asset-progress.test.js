@@ -237,3 +237,28 @@ test('a transaction left in the mempool is explained, with nothing to press', ()
 	assert.equal(stuckNote({ ...old, confirmations: 1 }, { fast: 18 }, now), null, 'a confirmed one is not stuck');
 	assert.equal(stuckNote({ ...fresh, stuck: true }, { fast: 18 }, now) !== null, true, 'the wallet saying so is enough');
 });
+
+test('a payment the wallet has a note on is worded by the note, never as paid or failed', async () => {
+	const { headline, statusOf, isFailed, isPending, noticeOf } = await import('./asset-progress.js');
+	const busd = { name: 'BUSD', type: 'normal', decimalDisplay: 2, amount: '357' };
+	const row = (state, code, extra = {}) => ({ kind: 'ln-send', state, failed: state === 'failed', assets: [busd], at: { created: 1 }, notice: { code, message: 'The wallet says so.' }, ...extra });
+	for (const state of ['pending', 'complete', 'failed']) {
+		const lost = row(state, 'PAYMENT_UNACCOUNTED');
+		assert.equal(headline(lost), 'Lightning payment of 3.57 BUSD: how it ended is not known');
+		assert.deepEqual(statusOf(lost), { text: 'not known', tone: 'blue' });
+		assert.equal(isFailed(lost), false);
+		const loose = row(state, 'PAYMENT_UNCONFIRMED');
+		assert.equal(headline(loose), 'Lightning payment of 3.57 BUSD: not confirmed as an asset payment');
+		assert.deepEqual(statusOf(loose), { text: 'unconfirmed', tone: 'blue' });
+	}
+	assert.equal(isPending(row('pending', 'PAYMENT_UNACCOUNTED')), true);
+	// A note this page has no words for is still a note, and still not a failure.
+	assert.equal(headline(row('failed', 'SOMETHING_NEW')), 'Lightning payment of 3.57 BUSD: the wallet has a note on it');
+	assert.deepEqual(noticeOf(row('pending', 'SOMETHING_NEW')), { code: 'SOMETHING_NEW', message: 'The wallet says so.' });
+	// No note, or an empty one, and the row is worded as ever.
+	for (const notice of [undefined, null, {}, { code: 'X', message: ' ' }]) {
+		assert.equal(noticeOf({ notice }), null);
+		assert.equal(headline({ kind: 'ln-send', state: 'complete', assets: [busd], notice }), 'Paid 3.57 BUSD over Lightning');
+		assert.equal(isFailed({ kind: 'ln-send', state: 'failed', failed: true, assets: [busd], notice }), true);
+	}
+});

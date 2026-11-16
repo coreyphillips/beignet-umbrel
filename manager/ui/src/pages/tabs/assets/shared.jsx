@@ -4,7 +4,7 @@ import { AssetAmount } from '../../../components/AssetAmount.jsx';
 import { Badge, ConfirmationMeter, CopyText, DetailRow, ExplorerLink, Modal, Timeline } from '../../../components/ui.jsx';
 import { usePoll } from '../../../hooks/usePoll.js';
 import { LIMITS } from '../../../lib/assets.js';
-import { handedOver, headline, kindWord, namesOf, proofUnpublished, railOf, statusOf, stepsOf, timelineLabel, unwatched } from '../../../lib/asset-progress.js';
+import { handedOver, headline, kindWord, namesOf, noticeOf, proofUnpublished, railOf, statusOf, stepsOf, timelineLabel, unwatched } from '../../../lib/asset-progress.js';
 import { txUrl } from '../../../lib/explorer.js';
 import { fmtDate, fmtSats, shortId } from '../../../lib/format.js';
 
@@ -113,6 +113,21 @@ export function RowTimeline({ row, network, host, compact = false, testId }) {
 	return <Timeline label={timelineLabel(row)} steps={steps} compact={compact} live={compact ? undefined : headline(row, { network })} testId={testId} />;
 }
 
+/**
+ * What the wallet says of a payment whose end it cannot vouch for
+ * (noticeOf): its own sentence, as something said and not something
+ * blocked, with its code for a test to find.
+ */
+export function RowNotice({ row, testId = 'asset-row-notice' }) {
+	const notice = noticeOf(row);
+	if (!notice) return null;
+	return (
+		<div className="info-note" role="status" data-testid={testId} data-code={notice.code}>
+			{notice.message}
+		</div>
+	);
+}
+
 /** A row's state as a badge. */
 export function RowStatus({ row, network }) {
 	const s = statusOf(row, { network });
@@ -150,6 +165,7 @@ export function AssetTransferDetail({ row, network, host, origin, onClose, child
 					<RowAssets row={row} />
 					<RowStatus row={row} network={network} />
 				</div>
+				<RowNotice row={row} />
 				{children}
 				{stepsOf(row, { network, host }).length > 0 && (
 					<div className="asset-transfer-steps">
