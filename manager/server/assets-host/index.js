@@ -148,7 +148,8 @@ function lightningFor(base, context) {
  * The attachment the engine is given: the host's, and beside it the channel
  * provider when the wallet has one. The one place that knows where the
  * engine looks for it. A host that only refuses has nothing of its own to
- * stop, so the provider is stopped here for every kind.
+ * stop, so the provider is closed here for every kind: its service, and the
+ * library's hold on the node.
  */
 function withProvider(attachment, ln) {
 	if (!ln) return attachment;
@@ -159,13 +160,17 @@ function withProvider(attachment, ln) {
 				await attachment.stop(reason);
 			} finally {
 				try {
-					ln.stop();
+					ln.close();
 				} catch (_) {
 					/* it is being left behind either way */
 				}
 			}
 		},
-		lightning: ln.attachment
+		// The members of an attachment that reach the node, where the engine
+		// reads them: on the attachment itself (adapter.js, item 29).
+		auxiliaryChannels: ln.attachment.auxiliaryChannels,
+		fixedOutputFees: ln.attachment.fixedOutputFees,
+		bind: (node) => ln.attachment.bind(node)
 	};
 }
 

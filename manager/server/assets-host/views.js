@@ -187,6 +187,15 @@ function assetViews({ records, registry, groups = new Map(), rows = [], channels
 			if (limit.maxReceive < sum.receivable) sum.receivable = limit.maxReceive;
 		}
 	}
+	// The inputs of a channel's funding stay in the on-chain records, set
+	// aside under the funding's name, until it has confirmed. What of them
+	// goes into the channel is counted there, and not here a second time.
+	// What they hold beyond that is the funding's change: it stays on-chain.
+	const inFunding = new Map();
+	for (const c of channels) {
+		if (!c.counted || !c.key) continue;
+		for (const a of c.assets || []) inFunding.set(`funding:${c.id}|${a.assetId}`, BigInt(a.amount));
+	}
 	for (const r of records) {
 		if (!isLive(r)) continue;
 		const reg = registry.get(r.assetId);
@@ -194,7 +203,15 @@ function assetViews({ records, registry, groups = new Map(), rows = [], channels
 		const key = groupKey || r.assetId;
 		const entry = byKey.get(key) || { key, groupKey, members: new Map(), anchors: new Set(), sample: r };
 		const member = entry.members.get(r.assetId) || 0n;
-		entry.members.set(r.assetId, member + BigInt(r.amount));
+		let amount = BigInt(r.amount);
+		const slot = r.reservedBy ? `${r.reservedBy}|${r.assetId}` : null;
+		if (slot && inFunding.has(slot)) {
+			const left = inFunding.get(slot);
+			const taken = amount < left ? amount : left;
+			amount -= taken;
+			inFunding.set(slot, left - taken);
+		}
+		entry.members.set(r.assetId, member + amount);
 		entry.anchors.add(r.anchorOutPoint);
 		byKey.set(key, entry);
 	}
@@ -278,18 +295,25 @@ const CHANNEL_CLOSING = Object.freeze(['CLOSING', 'FORCE_CLOSING', 'SHUTTING_DOW
  * A channel's state as the dashboard and the manager read it. `state` is the
  * engine's own word, absent while the engine has no channel yet.
  *
- * Three of the words are the host's. A channel is OPENING until its funding
+ * Four of the words are the host's. A channel is OPENING until its funding
  * has confirmed and the library has confirmed it, whatever the engine calls
- * it on the way: it cannot carry a payment before. And a closed channel is
- * CLOSING, or FORCE_CLOSING, until its assets are back on-chain: until then
- * it is not over, and the manager counts every state but CLOSED and
- * FORCE_CLOSED as a live channel. Only the library saying the recovery is
- * complete makes it over. No word on it, or a word this host has not met,
- * does not.
+ * it on the way: it cannot carry a payment before. A channel whose close
+ * has been asked for is CLOSING from that moment, also while the engine
+ * still calls it NORMAL. And a closed channel is CLOSING, or FORCE_CLOSING,
+ * until its assets are back on-chain: until then it is not over, and the
+ * manager counts every state but CLOSED and FORCE_CLOSED as a live channel.
+ * Only the library saying the recovery is complete makes it over. No word
+ * on it, or a word this host has not met, does not.
+ *
+ * MISSING is a channel the wallet's records say the node held, signed for,
+ * and that the node does not hold, with no close on record: what a restore
+ * from a backup leaves. It is no open under way and it carries nothing. It
+ * is a live channel all the same, with its last known balance.
  */
-function channelWord({ state, confirmed, recovery }) {
+function channelWord({ state, confirmed, recovery, engine, signed }) {
+	if (engine === 'missing' && signed) return 'MISSING';
 	if (!state || state === 'NONE' || state.startsWith('SENT_') || CHANNEL_FUNDING.includes(state)) return 'OPENING';
-	if (state === 'NORMAL') return confirmed ? 'NORMAL' : 'OPENING';
+	if (state === 'NORMAL') return !confirmed ? 'OPENING' : recovery && recovery !== 'none' ? 'CLOSING' : 'NORMAL';
 	if (state === 'CLOSED') return recovery === 'complete' ? 'CLOSED' : 'CLOSING';
 	if (state === 'FORCE_CLOSED') return recovery === 'complete' ? 'FORCE_CLOSED' : 'FORCE_CLOSING';
 	return state;

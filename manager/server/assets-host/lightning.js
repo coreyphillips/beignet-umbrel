@@ -5,8 +5,9 @@
  * them, and what the host answers the library's Lightning service.
  *
  * Everything here works against `host.ln`, the facade adapter.js builds over
- * the library (`createLightning`), or a fake of it in tests. A wallet whose
- * engine or library cannot carry asset channels has none: `host.ln` is null,
+ * the library's Lightning entry (`createLightning`). In tests it is the same
+ * facade, over a stand-in for the entry. A wallet whose engine or library
+ * cannot carry asset channels has none: `host.ln` is null,
  * the status says lightning is off, and every route but the channel list
  * refuses with LIGHTNING_UNAVAILABLE.
  *
@@ -49,8 +50,24 @@
  *   open and waits for it before it believes what the library says. An
  *   open whose funding transaction is signed is a channel in being,
  *   whatever its phase says: it is listed and counted, its units are in
- *   the books, and it is never undone. The loop looks at every confirmed
- *   open that nobody is working on, on every pass.
+ *   the books, and it is never undone. The one exception is the library's:
+ *   a signed funding it has proven unable to confirm and given up, which
+ *   is over, and said. The loop looks at every confirmed open that nobody
+ *   is working on, on every pass, and reads all of this from the library's
+ *   list and never from an event alone.
+ *
+ *   Until a funding has confirmed, its inputs stay in the on-chain records,
+ *   set aside under its name. What of them goes into the channel is counted
+ *   in the channel and taken off the on-chain figure, so nothing is counted
+ *   twice, and what they hold beyond that, the change, stays on-chain.
+ *
+ * A channel the node does not hold
+ *
+ *   The library lists what its records say the node held and the node does
+ *   not hold, with no close on record: what a restore from a backup leaves.
+ *   The host calls it MISSING. It is listed with its last known balance,
+ *   counted as a live channel, never usable, never an open under way, and
+ *   a close of it is refused in a sentence. The status says so.
  *
  * Paying an invoice
  *
@@ -64,10 +81,10 @@
  *   by a stop says nothing about the payment, which stays pending until a
  *   later pass of the loop reads the record, also after a restart. The one
  *   exception is a refusal the library makes before anything leaves the
- *   wallet (errors.js PAY_NOTHING_SENT), and a payment the library never
- *   took that the node has no record of. Those the host concludes itself,
- *   marks as its own conclusion, and takes back if the node turns out to
- *   have the payment after all.
+ *   wallet (the codes it exports for that, `host.ln.refusals`), and a
+ *   payment the library never took that the node has no record of. Those
+ *   the host concludes itself, marks as its own conclusion, and takes back
+ *   if the node turns out to have the payment after all.
  *
  * Rows
  *
@@ -76,6 +93,8 @@
  *                        was asked for, when it was over
  *   committed/funding:<id>  an open the user confirmed
  *   l-quote/<id>         a price given, until it is used or runs out
+ *   l-change/<id>        the change of a channel funding that is in no
+ *                        record of the wallet's (settleReservations)
  *   inv/<paymentHash>    an invoice made, for the list of them
  *   row/ln-send-<hash>   a payment, and row/ln-receive-<hash> an invoice,
  *                        as activity
@@ -83,7 +102,7 @@
 const crypto = require('crypto');
 const { sha256Hex } = require('./store');
 const { CHANNEL_SATS, CARRIER_SATS, unhex } = require('./adapter');
-const { refusal, isRefusal, mapError, mapLightning, isFenced, plainMessage, codeOf, PAY_NOTHING_SENT, paymentFailure } = require('./errors');
+const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure } = require('./errors');
 const views = require('./views');
 const ops = require('./ops');
 
@@ -114,6 +133,14 @@ const FAILED_PHASES = ['rejected', 'failed', 'cancelled'];
 // An open the user confirmed, that nobody is working on and the library has
 // no record of, is taken to have come to nothing once it is this old.
 const OPEN_LOST_AFTER_MS = 30 * 1000;
+
+// An open that came to nothing before anything was signed.
+const isEnded = (c) => !c.signed && FAILED_PHASES.includes(c.phase);
+// A signed funding the library has proven unable to confirm and given up:
+// the one way a signed funding ends. What it had set aside is released by
+// then. Until it is, the flow is still a channel in being.
+const isAbandoned = (c) => c.signed && c.phase === 'failed' && !c.fundingReservation;
+const cancelledError = () => Object.assign(new Error('the open was cancelled'), { code: 'ERR_BEIGNET_LN_CANCELLED' });
 
 const hexKey = (value) => String(value || '').trim().toLowerCase();
 const isId = (text) => typeof text === 'string' && /^[0-9a-f]{8,128}$/.test(text);
@@ -176,11 +203,16 @@ function channelList(host) {
 		seen.add(c.pendingChannelId);
 		// An open that came to nothing is not a channel. One whose funding
 		// transaction is signed is, whatever its phase says: the transaction
-		// may confirm, and its units have left the wallet's on-chain records.
-		if (!c.signed && !c.state && FAILED_PHASES.includes(c.phase)) continue;
+		// may confirm, and its units are set aside for it. The one signed
+		// funding that is no channel is the one given up as unable to confirm.
+		if (isEnded(c) || isAbandoned(c)) continue;
+		// A channel a peer began to open that the engine let go of before
+		// anything was signed: nothing of this wallet's is in it.
+		if (!c.signed && !c.initiator && c.engine === 'missing') continue;
 		const note = notes.get(c.pendingChannelId) || {};
 		const word = views.channelWord(c);
-		const usable = word === 'NORMAL';
+		// Only a channel the node holds, with no close asked for, carries a payment.
+		const usable = word === 'NORMAL' && c.engine === 'held' && c.recovery === 'none';
 		const spare = c.local > c.reserved ? c.local - c.reserved : 0n;
 		const assetId = c.assetId || note.assetId || null;
 		const groupKey = c.groupKey || note.groupKey || null;
@@ -197,11 +229,18 @@ function channelList(host) {
 			usable,
 			over: isOver(word),
 			// Not usable yet and not on its way out: an open still under way.
-			opening: !isOver(word) && !views.CHANNEL_CLOSING.includes(word) && c.recovery === 'none' && (word === 'OPENING' || !c.confirmed),
-			counted: (c.signed || !!c.state) && !isOver(word),
+			opening: !isOver(word) && word !== 'MISSING' && !views.CHANNEL_CLOSING.includes(word) && c.recovery === 'none' && (word === 'OPENING' || !c.confirmed),
+			// Its units are the channel's from the moment the funding is signed.
+			counted: (c.signed || c.committed || c.confirmed) && !isOver(word),
+			// On record, and not held by the node: see views.channelWord.
+			missing: word === 'MISSING',
 			signed: c.signed,
 			phase: c.phase,
+			engine: c.engine,
 			known: true,
+			// What it was funded with, by issuance: while its funding has not
+			// confirmed, that much of the on-chain records is the channel's.
+			assets: c.assets,
 			local: c.local,
 			remote: c.remote,
 			sendable: usable ? spare : 0n,
@@ -231,9 +270,12 @@ function channelList(host) {
 			over: !coming,
 			opening: coming,
 			counted: false,
+			missing: false,
 			signed: !coming,
 			phase: '',
+			engine: 'absent',
 			known: false,
+			assets: [],
 			local: coming ? BigInt(note.amount) : 0n,
 			remote: 0n,
 			sendable: 0n,
@@ -263,7 +305,30 @@ function statusOf(host) {
 	} catch (_) {
 		usableChannels = 0;
 	}
-	return { mode: modeOf(host), usableChannels, ...(recoveryStuck(host) ? { warning: RECOVERY_STUCK } : {}) };
+	const warning = warningOf(host);
+	return { mode: modeOf(host), usableChannels, ...(warning ? { warning } : {}) };
+}
+
+const CHANNEL_MISSING =
+	"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known.";
+const CHANGE_NOT_BACK =
+	"Part of an asset went into the funding transaction of a channel as change and is not in this wallet's records, so it is not in the balance shown. The wallet's log says which asset and how much.";
+const RECOVERY_STUCK = 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.';
+
+/**
+ * What the status says is wrong with the wallet's asset channels, in
+ * sentences of the host's, or null. Never throws: the status must not.
+ */
+function warningOf(host) {
+	const said = [];
+	try {
+		if (channelList(host).some((c) => c.missing)) said.push(CHANNEL_MISSING);
+		if (host.rows.list('l-change/').length > 0) said.push(CHANGE_NOT_BACK);
+		if (recoveryStuck(host)) said.push(RECOVERY_STUCK);
+	} catch (_) {
+		/* what could not be read is not said */
+	}
+	return said.length ? said.join(' ') : null;
 }
 
 /**
@@ -347,7 +412,9 @@ async function noteChannels(host) {
 	if (changed) host.markDirty();
 	for (const c of list) {
 		const note = rows.get(`chan/${c.id}`);
-		const learnt = c.channelId && note && !note.channelId;
+		// Its id as a channel is written down once the funding is signed, and
+		// not before: an open with one is never opened a second time.
+		const learnt = c.signed && c.channelId && note && !note.channelId;
 		const ended = c.over && !c.closedAt;
 		if (!learnt && !ended) continue;
 		await host.lock.run(() =>
@@ -389,7 +456,7 @@ function insufficientAsset(needed, total, free) {
 	return refusal(
 		'INSUFFICIENT_ASSET_BALANCE',
 		total >= needed
-			? 'Part of this asset is in a send that has not confirmed yet. Wait for it to confirm, then try again.'
+			? 'Part of this asset is set aside for a send or a channel that has not confirmed yet. Wait for it to confirm, then try again.'
 			: 'This wallet does not hold that much of the asset on-chain. Only what is on-chain can go into a new channel.',
 		409,
 		{ needed: needed.toString(), available: free.toString() }
@@ -539,6 +606,21 @@ function forgetOpen(host, id) {
 }
 
 /**
+ * Take an open that is over off the library's list, which keeps every open
+ * that ended until it is told to let go. Asked once: should the library not
+ * let go of it yet, the loop asks again after the next start (forgetEnded).
+ */
+function letGo(host, id) {
+	host.mem.forgetAsked.add(id);
+	try {
+		if (host.ln.ready()) host.ln.forgetChannel(id);
+	} catch (err) {
+		if (isFenced(err)) throw err;
+		host.say('warn', `assets: an open that is over could not be taken off the list: ${plainMessage(err)}`);
+	}
+}
+
+/**
  * Ask the library to give an open up, which also stops one it is working
  * on. True: nothing is left of it and nothing will be opened under its id.
  * False: its funding transaction is signed, and it stays. Null: that cannot
@@ -575,6 +657,7 @@ async function undoOpen(host, id, err) {
 	const asked = host.mem.dropping.delete(id) || codeOf(err) === 'ERR_BEIGNET_LN_CANCELLED';
 	const failure = asked ? openCancelled() : openFailure(host, err);
 	await forgetOpen(host, id);
+	letGo(host, id);
 	if (!asked) host.emitEvent('error', { code: failure.extensionCode, message: failure.message, channelId: id });
 	await noteChannels(host);
 	return asked ? { stopped: true } : { error: failure };
@@ -682,6 +765,7 @@ async function dropOpen(host, id) {
 	mem.dropping.delete(id);
 	if (!gone) return 'signed';
 	await forgetOpen(host, id);
+	letGo(host, id);
 	await noteChannels(host);
 	return 'gone';
 }
@@ -785,6 +869,9 @@ async function closeChannel(host, body) {
 	const c = isId(wanted) ? channelList(host).find((x) => x.id === wanted || x.channelId === wanted) : null;
 	if (!c || c.over) throw refusal('CHANNEL_NOT_FOUND', 'This wallet has no asset channel with that id.', 404);
 	if (!host.mem.channelWords) await noteChannels(host);
+	if (c.missing) {
+		throw refusal('CHANNEL_MISSING', "This channel is on record, but the wallet's node does not hold it, as happens after a restore from a backup. It cannot be closed from this wallet.", 409);
+	}
 	if (!c.channelId) {
 		// Not a channel yet. Once its funding transaction is signed it will be
 		// one, and can be closed when it is. Before that the open is dropped.
@@ -818,8 +905,10 @@ function knownAsset(host, wanted) {
 }
 
 /** The figures of a price, as both quotes and an invoice carry them. */
-function priceFields(reg, amountMsat, rate) {
-	const priced = !views.isNominal(rate);
+function priceFields(reg, amountMsat, rate, said = true) {
+	// No price at all when the library says the peer set none, and when the
+	// rate is the nominal one whatever the library says.
+	const priced = said !== false && !views.isNominal(rate);
 	return { amountSats: views.satsOf(amountMsat), rateText: priced ? views.rateText(reg, rate) : '', priced };
 }
 
@@ -858,11 +947,12 @@ async function invoiceQuote(host, body) {
 	if (amount > maxReceivable) throw short();
 	let quoted;
 	try {
-		quoted = await host.ln.quoteInvoice({ assetId: best.assetId, groupKey: best.groupKey, amount, peerPubkey: best.peerPubkey });
+		// The price is asked to stand as long as an invoice may live. The peer may give less.
+		quoted = await host.ln.quoteInvoice({ assetId: best.assetId, groupKey: best.groupKey, amount, peerPubkey: best.peerPubkey, expirySeconds: INVOICE_SECONDS });
 	} catch (err) {
 		throw lightningError(host, err, { maxReceivable: maxReceivable.toString() });
 	}
-	const price = priceFields(reg, quoted.amountMsat, quoted.unitsPerBtc);
+	const price = priceFields(reg, quoted.amountMsat, quoted.unitsPerBtc, quoted.priced);
 	const quote = {
 		kind: 'receive',
 		quoteId: quoted.quoteId,
@@ -1073,7 +1163,7 @@ async function makePayQuote(host, body) {
 		invoice: sha256Hex(bolt11),
 		paymentHash: quoted.paymentHash,
 		assetAmount: quoted.assetAmount.toString(),
-		...priceFields(reg, quoted.amountMsat, quoted.unitsPerBtc),
+		...priceFields(reg, quoted.amountMsat, quoted.unitsPerBtc, quoted.priced),
 		asked,
 		peerPubkey: quoted.peerPubkey,
 		peerAlias: through ? through.peerAlias : null,
@@ -1133,6 +1223,14 @@ function recordPayment(host, rowId, seen, { handed = false, own = false } = {}) 
 		if (!seen && !handed) return row;
 		const next = clone(row);
 		const now = host.now();
+		if (row.state === 'failed' && seen && seen.status === 'failed') {
+			// The host had concluded as much, and the record agrees: it may be
+			// that of an earlier try of the same invoice. The host's own words
+			// for why this one failed stand.
+			delete next.assumed;
+			host.rows.put(`row/${rowId}`, next);
+			return next;
+		}
 		delete next.assumed;
 		next.sent = true;
 		if (seen && seen.status === 'complete') {
@@ -1205,9 +1303,14 @@ async function sendPayment(host, { row, quote, quoteId, bound, key, route, body,
 			error = err;
 		}
 		let seen = lookAtPayment(host, quote.paymentHash);
-		if (error && seen === null && PAY_NOTHING_SENT.includes(codeOf(error))) {
-			// Refused before anything left the wallet. A price that moved is
-			// shown again, as long as someone is still waiting to see it.
+		// The library names the rejections that mean nothing left the wallet.
+		// After one, its record is gone again, or is back to what an earlier
+		// try of the same invoice left: a failure. A record that says
+		// anything else is followed, whatever was thrown.
+		const refused = !!error && host.ln.refusals.includes(codeOf(error));
+		if (refused && (seen === null || (seen && seen.status === 'failed'))) {
+			// A price that moved is shown again, as long as someone is still
+			// waiting to see it.
 			if (PRICE_MOVED.includes(codeOf(error)) && !state.answered) {
 				await host.lock.run(() =>
 					host.rows.tx(() => {
@@ -1223,8 +1326,10 @@ async function sendPayment(host, { row, quote, quoteId, bound, key, route, body,
 				}
 				return { changed: true, quote: fresh };
 			}
-			const mapped = mapError(error);
-			return { row: await failUnsent(host, row.id, { code: mapped.extensionCode, message: mapped.message }, { own: true }) };
+			const mapped = mapLightning(error);
+			if (!mapped) host.say('warn', `assets: a Lightning payment was not sent: ${plainMessage(error)}`);
+			const failure = mapped ? { code: mapped.extensionCode, message: mapped.message } : { code: 'PAYMENT_NOT_SENT', message: 'This payment was not sent, so nothing was paid.' };
+			return { row: await failUnsent(host, row.id, failure, { own: true }) };
 		}
 		// Anything else may have come after the node took the payment. Its
 		// record says how it ended, now or on a later pass of the loop.
@@ -1389,7 +1494,7 @@ async function cancelUnasked(host) {
 	let clean = true;
 	for (const c of host.ln.channels()) {
 		if (host.mem.stopped) return false;
-		if (!c.initiator || c.signed || c.state || FAILED_PHASES.includes(c.phase) || marks.has(`funding:${c.pendingChannelId}`)) continue;
+		if (!c.initiator || c.signed || FAILED_PHASES.includes(c.phase) || marks.has(`funding:${c.pendingChannelId}`)) continue;
 		let gone = false;
 		try {
 			gone = !!(await host.ln.cancelFlow(c.pendingChannelId));
@@ -1406,11 +1511,17 @@ async function cancelUnasked(host) {
 /**
  * Every pass: the opens the user confirmed that no request and no earlier
  * pass is still working on. One that signed is kept, and the library
- * carries it on. One that signed nothing and was turned down or failed is
- * undone, with its `error` event. One the library is still negotiating is
- * left alone. `first` is the first look of a generation: an open a restart
- * interrupted before it signed is then opened again under the same id, or
- * undone when asset channels are off by now.
+ * carries it on, unless the library has given its funding up as unable to
+ * confirm: that open is over, and said. One that signed nothing and was
+ * turned down or failed is undone, with its `error` event, and one the user
+ * gave up is undone without a word, however the library lists it. One the
+ * library is still negotiating is left alone, as long as the node holds the
+ * channel being negotiated. `first` is the first look of a generation: an
+ * open a restart interrupted before it signed is then opened again under
+ * the same id, or undone when asset channels are off by now.
+ *
+ * All of it is read from the library's list, on every pass: an event that
+ * never came, because the daemon stopped before it was sent, costs nothing.
  */
 async function settleOpens(host, { first = false } = {}) {
 	const { ln, rows, mem } = host;
@@ -1429,7 +1540,11 @@ async function settleOpens(host, { first = false } = {}) {
 			await host.lock.run(() => rows.del(`committed/${name}`));
 			continue;
 		}
-		const kept = !!note.channelId || (!!flow && (flow.signed || !!flow.state || flow.phase === 'active'));
+		if (flow && isAbandoned(flow)) {
+			await endAbandoned(host, id, note, flow);
+			continue;
+		}
+		const kept = !!note.channelId || (!!flow && (flow.signed || flow.confirmed || flow.phase === 'active'));
 		if (mem.dropping.has(id)) {
 			// A drop that could not be finished while the open was out.
 			if (kept) mem.dropping.delete(id);
@@ -1440,8 +1555,8 @@ async function settleOpens(host, { first = false } = {}) {
 		// One that got as far as a channel is never opened a second time,
 		// whatever became of it since: the loop notes it as over.
 		if (kept) continue;
-		if (flow && FAILED_PHASES.includes(flow.phase)) {
-			await undoOpen(host, id, new Error(`the open ended as ${flow.phase}`));
+		if (flow && isEnded(flow)) {
+			await undoOpen(host, id, flow.cancelled ? cancelledError() : new Error(`the open ended as ${flow.phase}${flow.error ? ` (${flow.error})` : ''}`));
 			continue;
 		}
 		if (modeOf(host) !== 'full') {
@@ -1453,10 +1568,117 @@ async function settleOpens(host, { first = false } = {}) {
 			startOpen(host, id, { reconnect: true });
 			continue;
 		}
-		// Still being negotiated: left to the library.
-		if (flow) continue;
+		// Still being negotiated: left to the library, which carries it on for
+		// as long as the node holds the channel the two are negotiating.
+		if (flow && flow.engine !== 'missing') continue;
+		if (flow) {
+			await undoOpen(host, id, new Error('the node no longer holds the channel that was being negotiated'));
+			continue;
+		}
 		// Nobody is opening it and the library has no record of it.
 		if (host.now() - (note.createdAt || 0) >= OPEN_LOST_AFTER_MS) await undoOpen(host, id, new Error('the library has no record of the open'));
+	}
+}
+
+const FUNDING_GIVEN_UP =
+	'This channel was not opened. Its funding transaction can no longer confirm, because a coin it spends was spent by another transaction. What was set aside for the channel has been released.';
+
+/**
+ * The library gave a signed funding up: an input of it was spent by another
+ * transaction, buried for good, so it can never confirm. The open is over.
+ * It is said, in a sentence of the host's, and then forgotten, in that
+ * order: said twice is better than never.
+ */
+async function endAbandoned(host, id, note, flow) {
+	host.say('warn', `assets: the funding of a channel was given up (${note.channelId || id}): ${plainMessage({ message: flow.error || 'it can no longer confirm' })}`);
+	host.emitEvent('error', { code: 'CHANNEL_FUNDING_FAILED', message: FUNDING_GIVEN_UP, channelId: note.channelId || id });
+	await forgetOpen(host, id);
+	letGo(host, id);
+	await noteChannels(host);
+}
+
+/**
+ * Take off the library's list the opens that are over and that the host has
+ * nothing left to do for: its own once they are undone, and a peer's that
+ * came to nothing. Asked once for each in a generation: an open the library
+ * will not let go of yet is asked about again after the next start.
+ */
+function forgetEnded(host) {
+	const { ln, rows, mem } = host;
+	const marks = host.markers();
+	for (const c of ln.channels()) {
+		const id = c.pendingChannelId;
+		if (!(isEnded(c) || isAbandoned(c)) || mem.forgetAsked.has(id)) continue;
+		if (mem.opens.has(id) || mem.dropping.has(id) || marks.has(`funding:${id}`) || rows.get(`chan/${id}`)) continue;
+		letGo(host, id);
+	}
+}
+
+const unitsText = (list) => (list || []).map((a) => `${a.amount} of ${a.assetId}`).join(', ') || 'nothing';
+
+/**
+ * Settle what the funding of a channel left set aside in the on-chain
+ * records when the library has no flow on record to do it: what a restore
+ * from a backup leaves, since a backup carries no flows. Asked once after
+ * each start and each restore, and then on every new block for as long as
+ * the library keeps anything back, which it does for a funding transaction
+ * it has seen and that is not buried yet.
+ *
+ * Released: the units are free again. Moved: the funding transaction took
+ * them, and they are the channel's. What that transaction held as change is
+ * then neither in the on-chain records nor in a channel: the library does
+ * not bring it back, so the host writes down what it was (`l-change/<id>`),
+ * says so in its status, and stops saying so once a record of that
+ * transaction's turns up.
+ */
+async function settleReservations(host, { block = false } = {}) {
+	const { ln, rows, mem } = host;
+	if (block) {
+		const lost = rows.list('l-change/');
+		if (lost.length > 0) {
+			const records = (await host.tap.stores.assets.listAssets()).filter(views.isLive);
+			for (const { key, value } of lost) {
+				const back =
+					!!value &&
+					!!value.fundingTxid &&
+					(value.change || []).every((a) => records.some((r) => r.assetId === a.assetId && String(r.anchorOutPoint || '').startsWith(`${value.fundingTxid}:`)));
+				if (back) await host.lock.run(() => rows.del(key));
+			}
+		}
+	}
+	if (mem.lnReservations === 'done' || (mem.lnReservations === 'kept' && !block)) return;
+	const reports = await ln.settleFundingReservations();
+	let kept = false;
+	for (const r of reports) {
+		const id = r.pendingChannelId || r.reservation;
+		if (r.outcome === 'kept') {
+			kept = true;
+			sayOnce(host, 'info', `assets: what the funding of a channel (${id}) set aside stays set aside for now: ${plainMessage({ message: r.reason || 'the library gave no reason' })}`);
+			continue;
+		}
+		if (r.outcome === 'released') {
+			host.say('info', `assets: what the funding of a channel (${id}) had set aside is free again: ${unitsText(r.assets)}`);
+			continue;
+		}
+		host.say('info', `assets: what the funding of a channel (${id}) had set aside went into it${r.fundingTxid ? `, in transaction ${r.fundingTxid}` : ''}: ${unitsText(r.assets)}`);
+		if (r.change.length === 0) continue;
+		host.say('warn', `assets: the change of that funding is not in this wallet's records, and is not in its balance: ${unitsText(r.change)}`);
+		await host.lock.run(() =>
+			rows.put(`l-change/${id}`, {
+				id,
+				channelId: r.channelId,
+				fundingTxid: r.fundingTxid,
+				change: r.change.map((a) => ({ assetId: a.assetId, amount: a.amount.toString() })),
+				at: host.now()
+			})
+		);
+	}
+	mem.lnReservations = kept ? 'kept' : 'done';
+	if (reports.some((r) => r.outcome !== 'kept')) {
+		host.markDirty();
+		const registry = host.registry();
+		const keys = new Set(reports.flatMap((r) => r.assets).map((a) => (registry.get(a.assetId) || {}).groupKey || a.assetId));
+		for (const key of keys) host.emitEvent('balance', { key });
 	}
 }
 
@@ -1465,7 +1687,7 @@ async function settleOpens(host, { first = false } = {}) {
  * host's lock, and each step is one look: the library is told to carry on
  * what it has, and the rows are brought up to what the node says.
  */
-async function pass(host) {
+async function pass(host, { block = false } = {}) {
 	const ln = host.ln;
 	if (!ln || host.mem.stopped || host.mem.lnError || !ln.ready()) return;
 	const quietly = async (what, run) => {
@@ -1493,14 +1715,16 @@ async function pass(host) {
 		if (settled) host.mem.lnSettled = true;
 		// Carrying on is what could sign a funding transaction. It waits
 		// until every flow nobody confirmed is known to be gone.
-		if (host.mem.lnSettled) await quietly('asset channels could not be carried on', () => ln.resume());
+		if (host.mem.lnSettled) {
+			await quietly('asset channels could not be carried on', () => ln.resume());
+			await quietly('what a channel funding set aside could not be settled', () => settleReservations(host, { block }));
+			await quietly('an open that is over could not be taken off the list', async () => forgetEnded(host));
+		}
 		await quietly('the assets of a closed channel could not be brought back', async () => noteRecovery(host, await ln.resumeRecovery()));
 	}
 	await quietly('a Lightning payment could not be settled', () => settleRows(host));
 	await quietly('the asset channels could not be read', () => noteChannels(host));
 }
-
-const RECOVERY_STUCK = 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.';
 
 /**
  * What bringing the assets of closed channels home reported. Each reason is
@@ -1613,6 +1837,34 @@ function onEvent(host, event) {
 	host.nudge();
 }
 
+// How long the same complaint of the library's is not logged again.
+const SAME_ERROR_MS = 10 * 60_000;
+
+/**
+ * Something went wrong in the library where no call of the host's was
+ * waiting: a message from a peer it could not use, a step of an open or of
+ * a recovery that failed. It goes to the log, the same words at most once
+ * in a while. It changes nothing by itself: every pass reads how things
+ * stand from the library's own list.
+ */
+function libraryError(host, err) {
+	if (isFenced(err)) {
+		host.shutdown();
+		return;
+	}
+	sayOnce(host, 'warn', `assets: asset channels: ${plainMessage(err, 'An asset channel step failed')}`);
+}
+
+/** Log `text`, unless the same words were logged a short while ago. */
+function sayOnce(host, level, text) {
+	const said = host.mem.lnSaid;
+	const at = host.now();
+	if (said.has(text) && at - said.get(text) < SAME_ERROR_MS) return;
+	if (said.size > 200) said.clear();
+	said.set(text, at);
+	host.say(level, text);
+}
+
 /** What `host.ln.start` is given. Each callback begins outside the lock, whoever calls it. */
 function startOptions(host) {
 	const outside = (fn) => (...args) => host.lock.outside(() => fn(host, ...args));
@@ -1620,9 +1872,12 @@ function startOptions(host) {
 		adapter: host.tap,
 		lib: host.lib,
 		quiet: host.cfg.lightning !== 'full',
+		// What buries a transaction for good is the wallet's own measure.
+		confirmations: host.cfg.minConfirmations,
 		fetchProof: outside(fetchProof),
 		acceptIncoming: outside(acceptIncoming),
-		onEvent: outside(onEvent)
+		onEvent: outside(onEvent),
+		onError: (err) => libraryError(host, err)
 	};
 }
 
@@ -1638,7 +1893,10 @@ const noRestore = (why) => refusal('ASSET_CHANNELS_OPEN', why, 409);
 function refuseImportWhileLive(host) {
 	if (!host.ln) return;
 	if (!host.ln.ready()) throw starting();
-	if (channelList(host).some((c) => !c.over)) {
+	// A channel on record that the node does not hold is no channel to
+	// restore over: it is what an earlier restore left, and it cannot be
+	// closed. The wallet's own record of it stands (backup.js).
+	if (channelList(host).some((c) => !c.over && !c.missing)) {
 		throw noRestore('This wallet has an asset channel, and a backup is never restored over one. Close its asset channels first.');
 	}
 }

@@ -88,7 +88,10 @@ const PARAM_MESSAGES = {
 // a sentence and a status. The caller adds what only it knows: how much a
 // channel can send or receive, or a new price (lightning.js).
 const LIGHTNING_REFUSALS = {
+	ERR_BEIGNET_LN_UNSUPPORTED: ['LIGHTNING_UNAVAILABLE', 'This wallet has no Lightning for its assets, so it has no asset channels to use.', 409],
 	ERR_BEIGNET_LN_NOT_READY: ['ASSETS_STARTING', 'Lightning is still starting. Try again in a moment.', 503],
+	ERR_BEIGNET_LN_INVALID: ['INVALID_PARAMS', 'Lightning could not use that request as it is, so nothing was done.', 400],
+	ERR_BEIGNET_LN_TIMEOUT: ['PEER_UNREACHABLE', 'The peer did not answer in time, so nothing was done. Try again in a moment.', 502],
 	ERR_BEIGNET_LN_PEER_OFFLINE: ['PEER_UNREACHABLE', 'The peer is not connected, so nothing was done. Try again once it is back.', 502],
 	ERR_BEIGNET_LN_PEER_UNSUPPORTED: ['PEER_NO_ASSET_CHANNELS', 'That peer does not open asset channels, so nothing was opened and nothing was spent.', 409],
 	ERR_BEIGNET_LN_FUNDING_REJECTED: ['PEER_NO_ASSET_CHANNELS', 'The peer turned the channel down, so nothing was opened and nothing was spent.', 409],
@@ -107,42 +110,36 @@ const LIGHTNING_REFUSALS = {
 	ERR_BEIGNET_LN_BAD_INVOICE: ['BAD_INVOICE', 'That is not a Lightning invoice this wallet can read.', 400],
 	ERR_BEIGNET_LN_INVOICE_EXPIRED: ['BAD_INVOICE', 'That invoice has expired. Ask whoever made it for a new one.', 400],
 	ERR_BEIGNET_LN_AMOUNT_REQUIRED: ['AMOUNT_REQUIRED', 'This invoice names no amount, so one is needed.', 400],
-	ERR_BEIGNET_LN_ALREADY_PAID: ['ALREADY_PAID', 'This wallet has already paid that invoice.', 409]
+	// The library says this of an invoice it has paid and of one it is paying.
+	ERR_BEIGNET_LN_ALREADY_PAID: ['ALREADY_PAID', 'This wallet has already paid that invoice, or is paying it now.', 409],
+	// The engine did not take the payment, or the invoice could not be worked with.
+	ERR_BEIGNET_LN_PAYMENT: ['PAYMENT_NOT_SENT', 'The payment could not be made, so nothing was paid.', 502]
+	// S5 (adapter.js): the code quoteInvoice will refuse a rate too coarse for
+	// the amount with gets its entry here once the library names it.
+	// ERR_BEIGNET_LN_CHANNEL, _FUNDING and _RECOVERY have no entry: they carry
+	// the library's account of what went wrong inside, which is for the log.
+	// The caller answers with a sentence of its own.
 };
 
-// What `payInvoice` rejects with before any payment has left the wallet
-// (adapter.js, the numbered list). These, and only these, say that nothing
-// was sent. Any other rejection, a timeout among them, may have come after
-// the node took the payment: then only the node's own record of it says how
-// it ended.
-const PAY_NOTHING_SENT = Object.freeze([
-	'ERR_BEIGNET_LN_NOT_READY',
-	'ERR_BEIGNET_LN_NO_QUOTE',
-	'ERR_BEIGNET_LN_QUOTE_EXPIRED',
-	'ERR_BEIGNET_LN_PRICE_BOUND',
-	'ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND',
-	'ERR_BEIGNET_LN_BAD_INVOICE',
-	'ERR_BEIGNET_LN_INVOICE_EXPIRED',
-	'ERR_BEIGNET_LN_AMOUNT_REQUIRED',
-	'ERR_BEIGNET_LN_ALREADY_PAID'
-]);
+// Which rejections of a payment mean that nothing left the wallet is the
+// library's to say: it exports the list (adapter.js, item 22), and the host
+// keeps no copy of it.
 
-// Why the node says a payment failed, by the word its record carries. A
-// record with any other text is worded generally, and its text goes to the
-// log and not to whoever asked.
+// Why the library's record says a payment failed. It writes two texts of its
+// own, and otherwise hands on whatever the engine gave as its reason. Only
+// its own are known here: any other text is worded generally, and goes to
+// the log and not to whoever asked.
 const PAYMENT_FAILURES = Object.freeze({
-	no_route: 'No route to the recipient could be found, so nothing was paid.',
-	timeout: 'The payment did not get through in time, so nothing was paid.',
-	rejected: 'The recipient turned the payment down, so nothing was paid.',
-	expired: 'The invoice ran out before the payment got through, so nothing was paid.',
-	insufficient_balance: 'The channel could not send that much, so nothing was paid.'
+	'the payment never left this wallet': 'This payment was never sent, so nothing was paid.',
+	// Said when the engine gave no reason at all.
+	'the payment failed': 'The payment did not go through, so nothing was paid.'
 });
 const PAYMENT_FAILED = 'The payment did not go through, so nothing was paid.';
 
-/** A failed payment's reason as a sentence, and whether the node's word for it was one this host knows. */
-function paymentFailure(word) {
-	const known = typeof word === 'string' && Object.prototype.hasOwnProperty.call(PAYMENT_FAILURES, word);
-	return { known, message: known ? PAYMENT_FAILURES[word] : PAYMENT_FAILED };
+/** A failed payment's reason as a sentence, and whether the record's text for it was one this host knows. */
+function paymentFailure(text) {
+	const known = typeof text === 'string' && Object.prototype.hasOwnProperty.call(PAYMENT_FAILURES, text);
+	return { known, message: known ? PAYMENT_FAILURES[text] : PAYMENT_FAILED };
 }
 
 // What mapError words with the library's own text.
@@ -251,7 +248,6 @@ module.exports = {
 	mapLightning,
 	workingSats,
 	LIGHTNING_REFUSALS,
-	PAY_NOTHING_SENT,
 	PAYMENT_FAILURES,
 	paymentFailure
 };

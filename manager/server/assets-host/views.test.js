@@ -314,6 +314,27 @@ test('an asset in a channel: the total is what is on the chain and what is on th
 	assert.deepEqual(views.assetViews({ records: [], registry: new Map(), channels: [channel({ key: null })] }), []);
 });
 
+test('a channel whose funding has not confirmed: what it set aside is counted in the channel once, and its change stays on-chain', () => {
+	const registry = new Map([[A1, { assetId: A1, groupKey: null, name: 'coin', type: 0, decimalDisplay: 0, mintedHere: true }]]);
+	const id = 'cc'.repeat(32);
+	const set = (amount, reservedBy, n) => ({ assetId: A1, groupKey: null, amount: String(amount), anchorOutPoint: `${n}:0`, ...(reservedBy ? { reservedBy } : {}) });
+	const channel = { id, key: A1, assetId: A1, groupKey: null, counted: true, local: 600n, sendable: 0n, receivable: 0n, assets: [{ assetId: A1, amount: 600n }] };
+	const books = (records, channels = [channel]) => {
+		const { balance } = views.assetViews({ records, registry, channels })[0];
+		return [balance.total, balance.onchain, balance.channelLocal];
+	};
+	// The funding's input holds 1000 and is still in the on-chain records, under the funding's name. 600 of it are the channel's.
+	assert.deepEqual(books([set(1000, `funding:${id}`, 'x'), set(50, null, 'y')]), ['1050', '450', '600']);
+	// Two inputs under the one name: the channel's share is taken off once, across them.
+	assert.deepEqual(books([set(500, `funding:${id}`, 'x'), set(300, `funding:${id}`, 'y')]), ['800', '200', '600']);
+	// What another funding, or a send, has set aside is not this channel's.
+	assert.deepEqual(books([set(1000, `funding:${'dd'.repeat(32)}`, 'x'), set(40, 'send:1', 'y')]), ['1640', '1040', '600']);
+	// Once the funding has confirmed its inputs are spent, and its change is a record like any other.
+	assert.deepEqual(books([set(400, null, 'z')]), ['1000', '400', '600']);
+	// An open that is not a channel yet takes nothing off, and adds nothing.
+	assert.deepEqual(books([set(1000, `funding:${id}`, 'x')], [{ ...channel, counted: false }]), ['1000', '1000', '0']);
+});
+
 test('a channel state: the three words that are the host\'s, and the engine\'s own for the rest', () => {
 	const word = (state, confirmed = false, recovery = 'none') => views.channelWord({ state, confirmed, recovery });
 	// No channel in the engine yet, or one still exchanging its first messages.
@@ -331,6 +352,12 @@ test('a channel state: the three words that are the host\'s, and the engine\'s o
 		assert.equal(word('CLOSED', true, recovery), 'CLOSING', String(recovery));
 		assert.equal(word('FORCE_CLOSED', true, recovery), 'FORCE_CLOSING', String(recovery));
 	}
+	// A channel whose close was asked for carries nothing from that moment, whatever the engine still calls it.
+	for (const recovery of ['pending', 'something-new']) assert.equal(word('NORMAL', true, recovery), 'CLOSING', recovery);
+	// On record and signed for, and the node does not hold it: missing, whatever else is said of it.
+	for (const state of [null, 'NORMAL', 'CLOSED']) assert.equal(views.channelWord({ state, confirmed: true, recovery: 'none', engine: 'missing', signed: true }), 'MISSING', String(state));
+	// An open that signed nothing is no channel to miss.
+	assert.equal(views.channelWord({ state: null, confirmed: false, recovery: 'none', engine: 'missing', signed: false }), 'OPENING');
 	// A funding the chain or the peer has still to confirm is opening, whatever the library says of it.
 	for (const state of ['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY']) for (const confirmed of [false, true]) assert.equal(word(state, confirmed), 'OPENING', state);
 	// Everything else is the engine's word, which the dashboard has a wording for or shows as it is.

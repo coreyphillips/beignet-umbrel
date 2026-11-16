@@ -21,7 +21,6 @@ const {
 	mapLightning,
 	workingSats,
 	LIGHTNING_REFUSALS,
-	PAY_NOTHING_SENT,
 	PAYMENT_FAILURES,
 	paymentFailure
 } = require('./errors');
@@ -90,7 +89,10 @@ test('each library error becomes the code the dashboard knows', () => {
 
 test('each refusal of the Lightning service becomes the code the dashboard words', () => {
 	const table = [
+		['ERR_BEIGNET_LN_UNSUPPORTED', 'LIGHTNING_UNAVAILABLE', 409],
 		['ERR_BEIGNET_LN_NOT_READY', 'ASSETS_STARTING', 503],
+		['ERR_BEIGNET_LN_INVALID', 'INVALID_PARAMS', 400],
+		['ERR_BEIGNET_LN_TIMEOUT', 'PEER_UNREACHABLE', 502],
 		['ERR_BEIGNET_LN_PEER_OFFLINE', 'PEER_UNREACHABLE', 502],
 		['ERR_BEIGNET_LN_PEER_UNSUPPORTED', 'PEER_NO_ASSET_CHANNELS', 409],
 		['ERR_BEIGNET_LN_FUNDING_REJECTED', 'PEER_NO_ASSET_CHANNELS', 409],
@@ -105,7 +107,8 @@ test('each refusal of the Lightning service becomes the code the dashboard words
 		['ERR_BEIGNET_LN_BAD_INVOICE', 'BAD_INVOICE', 400],
 		['ERR_BEIGNET_LN_INVOICE_EXPIRED', 'BAD_INVOICE', 400],
 		['ERR_BEIGNET_LN_AMOUNT_REQUIRED', 'AMOUNT_REQUIRED', 400],
-		['ERR_BEIGNET_LN_ALREADY_PAID', 'ALREADY_PAID', 409]
+		['ERR_BEIGNET_LN_ALREADY_PAID', 'ALREADY_PAID', 409],
+		['ERR_BEIGNET_LN_PAYMENT', 'PAYMENT_NOT_SENT', 502]
 	];
 	assert.deepEqual(Object.keys(LIGHTNING_REFUSALS).sort(), table.map((row) => row[0]).sort());
 	for (const [code, as, status] of table) {
@@ -121,6 +124,11 @@ test('each refusal of the Lightning service becomes the code the dashboard words
 	// What only the caller knows travels with the refusal.
 	const short = mapError(coded('ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND'), { details: { sendable: '40' } });
 	assert.deepEqual(short.details, { sendable: '40' });
+	// The codes that carry the library's own account of what went wrong inside
+	// have no words here: the caller logs them and answers in a sentence of its own.
+	for (const code of ['ERR_BEIGNET_LN_CHANNEL', 'ERR_BEIGNET_LN_FUNDING', 'ERR_BEIGNET_LN_RECOVERY', 'ERR_BEIGNET_LN_SOMETHING_NEW']) {
+		assert.equal(mapLightning(coded(code, 'state 7 of flow 03aa is not one this can leave')), null, code);
+	}
 });
 
 test('a wallet that is short of bitcoin says what was needed', () => {
@@ -219,14 +227,18 @@ test('a proof that does not verify is told apart from trouble reaching anything'
 	assert.equal(isProofInvalid(null), false);
 });
 
-test('only a refusal made before a payment leaves says that nothing was sent', () => {
-	// Each is a code the host has a sentence for, so a row that fails on one says why.
-	for (const code of PAY_NOTHING_SENT) assert.ok(LIGHTNING_REFUSALS[code], code);
-	// A timeout, a peer that went away, and a code nobody has heard of may all come after the node took the payment.
-	for (const code of ['ERR_BEIGNET_LN_TIMEOUT', 'ERR_BEIGNET_LN_PEER_OFFLINE', 'ERR_BEIGNET_LN_UNKNOWN_CHANNEL', 'ERR_BEIGNET_WALLET', 'ERR_SOMETHING_NEW', '']) {
-		assert.equal(PAY_NOTHING_SENT.includes(code), false, code);
+test('every refusal of a payment that means nothing left the wallet has a sentence here, and the list of them is not kept here', () => {
+	// Which codes those are is the library's to say (its export
+	// ASSET_PAYMENT_REFUSALS, read by adapter.js). These are the ones it
+	// names at ts-tap 2df9663: a row that fails on one says why.
+	const named = ['NOT_READY', 'INVALID', 'UNKNOWN_CHANNEL', 'NO_QUOTE', 'QUOTE_EXPIRED', 'PRICE_BOUND', 'INSUFFICIENT_OUTBOUND', 'BAD_INVOICE', 'INVOICE_EXPIRED', 'AMOUNT_REQUIRED', 'ALREADY_PAID', 'PAYMENT'];
+	for (const name of named) {
+		const mapped = mapLightning(coded(`ERR_BEIGNET_LN_${name}`, 'the detail of what went wrong'));
+		assert.ok(mapped, name);
+		assert.equal(mapped.message.includes('the detail of what went wrong'), false, name);
 	}
-	assert.equal(Object.isFrozen(PAY_NOTHING_SENT), true);
+	// The host keeps no copy of the list, which could fall behind the library's.
+	assert.equal('PAY_NOTHING_SENT' in require('./errors'), false);
 });
 
 test('a failed payment is worded by the host, whatever the node wrote', () => {

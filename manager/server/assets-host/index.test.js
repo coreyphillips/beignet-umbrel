@@ -311,17 +311,23 @@ test('a wallet stopped while it waits asks no more, and a host built after the s
 
 /* ---------------------------------------------------- the channel provider */
 
+/** The members of an attachment that the engine reads for its node, as this one names them. */
+const handed = (attachment) => Object.fromEntries(['auxiliaryChannels', 'fixedOutputFees', 'bind', 'lightning'].filter((name) => name in attachment).map((name) => [name, attachment[name]]));
+
 /** A stand-in for adapter.js createLightning: what the engine is handed, and what was done to it. */
 function provider() {
-	const seen = { started: 0, stopped: 0, bound: [] };
+	const seen = { started: 0, stopped: 0, closed: 0, bound: [] };
 	const ln = {
 		seen,
 		attachment: { auxiliaryChannels: { the: 'hooks' }, fixedOutputFees: { feeCoinCount: 4 }, bind: (node) => seen.bound.push(node) },
-		start: async () => {
+		start: () => {
 			seen.started += 1;
 		},
 		stop: () => {
 			seen.stopped += 1;
+		},
+		close: () => {
+			seen.closed += 1;
 		},
 		ready: () => false
 	};
@@ -331,9 +337,9 @@ function provider() {
 test('a wallet that cannot have asset channels hands the engine no provider, on any path', async () => {
 	// Packages that are not there, a network without assets, and no entry beside the engine.
 	const none = await beignetExtension({ network: 'regtest', env: {} }).attach(context());
-	assert.equal('lightning' in none, false);
+	assert.deepEqual(handed(none), {});
 	const signet = await beignetExtension({ network: 'signet', env: { BEIGNET_ASSETS_MODULES: MODULES, BEIGNET_ASSETS_LIGHTNING: 'full' } }).attach(context({ network: 'signet' }));
-	assert.equal('lightning' in signet, false);
+	assert.deepEqual(handed(signet), {});
 	const missing = await beignetExtension({ network: 'regtest', env: { BEIGNET_ASSETS_MODULES: MODULES, BEIGNET_ASSETS_LIGHTNING: 'full' } }).attach(context());
 	assert.deepEqual(Object.keys(missing).sort(), ['handlers', 'start', 'status', 'stop']);
 	assert.equal(lightningFor(parseConfig('regtest', { BEIGNET_ASSETS_MODULES: MODULES }), context()), null);
@@ -346,21 +352,27 @@ test('a wallet that can have asset channels hands the engine its provider though
 	const cfg = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: '/nonexistent/engine/node_modules' });
 	const attachment = await attach(cfg, context(), { lightningFor: () => ln });
 	assert.equal(attachment.status().phase, 'failed');
-	assert.deepEqual(attachment.lightning, ln.attachment);
-	assert.equal(attachment.lightning.auxiliaryChannels, ln.attachment.auxiliaryChannels);
+	// On the attachment itself, where the engine reads them, and the hooks as the library made them.
+	assert.deepEqual(Object.keys(handed(attachment)).sort(), ['auxiliaryChannels', 'bind', 'fixedOutputFees']);
+	assert.equal(attachment.auxiliaryChannels, ln.attachment.auxiliaryChannels);
+	assert.equal(attachment.fixedOutputFees, ln.attachment.fixedOutputFees);
+	// The engine binds its node before anything is started, and the provider hears of it.
+	const node = { the: 'node' };
+	attachment.bind(node);
+	assert.deepEqual(ln.seen.bound, [node]);
 	const err = await refusedBy(() => attachment.handlers['GET /channels']({ body: {}, query: new URLSearchParams() }));
 	assert.equal(err.extensionCode, 'ASSETS_UNAVAILABLE');
-	// Nothing could be handed to it, so it was never started. It is still stopped with the daemon.
+	// Nothing could be handed to it, so it was never started. It is still closed with the daemon.
 	assert.equal(ln.seen.started, 0);
 	await attachment.start();
 	await attachment.stop('shutdown');
-	assert.equal(ln.seen.stopped, 1);
+	assert.equal(ln.seen.closed, 1);
 
 	// The same whatever the wallet was asked: the wish is not what makes a channel enforceable.
 	for (const wish of ['off', 'full']) {
 		const again = provider();
 		const asked = await attach(parseConfig('regtest', { BEIGNET_ASSETS_MODULES: '/nonexistent/engine/node_modules', BEIGNET_ASSETS_LIGHTNING: wish }), context(), { lightningFor: () => again });
-		assert.equal(asked.lightning, again.attachment);
+		assert.equal(asked.auxiliaryChannels, again.attachment.auxiliaryChannels);
 	}
 });
 
@@ -406,11 +418,11 @@ test('a testnet wallet still waiting to hear its chain hands the engine its prov
 		});
 		assert.equal(attachment.status().phase, 'starting');
 		assert.match(attachment.status().startup.waiting, /which testnet it is on\.$/);
-		assert.equal(attachment.lightning, ln.attachment);
+		assert.equal(attachment.auxiliaryChannels, ln.attachment.auxiliaryChannels);
 		// There is no adapter to hand it yet, so its hooks still refuse.
 		assert.equal(ln.seen.started, 0);
 		await attachment.stop('shutdown');
-		assert.equal(ln.seen.stopped, 1);
+		assert.equal(ln.seen.closed, 1);
 	});
 });
 
@@ -422,42 +434,56 @@ test('a host that runs is handed its provider, starts it once the library is bui
 		]) {
 			const ln = provider();
 			const options = [];
-			ln.start = async (given) => {
+			ln.start = (given) => {
 				ln.seen.started += 1;
 				options.push(given);
 			};
 			const cfg = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: modules, BEIGNET_ASSETS_LIGHTNING: wish });
 			const attachment = await attach(cfg, context(), { lightningFor: () => ln, ask: async () => ({ answered: true, genesis: null, chain: 'regtest' }) });
 			assert.equal(attachment.status().phase, 'starting', wish);
-			assert.equal(attachment.lightning, ln.attachment);
-			// Started with the adapter the library built, before the engine has a node to bind.
+			assert.equal(attachment.auxiliaryChannels, ln.attachment.auxiliaryChannels);
+			// Handed the adapter the library built as soon as there is one. The
+			// service itself starts once the engine has bound its node as well
+			// (adapter.test.js), whichever of the two comes first.
 			assert.equal(ln.seen.started, 1);
-			assert.deepEqual(Object.keys(options[0]).sort(), ['acceptIncoming', 'adapter', 'fetchProof', 'lib', 'onEvent', 'quiet']);
+			assert.deepEqual(Object.keys(options[0]).sort(), ['acceptIncoming', 'adapter', 'confirmations', 'fetchProof', 'lib', 'onError', 'onEvent', 'onStartError', 'quiet']);
 			assert.deepEqual(options[0].adapter, { the: 'adapter' });
+			// How deep a transaction is buried for good is the wallet's own measure.
+			assert.equal(options[0].confirmations, cfg.minConfirmations);
 			// A wallet that was not asked for asset channels gives nobody a price.
 			assert.equal(options[0].quiet, quiet);
 			assert.deepEqual(attachment.status().lightning, { mode: wish, usableChannels: 0 });
 			await attachment.stop('shutdown');
-			assert.ok(ln.seen.stopped >= 1);
+			// The host closes its service, and the node's stop lets go of the rest.
+			assert.deepEqual([ln.seen.stopped, ln.seen.closed], [1, 1]);
 		}
 	});
 });
 
 test('a provider that will not start leaves a host that runs, with lightning off', async () => {
 	await withPackages(async (modules) => {
-		const ln = provider();
-		ln.start = async () => {
-			throw new Error('this engine is older than the package');
-		};
-		const ctx = context();
-		const cfg = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: modules, BEIGNET_ASSETS_LIGHTNING: 'full' });
-		const attachment = await attach(cfg, ctx, { lightningFor: () => ln, ask: async () => ({ answered: true, genesis: null, chain: 'regtest' }) });
-		assert.equal(attachment.status().phase, 'starting');
-		assert.deepEqual(attachment.status().lightning, { mode: 'off', usableChannels: 0 });
-		// The engine is still handed it: a channel it holds is not this failure's to give up.
-		assert.equal(attachment.lightning, ln.attachment);
-		assert.ok(ctx.logged.some((line) => /^assets: asset channels could not start/.test(line)));
-		await attachment.stop('shutdown');
+		// It may say so when it is handed the adapter, or later, when the engine binds its node.
+		for (const when of ['at once', 'at the bind']) {
+			const ln = provider();
+			let later = null;
+			ln.start = (given) => {
+				if (when === 'at once') throw new Error('this engine is older than the package');
+				later = given.onStartError;
+			};
+			const ctx = context();
+			const cfg = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: modules, BEIGNET_ASSETS_LIGHTNING: 'full' });
+			const attachment = await attach(cfg, ctx, { lightningFor: () => ln, ask: async () => ({ answered: true, genesis: null, chain: 'regtest' }) });
+			assert.equal(attachment.status().phase, 'starting', when);
+			if (later) {
+				assert.deepEqual(attachment.status().lightning, { mode: 'full', usableChannels: 0 });
+				later(new Error('this engine is older than the package'));
+			}
+			assert.deepEqual(attachment.status().lightning, { mode: 'off', usableChannels: 0 }, when);
+			// The engine is still handed it: a channel it holds is not this failure's to give up.
+			assert.equal(attachment.auxiliaryChannels, ln.attachment.auxiliaryChannels);
+			assert.ok(ctx.logged.some((line) => /^assets: asset channels could not start: This engine is older than the package/.test(line)), when);
+			await attachment.stop('shutdown');
+		}
 	});
 });
 

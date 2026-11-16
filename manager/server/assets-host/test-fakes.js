@@ -13,14 +13,15 @@
  * fake library: what the real library keeps in the database, this keeps in
  * its maps.
  *
- * `fakeLightning` stands in for the wallet's asset channels: the facade
- * adapter.js builds over the library's Lightning service. It also keeps the
- * two rules that service needs kept: it notes every call made to it with
- * the host's lock held that could have reached the node, and every call
- * made inside a storage transaction, in `violations`.
+ * `fakeLightning` stands in for the library's Lightning entry, which
+ * adapter.js builds the wallet's asset channels over. It also keeps the two
+ * rules that entry needs kept: it notes every call made to it with the
+ * host's lock held that could have reached the node, and every call made
+ * inside a storage transaction, in `violations`.
  */
 const { memoryStorage, sha256Hex } = require('./store');
 const { parseConfig } = require('./config');
+const { createLightning } = require('./adapter');
 const { createHost } = require('./service');
 const { bind } = require('./routes');
 
@@ -93,6 +94,10 @@ function fakeLib() {
 		metaReveal: (meta, decimals) => (meta || decimals ? { text: meta ? meta.data : '', decimalDisplay: decimals } : undefined),
 		metaView: () => null,
 		fileFacts: () => ({ timestamp: null, depth: 1 }),
+		// What the Lightning glue asks for a peer's proof: where to find its
+		// file, and the file decoded.
+		proofLocator: (p) => ({ assetId: p.assetId, scriptKey: p.scriptKey, anchorOutPoint: p.anchorOutPoint }),
+		decodeProofFile: (bytes) => ({ decoded: readFakeProof(bytes) }),
 		proofFacts(bytes) {
 			const f = readFakeProof(bytes);
 			return { assetId: f.assetId, groupKey: null, scriptKey: f.scriptKey, anchorOutPoint: f.anchorOutPoint, amount: BigInt(f.amount || 0), depth: 1 };
@@ -398,36 +403,75 @@ const fakeInvoice = ({ msat, hash } = {}) =>
 	`lnbcrt1${Buffer.from(JSON.stringify({ hash: hash || sha256Hex(`invoice:${msat}`), msat: msat === undefined || msat === null ? null : String(msat) })).toString('hex')}`;
 
 /**
- * The fake asset channels: adapter.js `createLightning`, kept in memory.
+ * The fake asset channels: a stand-in for the library's Lightning entry,
+ * `@ts-tap/beignet/lightning`, with its exported names and its shapes (ids,
+ * keys and hashes as Buffers, amounts and sats as bigint, times in unix
+ * seconds as a bigint), and a node for it to be bound to. A host under test
+ * is given the real facade (adapter.js createLightning) built over `entry`,
+ * so every test of the host also runs through the glue.
  *
- * `opts` switches behaviour: supports (the peer takes asset channels),
- * connectFails, fundFails, fundingFee, reserveSats, openHangs (the open
- * never answers), openGate (a promise the open waits on before the service
- * has heard of it), openFails (a code the open rejects with, nothing
- * signed), openTimesOut (it rejects with a timeout and the flow is kept),
- * openFailsSigned (a code it rejects with after the funding transaction is
- * signed), openFee (what the funding transaction really costs, when that
- * is not what the quote said), connectGate (a promise a connect waits on),
- * cancelFails (a cancel throws), cancelMissed (a cancel of an open the
- * service has no record of yet answers true and stops nothing), closeFails
- * (a code a close rejects with), recoveryErrors (what bringing a closed
- * channel's assets home reports as having gone wrong), peerOffline (no
- * channel's peer is connected),
- * rate, quoteMs, quoteFails, payStatus, payFailure (the word a failed
- * payment's record carries), payFails (a code the payment rejects with
- * before anything is sent), payThrowsAfter (a code it rejects with once the
- * node has the payment), payMoved (the peer's price is past the bound),
- * payFeeMsat.
+ * What the real entry keeps in the node's database this keeps in its maps,
+ * in plain values, and writes a row of under the store it was given, so
+ * that a wallet with channels has Lightning rows and a backup has something
+ * to carry.
  *
- * A test moves a channel on by hand: `confirm(id)` makes it NORMAL,
- * `set(id, fields)` changes its balances, `recover(id)` brings a closed
- * channel's assets home, `settle(paymentHash)` pays an invoice, and
- * `finish(paymentHash, status)` ends a payment that was left pending.
+ * `opts` switches behaviour: supported (the engine can carry asset
+ * channels), startFails (the message the service refuses to start with),
+ * supports (the peer takes asset channels), connectFails, fundFails,
+ * fundingFee, reserveSats, openHangs (the open never answers), openGate (a
+ * promise the open waits on before the service has heard of it), openFails
+ * (a code the open rejects with, nothing signed), openTimesOut (it rejects
+ * with a timeout and the flow is kept), openFailsSigned (a code it rejects
+ * with after the funding transaction is signed), openFee (what the funding
+ * transaction really costs, when that is not what the quote said),
+ * connectGate (a promise a connect waits on), cancelFails (a cancel
+ * throws), cancelMissed (a cancel of an open the service has no record of
+ * yet answers true and stops nothing), cancelNegotiated (a cancel lands on
+ * a negotiated channel, and is listed as cancelled and not as failed),
+ * closeFails (a code a close rejects with), recoveryErrors (what bringing
+ * a closed channel's assets home reports as having gone wrong),
+ * peerOffline (no channel's peer is connected), settleKeeps (the reason a
+ * funding reservation with no flow is left reserved), rate, priced (whether
+ * the peer sets a price), quoteMs, quoteFails, payStatus, payFailure (the
+ * text a failed payment's record carries), payFails (a code the payment is
+ * refused with before anything is sent), payThrowsAfter (a code it rejects
+ * with once the node has the payment, which the real entry never does),
+ * payMoved (the peer's price is past the bound), payFeeMsat.
+ *
+ * A test moves a channel on by hand: `confirm(id)` buries its funding and
+ * makes it NORMAL, `set(id, fields)` changes it, `abandon(id, reason)` gives
+ * a signed funding up as unable to confirm, `recover(id)` brings a closed
+ * channel's assets home, `settle(paymentHash)` pays an invoice,
+ * `finish(paymentHash, status)` ends a payment that was left pending, and
+ * `offer(proposal)` is a peer offering a channel.
  */
+const LN = 'ERR_BEIGNET_LN_';
+const ASSET_PAYMENT_REFUSALS = Object.freeze(
+	['NOT_READY', 'INVALID', 'UNKNOWN_CHANNEL', 'NO_QUOTE', 'QUOTE_EXPIRED', 'PRICE_BOUND', 'INSUFFICIENT_OUTBOUND', 'BAD_INVOICE', 'INVOICE_EXPIRED', 'AMOUNT_REQUIRED', 'ALREADY_PAID', 'PAYMENT'].map(
+		(name) => LN + name
+	)
+);
+// The rows a backup may carry, as the entry's own list has them.
+const CARRIED = [
+	'tap/channel/v1/channel/',
+	'tap/channel/v1/destination/',
+	'tap/channel/v1/destinations/',
+	'tap/channel/v1/last/',
+	'tap/recovery/v1/channel/',
+	'tap/recovery/v1/proof/',
+	'tap/recovery/v1/job/'
+];
+const RESTORED = 'tap/channel/v1/restored';
+const FUNDING_PHASES = ['funding-created', 'committed', 'broadcasting', 'broadcast', 'active'];
+const ENDED_PHASES = ['rejected', 'failed', 'cancelled'];
+const CLOSING_STATES = ['SHUTTING_DOWN', 'NEGOTIATING_CLOSING', 'CLOSED', 'FORCE_CLOSED'];
+
 function fakeLightning({ now = () => Date.now(), tap, storage, held = () => false } = {}) {
 	const calls = [];
 	const violations = [];
 	const opts = {
+		supported: true,
+		startFails: null,
 		supports: true,
 		connectFails: false,
 		fundFails: false,
@@ -442,14 +486,17 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		connectGate: null,
 		cancelFails: false,
 		cancelMissed: false,
+		cancelNegotiated: false,
 		closeFails: null,
 		recoveryErrors: [],
 		peerOffline: false,
+		settleKeeps: null,
 		rate: { coefficient: 100_000_000n, scale: 0 },
+		priced: null,
 		quoteMs: 60_000,
 		quoteFails: null,
 		payStatus: 'complete',
-		payFailure: 'no_route',
+		payFailure: 'no route to the destination',
 		payFails: null,
 		payThrowsAfter: null,
 		payMoved: false,
@@ -463,10 +510,16 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	const quotes = new Map();
 	const invoices = new Map();
 	const payments = new Map();
-	const state = { started: false, bound: false, options: null, node: null };
+	// What the newest host of this entry was given. `options` are the
+	// library's own start options, as the glue hands them over.
+	const state = { started: false, bound: false, options: null, adapter: null, node: null, made: null, store: null };
 	let n = 0;
 	const id = (what) => sha256Hex(`ln:${what}:${(n += 1)}`);
 	const log = (...entry) => calls.push(entry);
+	const hexOf = (bytes) => Buffer.from(bytes).toString('hex');
+	const bytes = (text) => Buffer.from(String(text), 'hex');
+	const seconds = (ms) => BigInt(Math.floor(ms / 1000));
+	const refuse = (name, message) => tapError(LN + name, message);
 	// The real service keeps its records in the node's database, a
 	// transaction at a time: a call made inside one of the host's would be a
 	// transaction inside another.
@@ -479,289 +532,708 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			throw err;
 		}
 	};
-	// What can reach the node, and be called back by it, is never called
-	// with the host's lock held.
-	const reaches = (name) => {
-		if (held()) violations.push(`${name} with the host's lock held`);
-		stored(name);
-		if (!state.started || !state.bound) throw tapError('ERR_BEIGNET_LN_NOT_READY', 'asset channels have not started');
-	};
-	// What only reads the service's records still needs the service: after a
-	// stop, or before the node is bound, it throws as the real one does.
-	const reads = (name) => {
-		stored(name);
-		if (!state.started || !state.bound) throw tapError('ERR_BEIGNET_LN_NOT_READY', 'asset channels have not started');
-	};
+	const isNominal = () => BigInt(opts.rate.coefficient) === 100_000_000n * 10n ** BigInt(opts.rate.scale);
+	const priced = () => (opts.priced === null ? !isNominal() : !!opts.priced);
 	const msatOf = (units) => (BigInt(units) * 100_000_000n * 1000n * 10n ** BigInt(opts.rate.scale)) / BigInt(opts.rate.coefficient);
 	const unitsOf = (msat) => {
 		const units = (BigInt(msat) * BigInt(opts.rate.coefficient)) / (100_000_000n * 1000n * 10n ** BigInt(opts.rate.scale));
 		return units > 0n ? units : 1n;
 	};
-	/** Take `amount` units of an asset off the chain, as a funding transaction does. */
-	const spend = (assetId, amount, txid) => {
-		let left = BigInt(amount);
-		for (const r of tap.records.filter((x) => x.assetId === assetId && !x.spent && !x.reservedBy)) {
-			if (left === 0n) break;
-			const have = BigInt(r.amount);
-			const take = have < left ? have : left;
-			r.spent = true;
-			if (have > take) tap.records.push({ ...r, spent: false, amount: (have - take).toString(), anchorOutPoint: `${txid}:1` });
-			left -= take;
-		}
-		if (left > 0n) throw tapError('ERR_TAPFREIGHTER_INSUFFICIENT_BALANCE', 'not enough of the asset');
-	};
 	const byChannel = (channelId) => [...flows.values()].find((f) => f.channelId === channelId) || null;
-	const ln = { calls, violations, opts, flows, quotes, invoices, payments, state };
+	const total = (assets) => assets.reduce((sum, a) => sum + BigInt(a.amount), 0n);
 
-	ln.attachment = {
-		auxiliaryChannels: { name: 'the fake provider' },
-		fixedOutputFees: { feeCoinCount: 4 },
-		bind(node) {
-			state.bound = true;
-			state.node = node;
+	/* The on-chain records an open holds: reserved under its name from the
+	 * moment its inputs are selected until its funding has confirmed. */
+	const nameOf = (flow) => `funding:${flow.pendingChannelId}`;
+	const reservedBy = (name) => tap.records.filter((r) => !r.spent && r.reservedBy === name);
+	const reserve = (flow) => {
+		if (flow.reserving) return;
+		for (const a of flow.assets) {
+			let left = BigInt(a.amount);
+			for (const r of tap.records.filter((x) => x.assetId === a.assetId && !x.spent && !x.reservedBy)) {
+				if (left <= 0n) break;
+				r.reservedBy = nameOf(flow);
+				left -= BigInt(r.amount);
+			}
+			if (left > 0n) {
+				for (const r of reservedBy(nameOf(flow))) r.reservedBy = undefined;
+				throw tapError('ERR_TAPFREIGHTER_INSUFFICIENT_BALANCE', 'not enough of the asset');
+			}
 		}
+		flow.reserving = true;
 	};
-	ln.start = async (options) => {
-		log('start', { quiet: !!options.quiet });
-		cancelled.clear();
-		hung.clear();
-		state.options = options;
-		state.started = true;
+	const release = (flow) => {
+		for (const r of reservedBy(nameOf(flow))) r.reservedBy = undefined;
+		flow.reserving = false;
 	};
-	ln.stop = () => {
-		log('stop');
-		state.started = false;
+	/** The funding is buried: its inputs are spent, and what they held beyond the channel is change. */
+	const bury = (flow) => {
+		if (!flow.reserving) return;
+		const inputs = reservedBy(nameOf(flow));
+		for (const a of flow.assets) {
+			const mine = inputs.filter((r) => r.assetId === a.assetId);
+			const had = mine.reduce((sum, r) => sum + BigInt(r.amount), 0n);
+			if (had > BigInt(a.amount) && mine[0]) {
+				tap.records.push({ ...mine[0], spent: false, reservedBy: undefined, amount: (had - BigInt(a.amount)).toString(), anchorOutPoint: `${flow.fundingTxid}:1` });
+			}
+		}
+		for (const r of inputs) Object.assign(r, { spent: true, reservedBy: undefined });
+		flow.reserving = false;
 	};
-	ln.ready = () => state.started && state.bound;
 
-	ln.channels = () => {
-		stored('channels');
-		if (!ln.ready()) throw tapError('ERR_BEIGNET_LN_NOT_READY', 'asset channels have not started');
-		return [...flows.values()].map((f) => ({ ...f }));
+	/* ------------------------------------------------------------- the store */
+
+	const own = (store) => {
+		if (!store || typeof store.transaction !== 'function') throw refuse('INVALID', 'store must be the store lightningStore() returns');
+		return store;
 	};
-	ln.connect = async (peer) => {
-		reaches('connect');
-		log('connect', peer);
-		if (opts.connectGate) await opts.connectGate;
-		if (opts.connectFails) throw new Error('connection refused');
-	};
-	ln.peerSupports = (pubkey) => {
-		reads('peerSupports');
-		log('peerSupports', pubkey);
-		return !!opts.supports;
-	};
-	ln.quoteFunding = async (request) => {
-		reaches('quoteFunding');
-		log('quoteFunding', request);
-		if (opts.fundFails) throw tapError('ERR_BEIGNET_FUNDING', 'wallet has no spendable fee input');
-		return { feeSats: opts.fundingFee, vbytes: 210, reserveSats: opts.reserveSats === undefined ? null : opts.reserveSats };
-	};
-	ln.openChannel = async (request) => {
-		reaches('openChannel');
-		log('openChannel', request.pendingChannelId, storage ? storage.list('h/').map((r) => r.key) : []);
-		const live = () => {
-			if (cancelled.has(request.pendingChannelId)) throw tapError('ERR_BEIGNET_LN_CANCELLED', 'the channel open was cancelled');
-		};
-		live();
-		if (opts.openHangs) return new Promise((_, reject) => hung.set(request.pendingChannelId, reject));
-		// Asked to open, and not yet anything the service has a record of.
-		if (opts.openGate) {
-			await opts.openGate;
-			live();
-		}
-		const known = flows.get(request.pendingChannelId);
-		if (known && known.channelId) return { channelId: known.channelId };
-		const flow = known || {
-			pendingChannelId: request.pendingChannelId,
-			channelId: null,
-			peerPubkey: request.peerPubkey,
-			initiator: true,
-			phase: 'accepted',
-			signed: false,
-			confirmed: false,
-			state: null,
-			assetId: request.assets[0].assetId,
-			groupKey: request.groupKey || null,
-			local: request.assets.reduce((sum, a) => sum + BigInt(a.amount), 0n),
-			remote: 0n,
-			reserved: 0n,
-			fundingSats: request.fundingSats,
-			reserveSats: null,
-			recovery: 'none',
-			request
-		};
-		flows.set(flow.pendingChannelId, flow);
-		if (opts.openFails) {
-			flow.phase = 'rejected';
-			throw tapError(opts.openFails, 'the peer said no');
-		}
-		// No answer in time: the flow is kept, for resume to carry on.
-		if (opts.openTimesOut) throw tapError('ERR_BEIGNET_LN_TIMEOUT', 'no answer from the peer in time');
-		// The transaction built costs more than the open may pay: refused before anything is signed.
-		const fee = opts.openFee === null ? opts.fundingFee : opts.openFee;
-		if (request.maxFeeSats !== undefined && fee > request.maxFeeSats) {
-			flow.phase = 'cancelled';
-			throw tapError('ERR_BEIGNET_LN_FEE_BOUND', 'the funding fee is above the bound: 99000 > 250000 at input 3');
-		}
-		const txid = id('funding');
-		for (const a of request.assets) spend(a.assetId, a.amount, txid);
-		flow.signed = true;
-		if (opts.openFailsSigned) throw tapError(opts.openFailsSigned, 'the network did not take the transaction');
-		flow.phase = 'broadcast';
-		flow.channelId = id('channel');
-		flow.state = 'AWAITING_FUNDING_CONFIRMED';
-		return { channelId: flow.channelId };
-	};
-	ln.cancelFlow = async (pendingChannelId) => {
-		reaches('cancelFlow');
-		log('cancelFlow', pendingChannelId);
-		if (opts.cancelFails) throw new Error('the database is busy');
-		const flow = flows.get(pendingChannelId);
-		if (flow && flow.signed) return false;
-		if (!flow && opts.cancelMissed) return true;
-		cancelled.add(pendingChannelId);
-		flows.delete(pendingChannelId);
-		const stop = hung.get(pendingChannelId);
-		hung.delete(pendingChannelId);
-		if (stop) stop(tapError('ERR_BEIGNET_LN_CANCELLED', 'the channel open was cancelled'));
-		return true;
-	};
-	ln.closeChannel = async ({ channelId, force }) => {
-		reaches('closeChannel');
-		log('closeChannel', channelId, !!force);
-		if (opts.closeFails) throw tapError(opts.closeFails, 'commitment 41 has 2 htlcs in flight');
-		const flow = byChannel(channelId);
-		if (!flow) throw tapError('ERR_BEIGNET_LN_UNKNOWN_CHANNEL', 'no such channel');
-		flow.state = force ? 'FORCE_CLOSED' : 'CLOSED';
-		flow.recovery = 'pending';
-	};
-	ln.resume = async () => {
-		reaches('resume');
-		log('resume');
-	};
-	ln.resumeRecovery = async () => {
-		reaches('resumeRecovery');
-		log('resumeRecovery');
-		// It never rejects: what went wrong is in each report.
-		return [...flows.values()]
-			.filter((f) => f.channelId && f.recovery === 'pending')
-			.map((f) => ({ channelId: f.channelId, completed: 0, pending: 1, errors: [...opts.recoveryErrors] }));
-	};
-	ln.paymentLimits = () => {
-		reads('paymentLimits');
-		const limits = new Map();
+	const stringify = (value) => JSON.stringify(value, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
+	const lastSeen = (f) => ({
+		version: 1,
+		pendingChannelId: f.pendingChannelId,
+		peer: f.peerPubkey,
+		initiator: f.initiator,
+		fundingSatoshis: String(f.fundingSats),
+		fundingTxid: f.fundingTxid || undefined,
+		assets: f.assets.map((a) => ({ assetId: a.assetId, amount: a.amount.toString() })),
+		groupKey: f.groupKey || undefined,
+		decimalDisplay: f.decimalDisplay || 0,
+		local: f.local.toString(),
+		remote: f.remote.toString(),
+		state: f.state || f.lastState || 'NORMAL'
+	});
+	/** Write what the entry would have in its store by now. Never inside a transaction of the host's. */
+	const persist = () => {
+		const store = state.store;
+		if (!store) return;
+		const rows = new Map();
 		for (const f of flows.values()) {
-			if (f.state !== 'NORMAL' || opts.peerOffline) continue;
-			const name = f.groupKey || f.assetId;
-			const limit = limits.get(name) || { assetId: f.groupKey ? null : f.assetId, groupKey: f.groupKey || null, maxSend: 0n, maxReceive: 0n, sendChannelId: null, receiveChannelId: null };
-			const send = f.local > f.reserved ? f.local - f.reserved : 0n;
-			if (send > limit.maxSend) Object.assign(limit, { maxSend: send, sendChannelId: f.channelId });
-			if (f.remote > limit.maxReceive) Object.assign(limit, { maxReceive: f.remote, receiveChannelId: f.channelId });
-			limits.set(name, limit);
+			if (f.channelId && (f.state || f.restored)) {
+				rows.set(`tap/channel/v1/last/${f.channelId}`, stringify(lastSeen(f)));
+				rows.set(`tap/channel/v1/channel/${f.channelId}`, f.pendingChannelId);
+				if (f.recovery !== 'none') rows.set(`tap/recovery/v1/channel/${f.channelId}`, stringify({ status: f.recovery }));
+			}
+			if (!f.restored && f.phase !== 'active') rows.set(`tap/funding/v1/flow/${f.pendingChannelId}`, stringify({ phase: f.phase, signed: f.signed }));
 		}
-		return [...limits.values()];
+		for (const q of quotes.keys()) rows.set(`tap/quotes/${q}`, '1');
+		for (const i of invoices.keys()) rows.set(`lightning/invoice/${i}`, '1');
+		for (const [hash, p] of payments) rows.set(`tap/channel/v1/sent/${hash}`, stringify({ status: p.status }));
+		store.transaction((tx) => {
+			for (const key of tx.keys('')) if (key !== RESTORED && !rows.has(key)) tx.remove(key);
+			for (const [key, value] of rows) if (tx.get(key) !== value) tx.put(key, value);
+		});
+	};
+	/** The channels a restored store knows of: listed, and not held by the engine. */
+	const load = (store) => {
+		store.transaction((tx) => {
+			for (const key of tx.keys('tap/channel/v1/last/')) {
+				const channelId = key.slice('tap/channel/v1/last/'.length);
+				const seen = JSON.parse(tx.get(key));
+				const status = tx.get(`tap/recovery/v1/channel/${channelId}`);
+				const over = CLOSING_STATES.includes(seen.state) || !!status;
+				const assets = seen.assets.map((a) => ({ assetId: a.assetId, amount: BigInt(a.amount) }));
+				flows.set(seen.pendingChannelId, {
+					pendingChannelId: seen.pendingChannelId,
+					channelId,
+					peerPubkey: seen.peer,
+					initiator: !!seen.initiator,
+					phase: 'active',
+					engine: over ? 'absent' : 'missing',
+					signed: true,
+					committed: true,
+					confirmed: true,
+					fundingTxid: seen.fundingTxid || null,
+					state: over ? (seen.state === 'FORCE_CLOSED' ? 'FORCE_CLOSED' : 'CLOSED') : null,
+					lastState: seen.state,
+					assetId: assets[0].assetId,
+					groupKey: seen.groupKey || null,
+					assets,
+					decimalDisplay: seen.decimalDisplay || 0,
+					local: BigInt(seen.local),
+					remote: BigInt(seen.remote),
+					reserved: 0n,
+					fundingSats: Number(seen.fundingSatoshis),
+					reserveSats: null,
+					recovery: over ? (status ? JSON.parse(status).status : BigInt(seen.local) > 0n ? 'pending' : 'complete') : 'none',
+					error: null,
+					reserving: false,
+					restored: true
+				});
+			}
+		});
 	};
 
-	ln.quoteInvoice = async ({ assetId, groupKey, amount, peerPubkey }) => {
-		reaches('quoteInvoice');
-		log('quoteInvoice', { assetId, groupKey, amount, peerPubkey });
-		if (opts.quoteFails) throw tapError(opts.quoteFails, 'the peer gave no price');
-		const quoteId = id('quote');
-		quotes.set(quoteId, { kind: 'receive', assetId, amount: BigInt(amount), peerPubkey });
-		return { quoteId, peerPubkey, assetAmount: BigInt(amount), amountMsat: msatOf(amount), unitsPerBtc: { ...opts.rate }, expiresAt: now() + opts.quoteMs };
-	};
-	ln.createInvoice = async ({ quoteId, description, expirySeconds }) => {
-		reaches('createInvoice');
-		log('createInvoice', { quoteId, description, expirySeconds });
-		const quote = quotes.get(quoteId);
-		if (!quote || quote.kind !== 'receive') throw tapError('ERR_BEIGNET_LN_QUOTE_EXPIRED', 'no such quote');
-		quotes.delete(quoteId);
-		const paymentHash = id('hash');
-		const amountMsat = msatOf(quote.amount);
-		invoices.set(paymentHash, { paymentHash, assetAmount: quote.amount, status: 'open', peerPubkey: quote.peerPubkey });
-		return { bolt11: fakeInvoice({ msat: amountMsat, hash: paymentHash }), paymentHash, assetAmount: quote.amount, amountMsat, expiresAt: now() + expirySeconds * 1000 };
-	};
-	ln.invoices = () => {
-		reads('invoices');
-		return [...invoices.values()].map((i) => ({ paymentHash: i.paymentHash, assetAmount: i.assetAmount, status: i.status }));
+	/* --------------------------------------------------------------- the node */
+
+	const node = {
+		async connectPeer(pubkey, host, port) {
+			if (held()) violations.push("connect with the host's lock held");
+			stored('connect');
+			log('connect', { pubkey, host, port });
+			if (opts.connectGate) await opts.connectGate;
+			if (opts.connectFails) throw new Error('connection refused');
+		}
 	};
 
-	ln.quotePayment = async ({ bolt11, assetId, groupKey, amountMsat }) => {
-		reaches('quotePayment');
-		log('quotePayment', { bolt11, assetId, groupKey, amountMsat });
-		const m = /^lnbcrt1([0-9a-f]+)$/.exec(String(bolt11));
-		let invoice = null;
-		try {
-			invoice = m ? JSON.parse(Buffer.from(m[1], 'hex').toString('utf8')) : null;
-		} catch (_) {
-			invoice = null;
+	/* ------------------------------------------------------------ the service */
+
+	const emit = (event) => {
+		if (state.started && state.options && typeof state.options.onEvent === 'function') state.options.onEvent(event);
+	};
+	const view = (f) => {
+		const stateWord = f.state || undefined;
+		const one = f.assets.length === 1;
+		const name = f.reserving ? nameOf(f) : undefined;
+		const inputs = new Map();
+		if (name) for (const r of reservedBy(name)) inputs.set(r.assetId, (inputs.get(r.assetId) || 0n) + BigInt(r.amount));
+		return {
+			pendingChannelId: bytes(f.pendingChannelId),
+			...(f.channelId ? { channelId: bytes(f.channelId) } : {}),
+			peer: bytes(f.peerPubkey),
+			initiator: f.initiator,
+			phase: f.phase,
+			engine: f.engine || (stateWord ? 'held' : f.phase === 'negotiated' || FUNDING_PHASES.includes(f.phase) ? 'missing' : 'absent'),
+			signed: f.signed,
+			committed: !!f.committed,
+			confirmed: f.confirmed,
+			...(f.fundingTxid ? { fundingTxid: f.fundingTxid } : {}),
+			...(stateWord ? { state: stateWord } : {}),
+			fundingSatoshis: BigInt(f.fundingSats),
+			...(f.reserveSats === null || f.reserveSats === undefined ? {} : { reserveSatoshis: BigInt(f.reserveSats) }),
+			assets: f.assets.map((a) => ({ assetId: bytes(a.assetId), amount: BigInt(a.amount), ...(one ? { local: f.local, remote: f.remote } : {}) })),
+			...(f.groupKey ? { groupKey: bytes(f.groupKey) } : {}),
+			decimalDisplay: f.decimalDisplay || 0,
+			localAssetBalance: f.local,
+			remoteAssetBalance: f.remote,
+			reserved: f.reserved,
+			...(name ? { fundingReservation: name, fundingInputs: [...inputs].map(([assetId, amount]) => ({ assetId: bytes(assetId), amount })) } : {}),
+			recovery: f.recovery,
+			...(f.error ? { error: f.error } : {})
+		};
+	};
+
+	function makeService(me, adapter, options) {
+		let closed = false;
+		const active = () => {
+			if (closed || !me.node) throw refuse('NOT_READY', 'asset channels have not started on this wallet');
+		};
+		// What can reach the node, and be called back by it, is never called
+		// with the host's lock held.
+		const reaches = (name) => {
+			if (held()) violations.push(`${name} with the host's lock held`);
+			stored(name);
+			active();
+		};
+		// What only reads the service's records still needs the service: after a
+		// stop, or before the node is bound, it throws as the real one does.
+		const reads = (name) => {
+			stored(name);
+			active();
+		};
+		const refusePaid = (hash) => {
+			const own = payments.get(hash);
+			if (own && own.status !== 'failed') throw refuse('ALREADY_PAID', 'this wallet has paid the invoice, or is paying it');
+		};
+		const paymentView = (p) => ({
+			paymentHash: bytes(p.paymentHash),
+			assetAmount: p.assetAmount,
+			status: p.status,
+			...(p.status === 'pending' || p.feeMsat === undefined || p.feeMsat === null ? {} : { feeMsat: p.feeMsat }),
+			...(p.status === 'failed' ? { failure: p.failure || 'the payment failed' } : {})
+		});
+		const service = {
+			channels() {
+				reads('channels');
+				return [...flows.values()].map(view);
+			},
+			peerSupports(peer) {
+				reads('peerSupports');
+				log('peerSupports', hexOf(peer));
+				return !!opts.supports;
+			},
+			async quoteFunding(request) {
+				reaches('quoteFunding');
+				log('quoteFunding', {
+					assets: request.assets.map((a) => ({ assetId: hexOf(a.assetId), amount: a.amount })),
+					groupKey: request.groupKey ? hexOf(request.groupKey) : null,
+					fundingSats: Number(request.fundingSatoshis),
+					feeRate: request.feeRate
+				});
+				if (opts.fundFails) throw tapError('ERR_BEIGNET_FUNDING', 'wallet has no spendable fee input');
+				return { feeSatoshis: BigInt(opts.fundingFee), vsize: 210, reserveSatoshis: BigInt(opts.reserveSats === undefined ? 1000 : opts.reserveSats) };
+			},
+			async openChannel(request) {
+				reaches('openChannel');
+				const pending = hexOf(request.pendingChannelId);
+				const plain = {
+					pendingChannelId: pending,
+					peerPubkey: hexOf(request.peer),
+					assets: request.assets.map((a) => ({ assetId: hexOf(a.assetId), amount: BigInt(a.amount) })),
+					groupKey: request.groupKey ? hexOf(request.groupKey) : null,
+					decimalDisplay: request.decimalDisplay,
+					fundingSats: Number(request.fundingSatoshis),
+					pushSats: Number((request.pushMsat || 0n) / 1000n),
+					feeRate: request.feeRate,
+					maxFeeSats: request.maxFee === undefined ? undefined : Number(request.maxFee)
+				};
+				log('openChannel', pending, storage ? storage.list('h/').map((r) => r.key) : []);
+				const live = () => {
+					if (cancelled.has(pending)) throw refuse('CANCELLED', 'the channel open was cancelled');
+				};
+				live();
+				if (opts.openHangs) return new Promise((_, reject) => hung.set(pending, reject));
+				// Asked to open, and not yet anything the service has a record of.
+				if (opts.openGate) {
+					await opts.openGate;
+					live();
+				}
+				const known = flows.get(pending);
+				if (known && known.signed && known.channelId) return { pendingChannelId: request.pendingChannelId, channelId: bytes(known.channelId) };
+				const flow = known || {
+					pendingChannelId: pending,
+					channelId: null,
+					peerPubkey: plain.peerPubkey,
+					initiator: true,
+					phase: 'accepted',
+					signed: false,
+					committed: false,
+					confirmed: false,
+					fundingTxid: null,
+					state: null,
+					assetId: plain.assets[0].assetId,
+					groupKey: plain.groupKey,
+					assets: plain.assets,
+					decimalDisplay: plain.decimalDisplay || 0,
+					local: total(plain.assets),
+					remote: 0n,
+					reserved: 0n,
+					fundingSats: plain.fundingSats,
+					reserveSats: null,
+					recovery: 'none',
+					error: null,
+					reserving: false,
+					request: plain
+				};
+				flows.set(pending, flow);
+				try {
+					// Its inputs are selected, and set aside in the on-chain records.
+					reserve(flow);
+					if (opts.openFails) {
+						Object.assign(flow, { phase: 'rejected', error: 'the peer said no' });
+						release(flow);
+						cancelled.add(pending);
+						throw tapError(opts.openFails, 'the channel was turned down: the peer said no');
+					}
+					// No answer in time: the flow is kept, for resume to carry on.
+					if (opts.openTimesOut) throw refuse('TIMEOUT', 'the peer did not answer in time');
+					// The transaction built costs more than the open may pay: refused before anything is signed.
+					const fee = opts.openFee === null ? opts.fundingFee : opts.openFee;
+					if (plain.maxFeeSats !== undefined && fee > plain.maxFeeSats) {
+						flow.phase = 'cancelled';
+						release(flow);
+						cancelled.add(pending);
+						throw refuse('FEE_BOUND', 'the funding fee is above the bound: 99000 > 250000 at input 3');
+					}
+					Object.assign(flow, { signed: true, fundingTxid: id('funding'), phase: 'funding-created', state: 'SENT_FUNDING' });
+					if (opts.openFailsSigned) throw tapError(opts.openFailsSigned, 'the network did not take the transaction');
+					Object.assign(flow, { phase: 'broadcast', channelId: id('channel'), committed: true, state: 'AWAITING_FUNDING_CONFIRMED' });
+					return { pendingChannelId: request.pendingChannelId, channelId: bytes(flow.channelId) };
+				} finally {
+					persist();
+				}
+			},
+			async cancelChannel(pendingChannelId) {
+				reaches('cancelFlow');
+				const pending = hexOf(pendingChannelId);
+				log('cancelFlow', pending);
+				if (opts.cancelFails) throw new Error('the database is busy');
+				const flow = flows.get(pending);
+				if (flow && flow.signed) return false;
+				if (!flow && opts.cancelMissed) return true;
+				cancelled.add(pending);
+				if (flow && !ENDED_PHASES.includes(flow.phase)) {
+					release(flow);
+					// Listed as cancelled only when the channel was negotiated by
+					// then. Before that it reads as failed, with the reason. The
+					// engine lets go of the channel it held for the open.
+					if (opts.cancelNegotiated) Object.assign(flow, { phase: 'cancelled', state: null });
+					else Object.assign(flow, { phase: 'failed', error: 'cancelled', state: null });
+					persist();
+					emit({ type: 'channel', pendingChannelId: bytes(pending), phase: 'cancelled' });
+				}
+				const stop = hung.get(pending);
+				hung.delete(pending);
+				if (stop) stop(refuse('CANCELLED', 'the channel open was cancelled'));
+				return true;
+			},
+			async closeChannel({ channelId, force }) {
+				reaches('closeChannel');
+				const wanted = hexOf(channelId);
+				log('closeChannel', wanted, !!force);
+				const flow = byChannel(wanted);
+				if (!flow || !flow.state || flow.engine === 'missing' || flow.engine === 'absent') throw refuse('UNKNOWN_CHANNEL', 'no asset channel has this channel ID');
+				if (opts.closeFails) throw tapError(opts.closeFails, 'commitment 41 has 2 htlcs in flight');
+				flow.state = force ? 'FORCE_CLOSED' : 'CLOSED';
+				flow.recovery = 'pending';
+				persist();
+			},
+			forgetChannel(wanted) {
+				reads('forgetChannel');
+				const key = hexOf(wanted);
+				const flow = [...flows.values()].find((f) => f.channelId === key || f.pendingChannelId === key);
+				log('forgetChannel', key);
+				if (!flow) return false;
+				// Not while the engine holds it, or while assets of it are coming back.
+				if (view(flow).engine === 'held' || flow.recovery === 'pending') return false;
+				// Not a signed funding that may still confirm: only one given up, or a channel that is lost.
+				if (flow.signed && !flow.restored && !(flow.phase === 'failed' && !flow.reserving)) return false;
+				// Not an open still under way.
+				if (!flow.signed && !ENDED_PHASES.includes(flow.phase)) return false;
+				flows.delete(flow.pendingChannelId);
+				persist();
+				return true;
+			},
+			async resume() {
+				reaches('resume');
+				log('resume');
+			},
+			recovery: {
+				async resume() {
+					reaches('resumeRecovery');
+					log('resumeRecovery');
+					// It never rejects: what went wrong is in each report.
+					return [...flows.values()]
+						.filter((f) => f.channelId && f.recovery === 'pending')
+						.map((f) => ({ channelId: f.channelId, completed: [], pending: ['a sweep'], superseded: [], errors: opts.recoveryErrors.map((message) => ({ message })) }));
+				}
+			},
+			async settleFundingReservations() {
+				reaches('settleFundingReservations');
+				log('settleFundingReservations');
+				const owners = new Set(tap.records.filter((r) => !r.spent && /^funding:[0-9a-f]{64}$/.test(r.reservedBy || '')).map((r) => r.reservedBy));
+				const reports = [];
+				for (const owner of owners) {
+					const pending = owner.slice('funding:'.length);
+					const flow = flows.get(pending);
+					// One whose flow this wallet still has is left to that flow.
+					if (flow && !flow.restored) continue;
+					const records = reservedBy(owner);
+					const sums = new Map();
+					for (const r of records) sums.set(r.assetId, (sums.get(r.assetId) || 0n) + BigInt(r.amount));
+					const report = {
+						reservation: owner,
+						pendingChannelId: bytes(pending),
+						assets: [...sums].map(([assetId, amount]) => ({ assetId: bytes(assetId), amount })),
+						...(flow ? { channelId: bytes(flow.channelId) } : {}),
+						...(flow && flow.fundingTxid ? { fundingTxid: flow.fundingTxid } : {})
+					};
+					if (opts.settleKeeps) {
+						reports.push({ ...report, outcome: 'kept', reason: opts.settleKeeps });
+					} else if (flow && flow.fundingTxid) {
+						// The funding transaction on record spent them: the units are the channel's.
+						for (const r of records) Object.assign(r, { spent: true, reservedBy: undefined });
+						const change = [...sums]
+							.map(([assetId, amount]) => ({ assetId: bytes(assetId), amount: amount - (flow.assets.find((a) => a.assetId === assetId) || { amount: 0n }).amount }))
+							.filter((c) => c.amount > 0n);
+						reports.push({ ...report, outcome: 'moved', ...(change.length ? { change } : {}) });
+					} else {
+						for (const r of records) r.reservedBy = undefined;
+						reports.push({ ...report, outcome: 'released' });
+					}
+				}
+				return reports;
+			},
+
+			async quoteInvoice({ asset, amount, peer, expirySeconds }) {
+				reaches('quoteInvoice');
+				const assetId = asset.assetId ? hexOf(asset.assetId) : null;
+				const groupKey = asset.groupKey ? hexOf(asset.groupKey) : null;
+				const peerPubkey = peer ? hexOf(peer) : null;
+				log('quoteInvoice', { assetId, groupKey, amount, peerPubkey, expirySeconds });
+				if (opts.quoteFails) throw tapError(opts.quoteFails, 'the peer gave no price');
+				const quoteId = id('quote');
+				// The quote stands as long as it was asked to, and no longer than the peer gives.
+				const lasts = Math.min(opts.quoteMs, (expirySeconds || 3600) * 1000);
+				const expiresAt = seconds(now() + lasts);
+				quotes.set(quoteId, { kind: 'receive', assetId, groupKey, amount: BigInt(amount), peerPubkey, expiresAt });
+				persist();
+				return { quoteId: bytes(quoteId), peer: bytes(peerPubkey), assetAmount: BigInt(amount), milliSatoshi: msatOf(amount), assetRate: { ...opts.rate }, expiresAt, priced: priced() };
+			},
+			async createInvoice({ quoteId, description, expirySeconds }) {
+				reaches('createInvoice');
+				const wanted = hexOf(quoteId);
+				log('createInvoice', { quoteId: wanted, description, expirySeconds });
+				const quote = quotes.get(wanted);
+				if (!quote || quote.kind !== 'receive' || quote.expiresAt <= seconds(now())) throw refuse('QUOTE_EXPIRED', 'the invoice quote is used up or too old: ask for a new one');
+				quotes.delete(wanted);
+				const paymentHash = id('hash');
+				const amountMsat = msatOf(quote.amount);
+				// It lives as long as asked, or as long as its quote when that is shorter.
+				const asked = seconds(now()) + BigInt(expirySeconds === undefined ? 3600 : expirySeconds);
+				const expiresAt = asked < quote.expiresAt ? asked : quote.expiresAt;
+				invoices.set(paymentHash, { paymentHash, assetAmount: quote.amount, amountMsat, status: 'open', peerPubkey: quote.peerPubkey, expiresAt });
+				persist();
+				return { bolt11: fakeInvoice({ msat: amountMsat, hash: paymentHash }), paymentHash: bytes(paymentHash), assetAmount: quote.amount, milliSatoshi: amountMsat, expiresAt };
+			},
+			invoices() {
+				reads('invoices');
+				return [...invoices.values()].map((i) => ({ paymentHash: bytes(i.paymentHash), assetAmount: i.assetAmount, milliSatoshi: i.amountMsat, expiresAt: i.expiresAt, status: i.status }));
+			},
+
+			async quotePayment({ invoice: bolt11, asset, amountMsat }) {
+				reaches('quotePayment');
+				const assetId = asset.assetId ? hexOf(asset.assetId) : null;
+				const groupKey = asset.groupKey ? hexOf(asset.groupKey) : null;
+				log('quotePayment', { bolt11, assetId, groupKey, amountMsat: amountMsat === undefined ? null : amountMsat });
+				const m = /^lnbcrt1([0-9a-f]+)$/.exec(String(bolt11));
+				let invoice = null;
+				try {
+					invoice = m ? JSON.parse(Buffer.from(m[1], 'hex').toString('utf8')) : null;
+				} catch (_) {
+					invoice = null;
+				}
+				if (!invoice || !invoice.hash) throw refuse('BAD_INVOICE', 'not an invoice');
+				refusePaid(invoice.hash);
+				const msat = invoice.msat !== null ? BigInt(invoice.msat) : amountMsat === undefined || amountMsat === null ? null : BigInt(amountMsat);
+				if (msat === null) throw refuse('AMOUNT_REQUIRED', 'the invoice names no amount');
+				if (opts.quoteFails) throw tapError(opts.quoteFails, 'the peer gave no price');
+				const flow = [...flows.values()].find((f) => f.state === 'NORMAL' && f.confirmed && (groupKey ? f.groupKey === groupKey : f.assetId === assetId));
+				if (!flow) throw refuse('INSUFFICIENT_OUTBOUND', 'no open asset channel carries this asset');
+				const quoteId = id('quote');
+				const assetAmount = unitsOf(msat);
+				quotes.set(quoteId, { kind: 'pay', paymentHash: invoice.hash, assetAmount, channelId: flow.channelId, expiresAt: seconds(now() + opts.quoteMs) });
+				persist();
+				return {
+					quoteId: bytes(quoteId),
+					paymentHash: bytes(invoice.hash),
+					peer: bytes(flow.peerPubkey),
+					channelId: bytes(flow.channelId),
+					assetAmount,
+					milliSatoshi: msat,
+					feeMsat: opts.payFeeMsat,
+					assetRate: { ...opts.rate },
+					expiresAt: seconds(now() + opts.quoteMs),
+					priced: priced()
+				};
+			},
+			async payInvoice({ quoteId, maxAssetAmount }) {
+				reaches('payInvoice');
+				const wanted = hexOf(quoteId);
+				log('payInvoice', wanted, maxAssetAmount, storage ? storage.list('h/').map((r) => r.key) : []);
+				const quote = quotes.get(wanted);
+				if (!quote || quote.kind !== 'pay') throw refuse('QUOTE_EXPIRED', 'the payment quote is used up or too old: ask for a new one');
+				refusePaid(quote.paymentHash);
+				quotes.delete(wanted);
+				// Refused while nothing has left: the record of an earlier try, if any, stands.
+				if (opts.payMoved || quote.assetAmount > BigInt(maxAssetAmount)) throw refuse('PRICE_BOUND', 'the price is past the bound');
+				if (opts.payFails) throw tapError(opts.payFails, 'the payment was not sent: no usable route');
+				// The node has the payment from here on, and the wallet its own record of it.
+				const status = opts.payThrowsAfter ? 'pending' : opts.payStatus;
+				const payment = { paymentHash: quote.paymentHash, assetAmount: quote.assetAmount, status, feeMsat: opts.payFeeMsat, failure: status === 'failed' ? opts.payFailure : null, channelId: quote.channelId };
+				payments.set(payment.paymentHash, payment);
+				persist();
+				if (opts.payThrowsAfter) throw tapError(opts.payThrowsAfter, 'no word from the node in time');
+				if (payment.status === 'complete') ln.move(payment.channelId, -payment.assetAmount);
+				return paymentView(payment);
+			},
+			payment(paymentHash) {
+				reads('payment');
+				const p = payments.get(hexOf(paymentHash));
+				return p ? paymentView(p) : undefined;
+			},
+			paymentLimits() {
+				reads('paymentLimits');
+				const limits = new Map();
+				for (const f of flows.values()) {
+					if (f.state !== 'NORMAL' || !f.confirmed || opts.peerOffline) continue;
+					const name = f.groupKey ? `group:${f.groupKey}` : `asset:${f.assetId}`;
+					const limit = limits.get(name) || { ...(f.groupKey ? { groupKey: bytes(f.groupKey) } : { assetId: bytes(f.assetId) }), maxSend: 0n, maxReceive: 0n };
+					const send = f.local > f.reserved ? f.local - f.reserved : 0n;
+					if (send > limit.maxSend) Object.assign(limit, { maxSend: send, sendChannelId: bytes(f.channelId) });
+					if (f.remote > limit.maxReceive) Object.assign(limit, { maxReceive: f.remote, receiveChannelId: bytes(f.channelId) });
+					limits.set(name, limit);
+				}
+				return [...limits.values()];
+			},
+			close() {
+				if (closed) return;
+				closed = true;
+				log('stop');
+				if (me.service === service) me.service = null;
+				if (state.host === me) state.started = false;
+			}
+		};
+		return service;
+	}
+
+	/* -------------------------------------------------------------- the entry */
+
+	const entry = {
+		ASSET_PAYMENT_REFUSALS,
+		NOMINAL_ASSET_RATE: Object.freeze({ coefficient: 100_000_000n, scale: 0 }),
+		assetLightningSupport: () => ({ supported: !!opts.supported, engineVersion: '0.43.0', missing: opts.supported ? [] : ['LightningNode.openAuxiliaryChannel'] }),
+		lightningStore(backend, prefix = 'ln/') {
+			if (typeof prefix !== 'string' || !/^[a-z0-9][a-z0-9._/-]{0,62}\/$/.test(prefix)) throw tapError('ERR_LIGHTNING_STORAGE', 'the store prefix must be lowercase segments ending in "/"');
+			const tx = {
+				get: (key) => {
+					const value = backend.get(prefix + key);
+					return value === null ? undefined : value;
+				},
+				put: (key, value) => backend.set(prefix + key, value),
+				remove: (key) => backend.delete(prefix + key),
+				keys: (scope) => backend.list(prefix + scope).map((row) => row.key.slice(prefix.length))
+			};
+			return { backend, prefix, transaction: (fn) => backend.transaction(() => fn(tx)) };
+		},
+		createAssetLightningHost(given) {
+			if (!opts.supported) throw refuse('UNSUPPORTED', 'this Beignet (0.42.0) has no asset channels');
+			own(given && given.store);
+			const me = { node: null, service: null };
+			Object.assign(state, { host: me, made: given, store: given.store, started: false, bound: false, options: null, adapter: null, node: null });
+			return {
+				attachment: {
+					auxiliaryChannels: { name: 'the fake provider' },
+					fixedOutputFees: given.fixedOutputFees,
+					bind(bound) {
+						if (me.node && me.node !== bound) throw refuse('INVALID', 'the asset Lightning host is bound to another node');
+						if (!bound || typeof bound.connectPeer !== 'function') throw refuse('UNSUPPORTED', 'this is not a node that carries asset channels');
+						me.node = bound;
+						if (state.host === me) Object.assign(state, { bound: true, node: bound });
+					}
+				},
+				start(adapter, options) {
+					if (!me.node) throw refuse('NOT_READY', 'the engine has not bound its node yet');
+					if (me.service) throw refuse('INVALID', 'the asset Lightning service is already running');
+					if (!options || typeof options.fetchProvenance !== 'function') throw refuse('INVALID', 'fetchProvenance is required');
+					if (options.forwarding) throw refuse('INVALID', 'this entry forwards no payments');
+					if (opts.startFails) throw new Error(opts.startFails);
+					log('start', { quiet: typeof options.price === 'function' });
+					cancelled.clear();
+					hung.clear();
+					me.service = makeService(me, adapter, options);
+					if (state.host === me) Object.assign(state, { started: true, options, adapter });
+					return me.service;
+				},
+				service: () => me.service || undefined,
+				close() {
+					if (me.service) me.service.close();
+					me.node = null;
+					if (state.host === me) state.bound = false;
+				}
+			};
+		},
+		assetLightningBackup: (store) =>
+			own(store).transaction((tx) => ({ version: 1, rows: CARRIED.flatMap((scope) => tx.keys(scope).map((key) => ({ key, value: tx.get(key) }))) })),
+		restoreAssetLightningBackup(store, backup) {
+			own(store);
+			const invalid = (message) => refuse('INVALID', message);
+			if (!backup || backup.version !== 1 || !Array.isArray(backup.rows)) throw invalid('this is not a backup of asset channels');
+			const seen = new Set();
+			for (const row of backup.rows) {
+				const carried = row && typeof row.key === 'string' && typeof row.value === 'string' && CARRIED.some((scope) => row.key.startsWith(scope) && row.key.length > scope.length);
+				if (!carried) throw invalid('the backup holds a row that a backup may not carry');
+				if (seen.has(row.key)) throw invalid('the backup holds a row twice');
+				seen.add(row.key);
+			}
+			const written = store.transaction((tx) => {
+				if (tx.keys('').length) throw invalid('the store already holds Lightning rows: a backup goes into an empty one');
+				for (const row of backup.rows) tx.put(row.key, row.value);
+				tx.put(RESTORED, JSON.stringify({ version: 1, at: seconds(now()).toString() }));
+				return backup.rows.length;
+			});
+			load(store);
+			return written;
 		}
-		if (!invoice || !invoice.hash) throw tapError('ERR_BEIGNET_LN_BAD_INVOICE', 'not an invoice');
-		const msat = invoice.msat !== null ? BigInt(invoice.msat) : amountMsat === undefined || amountMsat === null ? null : BigInt(amountMsat);
-		if (msat === null) throw tapError('ERR_BEIGNET_LN_AMOUNT_REQUIRED', 'the invoice names no amount');
-		if (opts.quoteFails) throw tapError(opts.quoteFails, 'the peer gave no price');
-		const flow = [...flows.values()].find((f) => f.state === 'NORMAL' && f.confirmed && (f.assetId === assetId || (groupKey && f.groupKey === groupKey)));
-		if (!flow) throw tapError('ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND', 'no channel');
-		const quoteId = id('quote');
-		const assetAmount = unitsOf(msat);
-		quotes.set(quoteId, { kind: 'pay', paymentHash: invoice.hash, assetAmount, channelId: flow.channelId });
-		return { quoteId, paymentHash: invoice.hash, peerPubkey: flow.peerPubkey, channelId: flow.channelId, assetAmount, amountMsat: msat, unitsPerBtc: { ...opts.rate }, expiresAt: now() + opts.quoteMs };
 	};
-	ln.payInvoice = async ({ quoteId, maxAssetAmount }) => {
-		reaches('payInvoice');
-		log('payInvoice', quoteId, maxAssetAmount, storage ? storage.list('h/').map((r) => r.key) : []);
-		const quote = quotes.get(quoteId);
-		if (!quote || quote.kind !== 'pay') throw tapError('ERR_BEIGNET_LN_QUOTE_EXPIRED', 'no such quote');
-		quotes.delete(quoteId);
-		if (opts.payMoved || quote.assetAmount > BigInt(maxAssetAmount)) throw tapError('ERR_BEIGNET_LN_PRICE_BOUND', 'the price is past the bound');
-		if (opts.payFails) throw tapError(opts.payFails, 'the payment could not be sent');
-		// The node has the payment from here on, and keeps its own record of it.
-		const status = opts.payThrowsAfter ? 'pending' : opts.payStatus;
-		const payment = { paymentHash: quote.paymentHash, assetAmount: quote.assetAmount, status, feeMsat: opts.payFeeMsat, failure: status === 'failed' ? opts.payFailure : null, channelId: quote.channelId };
-		payments.set(payment.paymentHash, payment);
-		if (opts.payThrowsAfter) throw tapError(opts.payThrowsAfter, 'no word from the node in time');
-		if (payment.status === 'complete') ln.move(payment.channelId, -payment.assetAmount);
-		return { ...payment };
-	};
-	ln.payment = (paymentHash) => {
-		reads('payment');
-		const p = payments.get(paymentHash);
-		return p ? { ...p } : null;
-	};
+
+	const ln = { calls, violations, opts, flows, quotes, invoices, payments, state, entry, node };
 
 	/* What a test does to the world. */
 	ln.flow = (pendingChannelId) => flows.get(pendingChannelId);
+	ln.persist = persist;
 	ln.move = (channelId, units) => {
 		const flow = byChannel(channelId);
 		if (!flow) return;
 		flow.local += BigInt(units);
 		flow.remote -= BigInt(units);
+		persist();
 	};
-	ln.confirm = (pendingChannelId) => Object.assign(flows.get(pendingChannelId), { state: 'NORMAL', confirmed: true, phase: 'active' });
-	ln.set = (pendingChannelId, fields) => Object.assign(flows.get(pendingChannelId), fields);
-	/** A channel a peer opened to this wallet, already the library's. */
-	ln.inbound = ({ assetId, amount, peerPubkey = `03${'cd'.repeat(32)}`, state: word = 'NORMAL' }) => {
+	/** The funding is buried and its proofs stored: the channel is open. */
+	ln.confirm = (pendingChannelId) => {
+		const flow = flows.get(pendingChannelId);
+		bury(flow);
+		Object.assign(flow, { state: 'NORMAL', confirmed: true, committed: true, phase: 'active' });
+		persist();
+		return flow;
+	};
+	ln.set = (pendingChannelId, fields) => {
+		const flow = Object.assign(flows.get(pendingChannelId), fields);
+		persist();
+		return flow;
+	};
+	/** A signed funding is proven unable to confirm: given up, its inputs released, and said once. */
+	ln.abandon = (pendingChannelId, reason = 'the funding transaction cannot confirm: its input 4f2a:0 was spent by 77c1', { silent = false } = {}) => {
+		const flow = flows.get(pendingChannelId);
+		release(flow);
+		Object.assign(flow, { phase: 'failed', error: reason });
+		persist();
+		if (!silent) emit({ type: 'channel', pendingChannelId: bytes(pendingChannelId), error: reason });
+		return flow;
+	};
+	/** A flow the library holds, put there by hand: an open of this wallet's that has signed nothing, unless `fields` say otherwise. */
+	ln.plant = (pendingChannelId, fields = {}) => {
+		const assets = fields.assets || [{ assetId: fields.assetId, amount: BigInt(fields.local || 0) + BigInt(fields.remote || 0) }];
 		const flow = {
-			pendingChannelId: id('pending'),
+			pendingChannelId,
+			channelId: null,
+			peerPubkey: `02${'ab'.repeat(32)}`,
+			initiator: true,
+			phase: 'accepted',
+			signed: false,
+			committed: false,
+			confirmed: false,
+			fundingTxid: null,
+			state: null,
+			assetId: assets[0].assetId,
+			groupKey: null,
+			assets,
+			decimalDisplay: 0,
+			local: 0n,
+			remote: 0n,
+			reserved: 0n,
+			fundingSats: 100000,
+			reserveSats: null,
+			recovery: 'none',
+			error: null,
+			reserving: false,
+			...fields
+		};
+		flows.set(pendingChannelId, flow);
+		persist();
+		return flow;
+	};
+	/** The library loses every record of an open: its flow, and what the flow had set aside. */
+	ln.lose = (pendingChannelId) => {
+		const flow = flows.get(pendingChannelId);
+		if (flow) release(flow);
+		flows.delete(pendingChannelId);
+		persist();
+	};
+	/** A channel a peer opened to this wallet, already the library's. */
+	ln.inbound = ({ assetId, amount, peerPubkey = `03${'cd'.repeat(32)}`, state: word = 'NORMAL' }) =>
+		ln.plant(id('pending'), {
 			channelId: id('channel'),
 			peerPubkey,
 			initiator: false,
 			phase: word === 'NORMAL' ? 'active' : 'broadcast',
 			signed: true,
+			committed: true,
 			confirmed: word === 'NORMAL',
+			fundingTxid: id('funding'),
 			state: word,
 			assetId,
-			groupKey: null,
-			local: 0n,
-			remote: BigInt(amount),
-			reserved: 0n,
-			fundingSats: 100000,
-			reserveSats: null,
-			recovery: 'none'
-		};
-		flows.set(flow.pendingChannelId, flow);
-		return flow;
-	};
+			remote: BigInt(amount)
+		});
 	/** A closed channel's assets are back in the wallet's on-chain records. */
 	ln.recover = (pendingChannelId) => {
 		const flow = flows.get(pendingChannelId);
@@ -770,20 +1242,35 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		if (flow.local > 0n) {
 			tap.records.push({ assetId: flow.assetId, scriptKey: `02${sha256Hex(`back:${pendingChannelId}`)}`, name: like.name, type: like.type, amount: flow.local.toString(), anchorOutPoint: `${id('sweep')}:0` });
 		}
+		persist();
+		emit({ type: 'recovery', channelId: bytes(flow.channelId), status: 'complete' });
 	};
 	ln.settle = (paymentHash) => {
 		const invoice = invoices.get(paymentHash);
 		invoice.status = 'paid';
 		const flow = [...flows.values()].find((f) => f.peerPubkey === invoice.peerPubkey && f.state === 'NORMAL');
 		if (flow) ln.move(flow.channelId, invoice.assetAmount);
-		if (state.options) state.options.onEvent({ type: 'invoice', paymentHash, status: 'paid' });
+		persist();
+		emit({ type: 'invoice', paymentHash: bytes(paymentHash), status: 'paid', assetAmount: invoice.assetAmount, channelId: bytes(flow ? flow.channelId : '00'.repeat(32)) });
 	};
 	ln.finish = (paymentHash, status, failure = null) => {
 		const payment = payments.get(paymentHash);
 		Object.assign(payment, { status, failure });
 		if (status === 'complete') ln.move(payment.channelId, -payment.assetAmount);
-		if (state.options) state.options.onEvent({ type: 'payment', paymentHash, status });
+		persist();
+		emit({ type: 'payment', paymentHash: bytes(paymentHash), status, assetAmount: payment.assetAmount, channelId: bytes(payment.channelId), ...(failure ? { failure } : {}) });
 	};
+	/** A peer offers a channel: what the service asks the wallet, in the library's own values. */
+	ln.offer = ({ pendingChannelId, peerPubkey = `03${'cd'.repeat(32)}`, assets = [], groupKey = null }) =>
+		state.options.acceptIncoming({
+			peer: bytes(peerPubkey),
+			pendingChannelId: bytes(pendingChannelId),
+			expiresAt: seconds(now()) + 1800n,
+			assets: assets.map((a) => ({ assetId: /^[0-9a-f]*$/.test(a.assetId) ? bytes(a.assetId) : a.assetId, amount: a.amount })),
+			inputProofs: [],
+			outputs: [],
+			...(groupKey ? { groupKey: bytes(groupKey) } : {})
+		});
 	return ln;
 }
 
@@ -792,10 +1279,13 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
  * new harness over the same storage, library records and clock. The host
  * starts no timers of its own unless `timers` is set.
  *
- * `lightning: true` gives the wallet asset channels (fakeLightning) and,
- * unless `env` says otherwise, asks for them (BEIGNET_ASSETS_LIGHTNING).
- * `lightning: 'unbound'` is the same before the engine has handed over its
- * node. Left out, the wallet is one that cannot have any.
+ * `lightning: true` gives the wallet asset channels and, unless `env` says
+ * otherwise, asks for them (BEIGNET_ASSETS_LIGHTNING). The host is handed
+ * the real facade (adapter.js createLightning) over the fake entry, a new
+ * one for each generation as a restarted daemon builds; `ln` is the fake
+ * itself, which is what a test switches and reads. `lightning: 'unbound'`
+ * is the same before the engine has handed over its node. Left out, the
+ * wallet is one that cannot have any.
  */
 function harness({ env = {}, network = 'regtest', shared, timers = false, chainCheck = null, lightning = false } = {}) {
 	const world = shared || { clock: { t: 1_700_000_000_000 }, mem: memoryStorage(), events: [], delivered: [], fetched: [], net: { down: false } };
@@ -833,9 +1323,24 @@ function harness({ env = {}, network = 'regtest', shared, timers = false, chainC
 	};
 	const events = world.events;
 	// What the fake channels check the lock of: the host of this generation.
-	const lockOf = { held: () => false };
+	const lockOf = world.lockOf || (world.lockOf = { held: () => false });
 	const ln = lightning ? world.ln || (world.ln = fakeLightning({ now, tap, storage: world.mem.storage, held: () => lockOf.held() })) : null;
-	const host = createHost({ cfg, storage: world.mem.storage, wallet, lib, net, emit: (name, data) => events.push([name, data]), logger: null, tap, ln, chainCheck, now, timers });
+	const logs = world.logs || (world.logs = []);
+	const logger = { info: (text) => logs.push(['info', text]), warn: (text) => logs.push(['warn', text]), error: (text) => logs.push(['error', text]) };
+	const host = createHost({
+		cfg,
+		storage: world.mem.storage,
+		wallet,
+		lib,
+		net,
+		emit: (name, data) => events.push([name, data]),
+		logger,
+		tap,
+		ln: ln ? createLightning({ entry: ln.entry, storage: world.mem.storage, cfg, now }) : null,
+		chainCheck,
+		now,
+		timers
+	});
 	lockOf.held = host.lock.held;
 	tap.proofPublisher = host.proofPublisher;
 	tap.courierFor = host.courierFor;
@@ -850,6 +1355,7 @@ function harness({ env = {}, network = 'regtest', shared, timers = false, chainC
 		ln,
 		wallet,
 		events,
+		logs,
 		handlers,
 		call,
 		get,
@@ -862,12 +1368,13 @@ function harness({ env = {}, network = 'regtest', shared, timers = false, chainC
 		boot: async () => {
 			await host.attach();
 			await host.startLightning();
-			if (ln && lightning !== 'unbound') ln.attachment.bind({ the: 'node' });
+			if (host.ln && lightning !== 'unbound') host.ln.attachment.bind(ln.node);
 			await host.startup();
 		},
+		// The daemon stops, node and all, and a new one starts over what it left.
 		restart: () => {
 			host.shutdown();
-			if (ln) ln.state.bound = false;
+			if (host.ln) host.ln.close();
 			return harness({ env, network, shared: world, timers, lightning });
 		},
 		/** Put a fake transaction in a block and run a pass of the loop. */

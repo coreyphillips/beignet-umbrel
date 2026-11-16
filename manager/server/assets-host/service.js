@@ -168,6 +168,13 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		// The closed channels whose assets could not be brought back at the
 		// last look, with since when.
 		recovery: new Map(),
+		// What the library said where nobody was waiting, and when: text -> time.
+		lnSaid: new Map(),
+		// The ended opens the library was asked to take off its list.
+		forgetAsked: new Set(),
+		// Whether what channel fundings left set aside has been settled:
+		// null before it was asked, then 'kept' or 'done'.
+		lnReservations: null,
 		channelWords: null
 	};
 	const handles = { pass: null, tip: null, backstop: null, preview: null, export: null };
@@ -907,7 +914,7 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 	/** Write the backup file now. Cheap when nothing changed. */
 	host.exportNow = async () => {
 		const fingerprint = await host.fingerprint();
-		const res = backup.exportBackup({ storage, rows, cfg, fingerprint, now: now() });
+		const res = backup.exportBackup({ storage, rows, cfg, fingerprint, now: now(), lightning: host.ln });
 		mem.lastExportAt = now();
 		host.emitEvent('backup', { exportedAt: res.exportedAt, dirty: false, changed: res.changed });
 		host.emitStatus();
@@ -936,12 +943,15 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 	/** Restore a backup into the store. The caller holds the lock. */
 	host.importNow = async (source) => {
 		const fingerprint = await host.fingerprint();
-		const res = backup.importBackup({ storage, cfg, fingerprint, backup: source });
+		const res = backup.importBackup({ storage, cfg, fingerprint, backup: source, lightning: host.ln });
 		// What the wallet holds may have changed: protect and reconcile again
 		// before anything spends.
 		mem.guarded = false;
 		mem.lockedKey = null;
 		mem.unlearnable.clear();
+		// A backup carries no funding flows: what one had set aside in the
+		// on-chain records is settled again from the chain (lightning.js).
+		mem.lnReservations = null;
 		if (!res.same) host.markDirty();
 		return res;
 	};
@@ -954,13 +964,20 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 	 */
 	host.startLightning = async () => {
 		if (!host.ln) return;
-		try {
-			await host.ln.start(lightning().startOptions(host));
-			mem.lnError = null;
-		} catch (err) {
-			if (isFenced(err)) throw err;
+		// The service itself starts once the engine has bound its node, which
+		// may be now or later: either way a failure lands here, never on the
+		// engine that did the binding.
+		const failed = (err) => {
 			mem.lnError = plainMessage(err, 'The Lightning service could not be started');
 			say('warn', `assets: asset channels could not start: ${mem.lnError}`);
+			host.emitStatus();
+		};
+		mem.lnError = null;
+		try {
+			host.ln.start({ ...lightning().startOptions(host), onStartError: failed });
+		} catch (err) {
+			if (isFenced(err)) throw err;
+			failed(err);
 		}
 	};
 
