@@ -28,6 +28,10 @@ const {
 	parseGuardianEntry,
 	validateGuardianSet
 } = require('./recovery');
+
+// An asset channel in one of these states holds nothing any more: its assets
+// are back on-chain and the assets host has nothing left to enforce.
+const ASSET_CHANNEL_OVER = new Set(['CLOSED', 'FORCE_CLOSED']);
 const {
 	ArchiveError,
 	assertPassphrase,
@@ -1552,6 +1556,21 @@ class WalletManager {
 		// server in place of the network's default. The daemon restarts
 		// below, which is what hands the host its new settings.
 		const nextAssets = assetsInput !== undefined ? this._normalizeAssets(assetsInput, rec) : undefined;
+		await this._refuseIfAssetChannels(
+			rec,
+			rt,
+			{
+				onchainOnly: nextOnchainOnly,
+				recovery,
+				assetsEnabled: nextAssets ? nextAssets.enabled : assets.normalizeAssets(undefined, rec.assets, { network: rec.network }).enabled
+			},
+			(next) =>
+				next.onchainOnly
+					? 'An on-chain only wallet cannot keep one.'
+					: !next.assetsEnabled
+						? 'Turning assets off would leave it with nothing to enforce it.'
+						: 'A channel backup kept by guardians does not cover asset channels.'
+		);
 		// The network mode and public address are held to the same rules as on
 		// create, against the posture the wallet is about to have.
 		const nextMode = netmode.requestedMode({ networkMode, tor }, netmode.networkMode(rec));
@@ -1746,10 +1765,70 @@ class WalletManager {
 				mode,
 				torProxy: config.torProxy,
 				walletDir: p.base,
-				lightning: 'off'
+				lightning: this._assetsLightning(rec)
 			})
 		);
 		return env;
+	}
+
+	/**
+	 * Whether a wallet's assets host may open and use asset channels:
+	 * 'full' or 'off' (BEIGNET_ASSETS_LIGHTNING).
+	 *
+	 * It takes an install that can carry them, a wallet with Lightning, and
+	 * a channel backup that is not kept by guardians. A guardian restore
+	 * rebuilds a wallet's channels on another device from what its guardians
+	 * hold, and an asset channel's proofs are not part of that, so the two
+	 * are not offered together.
+	 */
+	_assetsLightning(rec) {
+		if (!this.assetChannelsSupported || rec.onchainOnly) return 'off';
+		if (isGuardianMode(rec.recovery && rec.recovery.mode)) return 'off';
+		return 'full';
+	}
+
+	/**
+	 * How many asset channels a running wallet still has, closing ones
+	 * included, or null when its assets host cannot be asked.
+	 */
+	async _liveAssetChannels(rec) {
+		try {
+			const res = await fetch(`http://127.0.0.1:${rec.port}/x/assets/channels`, {
+				headers: { Authorization: `Bearer ${this.token(rec.id)}` },
+				signal: AbortSignal.timeout(3000)
+			});
+			if (!res.ok) return null;
+			const body = await res.json();
+			const list = body && body.result && body.result.channels;
+			if (!Array.isArray(list)) return null;
+			return list.filter((c) => !ASSET_CHANNEL_OVER.has(String(c && c.state).toUpperCase())).length;
+		} catch (_) {
+			return null;
+		}
+	}
+
+	/**
+	 * Refuse an edit that would take asset Lightning away from a wallet
+	 * that still has an asset channel.
+	 *
+	 * The channel's funds are enforced by the assets host: it signs every
+	 * commitment and it is what brings the assets home after a close. A
+	 * daemon holding such a channel refuses to start without it. So the
+	 * channel is closed first, while the wallet can still close it.
+	 */
+	async _refuseIfAssetChannels(rec, rt, next, reason) {
+		if (!rt.proc) return;
+		const had = this._assetsLightning(rec) === 'full' && assets.normalizeAssets(undefined, rec.assets, { network: rec.network }).enabled;
+		if (!had) return;
+		const keeps = this._assetsLightning({ ...rec, onchainOnly: next.onchainOnly, recovery: next.recovery }) === 'full' && next.assetsEnabled;
+		if (keeps) return;
+		const live = await this._liveAssetChannels(rec);
+		if (!live) return;
+		throw httpError(
+			409,
+			'ASSET_CHANNELS_OPEN',
+			`This wallet has ${live === 1 ? 'an asset channel' : `${live} asset channels`} open. ${reason(next)} Close ${live === 1 ? 'it' : 'them'} on the Channels tab first, and wait for the assets to be back on-chain.`
+		);
 	}
 
 	/**
