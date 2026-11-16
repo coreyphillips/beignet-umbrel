@@ -270,6 +270,7 @@ function started(options = {}, { entry = fakeEntry(), now = null } = {}) {
 		adapter: { the: 'adapter' },
 		lib,
 		fetchProof: async (locator) => ({ fileFor: locator }),
+		fetchGroupProof: async (groupKey) => `the issuance of ${groupKey}`,
 		acceptIncoming: async () => true,
 		onEvent: () => undefined,
 		...options
@@ -426,7 +427,11 @@ test('starting: the library is handed the adapter, its callbacks in its own valu
 	const { adapter, options } = seen.started;
 	assert.deepEqual(adapter, { the: 'adapter' });
 	// Forwarding is never asked for: the library refuses it, and this wallet is no routing node.
-	assert.deepEqual(Object.keys(options).sort(), ['acceptIncoming', 'confirmationDepth', 'fetchProvenance', 'onError', 'onEvent']);
+	assert.deepEqual(Object.keys(options).sort(), ['acceptIncoming', 'confirmationDepth', 'fetchProvenance', 'groupProofResolver', 'onError', 'onEvent']);
+	// The issuance that created a group: its key as hex in, the encoded file out, as bytes.
+	const groupFile = await options.groupProofResolver('02'.repeat(33));
+	assert.equal(Buffer.isBuffer(groupFile), true);
+	assert.equal(groupFile.toString(), `the issuance of ${'02'.repeat(33)}`);
 	// How deep a transaction is buried for good is the wallet's own measure.
 	assert.equal(options.confirmationDepth, 3);
 	// A decoded proof in, its decoded file out, by way of the host's proof server.
@@ -460,7 +465,7 @@ test('starting: the library is handed the adapter, its callbacks in its own valu
 
 	// Without a measure of its own the library keeps its default, and the host's clock is handed on in seconds when there is one.
 	const plain = started().seen;
-	assert.deepEqual(Object.keys(plain.started.options).sort(), ['acceptIncoming', 'fetchProvenance', 'onError', 'onEvent']);
+	assert.deepEqual(Object.keys(plain.started.options).sort(), ['acceptIncoming', 'fetchProvenance', 'groupProofResolver', 'onError', 'onEvent']);
 	const timed = started({}, { now: () => 1700000000999 }).seen;
 	assert.equal(timed.made.now(), 1700000000n);
 	assert.equal(timed.started.options.now(), 1700000000n);

@@ -447,7 +447,7 @@ test('a host that runs is handed its provider, starts it once the library is bui
 			// service itself starts once the engine has bound its node as well
 			// (adapter.test.js), whichever of the two comes first.
 			assert.equal(ln.seen.started, 1);
-			assert.deepEqual(Object.keys(options[0]).sort(), ['acceptIncoming', 'adapter', 'confirmations', 'fetchProof', 'lib', 'onError', 'onEvent', 'onStartError', 'quiet']);
+			assert.deepEqual(Object.keys(options[0]).sort(), ['acceptIncoming', 'adapter', 'confirmations', 'fetchGroupProof', 'fetchProof', 'lib', 'onError', 'onEvent', 'onStartError', 'quiet']);
 			assert.deepEqual(options[0].adapter, { the: 'adapter' });
 			// How deep a transaction is buried for good is the wallet's own measure.
 			assert.equal(options[0].confirmations, cfg.minConfirmations);

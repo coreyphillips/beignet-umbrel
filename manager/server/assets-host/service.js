@@ -176,6 +176,10 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		// null before it was asked, then 'kept' or 'done'.
 		lnReservations: null,
 		lnChangeLooked: false,
+		// The fee budget for channel fees: met used up since the last pass
+		// finished, and what the status says of it.
+		feeBudgetMet: false,
+		feeBudgetOut: false,
 		channelWords: null
 	};
 	const handles = { pass: null, tip: null, backstop: null, preview: null, export: null };

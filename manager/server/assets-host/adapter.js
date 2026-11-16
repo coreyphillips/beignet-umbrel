@@ -298,12 +298,30 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *       onEvent(event)           see 25
  *       onError(error)           what went wrong where nobody was waiting
  *       now()                    unix seconds as a bigint
- *     Left out: `forwarding` (the entry routes for nobody),
+ *       groupProofResolver(key)  a group key as hex in, a promise of the
+ *                                encoded proof file of the issuance that
+ *                                created the group out. See below.
+ *     Left out: `forwarding` (the entry routes for nobody) and
  *     `validateAcceptedChannel` (a check of a channel's Bitcoin parameters
- *     that this host has no rule for) and `groupProofResolver` (a way to
- *     fetch the proof of a group's key, which the wallet's verifier is left
- *     to find as it does for a transfer). Any other member is a mistake of
+ *     that this host has no rule for). Any other member is a mistake of
  *     this file's, and the fake of the tests refuses it.
+ *
+ *     What a channel with a grouped asset needs (src/lightning/
+ *     funding-verify.ts, verifyFundingInput and verifyFundingGroups): each
+ *     side verifies every funding input, and an input of a group must have
+ *     its group shown to be real. That is so by itself when the input's
+ *     own history begins with the issuance that created the group (its
+ *     first proof reveals the group key), and when the wallet already knows
+ *     the group: its records hold the group or any asset of it, which is
+ *     always so for the side that funds, since it holds what it funds
+ *     with. It is not so for the side that accepts when the asset is a
+ *     later issuance into a group that wallet has never held: the verifier
+ *     then throws 'unknown asset group' unless it is given
+ *     `groupProofResolver`, which it asks for the group's first issuance
+ *     and verifies before it trusts it. The same resolver is asked again
+ *     when a group's anchor moved in a reorg. The host answers it from the
+ *     wallet's proof server, as the wallet's own receive of such an asset
+ *     does (the courier's receiveGroupProof).
  *  6. close() of the host closes the service and the quote transport and
  *     lets go of the node: for when the node stops. close() of the service
  *     stops the service alone, and the provider stays. After either, every
@@ -869,7 +887,7 @@ function plainEvent(e) {
  *   attachment                 what the engine is handed: the library's
  *                                own, with the node noted on its way through
  *   start(options)             { adapter, lib, quiet, confirmations,
- *                                fetchProof, acceptIncoming, onEvent,
+ *                                fetchProof, fetchGroupProof, acceptIncoming, onEvent,
  *                                onError, onStartError }. Kept until the
  *                                node is bound, when the service starts. A
  *                                service that will not start is said to
@@ -1004,10 +1022,13 @@ function createLightning({ entry, storage, cfg, now = null }) {
 				begin();
 			}
 		},
-		start({ adapter, lib, quiet = false, confirmations, fetchProof, acceptIncoming, onEvent, onError: said, onStartError }) {
+		start({ adapter, lib, quiet = false, confirmations, fetchProof, fetchGroupProof, acceptIncoming, onEvent, onError: said, onStartError }) {
 			if (typeof said === 'function') report = said;
 			const options = {
 				fetchProvenance: async (p) => lib.decodeProofFile(await fetchProof(lib.proofLocator(p))),
+				// The issuance that created a group, for a peer's asset of a
+				// group this wallet has never held. The library verifies it.
+				...(typeof fetchGroupProof === 'function' ? { groupProofResolver: async (groupKey) => Buffer.from(await fetchGroupProof(String(groupKey))) } : {}),
 				acceptIncoming: (p) =>
 					acceptIncoming({
 						pendingChannelId: asHex(p.pendingChannelId),

@@ -121,7 +121,7 @@
 const crypto = require('crypto');
 const { sha256Hex } = require('./store');
 const { CHANNEL_SATS, CARRIER_SATS, unhex } = require('./adapter');
-const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure } = require('./errors');
+const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS } = require('./errors');
 const views = require('./views');
 const ops = require('./ops');
 
@@ -412,7 +412,10 @@ const RECOVERY_STUCK = 'The assets of a closed channel have not come back on-cha
  * What the status says is wrong with the wallet's asset channels: each a
  * code the dashboard can tell apart and a sentence of the host's. A wait
  * (RECOVERY_STUCK) is not a loss, and the reader should not be shown the
- * two alike. Never throws: the status must not.
+ * two alike. FEE_BUDGET_EXHAUSTED is the engine refusing a fee action of
+ * the loop's (carrying a channel on, bringing its assets home) because the
+ * budget for channel fees is used up: said while a pass meets it, and gone
+ * with the first pass that does not. Never throws: the status must not.
  */
 function warningsOf(host) {
 	const said = [];
@@ -420,6 +423,7 @@ function warningsOf(host) {
 		if (channelList(host).some((c) => c.missing)) said.push({ code: 'CHANNEL_MISSING', text: CHANNEL_MISSING });
 		if (host.rows.list('l-change/').length > 0) said.push({ code: 'CHANGE_NOT_BACK', text: CHANGE_NOT_BACK });
 		if (recoveryStuck(host)) said.push({ code: 'RECOVERY_STUCK', text: RECOVERY_STUCK });
+		if (host.mem.feeBudgetOut === true) said.push({ code: 'FEE_BUDGET_EXHAUSTED', text: ENGINE_REFUSALS.FEE_BUDGET_EXHAUSTED[1] });
 	} catch (_) {
 		/* what could not be read is not said */
 	}
@@ -1964,6 +1968,7 @@ async function pass(host, { block = false } = {}) {
 			return true;
 		} catch (err) {
 			if (isFenced(err)) throw err;
+			noteFeeBudget(host, err);
 			host.say('warn', `assets: ${what}: ${plainMessage(err)}`);
 			return false;
 		}
@@ -1992,6 +1997,26 @@ async function pass(host, { block = false } = {}) {
 	}
 	await quietly('a Lightning payment could not be settled', () => settleRows(host));
 	await quietly('the asset channels could not be read', () => noteChannels(host));
+	// The fee budget for channel fees: said for as long as a pass, or
+	// anything the library reported since the pass before, met it used up.
+	const out = host.mem.feeBudgetMet === true;
+	host.mem.feeBudgetMet = false;
+	if (out !== (host.mem.feeBudgetOut === true)) {
+		host.mem.feeBudgetOut = out;
+		host.emitStatus();
+	}
+}
+
+/**
+ * Note that the engine refused a fee action because the budget this app
+ * sets for the fees of a channel's fixed outputs is used up: `met` is an
+ * error, or the text of one the library handed back as data. Nothing is
+ * lost by it and the loop goes on, so it is a warning in the status
+ * (warningsOf) and no failure of anything.
+ */
+function noteFeeBudget(host, met) {
+	const err = typeof met === 'string' ? { message: met } : met;
+	if (engineCodeOf(err) === 'FEE_BUDGET_EXHAUSTED') host.mem.feeBudgetMet = true;
 }
 
 /**
@@ -2010,6 +2035,7 @@ function noteRecovery(host, reports) {
 		failing.add(id);
 		const known = mem.recovery.get(id) || { since: host.now(), sinceHeight: host.tip(), said: new Set() };
 		for (const text of r.errors) {
+			noteFeeBudget(host, text);
 			if (known.said.has(text)) continue;
 			if (known.said.size >= 16) known.said.clear();
 			known.said.add(text);
@@ -2048,6 +2074,20 @@ async function fetchProof(host, locator) {
 	const universe = host.cfg.defaultUniverse;
 	if (!universe) throw new Error('This wallet has no proof server to ask');
 	return host.courierFor(universe.courier).receiveProof(locator);
+}
+
+/**
+ * The proof file of the issuance that created a group, from the wallet's
+ * proof server: what the library asks for when a peer puts an asset of a
+ * group into a channel and this wallet has never held one of that group.
+ * The library verifies what comes back before it trusts the group.
+ */
+async function fetchGroupProof(host, groupKey) {
+	const universe = host.cfg.defaultUniverse;
+	if (!universe) throw new Error('This wallet has no proof server to ask');
+	const courier = host.courierFor(universe.courier);
+	if (typeof courier.receiveGroupProof !== 'function') throw new Error("This wallet's proof server cannot be asked for the issuance of a group");
+	return courier.receiveGroupProof(groupKey);
 }
 
 /**
@@ -2120,6 +2160,7 @@ function libraryError(host, err) {
 		host.shutdown();
 		return;
 	}
+	noteFeeBudget(host, err);
 	sayOnce(host, 'warn', `assets: asset channels: ${plainMessage(err, 'An asset channel step failed')}`);
 }
 
@@ -2143,6 +2184,7 @@ function startOptions(host) {
 		// What buries a transaction for good is the wallet's own measure.
 		confirmations: host.cfg.minConfirmations,
 		fetchProof: outside(fetchProof),
+		fetchGroupProof: outside(fetchGroupProof),
 		acceptIncoming: outside(acceptIncoming),
 		onEvent: outside(onEvent),
 		onError: (err) => libraryError(host, err)

@@ -1631,15 +1631,19 @@ test('the library is handed the adapter, the proof server and the host callbacks
 	const { h, asset } = await funded();
 	// What the host hands the glue.
 	const options = lightning.startOptions(h.host);
-	assert.deepEqual(Object.keys(options).sort(), ['acceptIncoming', 'adapter', 'confirmations', 'fetchProof', 'lib', 'onError', 'onEvent', 'quiet']);
+	assert.deepEqual(Object.keys(options).sort(), ['acceptIncoming', 'adapter', 'confirmations', 'fetchGroupProof', 'fetchProof', 'lib', 'onError', 'onEvent', 'quiet']);
 	assert.equal(options.adapter, h.tap);
 	assert.equal(options.lib, h.host.lib);
 	// What buries a transaction for good is the wallet's own measure: one block on regtest.
 	assert.equal(options.confirmations, h.cfg.minConfirmations);
 	// And what the glue made of it for the library: its own names, and no forwarding.
 	const given = h.ln.state.options;
-	assert.deepEqual(Object.keys(given).sort(), ['acceptIncoming', 'confirmationDepth', 'fetchProvenance', 'now', 'onError', 'onEvent']);
+	assert.deepEqual(Object.keys(given).sort(), ['acceptIncoming', 'confirmationDepth', 'fetchProvenance', 'groupProofResolver', 'now', 'onError', 'onEvent']);
 	assert.equal(given.confirmationDepth, 1);
+	// The issuance that created a group comes from the wallet's own proof server too, as bytes.
+	const groupFile = await given.groupProofResolver(`02${'9c'.repeat(32)}`);
+	assert.ok(Buffer.isBuffer(groupFile));
+	assert.deepEqual(h.world.fetched.pop(), { uri: 'universerpc://universe.example.com:10029', groupKey: `02${'9c'.repeat(32)}` });
 	assert.equal(h.ln.state.adapter, h.tap);
 	assert.equal(given.now(), BigInt(Math.floor(h.clock.t / 1000)));
 	// A proof is fetched from the wallet's own proof server.
@@ -2560,4 +2564,62 @@ test('the status says how many asset channels are not over, and says nothing rat
 	made.push(plain);
 	await plain.boot();
 	assert.equal((await plain.get('/status')).assetChannels, 0);
+});
+
+test('a peer\'s asset of a group this wallet has never held is taken: the issuance that made the group is fetched from the proof server for the library to verify', async () => {
+	const { h, asset } = await funded();
+	const group = `02${'9c'.repeat(32)}`;
+	const offer = (id) => h.ln.offer({ pendingChannelId: id, assets: [{ assetId: asset.assetId, amount: 10n }], groupKey: group });
+	// The library is handed a way to ask, in its own values.
+	const given = h.ln.state.options;
+	assert.equal(typeof given.groupProofResolver, 'function');
+	// A group the wallet already knows needs nothing fetched.
+	assert.equal(await offer('01'.repeat(32)), true);
+	assert.equal(h.world.fetched.some((f) => f.groupKey), false);
+	// One it has never held: asked of the wallet's own proof server, by the group's key.
+	h.ln.opts.knowsGroups = false;
+	assert.equal(await offer('02'.repeat(32)), true);
+	assert.deepEqual(h.world.fetched.filter((f) => f.groupKey).map((f) => f.groupKey), [group]);
+	assert.deepEqual(named(h, 'groupProof'), [['groupProof', group]]);
+	assert.deepEqual(h.ln.violations, []);
+	// A proof server that does not have it, or answers with another group's, and the open is not taken.
+	h.tap.opts.groupMissing = true;
+	await assert.rejects(offer('03'.repeat(32)));
+	h.tap.opts.groupMissing = false;
+	h.tap.opts.groupWrong = true;
+	assert.equal(await offer('04'.repeat(32)), false);
+});
+
+test('a fee budget for channel fees that the loop meets used up is a warning in the status, gone with the first pass that does not meet it', async () => {
+	const { h } = await channelled();
+	const warnings = async () => ((await h.get('/status')).lightning.warnings || []).map((w) => w.code);
+	const said = 'The budget this app sets for the miner fees of asset channels is used up, so nothing was done. Nothing was lost: the channels and what is in them are as they were.';
+	await h.host.pass();
+	assert.deepEqual(await warnings(), []);
+	// Carrying a channel on: the engine refuses the fee action, inside what the library throws.
+	h.ln.opts.resumeFails = 'FEE_BUDGET_EXHAUSTED';
+	const told = events(h, 'status').length;
+	await h.host.pass();
+	assert.deepEqual((await h.get('/status')).lightning.warnings, [{ code: 'FEE_BUDGET_EXHAUSTED', text: said }]);
+	assert.equal((await h.get('/status')).lightning.warning, said);
+	assert.equal(events(h, 'status').length > told, true);
+	// The loop goes on all the same, and the channel is as it was.
+	assert.equal((await h.get('/channels')).channels[0].state, 'NORMAL');
+	await h.host.pass();
+	assert.deepEqual(await warnings(), ['FEE_BUDGET_EXHAUSTED']);
+	h.ln.opts.resumeFails = null;
+	await h.host.pass();
+	assert.deepEqual(await warnings(), []);
+	// Bringing a closed channel's assets home reports it as data, by name.
+	await h.call('POST /channels/close', { channelId: (await h.get('/channels')).channels[0].channelId, force: true });
+	h.ln.opts.recoveryErrors = ['the sweep was not bumped: FEE_BUDGET_EXHAUSTED'];
+	await h.host.pass();
+	assert.deepEqual(await warnings(), ['FEE_BUDGET_EXHAUSTED']);
+	h.ln.opts.recoveryErrors = [];
+	await h.host.pass();
+	assert.deepEqual(await warnings(), []);
+	// Another failure of the loop's is not taken for it.
+	h.ln.opts.resumeFails = 'ERR_SOMETHING_NOBODY_NAMED';
+	await h.host.pass();
+	assert.deepEqual(await warnings(), []);
 });

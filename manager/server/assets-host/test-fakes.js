@@ -496,6 +496,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		openFails: null,
 		openTimesOut: false,
 		openFailsSigned: null,
+		// What the engine refused the loop's own step with, as the cause of what resume() throws.
+		resumeFails: null,
+		// Whether this wallet has ever held an asset of the group a peer offers.
+		knowsGroups: true,
 		// The wallet has signed the funding transaction and the peer has not
 		// signed its commitment: the open fails there, or gets no answer.
 		openFailsUnsigned: null,
@@ -956,6 +960,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			async resume() {
 				reaches('resume');
 				log('resume');
+				if (opts.resumeFails) throw Object.assign(tapError(`${LN}CHANNEL`, 'the engine would not bump the anchor of channel 03aa'), { cause: tapError(opts.resumeFails, 'pool 0 of 40000') });
 			},
 			recovery: {
 				async resume() {
@@ -1414,8 +1419,24 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		emit({ type: 'payment', paymentHash: bytes(paymentHash), attempt: payment.attempt || 1, status, assetAmount: payment.assetAmount, channelId: bytes(payment.channelId), ...(failure ? { failure } : {}) });
 	};
 	/** A peer offers a channel: what the service asks the wallet, in the library's own values. */
-	ln.offer = ({ pendingChannelId, peerPubkey = `03${'cd'.repeat(32)}`, assets = [], groupKey = null }) =>
-		state.options.acceptIncoming({
+	ln.offer = async ({ pendingChannelId, peerPubkey = `03${'cd'.repeat(32)}`, assets = [], groupKey = null }) => {
+		// The peer's assets are verified before the wallet is asked. An asset
+		// of a group this wallet has never held, issued after the group was
+		// made, needs the issuance that made the group: asked of the
+		// resolver, and an open without one is refused there.
+		if (groupKey && !opts.knowsGroups) {
+			if (typeof state.options.groupProofResolver !== 'function') {
+				emit({ type: 'channel', pendingChannelId: bytes(pendingChannelId), phase: 'rejected', error: 'unknown asset group' });
+				return false;
+			}
+			const file = await state.options.groupProofResolver(groupKey);
+			if (!Buffer.isBuffer(file) || !file.toString().includes(groupKey)) {
+				emit({ type: 'channel', pendingChannelId: bytes(pendingChannelId), phase: 'rejected', error: 'supporting group history does not reveal the requested group' });
+				return false;
+			}
+			log('groupProof', groupKey);
+		}
+		return state.options.acceptIncoming({
 			peer: bytes(peerPubkey),
 			pendingChannelId: bytes(pendingChannelId),
 			expiresAt: seconds(now()) + 1800n,
@@ -1424,6 +1445,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			outputs: [],
 			...(groupKey ? { groupKey: bytes(groupKey) } : {})
 		});
+	};
 	return ln;
 }
 
@@ -1467,6 +1489,13 @@ function harness({ env = {}, network = 'regtest', shared, timers = false, chainC
 			if (tap.opts.proofMissing) throw tapError('ERR_COURIER_PROOF_NOT_FOUND');
 			world.fetched.push({ uri, locator });
 			return fakeProof({ ...locator });
+		},
+		// The issuance that created a group, as the universe keeps it.
+		async receiveGroupProof(groupKey) {
+			if (world.net.down) throw Object.assign(new Error('Could not reach universe.example.com'), { code: 'PROOF_SERVER_UNREACHABLE' });
+			if (tap.opts.groupMissing) throw tapError('ERR_COURIER_PROOF_NOT_FOUND');
+			world.fetched.push({ uri, groupKey });
+			return Buffer.from(`group anchor of ${tap.opts.groupWrong ? 'another group' : groupKey}`);
 		}
 	});
 	const net = {
