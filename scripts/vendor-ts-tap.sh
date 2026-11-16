@@ -100,6 +100,20 @@ if [ "$VERIFY" = 1 ]; then
 	exit 1
 fi
 
+# The tarballs are published with this repository and ts-tap's sources are
+# not. A build keeps its source maps, which name each source file and line,
+# and must leave the text of the sources out of them.
+for tgz in "$WORK/named/"*.tgz; do
+	mkdir -p "$WORK/unpacked"
+	tar -xzf "$tgz" -C "$WORK/unpacked"
+	if grep -rlq --include='*.map' '"sourcesContent"' "$WORK/unpacked"; then
+		echo "$(basename "$tgz") carries source text in its source maps." >&2
+		echo "Vendor a ts-tap commit whose pack:release leaves it out. Nothing was changed in vendor/." >&2
+		exit 1
+	fi
+	rm -rf "$WORK/unpacked"
+done
+
 mkdir -p "$VENDOR"
 # One vendored build at a time: the image installs whatever SHA256SUMS names.
 find "$VENDOR" -maxdepth 1 -type f \( -name 'ts-tap-*.tgz' \) -delete
