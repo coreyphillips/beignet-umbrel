@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import AssetAvatar from '../../../../components/AssetAvatar.jsx';
 import { AssetAmount } from '../../../../components/AssetAmount.jsx';
-import { Badge, Button, Modal } from '../../../../components/ui.jsx';
+import { Badge, Button, CopyText, ExplorerLink, FeeField, Modal } from '../../../../components/ui.jsx';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
-import { canClose, channelState, peerName, sharePct } from '../../../../lib/asset-lightning.js';
+import { canClose, canReclaim, channelState, peerName, reclaimSent, sharePct } from '../../../../lib/asset-lightning.js';
+import { txUrl } from '../../../../lib/explorer.js';
+import { FEE_CAP_MULTIPLE } from '../../../../lib/fees.js';
 import { fmtSats, shortId } from '../../../../lib/format.js';
+import { FeePresets } from '../shared.jsx';
 
 /**
  * The asset channels of a wallet, one block each.
@@ -16,13 +19,27 @@ import { fmtSats, shortId } from '../../../../lib/format.js';
  *
  * A list and not a table: six figures a channel do not fit a phone as
  * columns, and a block wraps where a row would scroll sideways.
+ *
+ * An open whose funding transaction has not confirmed says so, and where
+ * the wallet says its bitcoin can be taken back (`reclaimable`) the line
+ * offers that, quietly: most fundings confirm by themselves. Once a
+ * transaction that takes it back is out, the row says that instead, links
+ * it, and the one thing left to offer is a higher fee.
  */
-export default function AssetChannelRows({ channels, onClose }) {
+export default function AssetChannelRows({ channels, network, onClose, onReclaim }) {
 	return (
 		<ul className="asset-channel-list" data-testid="asset-channel-list">
 			{(channels || []).map((c) => {
 				const state = channelState(c.state);
 				const alias = typeof c.peerAlias === 'string' && c.peerAlias.trim() ? c.peerAlias.trim() : null;
+				const takingBack = reclaimSent(c);
+				const reclaim = onReclaim && canReclaim(c) && (
+					<div className="note-actions">
+						<Button className="sm" data-testid="asset-channel-reclaim" onClick={(e) => onReclaim(c, e)}>
+							{takingBack ? 'Raise the fee' : 'Take the funding back'}
+						</Button>
+					</div>
+				);
 				return (
 					// A channel is known by the id its open was given until the funding
 					// transaction gives it its own. The first stays with it, so the row
@@ -39,8 +56,9 @@ export default function AssetChannelRows({ channels, onClose }) {
 									</span>
 								</div>
 							</div>
-							<Badge tone={state.tone}>{state.word}</Badge>
-							{onClose && canClose(c) && (
+							<Badge tone={state.tone}>{takingBack ? 'taking back' : state.word}</Badge>
+							{/* An open whose funding is being taken back cannot be closed: it ends by itself. */}
+							{onClose && canClose(c) && !takingBack && (
 								<Button className="sm" data-testid="asset-channel-close" onClick={(e) => onClose(c, e)}>
 									Close
 								</Button>
@@ -87,15 +105,109 @@ export default function AssetChannelRows({ channels, onClose }) {
 								<dd>{fmtSats(c.channelSats)}</dd>
 							</div>
 						</dl>
-						{state.word === 'opening' && (
-							<div className="field-hint">
-								Opening. It can carry payments once its funding transaction has confirmed.
+						{takingBack ? (
+							<div className="field-hint note-with-action" data-testid="asset-channel-reclaiming">
+								<span>
+									The funding of this channel is being taken back. Once that transaction confirms the channel is
+									gone, and its {c.asset?.name || 'asset'} is back in this wallet&apos;s holdings.{' '}
+									<CopyText value={c.reclaimTxid} label={shortId(c.reclaimTxid, 8)} />{' '}
+									<ExplorerLink url={txUrl(network, c.reclaimTxid)}>View</ExplorerLink>
+								</span>
+								{reclaim}
 							</div>
+						) : (
+							state.word === 'opening' && (
+								<div className="field-hint note-with-action" data-testid="asset-channel-opening">
+									<span>Opening. It can carry payments once its funding transaction has confirmed.</span>
+									{reclaim}
+								</div>
+							)
 						)}
 					</li>
 				);
 			})}
 		</ul>
+	);
+}
+
+/**
+ * Taking the funding of an open back.
+ *
+ * What it does in two sentences, the fee rate, and the button. The wallet
+ * cannot say what the transaction costs before it is made, so the dialog
+ * says where the fee comes from, and the wallet's answer says the figure.
+ * Asked for again on an open whose funding is already being taken back, it
+ * is the same request at a higher fee, and is worded as that.
+ *
+ * `onConfirm(feeRate)` does it and may reject with { code, text }; the
+ * dialog stays open with the reason when it does.
+ */
+export function ReclaimFundingModal({ channel, fees, origin, onClose, onConfirm }) {
+	const [feeRate, setFeeRate] = useState('');
+	const [busy, setBusy] = useState(false);
+	const [failure, setFailure] = useState(null);
+	const again = reclaimSent(channel);
+	const who = peerName(channel);
+	const name = channel.asset?.name || 'asset';
+	const rate = parseInt(feeRate, 10) || fees?.fast || null;
+	const label = again ? 'Raise the fee' : 'Take the funding back';
+
+	const run = async () => {
+		if (busy || !rate) return;
+		setBusy(true);
+		setFailure(null);
+		try {
+			await onConfirm(rate);
+		} catch (e) {
+			setFailure({ code: e?.code || '', text: e?.text || e?.message || 'The funding could not be taken back.' });
+			setBusy(false);
+		}
+	};
+
+	return (
+		<Modal title={label} onClose={onClose} origin={origin}>
+			<div data-testid="asset-channel-reclaim-dialog" data-again={again ? 'yes' : 'no'}>
+				{again ? (
+					<p className="wallet-meta">
+						The transaction that takes the funding of the {name} channel with {who} back has not confirmed. This sends
+						it again at a higher fee, in place of the one before.
+					</p>
+				) : (
+					<p className="wallet-meta">
+						This sends a transaction that spends the same bitcoin back to this wallet at a higher fee, so the funding of
+						the {name} channel with {who} can never confirm and the {name} stays in the wallet. Most fundings confirm by
+						themselves, and waiting costs nothing.
+					</p>
+				)}
+				<FeeField
+					label="Fee rate (sat/vB)"
+					value={feeRate}
+					onChange={setFeeRate}
+					rate={rate}
+					max={Math.max(10, (fees?.fast || 10) * FEE_CAP_MULTIPLE)}
+					hint={
+						again
+							? 'It has to be above the rate of the transaction sent before, or the network does not take it in its place.'
+							: 'It has to be above the rate the funding transaction pays, or the network does not take it in its place.'
+					}
+				/>
+				<FeePresets fees={fees} onPick={setFeeRate} />
+				<div className="field-note" data-testid="asset-channel-reclaim-cost">
+					The miner fee comes out of the bitcoin that returns. The wallet says the figure once the transaction is made.
+				</div>
+				{failure && (
+					<div className="error-note" role="alert" data-testid="asset-channel-reclaim-error" data-code={failure.code}>
+						{failure.text}
+					</div>
+				)}
+				<div className="center-actions">
+					<Button variant="primary" busy={busy} disabled={!rate || busy} data-testid="asset-channel-reclaim-confirm" onClick={run}>
+						{label}
+					</Button>
+					<Button onClick={onClose}>{failure ? 'Close' : 'Cancel'}</Button>
+				</div>
+			</div>
+		</Modal>
 	);
 }
 

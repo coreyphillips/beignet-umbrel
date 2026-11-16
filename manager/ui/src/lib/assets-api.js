@@ -149,7 +149,10 @@ export function assetsApi(api) {
 		testProofServer: (rest) => post('/proof-server/test', { rest }),
 
 		/* -------------------------------------------------------- lightning */
-		/** { channels: [{ channelId, peerPubkey, peerAlias, state, asset, capacity, localBalance, remoteBalance, sendable, receivable, channelSats }] } */
+		/**
+		 * { channels: [{ channelId, pendingChannelId, peerPubkey, peerAlias, state, asset, capacity, localBalance,
+		 *   remoteBalance, sendable, receivable, channelSats, fundingTxid, reclaimable, reclaimTxid }] }
+		 */
 		channels: () => get('/channels'),
 		/** { channelSats, feeSats, totalSats, spendableSats, sufficient } */
 		channelQuote: ({ key, amount, feeRate }) => post('/channels/quote', { key, amount, feeRate }),
@@ -157,6 +160,11 @@ export function assetsApi(api) {
 		openChannel: ({ peer, key: assetKey, amount, feeRate }, key) =>
 			once('/channels/open', { peer, key: assetKey, amount, feeRate }, key),
 		closeChannel: ({ channelId, force }) => post('/channels/close', { channelId, force: !!force }),
+		/**
+		 * Take the funding of an open that has not confirmed back, with a transaction at `feeRate`.
+		 * { channelId, pendingChannelId, txid, feeSats, feeRate }
+		 */
+		reclaimChannel: ({ channelId, feeRate }, key) => once('/channels/reclaim', { channelId, feeRate }, key),
 		/** A price for receiving: { quoteId, peerPubkey, peerAlias, assetAmount, amountSats, rateText, expiresAt, maxReceivable } */
 		invoiceQuote: ({ key, amount }) => post('/invoices/quote', { key, amount }),
 		/** { bolt11, paymentHash, assetAmount, amountSats, rateText, expiresAt, invoiceExpiresAt, row } */

@@ -63,6 +63,16 @@ export function canClose(channel) {
 }
 
 /**
+ * Whether the funding of this channel can be taken back: an open this
+ * wallet funded, whose funding transaction is made and has not confirmed.
+ * The wallet says so on the row, and it is not worked out here.
+ */
+export const canReclaim = (channel) => !!channel && channel.reclaimable === true;
+
+/** Whether a transaction that takes the funding back has already been sent. */
+export const reclaimSent = (channel) => !!channel && typeof channel.reclaimTxid === 'string' && channel.reclaimTxid !== '';
+
+/**
  * How much of a channel is on this wallet's side, as a percentage with one
  * decimal place. Worked out in whole units: an asset's balance can run past
  * what a JS number holds exactly, and a bar drawn from a rounded figure

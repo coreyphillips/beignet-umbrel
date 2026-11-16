@@ -420,3 +420,112 @@ test('a wallet with nothing wrong with its channels shows no warning', async () 
 		await r.unmount();
 	}
 });
+
+const CHANNEL_KEYS = ['channelId', 'pendingChannelId', 'peerPubkey', 'peerAlias', 'state', 'asset', 'capacity', 'localBalance', 'remoteBalance', 'sendable', 'receivable', 'channelSats', 'fundingTxid', 'reclaimable', 'reclaimTxid'];
+const keyed = (key) => ({ headers: { 'X-Idempotency-Key': key } });
+
+test('the funding of an open that will not confirm can be taken back: asked once, said on the row, and the asset comes back', async () => {
+	const backend = assetsBackend();
+	const before = (await busdOf(backend)).balance.onchain;
+	assert.equal(backend.mock.seed('demo-main', 'open-stuck'), true);
+	const listed = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	// The wallet's own keys, in its order, and its word on which funding can be taken back.
+	for (const c of listed) assert.deepEqual(Object.keys(c), CHANNEL_KEYS);
+	assert.deepEqual(listed.map((c) => [c.state, c.reclaimable, c.reclaimTxid]), [['OPENING', true, null], ['NORMAL', false, null]]);
+	assert.match(listed[0].fundingTxid, /^[0-9a-f]{64}$/);
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	const r = await mount(backend, { status });
+	try {
+		assert.equal(r.tests('asset-channel').length, 2);
+		// One row offers it: a channel that is open has nothing to take back.
+		assert.equal(r.tests('asset-channel-reclaim').length, 1);
+		assert.equal(r.test('asset-channel-reclaim').textContent, 'Take the funding back');
+		assert.match(r.test('asset-channel-opening').textContent, /^Opening\. It can carry payments once its funding transaction has confirmed\./);
+		await click(r.test('asset-channel-reclaim'));
+		await settle(60);
+		const dialog = r.test('asset-channel-reclaim-dialog');
+		assert.equal(dialog.getAttribute('data-again'), 'no');
+		assert.match(dialog.textContent, /spends the same bitcoin back to this wallet at a higher fee, so the funding of\s+the BUSD channel with Meridian edge can never confirm and the BUSD stays in the wallet\./);
+		assert.match(dialog.textContent, /Most fundings confirm by\s+themselves, and waiting costs nothing\./);
+		assert.match(r.test('asset-channel-reclaim-cost').textContent, /The wallet says the figure once the transaction is made\./);
+		await click(r.test('asset-channel-reclaim-confirm'));
+		await settle(ANSWERED_MS);
+		const posted = backend.posted('/channels/reclaim');
+		assert.equal(posted.length, 1);
+		assert.equal(posted[0].body.channelId, listed[0].channelId);
+		assert.equal(posted[0].body.feeRate > 2, true);
+		assert.match(posted[0].headers['X-Idempotency-Key'], /\S{8,}/, 'it goes with a key, so it is asked for once');
+		assert.equal(r.test('asset-channel-reclaim-dialog'), null);
+		assert.match(r.toasts().join(' '), /Taking the funding of the BUSD channel back\. The miner fee is [\d,]+ sats\. It is done once that transaction confirms\./);
+		// The row says so, links the transaction, and offers only a higher fee.
+		const now = (await backend.api('demo-main').get('/x/assets/channels')).channels[0];
+		assert.match(now.reclaimTxid, /^[0-9a-f]{64}$/);
+		assert.equal(now.reclaimable, true);
+		const note = r.test('asset-channel-reclaiming');
+		assert.match(note.textContent, /The funding of this channel is being taken back\./);
+		assert.match(note.textContent, /its BUSD is back in this wallet's holdings/);
+		assert.equal(r.test('asset-channel-opening'), null);
+		assert.equal(r.test('asset-channel-reclaim').textContent, 'Raise the fee');
+		assert.match(r.tests('asset-channel')[0].textContent, /taking back/);
+		// It ends by itself, so the one Close left is the open channel's.
+		assert.equal(r.tests('asset-channel-close').length, 1);
+		// A block later the open is over, and what was going into it is on-chain again.
+		assert.notEqual((await busdOf(backend)).balance.onchain, before);
+		await r.pass(7000);
+		assert.equal(r.tests('asset-channel').length, 1);
+		assert.equal((await busdOf(backend)).balance.onchain, before);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a funding that cannot be taken back, and a fee that is too high or too low, are refused in the wallet\'s own sentences', async () => {
+	const backend = assetsBackend();
+	const api = backend.api('demo-main');
+	backend.mock.seed('demo-main', 'open-stuck');
+	const [stuck, open] = (await api.get('/x/assets/channels')).channels;
+	const r = await mount(backend, { status: await api.get('/x/assets/status') });
+	try {
+		await click(r.test('asset-channel-reclaim'));
+		await settle(60);
+		const rate = () => r.test('asset-channel-reclaim-dialog').querySelector('input.amount-input');
+		const said = () => r.test('asset-channel-reclaim-error');
+		await type(rate(), '9999');
+		await click(r.test('asset-channel-reclaim-confirm'));
+		await settle(ANSWERED_MS);
+		assert.equal(said().getAttribute('data-code'), 'FEE_TOO_HIGH');
+		assert.equal(said().textContent, 'That fee rate is above the 500 sat/vB this wallet allows for an asset transaction.');
+		// A rate the funding transaction already pays is not a replacement of it.
+		await type(rate(), '2');
+		await click(r.test('asset-channel-reclaim-confirm'));
+		await settle(ANSWERED_MS);
+		assert.equal(said().getAttribute('data-code'), 'CHANNEL_RECLAIM_FAILED');
+		assert.match(said().textContent, /could not be made or sent\. If the funding transaction is already on the network, it takes a fee rate above the one that transaction pays\./);
+		assert.equal((await api.get('/x/assets/channels')).channels[0].reclaimTxid, null, 'nothing was sent');
+		await type(rate(), '30');
+		await click(r.test('asset-channel-reclaim-confirm'));
+		await settle(ANSWERED_MS);
+		assert.equal(r.test('asset-channel-reclaim-dialog'), null);
+		// Asked again, it is a higher fee and worded as that.
+		await click(r.test('asset-channel-reclaim'));
+		await settle(60);
+		assert.equal(r.test('asset-channel-reclaim-dialog').getAttribute('data-again'), 'yes');
+		assert.match(r.test('asset-channel-reclaim-dialog').textContent, /This sends\s+it again at a higher fee, in place of the one before\./);
+		assert.equal(r.test('asset-channel-reclaim-confirm').textContent, 'Raise the fee');
+		await type(rate(), '30');
+		await click(r.test('asset-channel-reclaim-confirm'));
+		await settle(ANSWERED_MS);
+		assert.equal(said().getAttribute('data-code'), 'CHANNEL_RECLAIM_FAILED');
+	} finally {
+		await r.unmount();
+	}
+	// A funding that is on the chain, a request with no key, and a close of an open still unconfirmed.
+	await assert.rejects(api.post('/x/assets/channels/reclaim', { channelId: open.channelId }, keyed('k-1')), (e) => e.code === 'CHANNEL_NOT_RECLAIMABLE' && /is on the chain, so there is nothing to take back\. Close the channel instead\./.test(e.message));
+	await assert.rejects(api.post('/x/assets/channels/reclaim', { channelId: stuck.channelId }), (e) => e.code === 'IDEMPOTENCY_KEY_REQUIRED');
+	await assert.rejects(api.post('/x/assets/channels/reclaim', { channelId: 'ff'.repeat(32) }, keyed('k-2')), (e) => e.code === 'CHANNEL_NOT_FOUND');
+	await assert.rejects(api.post('/x/assets/channels/close', { channelId: stuck.channelId }), (e) => e.code === 'CHANNEL_OPENING' && e.details.reclaimable === true);
+	// The same key is the same request: answered again, and nothing more is sent.
+	const first = await api.post('/x/assets/channels/reclaim', { channelId: stuck.channelId, feeRate: 40 }, keyed('k-3'));
+	assert.deepEqual(Object.keys(first), ['channelId', 'pendingChannelId', 'txid', 'feeSats', 'feeRate']);
+	assert.deepEqual(await api.post('/x/assets/channels/reclaim', { channelId: stuck.channelId, feeRate: 40 }, keyed('k-3')), first);
+});

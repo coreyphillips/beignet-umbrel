@@ -169,7 +169,11 @@ channel with "Lightning Labs edge" (2,400.00 yours, 3,100.00 theirs).
   refused (`asset-channel-refusal`, `PEER_NO_ASSET_CHANNELS`). Close on a row
   gives the cooperative page, with force close behind a second page. The same
   dialog opens from an asset's page (`asset-action-open-channel`) with that
-  asset already chosen.
+  asset already chosen. While a row reads "opening" its line offers Take the
+  funding back (`asset-channel-reclaim`), as the wallet says its funding can
+  be (`reclaimable`); `assets-demo=open-stuck` in the table below is the
+  state to walk it in. A Close pressed on such a row is refused in a sentence
+  that says the funding can be taken back instead.
   The demo daemon also lists that BUSD channel on `GET /channels`, marked
   `auxiliary: true`, as a real daemon does. The bitcoin table above the card
   must not show it (four open rows on `demo-main`), and no bitcoin figure on
@@ -232,6 +236,7 @@ wallet in the address, and stick until switched back:
 | `proof-refused` | Use `demo-testnet`. Its finished mint carries a blue note, `asset-proof-unpublished`, in the In progress list and on the asset's page: created and held, the proof server has not taken its proof. Never red, never "failed". Try again clears it. |
 | `send-refused` | A send six blocks deep whose proof the proof server answered "no" to. Its In progress row carries a red note, `asset-proof-undelivered` (`data-code="PROOF_REFUSED"`): the server answered, the recipient does not have the asset yet, nothing is lost. The headline reads "the proof server did not take the proof", the In progress tile and the dialog's pill read "proof refused" (red), and the timeline's proof step gives the server's reason and never says "not answering". Offer it again now clears it and the send completes. |
 | `unwatched` | Use `demo-testnet` with `view=receive`. An address nine days unpaid reads "not checked" in Recent receives, and its dialog has `asset-not-watched` with Check now, which finds the payment. |
+| `open-stuck` | Use `demo-main` on `/w/demo-main/channels`. A BUSD open with "Meridian edge" (500.00) whose funding transaction has sat an hour without a block, at 2 sat/vB. Its row reads "opening" and its line (`asset-channel-opening`) carries a quiet button, Take the funding back (`asset-channel-reclaim`); the open channel beside it has none. The dialog (`asset-channel-reclaim-dialog`) says what it does in two sentences, has the open dialog's fee control, and a line that the fee comes out of the bitcoin that returns (`asset-channel-reclaim-cost`). A fee rate of 9999 is refused in a sentence (`asset-channel-reclaim-error`, `FEE_TOO_HIGH`), and so is a rate of 2 or less (`CHANNEL_RECLAIM_FAILED`: a replacement has to pay more than the funding does). Left on auto it goes through: a toast with the miner fee (3,240 sats), the badge reads "taking back", the line says the funding is being taken back and links the transaction (`asset-channel-reclaiming`), the row has no Close, and its button reads Raise the fee (the dialog then has `data-again="yes"`, and a rate not above the last one is refused). About 6 s later the row is gone and the 500.00 BUSD is back in Holdings. For a funding that has confirmed (`CHANNEL_NOT_RECLAIMABLE`): open a channel from the dialog, press Take the funding back on its row within its 15 s, wait for the row behind the dialog to read "open", then press the dialog's button. |
 | `channel-missing` | Use `demo-main` on `/w/demo-main/channels`. Its BUSD channel becomes one the node does not hold, as after a restore from a backup: the badge reads "not held here" (`asset-channel` with `data-state="MISSING"`), Can send and Can receive read 0.00, there is no Close button, and a red note above the list (`asset-channels-warning`, `data-code="CHANNEL_MISSING"`) says it cannot be used or closed from this wallet. The Assets tab says the same across its top. |
 
 What to look at, in dark, in light (`localStorage['beignet-theme'] = 'light'`

@@ -45,6 +45,9 @@ const RECEIVE = { firstAt: 9000, firstAtFromSibling: 6000, every: 1600, proofAft
 const BURN = { confirmAt: 6000, doneAt: 7000 };
 const RETRY_PROOF_MS = 3000;
 const CHANNEL_OPEN_MS = 15000;
+// A funding taken back: how long its transaction waits for a block, and its size.
+const RECLAIM_CONFIRMS_MS = 6000;
+const RECLAIM_VBYTES = 180;
 const INVOICE_QUOTE_MS = 60 * SECOND;
 const INVOICE_SETTLES_MS = 12 * SECOND;
 const PAY_QUOTE_MS = 30 * SECOND;
@@ -280,6 +283,29 @@ export function createAssetsMock(ctx) {
 
 	const held = (id) =>
 		Object.values(S(id).assets).filter((a) => !isZero(a.onchain) || !isZero(channelTotals(id, a.key).local));
+
+	/**
+	 * A channel as the host lists it on GET /channels, key for key
+	 * (assets-host/views.js channelView). A funding can be taken back while
+	 * this wallet's open has made its transaction and no block has taken it.
+	 */
+	const pubChannel = (c) => ({
+		channelId: c.channelId,
+		pendingChannelId: c.pendingChannelId || c.channelId,
+		peerPubkey: c.peerPubkey,
+		peerAlias: c.peerAlias || null,
+		state: c.state,
+		asset: c.asset,
+		capacity: c.capacity,
+		localBalance: c.localBalance,
+		remoteBalance: c.remoteBalance,
+		sendable: c.sendable,
+		receivable: c.receivable,
+		channelSats: c.channelSats,
+		fundingTxid: c.fundingTxid || null,
+		reclaimable: c.state === 'OPENING' && !!c.fundingTxid,
+		reclaimTxid: c.reclaimTxid || null
+	});
 
 	const pubRow = (row) => {
 		const out = {};
@@ -526,7 +552,23 @@ export function createAssetsMock(ctx) {
 			if (row.kind === 'send' && row.at.proof && before.endsWith(':0')) ctx.emit(id, 'assets:proof-delivery', { row: pubRow(row) });
 		}
 		for (const c of s.channels) {
-			if (c.state !== 'OPENING' || t < c._openedAt + CHANNEL_OPEN_MS) continue;
+			if (c.state !== 'OPENING') continue;
+			// A funding that was taken back: its bitcoin is this wallet's again
+			// once that transaction is in a block, the open is over, and the
+			// asset never left the wallet.
+			if (c._reclaimAt) {
+				if (t < c._reclaimAt + RECLAIM_CONFIRMS_MS) continue;
+				const rec = s.assets[c.asset.key];
+				if (rec) rec.onchain = addUnits(rec.onchain, c.localBalance);
+				c.state = 'CLOSED';
+				c.localBalance = '0';
+				changed = true;
+				ctx.emit(id, 'assets:channel', { channelId: c.channelId, state: c.state });
+				ctx.emit(id, 'assets:balance', { key: c.asset.key });
+				continue;
+			}
+			// `_stuck` is a funding no block takes (the `open-stuck` state).
+			if (c._stuck || t < c._openedAt + CHANNEL_OPEN_MS) continue;
 			c.state = 'NORMAL';
 			c.sendable = c.localBalance;
 			c.receivable = c.remoteBalance;
@@ -715,6 +757,36 @@ export function createAssetsMock(ctx) {
 				_identity: from._identity || from.assets[0],
 				_t0: t - 9 * DAY,
 				_unwatched: true
+			});
+			return true;
+		},
+		// An open whose funding transaction has sat an hour without a block, at
+		// a rate under the going one. Its bitcoin can be taken back.
+		'open-stuck'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c._stuck)) return false;
+			const amount = '50000';
+			const rec = Object.values(s.assets).find((a) => a.type !== 'collectible' && cmpUnits(a.onchain, amount) >= 0);
+			if (!rec) return false;
+			rec.onchain = subUnits(rec.onchain, amount);
+			const channelId = derivedHex(`seed-stuck-open:${id}`, 64);
+			s.channels.unshift({
+				channelId,
+				peerPubkey: `03${derivedHex('seed-peer:stuck-open', 64)}`,
+				peerAlias: 'Meridian edge',
+				state: 'OPENING',
+				asset: brief(rec),
+				capacity: amount,
+				localBalance: amount,
+				remoteBalance: '0',
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				fundingTxid: derivedHex(`funding:${channelId}`, 64),
+				_unpriced: true,
+				_openedAt: now() - HOUR,
+				_fundingRate: 2,
+				_stuck: true
 			});
 			return true;
 		},
@@ -1275,8 +1347,9 @@ export function createAssetsMock(ctx) {
 		if (/^0[23]0{8}/.test(pubkey)) throw fail('That peer does not take asset channels', 'PEER_NO_ASSET_CHANNELS');
 		ctx.spend(id, quote.totalSats);
 		rec.onchain = subUnits(rec.onchain, amount);
+		const channelId = derivedHex(`chan:${id}:${state.n}:${now()}`, 64);
 		const channel = {
-			channelId: derivedHex(`chan:${id}:${state.n}:${now()}`, 64),
+			channelId,
 			peerPubkey: pubkey,
 			peerAlias: body.peer.alias || null,
 			state: 'OPENING',
@@ -1287,8 +1360,10 @@ export function createAssetsMock(ctx) {
 			sendable: '0',
 			receivable: '0',
 			channelSats: quote.channelSats,
+			fundingTxid: derivedHex(`funding:${channelId}`, 64),
 			_unpriced: true,
-			_openedAt: now()
+			_openedAt: now(),
+			_fundingRate: feeFor('channel', body?.feeRate).feeRate
 		};
 		s.channels.unshift(channel);
 		ctx.emit(id, 'assets:channel', { channelId: channel.channelId, state: channel.state });
@@ -1303,6 +1378,15 @@ export function createAssetsMock(ctx) {
 		if (c.state === 'MISSING') {
 			throw fail("This channel is on record, but the wallet's node does not hold it, as happens after a restore from a backup. It cannot be closed from this wallet.", 'CHANNEL_MISSING');
 		}
+		// As the host: an open whose funding is signed and not yet on the chain
+		// cannot be closed. Its bitcoin can be taken back instead.
+		if (pubChannel(c).reclaimable) {
+			throw fail(
+				'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain. If that transaction will not confirm, its bitcoin can be taken back instead, which ends the open.',
+				'CHANNEL_OPENING',
+				{ status: 409, details: { reclaimable: true } }
+			);
+		}
 		c.state = 'CLOSED';
 		const rec = s.assets[c.asset.key];
 		if (rec) rec.onchain = addUnits(rec.onchain, c.localBalance);
@@ -1310,6 +1394,53 @@ export function createAssetsMock(ctx) {
 		ctx.emit(id, 'assets:channel', { channelId: c.channelId, state: c.state });
 		ctx.emit(id, 'assets:balance', { key: c.asset.key });
 		return { channelId: c.channelId, closing: true, force: !!body.force };
+	}
+
+	/**
+	 * Taking a funding back (POST /channels/reclaim): a transaction that
+	 * spends the same bitcoin back to this wallet at a higher fee. The
+	 * host's answer and its refusals, word for word (assets-host/lightning.js
+	 * reclaimFunding). A replacement has to pay more than what it replaces,
+	 * so a rate that is not above the funding's, or above the one sent
+	 * before, is the transaction the network does not take.
+	 */
+	function reclaimFunding(id, body) {
+		const s = S(id);
+		const c = s.channels.find((x) => x.channelId === body?.channelId && x.state !== 'CLOSED');
+		if (!c) throw notFound('This wallet has no asset channel with that id.', 'CHANNEL_NOT_FOUND');
+		if (!pubChannel(c).reclaimable) {
+			throw fail(
+				c.state === 'NORMAL'
+					? 'The funding of this channel is on the chain, so there is nothing to take back. Close the channel instead.'
+					: 'The funding of this channel cannot be taken back. That can be done only for a channel this wallet is opening with its own bitcoin, once its funding transaction is made and while it has not confirmed.',
+				'CHANNEL_NOT_RECLAIMABLE',
+				{ status: 409 }
+			);
+		}
+		const given = body?.feeRate;
+		let rate = ((ctx.fees && ctx.fees()) || { fast: 18 }).fast;
+		if (given !== undefined && given !== null && given !== '') {
+			rate = Number(given);
+			if (!Number.isFinite(rate) || rate <= 0) throw fail('The fee rate must be a number of sats per vbyte above zero.', 'INVALID_PARAMS');
+			if (rate > FEE_LIMITS.maxFeeRate) {
+				throw fail(`That fee rate is above the ${FEE_LIMITS.maxFeeRate} sat/vB this wallet allows for an asset transaction.`, 'FEE_TOO_HIGH', {
+					status: 400,
+					details: { maxFeeRate: FEE_LIMITS.maxFeeRate }
+				});
+			}
+		}
+		if (rate <= Math.max(Number(c._fundingRate) || 0, Number(c._reclaimRate) || 0)) {
+			throw fail(
+				'The transaction that takes the funding back could not be made or sent. If the funding transaction is already on the network, it takes a fee rate above the one that transaction pays.',
+				'CHANNEL_RECLAIM_FAILED',
+				{ status: 502 }
+			);
+		}
+		c.reclaimTxid = derivedHex(`reclaim:${c.channelId}:${rate}`, 64);
+		c._reclaimRate = rate;
+		c._reclaimAt = now();
+		ctx.emit(id, 'assets:channel', { channelId: c.channelId, state: c.state });
+		return { channelId: c.channelId, pendingChannelId: c.pendingChannelId || c.channelId, txid: c.reclaimTxid, feeSats: Math.ceil(rate * RECLAIM_VBYTES), feeRate: rate };
 	}
 
 	function invoiceQuote(id, body) {
@@ -1538,7 +1669,7 @@ export function createAssetsMock(ctx) {
 
 	/* ----------------------------------------------------------- dispatch */
 
-	const IDEMPOTENT = new Set(['/mint', '/send/prepare', '/send/commit', '/burn/prepare', '/burn/commit', '/channels/open', '/pay']);
+	const IDEMPOTENT = new Set(['/mint', '/send/prepare', '/send/commit', '/burn/prepare', '/burn/commit', '/channels/open', '/channels/reclaim', '/pay']);
 
 	function handle(id, sub, q, method, body, key) {
 		if (method === 'GET') {
@@ -1547,7 +1678,7 @@ export function createAssetsMock(ctx) {
 			if (sub === '/asset') return assetDetail(id, String(q.get('key') || '').toLowerCase());
 			if (sub === '/activity') return activity(id, q);
 			if (sub === '/proofs/export') return exportProof(id, q.get('id'));
-			if (sub === '/channels') return { channels: S(id).channels.filter((c) => c.state !== 'CLOSED').map(pubRow) };
+			if (sub === '/channels') return { channels: S(id).channels.filter((c) => c.state !== 'CLOSED').map(pubChannel) };
 			if (sub === '/invoices') return { invoices: S(id).invoices.map((i) => ({ ...i })) };
 			return undefined;
 		}
@@ -1646,6 +1777,12 @@ export function createAssetsMock(ctx) {
 				return openChannel(id, body);
 			case '/channels/close':
 				return closeChannel(id, body);
+			case '/channels/reclaim':
+				// As the host: taking a funding back is asked for once, by its key.
+				if (!key) {
+					throw fail('This request needs an X-Idempotency-Key header, so that sending it twice does not take the same funding back twice.', 'IDEMPOTENCY_KEY_REQUIRED', { status: 400 });
+				}
+				return reclaimFunding(id, body);
 			case '/invoices/quote':
 				return invoiceQuote(id, body);
 			case '/invoices':
@@ -1796,6 +1933,7 @@ export function createAssetsMock(ctx) {
 				peerPubkey: `02${derivedHex('seed-peer:busd', 64)}`,
 				peerAlias: 'Lightning Labs edge',
 				state: 'NORMAL',
+				fundingTxid: derivedHex('seed-funding:demo-main:busd', 64),
 				asset: brief(busd),
 				capacity: '550000',
 				localBalance: '240000',

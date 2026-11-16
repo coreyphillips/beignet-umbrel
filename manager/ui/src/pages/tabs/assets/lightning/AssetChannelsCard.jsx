@@ -4,15 +4,19 @@ import { Button, Card, Empty, Skeleton } from '../../../../components/ui.jsx';
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { lightningRefusal } from '../../../../lib/asset-lightning.js';
-import { channelWarnings } from '../../../../lib/assets.js';
-import AssetChannelRows, { CloseAssetChannelModal } from './AssetChannelRows.jsx';
+import { channelWarnings, submitOnce } from '../../../../lib/assets.js';
+import { idempotencyKey } from '../../../../lib/assets-api.js';
+import { fmtSats } from '../../../../lib/format.js';
+import { useFees } from '../shared.jsx';
+import AssetChannelRows, { CloseAssetChannelModal, ReclaimFundingModal } from './AssetChannelRows.jsx';
 import OpenAssetChannelModal from './OpenAssetChannelModal.jsx';
 
 const clickOrigin = (e) => (e && typeof e.clientX === 'number' ? { x: e.clientX, y: e.clientY } : null);
 
 /**
  * The asset channels of a wallet, on its Channels tab: the list, opening
- * one, and closing one.
+ * one, closing one, and taking back the funding of an open that will not
+ * confirm.
  *
  * Mounted only for a wallet that is offered asset channels
  * (assetChannelsOffered in lib/asset-lightning.js), so a wallet that is not
@@ -28,6 +32,7 @@ const clickOrigin = (e) => (e && typeof e.clientX === 'number' ? { x: e.clientX,
 export default function AssetChannelsCard({ id, api, tick, bump, route, go, status }) {
 	const toast = useToast();
 	const assets = useAssetsApi(api);
+	const fees = useFees(api);
 	const [modal, setModal] = useState(null);
 	const { data, error, refresh } = usePoll(() => assets.channels(), 8000, [assets, tick]);
 	const channels = data?.channels || null;
@@ -59,6 +64,21 @@ export default function AssetChannelsCard({ id, api, tick, bump, route, go, stat
 				: `Closing the ${channel.asset?.name} channel. The funds come back on-chain once it confirms.`,
 			'success'
 		);
+		setModal(null);
+		changed();
+	};
+
+	// Asked for once: the key goes with the request, so a second press, or an
+	// answer that was lost on the way, never takes the same funding back twice.
+	const reclaim = async (channel, feeRate) => {
+		let answer;
+		try {
+			answer = await submitOnce((k) => assets.reclaimChannel({ channelId: channel.channelId, feeRate }, k), idempotencyKey());
+		} catch (e) {
+			throw lightningRefusal(e, { asset: channel.asset });
+		}
+		const cost = answer && answer.feeSats !== null && answer.feeSats !== undefined ? ` The miner fee is ${fmtSats(answer.feeSats)}.` : '';
+		toast(`Taking the funding of the ${channel.asset?.name} channel back.${cost} It is done once that transaction confirms.`, 'success');
 		setModal(null);
 		changed();
 	};
@@ -100,7 +120,12 @@ export default function AssetChannelsCard({ id, api, tick, bump, route, go, stat
 					) : channels.length === 0 ? (
 						<Empty>No asset channels. Open one to send and receive an asset over Lightning.</Empty>
 					) : (
-						<AssetChannelRows channels={channels} onClose={(c, e) => setModal({ type: 'close', channel: c, origin: clickOrigin(e) })} />
+						<AssetChannelRows
+							channels={channels}
+							network={status?.network}
+							onClose={(c, e) => setModal({ type: 'close', channel: c, origin: clickOrigin(e) })}
+							onReclaim={(c, e) => setModal({ type: 'reclaim', channel: c, origin: clickOrigin(e) })}
+						/>
 					)}
 				</div>
 			</Card>
@@ -124,6 +149,15 @@ export default function AssetChannelsCard({ id, api, tick, bump, route, go, stat
 					origin={modal.origin}
 					onClose={() => setModal(null)}
 					onConfirm={(force) => close(modal.channel, force)}
+				/>
+			)}
+			{modal?.type === 'reclaim' && (
+				<ReclaimFundingModal
+					channel={modal.channel}
+					fees={fees}
+					origin={modal.origin}
+					onClose={() => setModal(null)}
+					onConfirm={(feeRate) => reclaim(modal.channel, feeRate)}
 				/>
 			)}
 		</>
