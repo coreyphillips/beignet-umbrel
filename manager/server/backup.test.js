@@ -24,7 +24,16 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'beignet-backup-'));
 process.env.DATA_DIR = DATA_DIR;
 
 const { WalletManager } = require('./wallet-manager');
-const { backupStale, openArchive, payloadFiles, payloadRegistry } = require('./backup');
+const {
+	backupStale,
+	buildPayload,
+	openArchive,
+	payloadFiles,
+	payloadRegistry,
+	sealWithinLimit,
+	MAX_ARCHIVE_BYTES,
+	RESTORE_BODY_LIMIT_BYTES
+} = require('./backup');
 
 const PASSPHRASE = 'a good long passphrase';
 
@@ -37,7 +46,10 @@ const SEED_B =
 async function quiet(fn) {
 	const write = process.stdout.write;
 	const log = console.log;
-	process.stdout.write = () => true;
+	// The manager's log lines are text. Under `node --test` this file's results
+	// travel to the runner as binary frames on the same stream, and a result
+	// written while a later test is being quiet must still get through.
+	process.stdout.write = (chunk, ...rest) => (typeof chunk === 'string' ? true : write.call(process.stdout, chunk, ...rest));
 	console.log = () => {};
 	try {
 		return await fn();
@@ -346,7 +358,130 @@ test('a wallet already here under the same id is left exactly as it is', async (
 	assert.equal(manager().registry.get(a.id).name, 'Renamed since the backup');
 });
 
+test('the assets file an archive asks for does not make that archive stale', async () => {
+	const { a } = twoWalletBox();
+	writeRegistry([{ ...a, assetsHeld: true }]);
+	const m = manager();
+	const dir = path.join(DATA_DIR, 'wallets', a.id, 'assets');
+	// A running wallet whose assets changed a moment ago: the archive asks
+	// its host to write the file, and the host's word that it did reaches the
+	// manager only after the archive is made.
+	m.runtimeState(a.id).proc = {};
+	m.runtimeState(a.id).healthy = true;
+	m.runtimeState(a.id).spawnedEnv = { BEIGNET_EXTENSIONS: '/x' };
+	let written = 0;
+	m._daemonCall = async (rec, method, route) => {
+		assert.equal(route, '/x/assets/backup/export');
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+		fs.writeFileSync(path.join(dir, 'backup.json'), '{"rows":[]}', { mode: 0o600 });
+		written = Date.now();
+		await new Promise((r) => setTimeout(r, 5));
+		return { exportedAt: written, changed: true };
+	};
+	const out = await quiet(() => m.exportBackup({ passphrase: PASSPHRASE }));
+	assert.ok(Date.parse(out.createdAt) >= written, 'the archive is stamped after the file it carries');
+	m._onAssetsEvent(a.id, 'assets:backup', { exportedAt: written, dirty: false, changed: true });
+	assert.equal(m.publicRecord(a.id).backupStale, false);
+	// A file written after the archive is a change the archive does not hold.
+	m._onAssetsEvent(a.id, 'assets:backup', { exportedAt: Date.parse(out.createdAt) + 1000, dirty: false, changed: true });
+	assert.equal(m.publicRecord(a.id).backupStale, true);
+});
+
+test("a wallet's assets ride in the archive and wait for its assets host after a restore", async () => {
+	const { a, b } = twoWalletBox();
+	const blob = Buffer.from(JSON.stringify({ v: 1, network: 'regtest', rows: [['assets/x', 'y']] }));
+	const dir = path.join(DATA_DIR, 'wallets', a.id, 'assets');
+	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+	fs.writeFileSync(path.join(dir, 'backup.json'), blob, { mode: 0o600 });
+	// Not part of a backup: only the one file is.
+	fs.writeFileSync(path.join(dir, 'pending-import.json.imported'), 'old');
+	writeRegistry([{ ...a, assetsHeld: true }, { ...b, assetsHeld: true }]);
+
+	const out = await quiet(() => manager().exportBackup({ passphrase: PASSPHRASE }));
+	const files = payloadFiles(openArchive(out.archive, PASSPHRASE));
+	assert.deepEqual(files.get(`wallets/${a.id}/assets/backup.json`).data, blob);
+	assert.equal([...files.keys()].filter((k) => k.includes('/assets/')).length, 1);
+	// The other wallet holds assets and has no file: the archive says so.
+	assert.deepEqual(out.assetsMissing, [{ id: b.id, name: 'Savings', reason: 'no-file' }]);
+	// And each record keeps saying it after the download is gone.
+	assert.equal(manager().publicRecord(a.id).assets.notArchived, null);
+	assert.equal(manager().publicRecord(a.id).assets.backupFile, true);
+	assert.equal(manager().publicRecord(b.id).assets.notArchived, 'no-file');
+	assert.equal(manager().publicRecord(b.id).assets.backupFile, false);
+
+	wipe();
+	await quiet(() => manager().restoreBackup({ passphrase: PASSPHRASE, archive: out.archive.toString('base64') }));
+	const pending = path.join(DATA_DIR, 'wallets', a.id, 'assets', 'pending-import.json');
+	assert.deepEqual(fs.readFileSync(pending), blob);
+	assert.equal(modeOf(pending), 0o600);
+	assert.equal(modeOf(path.dirname(pending)), 0o700);
+	// It waits for the host; it is not put back as if it had been imported.
+	assert.equal(fs.existsSync(path.join(DATA_DIR, 'wallets', a.id, 'assets', 'backup.json')), false);
+	assert.equal(fs.existsSync(path.join(DATA_DIR, 'wallets', b.id, 'assets')), false);
+	assert.equal(manager().publicRecord(a.id).assets.holdsAssets, true);
+});
+
+test('an archive is never written larger than a restore accepts: the largest assets backups are left out and named', () => {
+	// A restore carries the archive as base64 in one request body.
+	assert.ok(Math.ceil((MAX_ARCHIVE_BYTES * 4) / 3) < RESTORE_BODY_LIMIT_BYTES);
+
+	// The seal here is the payload's size, so the arithmetic is the test.
+	const sizes = new Map([['small', 10], ['huge', 500], ['big', 300], ['none', 0]]);
+	const build = (without) => [...sizes].filter(([id]) => !without.includes(id)).reduce((sum, [, n]) => sum + n, 100);
+	const seal = (bytes) => Buffer.alloc(bytes);
+	// Fits: nothing is left out.
+	assert.deepEqual(sealWithinLimit({ build, seal, sizes, maxBytes: 1000 }).skipped, []);
+	// Too large: the largest goes first, and only as many as it takes.
+	const one = sealWithinLimit({ build, seal, sizes, maxBytes: 500 });
+	assert.deepEqual(one.skipped, ['huge']);
+	assert.equal(one.archive.length, 410);
+	assert.deepEqual(sealWithinLimit({ build, seal, sizes, maxBytes: 150 }).skipped, ['huge', 'big']);
+	// A wallet with no assets file is never named, and the seeds are archived
+	// even when nothing else fits.
+	const all = sealWithinLimit({ build, seal, sizes, maxBytes: 50 });
+	assert.deepEqual(all.skipped, ['huge', 'big', 'small']);
+	assert.equal(all.archive.length, 100);
+});
+
+test("a wallet's assets backup can be left out of a payload without touching its seed", () => {
+	const { a, b } = twoWalletBox();
+	for (const rec of [a, b]) {
+		const dir = path.join(DATA_DIR, 'wallets', rec.id, 'assets');
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+		fs.writeFileSync(path.join(dir, 'backup.json'), `{"of":"${rec.id}"}`, { mode: 0o600 });
+	}
+	const payload = buildPayload({ dataDir: DATA_DIR, walletIds: [a.id, b.id], createdAt: 'now', withoutAssets: [a.id] });
+	const paths = payload.files.map((f) => f.path);
+	assert.equal(paths.includes(`wallets/${a.id}/assets/backup.json`), false);
+	assert.equal(paths.includes(`wallets/${b.id}/assets/backup.json`), true);
+	assert.equal(paths.includes(`wallets/${a.id}/secrets/mnemonic`), true);
+});
+
+test('an archive cannot name another file under a wallet', () => {
+	const entry = (rel) => ({ files: [{ path: rel, mode: 0o600, data: '' }] });
+	const id = 'aaaaaaaa-0000-4000-8000-000000000001';
+	assert.equal(payloadFiles(entry(`wallets/${id}/assets/backup.json`)).size, 1);
+	for (const rel of [
+		`wallets/${id}/assets/pending-import.json`,
+		`wallets/${id}/assets/../secrets/mnemonic`,
+		`wallets/${id}/assets/backup.json.tmp`,
+		`wallets/${id}/data/beignet.db`,
+		`wallets/../assets/backup.json`
+	]) {
+		assert.throws(() => payloadFiles(entry(rel)), (err) => err.code === 'BAD_ARCHIVE', rel);
+	}
+});
+
 test('the stale rule: never backed up, backed up, edited since', () => {
+	// Assets that changed since the archive make it stale without any edit.
+	assert.equal(
+		backupStale({ createdAt: '2026-09-01T00:00:00.000Z', lastBackupAt: '2026-09-02T00:00:00.000Z', assetsChangedAt: '2026-09-03T00:00:00.000Z' }),
+		true
+	);
+	assert.equal(
+		backupStale({ createdAt: '2026-09-01T00:00:00.000Z', lastBackupAt: '2026-09-02T00:00:00.000Z', assetsChangedAt: '2026-09-01T12:00:00.000Z' }),
+		false
+	);
 	const created = '2026-09-01T00:00:00.000Z';
 	assert.equal(backupStale({ createdAt: created }), true);
 	assert.equal(backupStale({ createdAt: created, lastBackupAt: '2026-09-02T00:00:00.000Z' }), false);

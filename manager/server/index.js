@@ -3,8 +3,9 @@
 const path = require('path');
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
-const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, PUBLIC_ELECTRUM_SERVERS } = require('./config');
+const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, PUBLIC_ELECTRUM_SERVERS, PUBLIC_UNIVERSE_SERVERS, publicUniverseServers } = require('./config');
 const { WalletManager } = require('./wallet-manager');
+const { RESTORE_BODY_LIMIT_BYTES } = require('./backup');
 const { createAccessGuard } = require('./access-control');
 const { releaseUpstreamOnClose } = require('./proxy-release');
 const { createTransactionsRoute } = require('./dropped-transactions');
@@ -145,7 +146,7 @@ async function main() {
 	// A restore carries the whole archive in its body (base64), which on a box
 	// with many wallets is larger than any other request here. Mounted first so
 	// the general parser below leaves an already-parsed body alone.
-	app.use('/api/backup', express.json({ limit: '32mb' }));
+	app.use('/api/backup', express.json({ limit: RESTORE_BODY_LIMIT_BYTES }));
 	app.use(express.json({ limit: '1mb' }));
 
 	// --- Management API ---
@@ -182,6 +183,23 @@ async function main() {
 				// Iroh held to the relay (beignet #1982): without it the dashboard
 				// offers no relay-only switch beside the phone link.
 				irohRelayOnlyAvailable: manager.irohRelayOnlyAvailable(),
+				// Taproot Assets (docs/ASSETS.md): the engine loads host
+				// extensions and the assets host is installed beside it. The
+				// second flag is assets in Lightning channels, which need more
+				// of the engine. The servers are the universes a wallet can use.
+				assetsAvailable: manager.assetsAvailable(),
+				assetChannelsAvailable: manager.assetChannelsAvailable(),
+				universeServers: PUBLIC_UNIVERSE_SERVERS.concat(publicUniverseServers('regtest')).map((s) => ({
+					id: s.id,
+					label: s.label,
+					courier: s.courier,
+					rest: s.rest,
+					networks: s.networks,
+					// Which testnet, for a testnet server. Null for a server
+					// of a network that is one chain.
+					chain: s.chain || null,
+					note: s.note
+				})),
 				// Channel backup (the Recovery Protocol) needs an engine that
 				// carries its surface; older engines get no controls for it.
 				engineVersion: manager.engineVersion,
@@ -262,6 +280,9 @@ async function main() {
 	api.post(
 		'/backup/export',
 		asyncHandler(async (req, res) => {
+			// A wallet whose Taproot Assets this archive could not carry says so
+			// on its own record afterwards (assets.notArchived), which is what
+			// the dashboard shows.
 			const { archive, filename } = await manager.exportBackup(req.body || {});
 			res.setHeader('Content-Type', 'application/octet-stream');
 			res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

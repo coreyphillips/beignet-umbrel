@@ -51,8 +51,11 @@ const MIN_PASSPHRASE = 8;
 
 // The only paths this app writes back out of an archive. Wallet ids are
 // UUIDs; the character class excludes dots, so no entry can name a parent
-// directory however the archive was edited.
-const SAFE_PATH = /^(registry\.json|settings\.json|wallets\/[0-9a-zA-Z-]+\/secrets\/(mnemonic|api_token))$/;
+// directory however the archive was edited. A wallet's assets file is the
+// one thing here a seed cannot recreate (docs/ASSETS.md): the proofs that
+// make an output an asset exist nowhere on chain.
+const SAFE_PATH =
+	/^(registry\.json|settings\.json|wallets\/[0-9a-zA-Z-]+\/(secrets\/(mnemonic|api_token)|assets\/backup\.json))$/;
 
 class ArchiveError extends Error {
 	constructor(code, message) {
@@ -166,7 +169,7 @@ function openArchive(archive, passphrase) {
  * settings files as they are, and each wallet's two secrets. Files are copied
  * verbatim, with their modes, so a restore can put them back exactly.
  */
-function buildPayload({ dataDir, walletIds, app, engine, createdAt }) {
+function buildPayload({ dataDir, walletIds, app, engine, createdAt, withoutAssets = [] }) {
 	const files = [];
 	const add = (rel, required) => {
 		const abs = path.join(dataDir, ...rel.split('/'));
@@ -189,6 +192,10 @@ function buildPayload({ dataDir, walletIds, app, engine, createdAt }) {
 	for (const id of walletIds) {
 		add(`wallets/${id}/secrets/mnemonic`, true);
 		add(`wallets/${id}/secrets/api_token`, true);
+		// Written by the wallet's assets host whenever its assets change.
+		// Absent for a wallet that never held any, and left out for one whose
+		// file would make the archive larger than a restore accepts.
+		if (!withoutAssets.includes(id)) add(assetsBackupPath(id), false);
 	}
 	return { createdAt, app: app || null, engine: engine || null, files };
 }
@@ -252,6 +259,39 @@ function tokenPath(id) {
 	return `wallets/${id}/secrets/api_token`;
 }
 
+/** A wallet's Taproot Assets backup, as its assets host writes it. */
+function assetsBackupPath(id) {
+	return `wallets/${id}/assets/backup.json`;
+}
+
+// An archive comes back to this app as base64 inside a JSON request, so the
+// largest request the restore routes accept decides the largest archive worth
+// writing: one that cannot be restored is not a backup. Seeds and settings
+// are a few kilobytes; only assets backups (proof files) can approach this.
+const RESTORE_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
+// base64 is four characters for three bytes; the rest of the request is the
+// passphrase and a few field names.
+const MAX_ARCHIVE_BYTES = Math.floor((RESTORE_BODY_LIMIT_BYTES * 3) / 4) - 64 * 1024;
+
+/**
+ * Seal an archive that a restore will accept. When the wallets' assets
+ * backups make it too large, the largest are left out one at a time until it
+ * fits, and named in `skipped`: the seeds on a box are always archived, and
+ * an assets backup that would not have restored is reported, not carried.
+ *
+ * `build(withoutAssets)` returns the payload; `sizes` maps a wallet id to the
+ * bytes of its assets backup file.
+ */
+function sealWithinLimit({ build, seal, sizes, maxBytes = MAX_ARCHIVE_BYTES }) {
+	const largestFirst = [...sizes.entries()].filter(([, bytes]) => bytes > 0).sort((a, b) => b[1] - a[1]).map(([id]) => id);
+	const skipped = [];
+	for (;;) {
+		const archive = seal(build(skipped));
+		if (archive.length <= maxBytes || skipped.length >= largestFirst.length) return { archive, skipped };
+		skipped.push(largestFirst[skipped.length]);
+	}
+}
+
 /**
  * What restoring this archive onto a box that already holds `existing` would
  * do, wallet by wallet. `existing` is one entry per wallet already here:
@@ -307,6 +347,10 @@ function planRestore({ records, files, existing }) {
 function backupStale(rec) {
 	const backedUp = Date.parse((rec && rec.lastBackupAt) || '');
 	if (!Number.isFinite(backedUp)) return true;
+	// A wallet's assets change without its record being edited: a mint, a
+	// send or a receive each leave the last archive short of them.
+	const assetsChanged = Date.parse(rec.assetsChangedAt || '');
+	if (Number.isFinite(assetsChanged) && assetsChanged > backedUp) return true;
 	const changed = Date.parse(rec.updatedAt || rec.createdAt || '');
 	return Number.isFinite(changed) ? changed > backedUp : false;
 }
@@ -341,5 +385,9 @@ module.exports = {
 	seedDigest,
 	mnemonicPath,
 	tokenPath,
+	assetsBackupPath,
+	RESTORE_BODY_LIMIT_BYTES,
+	MAX_ARCHIVE_BYTES,
+	sealWithinLimit,
 	backupFilename
 };

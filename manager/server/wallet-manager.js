@@ -43,6 +43,8 @@ const {
 	seedDigest,
 	mnemonicPath,
 	tokenPath,
+	assetsBackupPath,
+	sealWithinLimit,
 	backupFilename
 } = require('./backup');
 const {
@@ -61,12 +63,16 @@ const {
 	torProxyScopeAvailable,
 	electrumTlsVerifyAvailable,
 	irohAvailable,
-	irohRelayOnlyAvailable
+	irohRelayOnlyAvailable,
+	assetsAvailable,
+	assetChannelsAvailable,
+	assetsModulesDir
 } = require('./engine');
 const { normalizeElectrumTls, electrumTlsEnv } = require('./electrum-tls');
 const { electrumRequests, cachedProbe, discoverServers } = require('./electrum-probe');
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
+const assets = require('./assets');
 const netmode = require('./network-mode');
 const { createOutbound } = require('./outbound');
 const { createLnurl } = require('./lnurl');
@@ -222,6 +228,22 @@ class WalletManager {
 		this.irohRelayOnlySupported = irohRelayOnlyAvailable();
 		// Electrum TLS certificate verification (beignet #1776, engine 0.31.0).
 		this.electrumTlsVerifySupported = electrumTlsVerifyAvailable();
+		// Taproot Assets (docs/ASSETS.md) needs three things of the install:
+		// an engine that loads host extensions, the two packages the assets
+		// host is built on installed beside that engine, and a host module
+		// the daemon will accept. The daemon refuses to start on a module
+		// another local user could have written, so the manager checks what
+		// the engine checks and leaves assets off when it would be refused.
+		this.assetsModulesDir = assetsModulesDir();
+		this.assetsHostProblem = assetsAvailable() ? assets.hostProblem() : null;
+		this.assetsSupported =
+			assetsAvailable() &&
+			this.assetsHostProblem === null &&
+			String(process.env.BEIGNET_ASSETS || '').toLowerCase() !== 'off';
+		// Assets in Lightning channels (Milestone B): the engine's contract
+		// has to hand an extension the node, and the adapter has to carry
+		// its Lightning entry. Neither does yet.
+		this.assetChannelsSupported = this.assetsSupported && assetChannelsAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
 		// The manager's one way out to the internet (LNURL services), routed
@@ -241,6 +263,9 @@ class WalletManager {
 			`engine: beignet ${this.engineVersion || 'unknown version'}` +
 				`${this.recoveryAvailable() ? '' : ' (recovery protocol not available)'}\n`
 		);
+		if (this.assetsHostProblem) {
+			process.stdout.write(`assets: off, the daemon would refuse the assets host: ${this.assetsHostProblem}\n`);
+		}
 		if (config.torProxy && !this.torProxyScopeSupported) {
 			process.stdout.write(
 				'engine: no onion-only Tor proxy scope (beignet 0.22.0 or later); Clearnet and Hybrid wallets ' +
@@ -496,6 +521,10 @@ class WalletManager {
 				// with the settlement peer after a start) produced, whether a
 				// peer contradicted an ACTIVE epoch at reconnect (enforce
 				// on-chain), and the guard against two returns at once.
+				// Taproot Assets: what the assets host last reported about
+				// itself (phase, whether the wallet holds assets, its backup),
+				// null until it has and again once the daemon stops.
+				assets: null,
 				fforReturn: null,
 				fforEnforce: null,
 				fforEnforced: null,
@@ -1020,6 +1049,15 @@ class WalletManager {
 		return this.torProxyScopeSupported === true;
 	}
 
+	/** Whether this install can run Taproot Assets at all (docs/ASSETS.md). */
+	assetsAvailable() {
+		return this.assetsSupported === true;
+	}
+
+	assetChannelsAvailable() {
+		return this.assetChannelsSupported === true;
+	}
+
 	electrumTlsVerifyAvailable() {
 		return this.electrumTlsVerifySupported === true;
 	}
@@ -1153,6 +1191,18 @@ class WalletManager {
 			);
 		}
 		return true;
+	}
+
+	/**
+	 * The per-wallet assets block (docs/ASSETS.md). A universe server is
+	 * held to the same address rules as any service this app reaches for a
+	 * wallet, and none can be set on an install that cannot run assets.
+	 */
+	_normalizeAssets(input, rec) {
+		if (!this.assetsAvailable()) {
+			throw httpError(400, 'ASSETS_UNSUPPORTED', 'Taproot Assets are not available on this install. Update the app first.');
+		}
+		return assets.normalizeAssets(input, rec.assets, { network: rec.network });
 	}
 
 	/**
@@ -1457,7 +1507,8 @@ class WalletManager {
 			liquidityProvider,
 			jit,
 			swaps,
-			ffor: fforInput
+			ffor: fforInput,
+			assets: assetsInput
 		} = {}
 	) {
 		const rec = this.registry.get(id);
@@ -1497,6 +1548,10 @@ class WalletManager {
 
 		const nextOnchainOnly = onchainOnly === undefined ? !!rec.onchainOnly : !!onchainOnly;
 		const nextFfor = fforInput !== undefined ? this._normalizeFfor(fforInput, rec.ffor, nextOnchainOnly) : undefined;
+		// Taproot Assets: on or off for this wallet, and its own universe
+		// server in place of the network's default. The daemon restarts
+		// below, which is what hands the host its new settings.
+		const nextAssets = assetsInput !== undefined ? this._normalizeAssets(assetsInput, rec) : undefined;
 		// The network mode and public address are held to the same rules as on
 		// create, against the posture the wallet is about to have.
 		const nextMode = netmode.requestedMode({ networkMode, tor }, netmode.networkMode(rec));
@@ -1551,6 +1606,7 @@ class WalletManager {
 		if (nextJit !== undefined) rec.jit = nextJit;
 		if (nextSwaps !== undefined) rec.swaps = nextSwaps;
 		if (nextFfor !== undefined) rec.ffor = nextFfor;
+		if (nextAssets !== undefined) rec.assets = nextAssets;
 		if (rec.onchainOnly && rec.ffor && ffor.hasFforRole({ ...rec, onchainOnly: false })) {
 			// Parking Lightning stops the listener every FFOR role runs on.
 			rec.ffor = ffor.normalizeFfor(
@@ -1677,6 +1733,22 @@ class WalletManager {
 		// Settling offline receives for siblings (FFOR, beignet #729): an
 		// exact 'true' plus the terms floor and caps. Off contributes nothing.
 		Object.assign(env, ffor.fforEnv(rec));
+		// Taproot Assets: name the assets host to the daemon, with the
+		// wallet's universe servers and the way out to them. It contributes
+		// nothing when assets are unavailable or off, so such a daemon gets
+		// the environment it always got. The host runs for an on-chain only
+		// wallet too: on-chain assets need no Lightning.
+		Object.assign(
+			env,
+			assets.assetsEnv(rec, {
+				available: this.assetsAvailable(),
+				modulesDir: this.assetsModulesDir,
+				mode,
+				torProxy: config.torProxy,
+				walletDir: p.base,
+				lightning: 'off'
+			})
+		);
 		return env;
 	}
 
@@ -1779,6 +1851,10 @@ class WalletManager {
 		const token = this.token(id);
 		this._clearStaleInstanceLock(rec, p);
 		const env = this._daemonEnv(rec, p, mnemonic, token);
+		if (env.BEIGNET_ASSETS_BACKUP_FILE) {
+			// Where the assets host keeps its backup file, readable by no one else.
+			fs.mkdirSync(path.dirname(env.BEIGNET_ASSETS_BACKUP_FILE), { recursive: true, mode: 0o700 });
+		}
 
 		const { cmd, args } = beignetSpawn();
 		rt.status = 'starting';
@@ -1985,6 +2061,9 @@ class WalletManager {
 				if (name.startsWith('recovery:')) {
 					this._log(id, `recovery ${name} ${JSON.stringify(data || {})}`);
 				}
+				// Taproot Assets: the host's status rides on the runtime, and
+				// whatever moved an asset or went wrong leaves a line in the log.
+				if (name.startsWith('assets:')) this._onAssetsEvent(id, name, data);
 				// Lightning-first progress (beignet #669): a funding this daemon
 				// fronts or receives, one line each, so the Logs tab tells the
 				// story of a just-in-time channel or a direct funding.
@@ -2230,6 +2309,7 @@ class WalletManager {
 		rt.proc = null;
 		rt.healthy = false;
 		rt.status = 'stopped';
+		rt.assets = null;
 		if (rt.chainWatch) {
 			clearInterval(rt.chainWatch);
 			rt.chainWatch = null;
@@ -2562,34 +2642,93 @@ class WalletManager {
 						: '.')
 			);
 		}
-		const createdAt = nowIso();
 		// settings.json is only written when settings are saved, and a box that
 		// has never saved any still has defaults worth carrying: write them out
 		// now, or the first archive off a box restores one with none.
 		this.settings.save();
 		const ids = this.registry.list().map((rec) => rec.id);
+		// A running wallet's assets host writes its backup file again now, so
+		// the archive holds its assets as they are and not as of its last
+		// change. A wallet that holds assets and has no file to archive is
+		// named in the answer: the archive restores its bitcoin, not its assets.
+		const assetsMissing = await this._refreshAssetsBackups();
+		// Stamped after those files are written, never before: a file this
+		// archive carries must not read as a change made since it.
+		const createdAt = nowIso();
 		let archive;
+		let tooLarge;
 		try {
-			archive = sealArchive(
-				buildPayload({
-					dataDir: config.dataDir,
-					walletIds: ids,
-					app: config.appVersion,
-					engine: this.engineVersion,
-					createdAt
-				}),
-				passphrase
-			);
+			// An archive a restore would turn away is not a backup, so the
+			// largest assets backups are left out until it fits. The seeds
+			// are always in it.
+			({ archive, skipped: tooLarge } = sealWithinLimit({
+				sizes: new Map(ids.map((id) => [id, this._assetsBackupBytes(id)])),
+				build: (withoutAssets) =>
+					buildPayload({
+						dataDir: config.dataDir,
+						walletIds: ids,
+						app: config.appVersion,
+						engine: this.engineVersion,
+						createdAt,
+						withoutAssets
+					}),
+				seal: (payload) => sealArchive(payload, passphrase)
+			}));
 		} catch (err) {
 			throw this._backupError(err);
 		}
+		for (const id of tooLarge) {
+			const rec = this.registry.get(id);
+			assetsMissing.push({ id, name: rec.name, reason: 'too-large' });
+			this._log(id, 'assets: this wallet\'s assets backup is too large for the box archive and was left out of it; its bitcoin and settings are in it');
+		}
 		// Stamped only once the archive exists, and in one write rather than
 		// one per wallet: a failed export must not claim a backup happened.
-		for (const rec of this.registry.list()) rec.lastBackupAt = createdAt;
+		for (const rec of this.registry.list()) {
+			rec.lastBackupAt = createdAt;
+			// What the last archive could not carry for this wallet, so the
+			// dashboard keeps saying it after the download is gone.
+			const missed = assetsMissing.find((m) => m.id === rec.id);
+			if (missed) rec.assetsNotArchived = missed.reason;
+			else delete rec.assetsNotArchived;
+		}
 		this.registry.save();
 		this.settings.update({ lastBackupAt: createdAt });
 		console.log(`backup: exported ${ids.length} wallet(s) at ${createdAt}`);
-		return { archive, filename: backupFilename(createdAt), createdAt, walletCount: ids.length };
+		return { archive, filename: backupFilename(createdAt), createdAt, walletCount: ids.length, assetsMissing };
+	}
+
+	/**
+	 * Have every running assets host write its backup file, and name the
+	 * wallets that hold assets with no file for an archive to carry.
+	 */
+	async _refreshAssetsBackups() {
+		const missing = [];
+		for (const rec of this.registry.list()) {
+			const rt = this.runtimeState(rec.id);
+			if (rt.proc && rt.healthy && rt.spawnedEnv && rt.spawnedEnv.BEIGNET_EXTENSIONS) {
+				try {
+					await this._daemonCall(rec, 'POST', '/x/assets/backup/export', {});
+				} catch (err) {
+					this._log(rec.id, `assets: the backup file could not be written again (${err.message}); the archive carries the last one`);
+				}
+			}
+			const holds = rt.assets ? rt.assets.holdsAssets : rec.assetsHeld === true;
+			if (holds && this._assetsBackupBytes(rec.id) === 0) {
+				missing.push({ id: rec.id, name: rec.name, reason: 'no-file' });
+			}
+		}
+		return missing;
+	}
+
+	/** The size of a wallet's assets backup file, or 0 when it has none. */
+	_assetsBackupBytes(id) {
+		try {
+			const stat = fs.statSync(path.join(config.dataDir, ...assetsBackupPath(id).split('/')));
+			return stat.isFile() ? stat.size : 0;
+		} catch (_) {
+			return 0;
+		}
 	}
 
 	_openBackup({ passphrase, archive }) {
@@ -2670,6 +2809,15 @@ class WalletManager {
 			fs.mkdirSync(p.secrets, { recursive: true, mode: 0o700 });
 			this._writeSecret(p.mnemonicFile, files.get(mnemonicPath(rec.id)));
 			this._writeSecret(p.tokenFile, files.get(tokenPath(rec.id)));
+			// The wallet's assets, when the archive carries them, wait where
+			// its assets host looks on its first start: a seed alone brings
+			// back none of them.
+			const assetsFile = files.get(assetsBackupPath(rec.id));
+			if (assetsFile) {
+				const paths = assets.assetsPaths(p.base);
+				fs.mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
+				this._writeSecret(paths.pendingImport, { data: assetsFile.data, mode: 0o600 });
+			}
 			this.registry.upsert(rec);
 			restored.push({ id: rec.id, name: rec.name, port: rec.port });
 			this._log(rec.id, `restored from a backup archive written ${payload.createdAt}; start it when ready`);
@@ -2712,11 +2860,100 @@ class WalletManager {
 	 * Zero-conf trust and the direct-funding policy live in daemon memory
 	 * and die with the process, so they are re-applied on every start.
 	 */
+	/**
+	 * The assets block of a wallet's record. For a wallet that holds assets
+	 * it also says whether the file an archive carries exists yet: without
+	 * it a backup of the box restores the wallet's bitcoin and not its assets.
+	 */
+	_publicAssets(rec, rt) {
+		const block = assets.publicAssets(rec, rt);
+		return {
+			...block,
+			backupFile: block.holdsAssets ? this._assetsBackupBytes(rec.id) > 0 : null,
+			// Why the last box archive does not hold this wallet's assets
+			// ('no-file' or 'too-large'), or null when it does or none exists.
+			notArchived: block.holdsAssets ? rec.assetsNotArchived || null : null
+		};
+	}
+
+	/** One event from a wallet's assets host. */
+	_onAssetsEvent(id, name, data) {
+		if (name === 'assets:status') this._noteAssetsStatus(id, data);
+		if (name === 'assets:backup' && data && typeof data === 'object') {
+			const rt = this.runtimeState(id);
+			if (rt.assets) rt.assets = { ...rt.assets, backup: { exportedAt: data.exportedAt || null, dirty: !!data.dirty } };
+			// The file changed, so an archive made before it was written no
+			// longer holds it. The time is the file's own, not when the news of
+			// it arrived: an archive asks for the file and is stamped after it,
+			// and the event for that same file can come in later still.
+			const rec = this.registry.get(id);
+			if (rec && data.changed === true) {
+				const written = Number(data.exportedAt);
+				rec.assetsChangedAt = Number.isFinite(written) && written > 0 ? new Date(written).toISOString() : nowIso();
+				this.registry.upsert(rec);
+			}
+		}
+		const line = assets.describeAssetEvent(name, data);
+		if (line) this._log(id, line);
+	}
+
+	/**
+	 * Keep what the assets host says about itself. Whether the wallet holds
+	 * assets is also saved on its record, so a stopped wallet still says so:
+	 * that is what tells its owner the recovery phrase alone is not enough.
+	 */
+	_noteAssetsStatus(id, status) {
+		if (!status || typeof status !== 'object') return;
+		const rt = this.runtimeState(id);
+		const was = rt.assets;
+		rt.assets = {
+			phase: typeof status.phase === 'string' ? status.phase : null,
+			ready: status.ready === true,
+			error: status.error || null,
+			holdsAssets: status.holdsAssets === true,
+			backup: status.backup && typeof status.backup === 'object' ? { exportedAt: status.backup.exportedAt || null, dirty: !!status.backup.dirty } : (was && was.backup) || null
+		};
+		if (rt.assets.phase === 'failed' && (!was || was.phase !== 'failed')) {
+			this._log(id, `assets: not running, ${rt.assets.error || 'no reason given'}. The bitcoin wallet is unaffected.`);
+		}
+		const rec = this.registry.get(id);
+		if (rec && (rec.assetsHeld === true) !== rt.assets.holdsAssets) {
+			rec.assetsHeld = rt.assets.holdsAssets;
+			this.registry.upsert(rec);
+		}
+	}
+
+	/**
+	 * Ask a started daemon's assets host how it is. A host that failed to
+	 * attach is reported and never counts against the wallet's health: the
+	 * bitcoin wallet runs without it.
+	 */
+	async _readAssetsStatus(id) {
+		const rec = this.registry.get(id);
+		const rt = this.runtimeState(id);
+		if (!rec || !rt.spawnedEnv || !rt.spawnedEnv.BEIGNET_EXTENSIONS) return;
+		try {
+			this._noteAssetsStatus(id, await this._daemonCall(rec, 'GET', '/x/assets/status'));
+		} catch (err) {
+			let reason = err.message;
+			try {
+				const listed = await this._daemonCall(rec, 'GET', '/extensions');
+				const host = ((listed && listed.extensions) || []).find((e) => e.id === 'assets');
+				if (host && host.error) reason = host.error;
+			} catch (_) {
+				/* the first reason stands */
+			}
+			this._noteAssetsStatus(id, { phase: 'failed', ready: false, error: reason, holdsAssets: rec.assetsHeld === true });
+		}
+	}
+
 	async _onHealthy(id) {
 		await this._captureNodeId(id);
 		await this._restoreLfbwLinks(id);
 		await this._eventsReady(id);
 		await this._fforReturn(id);
+		// Last, and on its own: nothing above waits on the assets host.
+		await this._readAssetsStatus(id);
 	}
 
 	/**
@@ -3965,6 +4202,10 @@ class WalletManager {
 			// contradicted an ACTIVE epoch (enforce on-chain).
 			ffor: ffor.normalizeFfor(undefined, rec.ffor),
 			fforReturn: rt.fforReturn || null,
+			// Taproot Assets: whether they are on for this wallet, its own
+			// universe server (null for the network's default), whether it
+			// holds any, and how the host is doing while the wallet runs.
+			assets: this._publicAssets(rec, rt),
 			fforEnforce: rt.fforEnforce || null,
 			fforEnforced: rt.fforEnforced || null,
 			fforSetup: rt.fforSetup || null,

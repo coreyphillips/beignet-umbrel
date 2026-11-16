@@ -436,3 +436,52 @@ test('the node alias is the wallet name cleaned of what BOLT 1 forbids (beignet 
 	const empty = m._daemonEnv(rec({ id: 'abcd1234', name: '\u200B\u200D' }), PATHS, 's', 't');
 	assert.equal(empty.BEIGNET_ALIAS, 'Wallet abcd');
 });
+
+// Taproot Assets (docs/ASSETS.md): a daemon is told about the assets host
+// only on an install that can run it, for a wallet that has it on.
+const ASSET_PATHS = { ...PATHS, base: '/tmp/x' };
+function assetsManager() {
+	const m = bareManager();
+	m.assetsSupported = true;
+	m.assetsModulesDir = '/opt/beignet/node_modules';
+	return m;
+}
+
+test('a daemon gets no assets environment unless the install can run assets', () => {
+	const names = (env) => Object.keys(env).filter((k) => k === 'BEIGNET_EXTENSIONS' || k.startsWith('BEIGNET_ASSETS'));
+	assert.deepEqual(names(bareManager()._daemonEnv(rec(), ASSET_PATHS, 's', 't')), []);
+	assert.deepEqual(names(assetsManager()._daemonEnv(rec({ assets: { enabled: false } }), ASSET_PATHS, 's', 't')), []);
+	const env = assetsManager()._daemonEnv(rec(), ASSET_PATHS, 's', 't');
+	assert.equal(env.BEIGNET_EXTENSIONS, require('./assets').HOST_MODULE);
+	assert.equal(env.BEIGNET_ASSETS_MODULES, '/opt/beignet/node_modules');
+	assert.equal(env.BEIGNET_ASSETS_NETWORK_MODE, 'hybrid');
+	assert.equal(env.BEIGNET_ASSETS_BACKUP_FILE, '/tmp/x/assets/backup.json');
+	assert.equal(env.BEIGNET_ASSETS_IMPORT_FILE, '/tmp/x/assets/pending-import.json');
+	assert.equal(env.BEIGNET_ASSETS_LIGHTNING, 'off');
+	assert.deepEqual(JSON.parse(env.BEIGNET_ASSETS_UNIVERSES), [
+		{ courier: 'universerpc://universe.lightning.finance:10029', rest: 'https://universe.lightning.finance', isDefault: true }
+	]);
+});
+
+test('the assets host follows the wallet: its network mode, its own universe, and an on-chain only wallet keeps it', () => {
+	const m = assetsManager();
+	const own = { courier: 'universerpc://u.example.com:10029', rest: 'https://u.example.com' };
+	const env = m._daemonEnv(rec({ networkMode: 'tor', assets: { enabled: true, universe: own } }), ASSET_PATHS, 's', 't');
+	assert.equal(env.BEIGNET_ASSETS_NETWORK_MODE, 'tor');
+	assert.deepEqual(JSON.parse(env.BEIGNET_ASSETS_UNIVERSES)[0], { ...own, isDefault: false });
+	// On-chain assets need no Lightning, so parking Lightning does not park them.
+	const parked = m._daemonEnv(rec({ onchainOnly: true }), ASSET_PATHS, 's', 't');
+	assert.equal(parked.BEIGNET_EXTENSIONS, require('./assets').HOST_MODULE);
+	assert.equal(parked.BEIGNET_LISTEN_PORT, undefined);
+});
+
+test('a universe server can be set only where assets run, and is held to the address rules', () => {
+	const m = assetsManager();
+	const wallet = rec();
+	assert.deepEqual(m._normalizeAssets({ universe: { courier: 'universerpc://u.example.com', rest: 'https://u.example.com/' } }, wallet), {
+		enabled: true,
+		universe: { courier: 'universerpc://u.example.com:10029', rest: 'https://u.example.com' }
+	});
+	assert.throws(() => m._normalizeAssets({ universe: { courier: 'universerpc://u.example.com', rest: 'http://u.example.com' } }, wallet), (err) => err.code === 'BAD_UNIVERSE' && err.statusCode === 400);
+	assert.throws(() => bareManager()._normalizeAssets({ enabled: true }, wallet), (err) => err.code === 'ASSETS_UNSUPPORTED');
+});
