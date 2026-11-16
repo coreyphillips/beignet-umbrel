@@ -4,7 +4,7 @@ import { Button, Card, Empty, Skeleton } from '../../../../components/ui.jsx';
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { lightningRefusal } from '../../../../lib/asset-lightning.js';
-import { channelWarnings, submitOnce } from '../../../../lib/assets.js';
+import { channelWarnings, lightningHeld, submitOnce } from '../../../../lib/assets.js';
 import { idempotencyKey } from '../../../../lib/assets-api.js';
 import { fmtSats } from '../../../../lib/format.js';
 import { useFees } from '../shared.jsx';
@@ -27,7 +27,9 @@ const clickOrigin = (e) => (e && typeof e.clientX === 'number' ? { x: e.clientX,
  *
  * `status` is the assets host's status. What it says is wrong with a
  * channel (one the node no longer holds, a close whose assets are not back)
- * is said above the list, in the host's own sentences.
+ * is said above the list, in the host's own sentences. A node that does not
+ * offer asset channels is said above the card: nothing new is opened, and
+ * the channels there already are stay listed and can be closed.
  */
 export default function AssetChannelsCard({ id, api, tick, bump, route, go, status }) {
 	const toast = useToast();
@@ -37,10 +39,11 @@ export default function AssetChannelsCard({ id, api, tick, bump, route, go, stat
 	const { data, error, refresh } = usePoll(() => assets.channels(), 8000, [assets, tick]);
 	const channels = data?.channels || null;
 
+	const held = lightningHeld(status);
 	const wanted = route?.state?.openAsset || null;
 	useEffect(() => {
 		if (!wanted) return;
-		setModal({ type: 'open', assetKey: wanted, origin: null });
+		if (!held) setModal({ type: 'open', assetKey: wanted, origin: null });
 		// The request is spent. Without this, coming back to the tab, or
 		// reloading it, would open the dialog again.
 		if (go) go('channels', { replace: true });
@@ -85,6 +88,11 @@ export default function AssetChannelsCard({ id, api, tick, bump, route, go, stat
 
 	return (
 		<>
+			{held && (
+				<div className="error-note" role="alert" data-testid="asset-channels-held" data-code={held.code}>
+					{held.text}
+				</div>
+			)}
 			<Card
 				title="Asset channels"
 				help="A Lightning channel funded with an asset. Payments through it are made in the asset, and the peer exchanges it for bitcoin at a price it quotes each time."
@@ -93,6 +101,8 @@ export default function AssetChannelsCard({ id, api, tick, bump, route, go, stat
 						variant="primary"
 						className="sm"
 						data-testid="asset-channel-open"
+						disabled={!!held}
+						title={held ? held.text : undefined}
 						onClick={(e) => setModal({ type: 'open', assetKey: null, origin: clickOrigin(e) })}
 					>
 						Open asset channel

@@ -356,3 +356,36 @@ test('an invoice that brought in a unit less than it asked for says both, in its
 	const settled = (await api.get('/x/assets/invoices')).invoices.find((i) => i.paymentHash === whole.paymentHash);
 	assert.deepEqual([settled.status, settled.receivedAmount], ['PAID', '300']);
 });
+
+test('a node that does not offer asset channels: the tab says so across its top, and the invoice card and the pay flow are held with that reason', async () => {
+	const backend = assetsBackend();
+	backend.mock.seed('demo-main', 'not-advertised');
+	const said = (await backend.api('demo-main').get('/x/assets/status')).lightning.unavailable.message;
+	const r = await asking(backend, 'demo-main', 'BUSD', '250');
+	try {
+		const top = r.tests('asset-warning').filter((w) => w.getAttribute('data-code') === 'NOT_ADVERTISED');
+		assert.equal(top.length, 1);
+		assert.equal(top[0].textContent, said);
+		// The card is there, says why, and asks the peer for nothing.
+		assert.equal(r.test('asset-invoice-card').getAttribute('data-state'), 'held');
+		const held = r.test('asset-invoice-held');
+		assert.deepEqual([held.getAttribute('data-code'), held.getAttribute('role'), held.textContent], ['NOT_ADVERTISED', 'alert', said]);
+		assert.equal(r.test('asset-invoice-create'), null);
+		assert.equal(backend.posted('/invoices/quote').length, 0);
+		// The on-chain address beside it is untouched.
+		assert.ok(titles(r).includes('On-chain address'));
+
+		// A pasted invoice is read, and held with the same reason.
+		await r.view('Send');
+		const { bech32Encode } = await import('../../../../lib/payment-uri.js');
+		await type(r.test('asset-send-input'), bech32Encode('lnbc50u', Array.from({ length: 200 }, (_, i) => (i * 7 + 3) % 32)));
+		await settle(PRICED_MS);
+		const pay = r.test('asset-pay-held');
+		assert.equal(pay.getAttribute('data-code'), 'NOT_ADVERTISED');
+		assert.equal(pay.textContent, `That is a Lightning invoice, and this wallet cannot pay it with an asset now. ${said}`);
+		assert.equal(r.test('asset-pay'), null);
+		assert.equal(backend.posted('/pay/quote').length, 0);
+	} finally {
+		await r.unmount();
+	}
+});

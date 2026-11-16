@@ -39,12 +39,21 @@ function decodeRefusal(error, network) {
  * A Lightning invoice in the box. A wallet with asset channels pays it with
  * an asset (`pay` is what that needs); any other is told where things stand.
  */
-function Invoice({ rec, lightning, pay }) {
+function Invoice({ rec, lightning, held, pay }) {
 	if (rec?.onchainOnly) {
 		return (
 			<div className="error-note" role="alert" data-testid="asset-send-refusal" data-code="ONCHAIN_ONLY">
 				That is a Lightning invoice, and this wallet is on-chain only, so it cannot pay it. Lightning can be switched
 				on in the wallet&apos;s Edit dialog.
+			</div>
+		);
+	}
+	// A node that does not offer asset channels pays nothing over them: the
+	// invoice is read, and held with the wallet's own reason.
+	if (PAYS_INVOICES && lightning && held) {
+		return (
+			<div className="error-note" role="alert" data-testid="asset-pay-held" data-code={held.code}>
+				That is a Lightning invoice, and this wallet cannot pay it with an asset now. {held.text}
 			</div>
 		);
 	}
@@ -69,7 +78,7 @@ function Invoice({ rec, lightning, pay }) {
  * (prepare), so the fee on screen is the fee that will be paid, and Send
  * broadcasts that same transaction (commit).
  */
-export default function SendView({ api, state, patch, holdings, rows, network, fees, rec, proofServer, lightning, bump, go }) {
+export default function SendView({ api, state, patch, holdings, rows, network, fees, rec, proofServer, lightning, lightningHeld, bump, go }) {
 	const toast = useToast();
 	const assets = useAssetsApi(api);
 	const { input, feeRate } = state;
@@ -228,6 +237,7 @@ export default function SendView({ api, state, patch, holdings, rows, network, f
 					<Invoice
 						rec={rec}
 						lightning={lightning}
+						held={lightningHeld}
 						pay={{ api, invoice: parsed.invoice, amountSats: parsed.amountSats, holdings, state, patch, bump, go }}
 					/>
 				)}

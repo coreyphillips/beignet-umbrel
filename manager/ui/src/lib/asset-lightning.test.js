@@ -50,6 +50,11 @@ test('asset channels are shown only when the engine, the wallet and its assets h
 	assert.equal(assetChannelsOffered({ config: { assetsAvailable: true, assetChannelsAvailable: false }, rec: {}, status: FULL }), false, 'an engine that cannot carry them');
 	assert.equal(assetChannelsOffered({ config: { assetChannelsAvailable: true }, rec: {}, status: FULL }), false, 'an app with no assets host');
 	assert.equal(assetChannelsOffered({ config: ON, rec: { onchainOnly: true }, status: FULL }), false, 'a wallet with no Lightning');
+	// Off for a reason the host gives is still shown: its channels can be closed, and the rest is held with that reason.
+	const held = { lightning: { mode: 'off', usableChannels: 1, unavailable: { code: 'NOT_ADVERTISED', message: 'The node does not offer asset channels.', reason: 'x' } } };
+	assert.equal(assetChannelsOffered({ config: ON, rec: {}, status: held }), true);
+	assert.equal(assetChannelsOffered({ config: ON, rec: { onchainOnly: true }, status: held }), false);
+	assert.equal(assetChannelsOffered({ config: ON, rec: {}, status: { lightning: { mode: 'off', unavailable: { code: 'NOT_ADVERTISED', message: ' ' } } } }), false, 'a reason with no words is no reason');
 	assert.equal(assetChannelsOffered({ config: ON, rec: { assets: { enabled: false } }, status: FULL }), false, 'a wallet with assets switched off');
 	assert.equal(assetChannelsOffered({ config: ON, rec: {}, status: OFF }), false, 'a host whose Lightning side is off, as every real one is today');
 	assert.equal(assetChannelsOffered({ config: ON, rec: {}, status: null }), false, 'and nothing before the host has answered');

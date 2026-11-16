@@ -78,7 +78,7 @@ function TapAddress({ address, what, host }) {
  * The form lives with the tab (`state`, `patch`), so going to look at
  * Holdings and coming back finds the address still there.
  */
-export default function ReceiveView({ api, state, patch, holdings, rows, network, host, proofServer, lightning, bump, onRetryProof, onCheckAddress }) {
+export default function ReceiveView({ api, state, patch, holdings, rows, network, host, proofServer, lightning, lightningHeld, bump, onRetryProof, onCheckAddress }) {
 	const assets = useAssetsApi(api);
 	const detail = useRowDetail();
 	const [busy, setBusy] = useState(false);
@@ -277,7 +277,7 @@ export default function ReceiveView({ api, state, patch, holdings, rows, network
 				{/* The Lightning invoice, beside the on-chain address, for a wallet
 				    with asset channels (the `lightning` prop). It takes the same
 				    picked asset and amount. */}
-				{lightning && <InvoiceCard api={api} asset={asset} units={units} state={state} patch={patch} rows={rows} bump={bump} />}
+				{lightning && <InvoiceCard api={api} asset={asset} units={units} state={state} patch={patch} rows={rows} bump={bump} held={lightningHeld} />}
 
 				<Card title="Recent receives" className="grid-full">
 					{receives.length === 0 ? (

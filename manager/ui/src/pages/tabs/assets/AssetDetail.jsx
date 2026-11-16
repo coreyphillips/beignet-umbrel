@@ -104,7 +104,7 @@ function provenance(asset) {
  * and survives a reload. An asset this wallet does not hold says so and
  * offers the way back, instead of an empty page.
  */
-export default function AssetDetail({ api, assetKey, tick, rows, network, host, lightning, fees, back, setView, go, bump, backHref, onRetryProof }) {
+export default function AssetDetail({ api, assetKey, tick, rows, network, host, lightning, lightningHeld, fees, back, setView, go, bump, backHref, onRetryProof }) {
 	const { asset, missing, error, loading } = useAssetDetail(api, assetKey, tick);
 	const explorer = useContext(ExplorerNetwork) || network;
 	const [burning, setBurning] = useState(null);
@@ -200,7 +200,12 @@ export default function AssetDetail({ api, assetKey, tick, rows, network, host, 
 							</Button>
 						)}
 						{lightning && !collectible && go && (
-							<Button data-testid="asset-action-open-channel" onClick={() => go('channels', { state: { openAsset: asset.key } })}>
+							<Button
+								data-testid="asset-action-open-channel"
+								disabled={!!lightningHeld}
+								title={lightningHeld ? lightningHeld.text : undefined}
+								onClick={() => go('channels', { state: { openAsset: asset.key } })}
+							>
 								Open channel
 							</Button>
 						)}

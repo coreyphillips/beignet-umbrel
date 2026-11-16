@@ -529,3 +529,67 @@ test('a funding that cannot be taken back, and a fee that is too high or too low
 	assert.deepEqual(Object.keys(first), ['channelId', 'pendingChannelId', 'txid', 'feeSats', 'feeRate']);
 	assert.deepEqual(await api.post('/x/assets/channels/reclaim', { channelId: stuck.channelId, feeRate: 40 }, keyed('k-3')), first);
 });
+
+const NOT_OFFERED = "This wallet's node does not offer asset channels to its peers: a Lightning feature they depend on is turned off in the node's settings. Nothing new can be opened, invoiced or paid over asset channels until it is turned on. The channels there already are stay listed and can still be closed.";
+
+test('a node that does not offer asset channels: said above the card, nothing new is opened, and the channels there are stay listed and closable', async () => {
+	const backend = assetsBackend();
+	const api = backend.api('demo-main');
+	const busd = await busdOf(backend);
+	assert.equal(backend.mock.seed('demo-main', 'not-advertised'), true);
+	const status = await api.get('/x/assets/status');
+	// The wallet's shape: off, with the reason beside it, and its channels still counted.
+	assert.deepEqual(Object.keys(status.lightning), ['mode', 'usableChannels', 'unavailable']);
+	assert.deepEqual([status.lightning.mode, status.lightning.usableChannels], ['off', 1]);
+	assert.deepEqual(Object.keys(status.lightning.unavailable), ['code', 'message', 'reason']);
+	assert.deepEqual([status.lightning.unavailable.code, status.lightning.unavailable.message], ['NOT_ADVERTISED', NOT_OFFERED]);
+	// Anything new is refused by the wallet, in the same sentence.
+	for (const [route, body] of [
+		['/channels/quote', { key: busd.key, amount: '1000' }],
+		['/invoices/quote', { key: busd.key, amount: '1000' }],
+		['/pay/quote', { bolt11: 'lnbc50u1x', key: busd.key }]
+	]) {
+		await assert.rejects(api.post(`/x/assets${route}`, body), (e) => e.code === 'LIGHTNING_NOT_ADVERTISED' && e.status === 409 && e.message === NOT_OFFERED && typeof e.details.reason === 'string');
+	}
+	const r = await mount(backend, { status, route: { query: {}, state: { openAsset: busd.key } } });
+	try {
+		const note = r.test('asset-channels-held');
+		assert.deepEqual([note.getAttribute('data-code'), note.getAttribute('role'), note.textContent], ['NOT_ADVERTISED', 'alert', NOT_OFFERED]);
+		// Held, not hidden: the button is there and does nothing, and an asset's page asking for the dialog gets none.
+		assert.equal(r.test('asset-channel-open').disabled, true);
+		assert.equal(r.test('asset-channel-open-dialog'), null);
+		assert.deepEqual(r.moves, [['channels', { replace: true }]], 'the request is spent all the same');
+		// The channel there is stays listed, and closes.
+		assert.equal(r.tests('asset-channel').length, 1);
+		await click(r.test('asset-channel-close'));
+		await settle(60);
+		await click(r.test('asset-channel-close-coop'));
+		await settle(ANSWERED_MS);
+		assert.equal(backend.posted('/channels/close').length, 1);
+		assert.equal(r.test('asset-channel-close-dialog'), null);
+		assert.equal(r.tests('asset-channel').length, 0);
+	} finally {
+		await r.unmount();
+	}
+	// Put back, the wallet is as it was.
+	backend.mock.setHost('demo-main', null);
+});
+
+test('a fee budget for channel fees that is used up is said above the list as something said, not something lost', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'fee-budget'), true);
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	assert.deepEqual(status.lightning.warnings.map((w) => w.code), ['FEE_BUDGET_EXHAUSTED']);
+	const r = await mount(backend, { status });
+	try {
+		const notes = r.tests('asset-channels-warning');
+		assert.equal(notes.length, 1);
+		assert.deepEqual([notes[0].getAttribute('data-code'), notes[0].getAttribute('role'), notes[0].className], ['FEE_BUDGET_EXHAUSTED', 'status', 'info-note']);
+		assert.equal(notes[0].textContent, 'The budget this app sets for the miner fees of asset channels is used up, so nothing was done. Nothing was lost: the channels and what is in them are as they were.');
+		// Everything else on the card works as ever.
+		assert.equal(r.test('asset-channel-open').disabled, false);
+		assert.equal(r.test('asset-channels-held'), null);
+	} finally {
+		await r.unmount();
+	}
+});

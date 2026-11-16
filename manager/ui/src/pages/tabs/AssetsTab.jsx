@@ -3,7 +3,7 @@ import { AnimatePresence, m } from 'motion/react';
 import { useToast } from '../../components/Toast.jsx';
 import { Button, ErrorNote, Segmented, Skeleton } from '../../components/ui.jsx';
 import { useAssetActivity, useAssetBalances, useAssetSummary, useAssetsApi } from '../../hooks/useAssets.js';
-import { assetWarnings, explorerNetwork, hostState, proofFileBytes, proofTaken, sentence, MAX_PROOF_FILE_BYTES } from '../../lib/assets.js';
+import { assetWarnings, explorerNetwork, hostState, lightningHeld, MAX_PROOF_FILE_BYTES, proofFileBytes, proofTaken, sentence } from '../../lib/assets.js';
 import { fileToBase64, openBackup, saveFile } from '../../lib/backup.js';
 import AssetDetail from './assets/AssetDetail.jsx';
 import AssetSettingsModal from './assets/AssetSettingsModal.jsx';
@@ -118,7 +118,10 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 
 	const network = rec?.network || status?.network || 'mainnet';
 	const host = status?.proofServer?.host || null;
-	const lightning = !!config?.assetChannelsAvailable && !rec?.onchainOnly && status?.lightning?.mode !== 'off';
+	// Off with a reason of the host's (lightningHeld) is shown all the same,
+	// with everything that would start something new held for that reason.
+	const held = lightningHeld(status);
+	const lightning = !!config?.assetChannelsAvailable && !rec?.onchainOnly && (status?.lightning?.mode !== 'off' || !!held);
 
 	const [receive, setReceive] = useState(EMPTY_RECEIVE);
 	const [send, setSend] = useState(EMPTY_SEND);
@@ -303,6 +306,7 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 				network={network}
 				host={host}
 				lightning={lightning}
+				lightningHeld={lightning ? held : null}
 				fees={fees}
 				bump={bump}
 				go={go}
@@ -324,6 +328,7 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 				host={host}
 				proofServer={status.proofServer}
 				lightning={lightning}
+				lightningHeld={lightning ? held : null}
 				bump={bump}
 				onRetryProof={retryProof}
 				onCheckAddress={checkAddress}
@@ -342,6 +347,7 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 				rec={rec}
 				proofServer={status.proofServer}
 				lightning={lightning}
+				lightningHeld={lightning ? held : null}
 				bump={bump}
 				go={go}
 			/>
@@ -374,6 +380,7 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 				network={network}
 				host={host}
 				lightning={lightning}
+				lightningHeld={lightning ? held : null}
 				openAsset={(key) => move({ asset: key })}
 				setView={setView}
 				onRetryProof={retryProof}
@@ -445,6 +452,7 @@ function AssetsTabBody({ id, api, info, health, rec, tick, bump, config, route, 
 						config={config}
 						network={network}
 						lightning={lightning}
+						lightningHeld={lightning ? held : null}
 						origin={settings}
 						onClose={() => setSettings(null)}
 						onSaved={() => {

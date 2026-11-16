@@ -9,7 +9,7 @@
  * already holds.
  */
 import { cmpUnits, fmtAsset, isZero, toUnits } from './asset-amount.js';
-import { isRefusal, sentence } from './assets.js';
+import { isRefusal, lightningHeld, sentence } from './assets.js';
 import { fmtSats } from './format.js';
 import { assetsShown } from './wallet-assets.js';
 
@@ -29,7 +29,10 @@ export function assetChannelsOffered({ config, rec, status } = {}) {
 	if (!assetsShown(config, rec)) return false;
 	if (rec && rec.onchainOnly) return false;
 	const mode = status && status.lightning && status.lightning.mode;
-	return typeof mode === 'string' && mode !== 'off';
+	// Off for a reason the host gives (a node that does not offer asset
+	// channels) is still shown: the channels there are can be closed, and
+	// everything else is held with that reason and not hidden.
+	return (typeof mode === 'string' && mode !== 'off') || !!lightningHeld(status);
 }
 
 /* --------------------------------------------------------------- channels */

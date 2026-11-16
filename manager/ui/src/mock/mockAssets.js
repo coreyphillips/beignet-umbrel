@@ -854,6 +854,18 @@ export function createAssetsMock(ctx) {
 			s.invoiceShort = true;
 			return true;
 		},
+		// The node does not offer asset channels: nothing new over them, and
+		// what is there stays listed and closable. `ok` puts it back.
+		'not-advertised'(id) {
+			S(id).notAdvertised = true;
+			return true;
+		},
+		// The budget for the miner fees of asset channels is used up: a
+		// warning, and nothing lost. `ok` puts it back.
+		'fee-budget'(id) {
+			S(id).feeBudgetOut = true;
+			return true;
+		},
 		// A payment the node has no record of any more: it may have been paid.
 		'pay-unaccounted'(id) {
 			return plantNotice(id, 'PAYMENT_UNACCOUNTED');
@@ -906,11 +918,25 @@ export function createAssetsMock(ctx) {
 		return true;
 	}
 
+	// A node that does not offer asset channels to its peers, as the host
+	// says it in `status.lightning.unavailable` (assets-host/lightning.js).
+	// `reason` is the node's own word for what is turned off.
+	const NOT_ADVERTISED = {
+		code: 'NOT_ADVERTISED',
+		message:
+			"This wallet's node does not offer asset channels to its peers: a Lightning feature they depend on is turned off in the node's settings. Nothing new can be opened, invoiced or paid over asset channels until it is turned on. The channels there already are stay listed and can still be closed.",
+		reason: 'option_simple_taproot is not offered'
+	};
+	// The engine refusing a fee action of the loop's, as the host's status warns of it.
+	const FEE_BUDGET_TEXT =
+		'The budget this app sets for the miner fees of asset channels is used up, so nothing was done. Nothing was lost: the channels and what is in them are as they were.';
+
 	// The host's own sentence for it, as its status says it.
 	const CHANNEL_MISSING_TEXT =
 		"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known. This wallet cannot bring the assets in it back by itself.";
 	const channelWarningsOf = (s) => {
 		const said = s.channels.some((c) => c.state === 'MISSING') ? [{ code: 'CHANNEL_MISSING', text: CHANNEL_MISSING_TEXT }] : [];
+		if (s.feeBudgetOut) said.push({ code: 'FEE_BUDGET_EXHAUSTED', text: FEE_BUDGET_TEXT });
 		return said.length ? { warning: said.map((w) => w.text).join(' '), warnings: said } : {};
 	};
 
@@ -931,10 +957,17 @@ export function createAssetsMock(ctx) {
 			const want = m && new URLSearchParams(loc.search || '').get('assets-demo');
 			if (!want) return;
 			const s = S(decodeURIComponent(m[1]));
-			const before = `${s.host}:${s.proofServerDown}`;
+			const before = `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}`;
 			if (want === 'ok') {
 				s.host = null;
 				s.proofServerDown = false;
+				// The two that are states and not rows, so they can be put on again.
+				s.notAdvertised = false;
+				s.feeBudgetOut = false;
+				if (s.seeded) {
+					delete s.seeded['not-advertised'];
+					delete s.seeded['fee-budget'];
+				}
 			} else if (want === 'proof-server-down') {
 				s.host = null;
 				s.proofServerDown = true;
@@ -943,7 +976,7 @@ export function createAssetsMock(ctx) {
 			} else if (SEEDS[want]) {
 				putState(decodeURIComponent(m[1]), want);
 			}
-			if (before !== `${s.host}:${s.proofServerDown}`) save();
+			if (before !== `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}`) save();
 		} catch (_) {
 			/* no address to read, nothing switched */
 		}
@@ -991,7 +1024,14 @@ export function createAssetsMock(ctx) {
 			lockedSats: anchors * ANCHOR_SATS,
 			anchorCount: anchors,
 			startup: null,
-			lightning: { mode, usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL').length, ...(mode === 'off' ? {} : channelWarningsOf(s)) },
+			// A node that does not offer asset channels reads as off, with the
+			// reason beside it, and its channels still counted and warned of.
+			lightning: {
+				mode: mode !== 'off' && s.notAdvertised ? 'off' : mode,
+				usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL').length,
+				...(mode !== 'off' && s.notAdvertised ? { unavailable: { ...NOT_ADVERTISED } } : {}),
+				...(mode === 'off' ? {} : channelWarningsOf(s))
+			},
 			proofServer: proofServer(id),
 			backup: { ...s.backup },
 			limits: { ...FEE_LIMITS }
@@ -1406,6 +1446,8 @@ export function createAssetsMock(ctx) {
 
 	function requireLightning(id) {
 		if (lightningMode(id) === 'off') throw fail('This wallet has no Lightning, so it has no asset channels', 'LIGHTNING_UNAVAILABLE');
+		// As the host: nothing new over asset channels while the node does not offer them.
+		if (S(id).notAdvertised) throw fail(NOT_ADVERTISED.message, 'LIGHTNING_NOT_ADVERTISED', { status: 409, details: { reason: NOT_ADVERTISED.reason } });
 	}
 
 	function usableChannel(id, key, direction, amount, only = () => true) {

@@ -65,7 +65,7 @@ function InvoiceText({ bolt11, what }) {
  * The invoice lives with the tab (`state.invoice`, `patch`), so looking at
  * Holdings and coming back finds it still there.
  */
-export default function InvoiceCard({ api, asset, units, state, patch, rows, bump }) {
+export default function InvoiceCard({ api, asset, units, state, patch, rows, bump, held }) {
 	const assets = useAssetsApi(api);
 	const [busy, setBusy] = useState(false);
 	const [failure, setFailure] = useState(null);
@@ -78,7 +78,9 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 	// already holds, without asking the peer for a price it cannot use.
 	const noInbound = !!asset && !collectible && isZero(asset.balance?.lightningReceivable);
 	const scope = asset && amount && !noInbound ? `${asset.key}|${amount}` : null;
-	const price = useLightningQuote(() => assets.invoiceQuote({ key: asset.key, amount }), state.invoice ? null : scope);
+	// `held` is why the wallet's node takes nothing new over asset channels
+	// (lightningHeld): no price is asked for, and the card says why.
+	const price = useLightningQuote(() => assets.invoiceQuote({ key: asset.key, amount }), state.invoice || held ? null : scope);
 	const quote = price.quote;
 	// A refusal was about one asset and one amount. Changing either asks afresh.
 	useEffect(() => {
@@ -162,8 +164,13 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 			title="Lightning invoice"
 			help="An ordinary Lightning invoice, priced in bitcoin by your channel peer when it is made. The payer pays it from any Lightning wallet and you receive the asset. The price holds for a short while, so make the invoice when the payer is ready."
 		>
-			<div data-testid="asset-invoice-card" data-state={made ? standing : quote ? 'priced' : refusal ? 'refused' : 'empty'}>
-				{!made && (
+			<div data-testid="asset-invoice-card" data-state={made ? standing : held ? 'held' : quote ? 'priced' : refusal ? 'refused' : 'empty'}>
+				{!made && held && (
+					<div className="error-note" role="alert" data-testid="asset-invoice-held" data-code={held.code}>
+						{held.text}
+					</div>
+				)}
+				{!made && !held && (
 					<>
 						{!asset ? (
 							<Empty>Choose the asset above first.</Empty>

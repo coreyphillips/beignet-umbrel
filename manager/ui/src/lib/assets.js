@@ -151,12 +151,29 @@ export function onHandShortage(details, what) {
  * is something the wallet cannot put right by itself, and is said in red. A
  * host that names no codes is believed all the same, in one red note.
  */
+/**
+ * Why this wallet's node takes nothing new over asset channels, when the
+ * wallet's assets host says it does not (`status.lightning.unavailable`):
+ * { code, text }, with the host's own sentence. Null for a wallet whose
+ * asset channels work, and for one that has none to speak of. The channels
+ * there already are stay listed and can still be closed, so the screens
+ * stay, held with this reason.
+ */
+export function lightningHeld(status) {
+	const said = status && status.lightning && status.lightning.unavailable;
+	if (!said || typeof said.message !== 'string' || !said.message.trim()) return null;
+	return { code: typeof said.code === 'string' && said.code ? said.code : 'LIGHTNING_UNAVAILABLE', text: said.message.trim() };
+}
+
+// A warning that is a wait or a thing said, not a loss: shown blue.
+const CHANNEL_NOTES = new Set(['RECOVERY_STUCK', 'FEE_BUDGET_EXHAUSTED']);
+
 export function channelWarnings(status) {
 	const ln = status && status.lightning;
 	if (!ln) return [];
 	const said = Array.isArray(ln.warnings) ? ln.warnings.filter((w) => w && typeof w.text === 'string' && w.text.trim()) : [];
 	if (said.length > 0) {
-		return said.map((w) => ({ code: String(w.code || 'CHANNEL_WARNING'), tone: w.code === 'RECOVERY_STUCK' ? 'info' : 'error', text: w.text.trim() }));
+		return said.map((w) => ({ code: String(w.code || 'CHANNEL_WARNING'), tone: CHANNEL_NOTES.has(w.code) ? 'info' : 'error', text: w.text.trim() }));
 	}
 	return typeof ln.warning === 'string' && ln.warning.trim() ? [{ code: 'CHANNEL_WARNING', tone: 'error', text: ln.warning.trim() }] : [];
 }
@@ -212,6 +229,10 @@ export function assetWarnings({ status, rec, info, health, btc, holdings, rows, 
 	// What is wrong with an asset channel is said here too: the assets in it
 	// are part of what this tab counts.
 	for (const w of channelWarnings(status)) out.push({ code: w.code, tone: w.tone, parts: [w.text] });
+	// A node that does not offer asset channels: nothing new can be opened,
+	// invoiced or paid over them, in the host's own sentence.
+	const held = lightningHeld(status);
+	if (held) out.push({ code: held.code, tone: 'error', parts: [held.text] });
 
 	if (health && health.electrumConnected === false) {
 		out.push({
