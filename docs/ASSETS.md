@@ -44,7 +44,7 @@ browser ──> manager ──> /wallets/:id/api/x/assets/*  ──> the wallet'
 
 **Where the code comes from.** ts-tap is not published to npm. Two tarballs built from one ts-tap commit are committed under `vendor/`, with their checksums and the commit they came from (`vendor/ts-tap.lock.json`). The image build checks the checksums and installs them beside the engine in one step, so the adapter and the daemon share a single copy of the engine.
 
-**When the tab appears.** Assets need an engine release that carries the host extension contract. The manager looks at the engine it is bundled with: on an older engine the Assets tab is simply absent and every wallet runs as before. `BEIGNET_ASSETS=off` in the app's environment switches assets off for the whole box.
+**When the tab appears.** Assets need an engine release that carries the host extension contract. Beignet 0.42.0 is the first, and it is the one this app bundles. The manager looks at the engine it is bundled with: on an older engine the Assets tab is simply absent and every wallet runs as before. `BEIGNET_ASSETS=off` in the app's environment switches assets off for the whole box.
 
 ## Where the requests go
 
@@ -162,6 +162,8 @@ Three layers, each of which can be run again.
 - **Testnet3,** against `testnet.universe.lightning.finance`. The same mints, six confirmations, the issuances found on the public universe and learned from it by a second wallet, and a transfer that confirmed. Its proof was refused by the server, so the transfer did not complete: see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers).
 
 The regtest stack runs its `tapd` with today's proof rules in force from the first block (`--proofactivationheight=1`), so the scenarios exercise what mainnet, testnet3 and testnet4 require of a proof and not the older rules a stock regtest `tapd` keeps.
+
+The unit tests and the regtest scenarios were first run on an engine built from the pull request that added the host extension contract, and run again on the published Beignet 0.42.0.
 
 Nothing was spent on mainnet to test this. Mainnet runs the same code with a different address prefix, activation height and universe server, and its universe server is the one unknown above.
 
