@@ -386,6 +386,10 @@ function statusView({ cfg, phase, error = null, tip = 0, summary = {}, startup =
 		chain: { name: cfg.tapNetwork || null, height: tip || 0, minConfirmations: cfg.minConfirmations },
 		pending: { mints: 0, sends: 0, receives: 0, burns: 0, ...(summary.pending || {}) },
 		holdsAssets: !!summary.holdsAssets,
+		// How many asset channels are not over, closing ones included, or
+		// null while that cannot be said. The manager remembers the last
+		// number it was told, for a wallet that is stopped.
+		assetChannels: Number.isInteger(summary.liveChannels) ? summary.liveChannels : null,
 		lockedSats: summary.lockedSats || 0,
 		anchorCount: summary.anchorCount || 0,
 		startup: startup || null,

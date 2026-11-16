@@ -366,6 +366,22 @@ function channelCount(host) {
 	}
 }
 
+/**
+ * How many channels are not over, for whoever must not take "cannot be
+ * asked" for "none": null while there is a node to ask that is not there
+ * yet, and when the list cannot be read. A wallet with no Lightning side
+ * has none, and says 0.
+ */
+function liveChannels(host) {
+	if (!host.ln) return 0;
+	try {
+		if (!host.ln.ready()) return null;
+		return channelList(host).filter((c) => !c.over).length;
+	} catch (_) {
+		return null;
+	}
+}
+
 /** The `lightning` part of the status. */
 function statusOf(host) {
 	let usableChannels = 0;
@@ -2164,6 +2180,7 @@ module.exports = {
 	modeOf,
 	channelList,
 	channelCount,
+	liveChannels,
 	statusOf,
 	listChannels,
 	paymentLimits,

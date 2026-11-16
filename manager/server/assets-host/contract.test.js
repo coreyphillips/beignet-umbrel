@@ -46,7 +46,7 @@ const CHANNELS = !skip && assetChannelsAvailable(ENGINE_BIN);
 // The well-known test phrase. It holds nothing, on a chain of its own.
 const MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 const STATUS_KEYS = [
-	'phase', 'ready', 'error', 'network', 'hrp', 'chain', 'pending', 'holdsAssets', 'lockedSats', 'anchorCount', 'startup', 'lightning', 'proofServer',
+	'phase', 'ready', 'error', 'network', 'hrp', 'chain', 'pending', 'holdsAssets', 'assetChannels', 'lockedSats', 'anchorCount', 'startup', 'lightning', 'proofServer',
 	'backup', 'limits'
 ];
 

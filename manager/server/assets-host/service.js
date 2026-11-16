@@ -859,6 +859,9 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		mem.summary = {
 			holdsAssets: live.length > 0 || channels > 0,
 			channels,
+			// The same count for the manager, which keeps it across a stop:
+			// null when it cannot be read now, which is never taken for none.
+			liveChannels: lightning().liveChannels(host),
 			anchorCount: anchors.length,
 			lockedSats: mem.lockedSats,
 			pending: { mints: active('mint'), sends: active('send'), receives: active('receive'), burns: active('burn') },
@@ -896,7 +899,7 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 	/** Publish the status when the part the manager keeps has changed. */
 	host.emitStatus = () => {
 		const s = host.status();
-		const key = JSON.stringify([s.phase, s.ready, s.error, s.holdsAssets, s.backup, s.lightning]);
+		const key = JSON.stringify([s.phase, s.ready, s.error, s.holdsAssets, s.assetChannels, s.backup, s.lightning]);
 		if (key === mem.statusKey) return;
 		mem.statusKey = key;
 		host.emitEvent('status', s);

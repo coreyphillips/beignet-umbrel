@@ -2542,3 +2542,22 @@ test('a funding whose change comes back with it leaves no note: only a backup ma
 		assert.deepEqual((await again.get('/status')).lightning.warnings.map((w) => w.code), ['CHANNEL_MISSING']);
 	});
 });
+
+test('the status says how many asset channels are not over, and says nothing rather than none while the node cannot be asked', async () => {
+	// The node is not there yet: the count is not known, which is not 0.
+	const early = world({ lightning: 'unbound' });
+	await early.boot();
+	assert.equal((await early.get('/status')).assetChannels, null);
+	// One channel, counted while it is open and while it is closing.
+	const { h, channel } = await channelled();
+	await h.host.pass();
+	assert.equal((await h.get('/status')).assetChannels, 1);
+	await h.call('POST /channels/close', { channelId: channel.channelId });
+	await h.host.pass();
+	assert.equal((await h.get('/status')).assetChannels, 1);
+	// A wallet with no Lightning side for its assets has none.
+	const plain = harness();
+	made.push(plain);
+	await plain.boot();
+	assert.equal((await plain.get('/status')).assetChannels, 0);
+});

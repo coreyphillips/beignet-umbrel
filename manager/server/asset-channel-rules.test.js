@@ -110,3 +110,105 @@ test('a wallet whose asset channels are all over, or that never had asset Lightn
 	assert.equal((await m.updateWallet('w1', { onchainOnly: true })).onchainOnly, true);
 	assert.equal(m.asked, 1);
 });
+
+test('a wallet that is stopped, or whose assets host does not answer, is held to what its host last said', async () => {
+	// Stopped, with two asset channels on record from when it last ran.
+	let m = managerWith({ records: wallet({ running: false, assetChannelsLive: 2 }), channels: ['NORMAL'], running: false });
+	await assert.rejects(m.updateWallet('w1', { recoveryMode: 'quorum' }), (err) => {
+		assert.equal(err.code, 'ASSET_CHANNELS_OPEN');
+		assert.equal(
+			err.message,
+			'This wallet has 2 asset channels open. A channel backup kept by guardians does not cover asset channels. Close them on the Channels tab first, and wait for the assets to be back on-chain.'
+		);
+		return true;
+	});
+	assert.equal(m.asked, 0);
+	// Running, and its assets host does not answer.
+	m = managerWith({ records: wallet({ assetChannelsLive: 1 }), channels: null });
+	await assert.rejects(m.updateWallet('w1', { onchainOnly: true }), { code: 'ASSET_CHANNELS_OPEN' });
+	assert.equal(m.asked, 1);
+	// A host that answers is believed over what was remembered.
+	m = managerWith({ records: wallet({ assetChannelsLive: 1 }), channels: ['CLOSED'] });
+	assert.equal((await m.updateWallet('w1', { onchainOnly: true })).onchainOnly, true);
+});
+
+test('the manager remembers how many asset channels a wallet has, and a host that cannot say changes nothing', () => {
+	const records = wallet();
+	const m = managerWith({ records });
+	m.runtimeState = (id) => m.runtime.get(id);
+	const status = (assetChannels) => ({ phase: 'ready', ready: true, holdsAssets: true, assetChannels });
+	m._noteAssetsStatus('w1', status(2));
+	assert.equal(records.w1.assetChannelsLive, 2);
+	// Still starting, or a host from before it said so.
+	m._noteAssetsStatus('w1', status(null));
+	m._noteAssetsStatus('w1', { phase: 'ready', ready: true, holdsAssets: true });
+	m._noteAssetsStatus('w1', status(-1));
+	assert.equal(records.w1.assetChannelsLive, 2);
+	m._noteAssetsStatus('w1', status(0));
+	assert.equal(records.w1.assetChannelsLive, 0);
+});
+
+test('a wallet on a guardian backup whose assets host last listed an asset channel is not started, and says why', async () => {
+	const start = (m) => WalletManager.prototype.startWallet.call(m, 'w1');
+	const made = (extra, opts = {}) => {
+		const records = wallet({ running: false, ...extra });
+		const m = managerWith({ records, running: false, ...opts });
+		m.runtime.set('w1', { proc: null, spawning: false, status: 'stopped', healthy: false, lastStartError: null });
+		m.runtimeState = (id) => m.runtime.get(id);
+		m.started = 0;
+		m._startWalletLocked = async () => {
+			m.started += 1;
+		};
+		m.logged = [];
+		m._log = (id, line) => m.logged.push(line);
+		return m;
+	};
+	const said =
+		'This wallet has an asset channel open and is on a channel backup kept by guardians, which does not cover asset channels, so it was not started. Take it off the guardian backup, start it, and close the channel on the Channels tab. Once the assets are back on-chain it can go back on a guardian backup.';
+	for (const mode of ['async-remote', 'quorum']) {
+		const m = made({ recovery: { mode, guardians: G }, assetChannelsLive: 1 });
+		await assert.rejects(start(m), (err) => {
+			assert.deepEqual([err.code, err.statusCode, err.message], ['ASSET_CHANNELS_OPEN', 409, said]);
+			return true;
+		});
+		// The daemon is never spawned, and the wallet says why it is not running.
+		assert.equal(m.started, 0);
+		const rt = m.runtime.get('w1');
+		assert.deepEqual([rt.status, rt.lastStartError.code, rt.lastStartError.message, rt.spawning], ['stopped', 'ASSET_CHANNELS_OPEN', said, false]);
+		assert.equal(m.logged.length, 1);
+	}
+	const several = made({ recovery: { mode: 'quorum', guardians: G }, assetChannelsLive: 3 });
+	await assert.rejects(start(several), (err) => /^This wallet has 3 asset channels open .* close the channels on the Channels tab\./.test(err.message));
+
+	// Started as before: no channel on record, a backup that covers them, or an install that cannot have one.
+	for (const m of [
+		made({ recovery: { mode: 'quorum', guardians: G }, assetChannelsLive: 0 }),
+		made({ recovery: { mode: 'quorum', guardians: G } }),
+		made({ recovery: { mode: 'peer-storage', guardians: [] }, assetChannelsLive: 3 }),
+		made({ recovery: { mode: 'off', guardians: [] }, assetChannelsLive: 3 }),
+		made({ recovery: { mode: 'quorum', guardians: G }, assetChannelsLive: 3 }, { supported: false })
+	]) {
+		await start(m);
+		assert.equal(m.started, 1);
+	}
+});
+
+test('what the engine refuses over asset channels at boot is said in the manager\'s words, from one table', () => {
+	const m = managerWith({ records: wallet() });
+	const failed = (error) => {
+		const rt = { lastStartError: null };
+		m._noteStartFailure(rt, JSON.stringify({ ok: false, error }));
+		return rt.lastStartError;
+	};
+	const provider = failed({ code: 'ASSET_PROVIDER_REQUIRED', message: 'channel 03ab needs its auxiliary provider' });
+	assert.equal(provider.code, 'ASSET_PROVIDER_REQUIRED');
+	assert.match(provider.message, /^This wallet has an asset channel, and was started in a way that cannot keep one/);
+	assert.equal(provider.message.includes('03ab'), false);
+	// Named only in the text of a failed start.
+	const restore = failed({ code: 'START_FAILED', message: 'restore refused: ASSET_RESTORE_REFUSED (2 channels)' });
+	assert.equal(restore.code, 'ASSET_RESTORE_REFUSED');
+	assert.match(restore.message, /a channel backup restored over it would not cover that channel/);
+	// Any other failed start is kept as the daemon wrote it.
+	assert.equal(failed({ code: 'START_FAILED', message: 'Another beignet instance is already using this directory' }).message, 'Another beignet instance is already using this directory');
+	assert.equal(failed({ code: 'SOMETHING_ELSE', message: 'no' }), null);
+});

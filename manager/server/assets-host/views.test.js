@@ -454,7 +454,7 @@ test('status: lightning is full only when the host says so', () => {
 test('status: every field the dashboard reads, with lightning off', () => {
 	const status = views.statusView({ cfg: regtest, phase: 'starting' });
 	assert.deepEqual(Object.keys(status), [
-		'phase', 'ready', 'error', 'network', 'hrp', 'chain', 'pending', 'holdsAssets', 'lockedSats', 'anchorCount', 'startup', 'lightning',
+		'phase', 'ready', 'error', 'network', 'hrp', 'chain', 'pending', 'holdsAssets', 'assetChannels', 'lockedSats', 'anchorCount', 'startup', 'lightning',
 		'proofServer', 'backup', 'limits'
 	]);
 	assert.equal(status.ready, false);
