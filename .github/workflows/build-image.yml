@@ -786,7 +786,18 @@ env:
   # (#2055). The storage schema (20), the environment settings and the
   # runtime dependencies are unchanged, and the capability probes in
   # server/engine.js answer as for 0.40.0.
-  BEIGNET_VERSION: "0.41.0"
+  # 0.42.0 adds host extensions (coreyphillips/beignet#2094): the process
+  # that starts a daemon can name modules that run inside it, beside the
+  # wallet, with `beignet start --extension <path>` or BEIGNET_EXTENSIONS.
+  # Their routes are served under /x/<id>, and GET /extensions lists them.
+  # A daemon started with no extension behaves as 0.41.0 does, so nothing
+  # changes for a wallet that loads none. It is the first release the
+  # Taproot Assets host (#308) can be loaded on. BeignetErrorCode gains
+  # EXTENSION_ERROR and EXTENSION_UNAVAILABLE. The storage schema (20) and
+  # the runtime dependencies are unchanged, BEIGNET_EXTENSIONS is the one
+  # new environment setting, and the capability probes in server/engine.js
+  # answer as for 0.41.0.
+  BEIGNET_VERSION: "0.42.0"
 
 jobs:
   build:
