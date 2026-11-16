@@ -9,7 +9,7 @@ export const DEMO =
 	import.meta.env.VITE_DEMO === '1' || sessionStorage.getItem('beignet-demo') === '1';
 
 async function request(path, { method = 'GET', body, timeoutMs, headers } = {}) {
-	if (DEMO) return (await import('./mock/mockApi.js')).mockRequest(path, { method, body });
+	if (DEMO) return (await import('./mock/mockApi.js')).mockRequest(path, { method, body, headers });
 	let res;
 	try {
 		res = await fetch(path, {
@@ -32,17 +32,31 @@ async function request(path, { method = 'GET', body, timeoutMs, headers } = {}) 
 	} catch (_) {
 		/* non-JSON */
 	}
-	if (!res.ok || data.ok === false) {
-		const err = new Error((data.error && data.error.message) || `Request failed (${res.status})`);
-		err.code = data.error && data.error.code;
-		// The HTTP status rides along for the one case a route's absence is
-		// an answer: a 404 from a daemon that predates a feature.
-		err.status = res.status;
-		// Structured context on a refusal (which wallets depend on a primary).
-		err.details = (data.error && data.error.details) || null;
-		throw err;
-	}
+	if (!res.ok || data.ok === false) throw responseError(res.status, data.error);
 	return data.result;
+}
+
+/**
+ * A refusal as the Error every caller catches: `code`, `status`, `details`.
+ *
+ * A wallet's host extension (Taproot Assets, under /x/assets) refuses through
+ * the daemon, which answers its own code, EXTENSION_ERROR, with the
+ * extension's code and details beside it. The extension's are the ones a
+ * caller acts on (INSUFFICIENT_BTC, PREVIEW_EXPIRED), so they are lifted
+ * here, once, and no component has to know about the wrapper.
+ */
+export function responseError(status, error) {
+	const e = error && typeof error === 'object' ? error : {};
+	const ext = e.extension && typeof e.extension === 'object' ? e.extension : null;
+	const err = new Error(e.message || `Request failed (${status})`);
+	err.code = (ext && ext.code) || e.code;
+	// The HTTP status rides along for the one case a route's absence is
+	// an answer: a 404 from a daemon that predates a feature.
+	err.status = status;
+	// Structured context on a refusal (which wallets depend on a primary).
+	err.details = (ext && ext.details) || e.details || null;
+	if (ext) err.extension = ext.id || null;
+	return err;
 }
 
 /**

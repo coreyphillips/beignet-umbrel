@@ -33,6 +33,7 @@ import { copy, fmtSats } from '../lib/format.js';
 import { isClosedChannel } from '../lib/channels.js';
 import { usesOnion, usesPublic } from '../lib/node-uris.js';
 import { openBackup } from '../lib/backup.js';
+import { assetsNotArchived, deleteAssetsNote } from '../lib/wallet-assets.js';
 
 function statusTone(s) {
 	if (s === 'running') return 'green';
@@ -201,6 +202,7 @@ export default function WalletsPage() {
 									{w.status === 'restarting' && w.lastStartError && (
 										<div className="wallet-meta">Last start failed: {w.lastStartError.message}</div>
 									)}
+									<AssetsBackupLine wallet={w} />
 									{info && (
 										<div className="wallet-meta">
 											{w.onchainOnly ? (
@@ -579,18 +581,41 @@ function SeedModal({ name, mnemonic, onClose }) {
 	);
 }
 
-function DeleteModal({ wallet, origin, onClose, onDeleted }) {
+/**
+ * A wallet whose assets the last box backup was written without, said in the
+ * list the way its other standing conditions are: one quiet line, with what
+ * to do about it. Settings names the same wallets beside the backup buttons.
+ */
+export function AssetsBackupLine({ wallet }) {
+	const gap = assetsNotArchived(wallet);
+	if (!gap) return null;
+	return (
+		<div className="wallet-meta" data-testid={`wallet-assets-backup-${wallet.id}`}>
+			{gap.text}
+		</div>
+	);
+}
+
+export function DeleteModal({ wallet, origin, onClose, onDeleted }) {
 	const toast = useToast();
 	const [purge, setPurge] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [refused, setRefused] = useState(null);
 	const dependents = refused?.dependents || wallet.lfbwDependents || [];
+	// A wallet that holds assets loses more than its coins' keys: the phrase
+	// does not bring assets back, so whether a backup has them is said here.
+	const assetsNote = deleteAssetsNote(wallet);
 	return (
 		<Modal title={`Delete "${wallet.name}"`} onClose={onClose} origin={origin}>
 			<div className="error-note">
 				Deleting removes this wallet from Beignet. If you also erase its data and have not backed
 				up the seed, any funds will be lost permanently.
 			</div>
+			{assetsNote && (
+				<div className={assetsNote.safe ? 'info-note' : 'error-note'} data-testid="delete-assets-note">
+					{assetsNote.text}
+				</div>
+			)}
 			{dependents.length > 0 && (
 				<div className="error-note" role="alert">
 					This wallet is the primary node of {dependents.map((d) => `"${d.name}"`).join(', ')}: their

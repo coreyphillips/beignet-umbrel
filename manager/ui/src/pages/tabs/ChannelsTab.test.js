@@ -14,6 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
+import { assetsBackend } from '../../../test/assets-backend.mjs';
 import { click, render, settle, type } from '../../../test/render.mjs';
 import { ToastProvider } from '../../components/Toast.jsx';
 import ChannelsTab from './ChannelsTab.jsx';
@@ -612,6 +613,142 @@ test('a phone wallet is named a private peer, and asked about once for all its c
 		assert.match(labels[0].title, /phone wallet/);
 		assert.equal(labels[1].muted, false);
 		assert.ok(!/unknown node/i.test(view.text()), 'nothing is called unknown');
+	} finally {
+		await view.unmount();
+		restore();
+	}
+});
+
+/* --------------------------------------------------------- asset channels */
+
+// What the wallet page hands the tab: the app's config, the wallet's record,
+// and the summary of its assets host.
+const ASSETS_ON = { assetsAvailable: true, assetChannelsAvailable: true };
+const HOST_ON = { status: { ready: true, lightning: { mode: 'full', usableChannels: 1 } } };
+const HOST_OFF = { status: { ready: true, lightning: { mode: 'off', usableChannels: 0 } } };
+
+/** The tab's markup with the ids React numbers per mount taken out. */
+const markup = (view) => view.container.innerHTML.replace(/:r[0-9a-z]+:/g, ':id:');
+
+/** The daemon stub, remembering every path it was asked for. */
+function recordingApi() {
+	const stub = stubApi();
+	const asked = [];
+	return {
+		asked,
+		get: (path) => {
+			asked.push(path);
+			return stub.get(path);
+		},
+		post: (path, body) => {
+			asked.push(path);
+			return stub.post(path, body);
+		}
+	};
+}
+
+test('a wallet without asset channels sees the tab exactly as it was, and its assets host is not asked', async () => {
+	const restore = stubManagerFetch();
+	try {
+		const plain = await render(wrapped, tabProps());
+		await settle(50);
+		const before = markup(plain);
+		assert.ok(before.includes('Open channel'));
+		await plain.unmount();
+
+		const cases = [
+			['an engine that cannot carry them, as every released one is', { config: { assetsAvailable: true, assetChannelsAvailable: false }, assets: HOST_ON }],
+			['an app with no assets host', { config: { assetsAvailable: false, assetChannelsAvailable: true }, assets: HOST_ON }],
+			['an on-chain only wallet', { config: ASSETS_ON, rec: { onchainOnly: true }, assets: HOST_ON }],
+			['a wallet with assets switched off', { config: ASSETS_ON, rec: { assets: { enabled: false } }, assets: HOST_ON }],
+			['a host whose Lightning side is off', { config: ASSETS_ON, assets: HOST_OFF }],
+			['a host that has not answered yet', { config: ASSETS_ON, assets: { status: null } }]
+		];
+		for (const [what, props] of cases) {
+			const api = recordingApi();
+			const view = await render(wrapped, {
+				id: 'w1',
+				api,
+				rec: {},
+				tick: 0,
+				bump: () => {},
+				// Even with an asset's Open channel pressed on the way here.
+				route: { query: {}, state: { openAsset: 'a'.repeat(64) } },
+				go: () => {},
+				...props
+			});
+			try {
+				await settle(50);
+				assert.equal(markup(view), before, what);
+				assert.equal(view.$('[data-testid="asset-channels"]'), null, what);
+				assert.equal(view.$('[data-testid="asset-channel-open-dialog"]'), null, `${what}: there is no dialog to open`);
+				assert.deepEqual(
+					api.asked.filter((path) => path.startsWith('/x/assets')),
+					[],
+					`${what}: nothing is asked of the assets host`
+				);
+			} finally {
+				await view.unmount();
+			}
+		}
+	} finally {
+		restore();
+	}
+});
+
+test('a wallet with asset channels has them in a card of their own, under the bitcoin channels', async () => {
+	const restore = stubManagerFetch();
+	const backend = assetsBackend();
+	const wallet = backend.api('demo-main');
+	const daemon = stubApi();
+	const forAssets = (path) => path.startsWith('/x/assets') || path === '/fees/estimates';
+	const api = {
+		get: (path) => (forAssets(path) ? wallet.get(path) : daemon.get(path)),
+		post: (path, body, options) => (forAssets(path) ? wallet.post(path, body, options) : daemon.post(path, body))
+	};
+	const moves = [];
+	const busd = (await wallet.get('/x/assets/balances')).assets.find((a) => a.name === 'BUSD');
+	const view = await render(wrapped, {
+		id: 'w1',
+		api,
+		rec: {},
+		tick: 0,
+		bump: () => {},
+		config: ASSETS_ON,
+		assets: { status: await wallet.get('/x/assets/status') },
+		// Arrived from the BUSD page, with its Open channel pressed.
+		route: { query: {}, state: { openAsset: busd.key } },
+		go: (to, options) => moves.push([to, options || {}])
+	});
+	try {
+		await settle(80);
+		assert.deepEqual(
+			view.$$('.card-head h3').map((h) => h.firstChild.textContent),
+			['Channels', 'Asset channels']
+		);
+		assert.equal(view.$$('tbody tr').length, 1, 'the bitcoin channel is still listed as it was');
+		const rows = view.$$('[data-testid="asset-channel"]');
+		assert.equal(rows.length, 1);
+		assert.match(rows[0].textContent, /BUSD/);
+		assert.match(rows[0].textContent, /with Lightning Labs edge/);
+
+		// The asset's page asked for a channel, and the dialog is open on it.
+		const dialog = view.$('[data-testid="asset-channel-open-dialog"]');
+		assert.ok(dialog);
+		const chosen = [...dialog.querySelectorAll('.asset-chip')].find((c) => c.getAttribute('aria-checked') === 'true');
+		assert.equal(chosen.textContent, 'BUSD');
+		assert.deepEqual(moves, [['channels', { replace: true }]]);
+		await click([...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel'));
+		await settle(250);
+
+		// Closed channels are history, and a listed asset channel is not.
+		await click(view.$$('button.pill').find((b) => /Closed \(1\)/.test(b.textContent)));
+		await settle(50);
+		assert.equal(view.$('[data-testid="asset-channels"]'), null);
+		assert.deepEqual(
+			view.$$('.card-head h3').map((h) => h.firstChild.textContent),
+			['Closed channels']
+		);
 	} finally {
 		await view.unmount();
 		restore();

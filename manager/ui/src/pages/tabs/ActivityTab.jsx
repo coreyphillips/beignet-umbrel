@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { usePoll } from '../../hooks/usePoll.js';
+import { useAssetActivity } from '../../hooks/useAssets.js';
 import { useToast } from '../../components/Toast.jsx';
 import {
 	Badge,
@@ -17,13 +18,27 @@ import { addressUrl, txUrl } from '../../lib/explorer.js';
 import { describeFallback, persistFallback } from '../../lib/direct-funding.js';
 import { manager } from '../../api.js';
 import { FundingSteps } from '../../components/FundingSteps.jsx';
+import { pendingCount } from '../../lib/assets.js';
+import {
+	NO_ASSET_BUMP,
+	anchorAmounts,
+	anchorAssetKey,
+	anchorIndex,
+	anchorLabel,
+	assetsShown,
+	bumpVerdict
+} from '../../lib/wallet-assets.js';
 
 const STATUS_TONE = { COMPLETED: 'green', PENDING: 'yellow', FAILED: 'red' };
+
+// As many asset rows as the wallet hands over in one answer. The ones that
+// matter most here, the unconfirmed, are the newest and come first.
+const ASSET_ROWS = { limit: 200 };
 
 const confirmations = (tx, tipHeight) =>
 	tx.confirmed && tx.height ? Math.max(1, tipHeight - tx.height + 1) : 0;
 
-export default function ActivityTab({ id, api, info, rec, tick, bump }) {
+export default function ActivityTab({ id, api, info, rec, tick, bump, config, go, assets }) {
 	const [tab, setTab] = useState('onchain');
 	// The edit dialog can flip the wallet to on-chain only without this tab
 	// unmounting, so the pill row loses Lightning while local state still says
@@ -69,6 +84,32 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 	for (const t of boostable?.cpfp || []) boostMethod[t.txid] = 'cpfp';
 	for (const t of boostable?.rbf || []) boostMethod[t.txid] = 'rbf';
 
+	// Taproot Assets. A transaction that carries an asset looks like any other
+	// taproot spend in the wallet's own history, so the asset rows are asked
+	// which ones they are: those get named, and are never offered a fee bump.
+	const showAssets = assetsShown(config, rec);
+	const { rows: assetRows, error: assetRowsError } = useAssetActivity(api, tick, ASSET_ROWS, showAssets);
+	const anchors = useMemo(() => anchorIndex(assetRows), [assetRows]);
+	const bumpContext = {
+		anchors,
+		known: !showAssets || !!assetRows,
+		atStake:
+			showAssets && (!!assets?.status?.holdsAssets || !!rec?.assets?.holdsAssets || pendingCount(assets?.status) > 0)
+	};
+	// The rows could not be read at all, for a wallet with assets: no pending
+	// transaction can be cleared for a bump, and the page says why none is offered.
+	const bumpsHeld =
+		!bumpContext.known &&
+		bumpContext.atStake &&
+		!!assetRowsError &&
+		(data?.txs || []).some((t) => !t.confirmed && !t.dropped && boostMethod[t.txid]);
+	const openAsset = go
+		? (row) => {
+				const key = anchorAssetKey(row);
+				go('assets', key ? { query: { asset: key } } : {});
+		  }
+		: null;
+
 	return (
 		<div>
 			<Segmented
@@ -91,6 +132,12 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 
 			{tab === 'onchain' && (
 				<Card title="On-chain transactions">
+					{bumpsHeld && (
+						<div className="info-note" style={{ marginBottom: 12 }} data-testid="bump-held">
+							Bump fee is held back for now. This wallet&apos;s asset activity could not be read, and a transaction
+							that carries an asset must not be replaced.
+						</div>
+					)}
 					{!data?.txs || data.txs.length === 0 ? (
 						<div className="empty">No on-chain transactions yet.</div>
 					) : (
@@ -116,6 +163,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 										>
 											<td>
 												<Badge tone={t.type === 'received' ? 'green' : 'blue'}>{t.type}</Badge>
+												{anchors.has(t.txid) && <Badge tone="asset">{anchorLabel(anchors.get(t.txid))}</Badge>}
 												{/* Otherwise this row is an ordinary send in every
 												    respect, which is exactly what made a degraded
 												    direct funding impossible to find afterwards. */}
@@ -137,7 +185,15 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 											<td className="mono" title={t.txid}>{shortId(t.txid)}</td>
 											<td className="wallet-meta">{fmtDate(t.confirmTimestamp || t.timestamp)}</td>
 											<td>
-												{!t.confirmed && !t.dropped && boostMethod[t.txid] && (
+												{/* In place of the button, for a transaction that
+												    carries an asset: a replacement would have a new
+												    id, and the asset's proof is waiting on this one. */}
+												{!t.confirmed && !t.dropped && anchors.has(t.txid) && (
+													<span className="wallet-meta tx-no-bump" data-testid="tx-no-bump">
+														{NO_ASSET_BUMP}
+													</span>
+												)}
+												{!t.confirmed && !t.dropped && boostMethod[t.txid] && bumpVerdict(t.txid, bumpContext) === 'yes' && (
 													<button
 														type="button"
 														className="btn sm"
@@ -254,6 +310,8 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 					network={network}
 					tipHeight={tipHeight}
 					fallback={detail.kind === 'tx' ? fellBack[detail.item.txid] || null : null}
+					anchor={detail.kind === 'tx' ? anchors.get(detail.item.txid) || null : null}
+					onOpenAsset={openAsset}
 					onClose={() => setDetail(null)}
 				/>
 			)}
@@ -284,7 +342,7 @@ export default function ActivityTab({ id, api, info, rec, tick, bump }) {
 	);
 }
 
-function DetailModal({ detail, network, tipHeight, fallback, onClose }) {
+function DetailModal({ detail, network, tipHeight, fallback, anchor, onOpenAsset, onClose }) {
 	const { kind, item } = detail;
 	const title =
 		kind === 'tx' ? 'Transaction' : kind === 'payment' ? 'Lightning payment' : 'Coin';
@@ -293,7 +351,14 @@ function DetailModal({ detail, network, tipHeight, fallback, onClose }) {
 		// is just a second thing to read.
 		<Modal title={title} onClose={onClose} wide>
 			{kind === 'tx' && (
-				<TxDetail tx={item} network={network} tipHeight={tipHeight} fallback={fallback} />
+				<TxDetail
+					tx={item}
+					network={network}
+					tipHeight={tipHeight}
+					fallback={fallback}
+					anchor={anchor}
+					onOpenAsset={onOpenAsset}
+				/>
 			)}
 			{kind === 'payment' && <PaymentDetail payment={item} />}
 			{kind === 'utxo' && <UtxoDetail utxo={item} network={network} />}
@@ -301,9 +366,10 @@ function DetailModal({ detail, network, tipHeight, fallback, onClose }) {
 	);
 }
 
-function TxDetail({ tx, network, tipHeight, fallback }) {
+function TxDetail({ tx, network, tipHeight, fallback, anchor, onOpenAsset }) {
 	const confs = confirmations(tx, tipHeight);
 	const url = txUrl(network, tx.txid);
+	const assetAmounts = anchor ? anchorAmounts(anchor) : '';
 	return (
 		<div className="detail">
 			{/* The one thing about this transaction that nothing else can say: it
@@ -323,7 +389,25 @@ function TxDetail({ tx, network, tipHeight, fallback }) {
 			)}
 			<DetailRow label="Type">
 				<Badge tone={tx.type === 'received' ? 'green' : 'blue'}>{tx.type}</Badge>
+				{anchor && <Badge tone="asset">{anchorLabel(anchor)}</Badge>}
 			</DetailRow>
+			{/* What the transaction is for, which its bitcoin amount does not
+			    say: the sats here are the fee and the output the asset sits in. */}
+			{anchor && (
+				<DetailRow label="Asset">
+					<span data-testid="tx-asset">{assetAmounts || 'An asset of this wallet'}</span>
+					{onOpenAsset && (
+						<button
+							type="button"
+							className="btn sm tx-asset-link"
+							data-testid="tx-asset-link"
+							onClick={() => onOpenAsset(anchor)}
+						>
+							View in Assets
+						</button>
+					)}
+				</DetailRow>
+			)}
 			<DetailRow label="Amount">{fmtSats(Math.abs(tx.valueSats))}</DetailRow>
 			<DetailRow label="Fee">
 				{tx.feeSats != null ? fmtSats(tx.feeSats) : 'not known for a received transaction'}
@@ -350,7 +434,10 @@ function TxDetail({ tx, network, tipHeight, fallback }) {
 						</div>
 					</>
 				) : (
-					<Badge tone="yellow">pending, waiting for a block</Badge>
+					<>
+						<Badge tone="yellow">pending, waiting for a block</Badge>
+						{anchor && <div className="wallet-meta">{NO_ASSET_BUMP}</div>}
+					</>
 				)}
 			</DetailRow>
 			{tx.address && (

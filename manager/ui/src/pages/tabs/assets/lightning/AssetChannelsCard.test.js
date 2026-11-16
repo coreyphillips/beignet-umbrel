@@ -1,0 +1,375 @@
+/**
+ * Run with: npm test (from manager/ui).
+ *
+ * Asset channels on the Channels tab: the list, opening one, closing one.
+ * A channel funded with an asset is counted in the asset, so every figure is
+ * in its units and the one in sats says so. Opening says what it costs in
+ * bitcoin before the button works and happens once, a peer that does not
+ * take asset channels is refused in plain words with nothing spent, and a
+ * force close is never one press away.
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { act, createElement, useState } from 'react';
+import { assetsBackend } from '../../../../../test/assets-backend.mjs';
+import { click, render, select, settle, type } from '../../../../../test/render.mjs';
+import { ToastProvider } from '../../../../components/Toast.jsx';
+import AssetChannelsCard from './AssetChannelsCard.jsx';
+
+test.beforeEach(() => sessionStorage.clear());
+
+const PEER = `02${'ab'.repeat(32)}`;
+// The demo's peer that does not take asset channels: a key that starts 02 and eight zeros.
+const PLAIN_PEER = `0200000000${'cd'.repeat(28)}`;
+// A cost is asked for a beat after the form stops moving.
+const PRICED_MS = 350;
+const ANSWERED_MS = 80;
+
+/** The card over a backend, as the Channels tab mounts it, with a way to make it ask again. */
+async function mount(backend, { id = 'demo-main', api, route, go } = {}) {
+	let bump = () => {};
+	const moves = [];
+	function Page() {
+		const [tick, setTick] = useState(0);
+		bump = () => setTick((n) => n + 1);
+		return createElement(
+			ToastProvider,
+			null,
+			createElement(AssetChannelsCard, {
+				id,
+				api: api || backend.api(id),
+				tick,
+				bump: () => {},
+				route: route || { query: {}, state: null },
+				go: go || ((to, options) => moves.push([to, options || {}]))
+			})
+		);
+	}
+	const r = await render(Page, {});
+	await settle(30);
+	return {
+		...r,
+		moves,
+		test: (name) => r.$(`[data-testid="${name}"]`),
+		tests: (name) => r.$$(`[data-testid="${name}"]`),
+		toasts: () => r.$$('.toast').map((t) => t.textContent),
+		/** Let time pass in the wallet, and the card hear about it. */
+		async pass(ms) {
+			backend.pass(ms);
+			await act(async () => bump());
+			await settle(30);
+		}
+	};
+}
+
+const chip = (r, name) => r.$$('.asset-chip').find((b) => b.querySelector('.asset-chip-name').textContent === name);
+const busdOf = async (backend, id = 'demo-main') => (await backend.api(id).get('/x/assets/balances')).assets.find((a) => a.name === 'BUSD');
+
+/** The open dialog with BUSD chosen, an amount typed and a peer named. */
+async function filled(r, { amount = '1000', peer = `${PEER}@10.0.0.9:9736` } = {}) {
+	await click(r.test('asset-channel-open'));
+	await settle(60);
+	await click(chip(r, 'BUSD'));
+	if (amount) await type(r.test('asset-channel-amount'), amount);
+	if (peer) await type(r.test('asset-channel-peer-input'), peer);
+	await settle(PRICED_MS);
+}
+
+test('a channel is shown in the asset it holds: both sides, what can move, and its bitcoin', async () => {
+	const backend = assetsBackend();
+	const r = await mount(backend);
+	try {
+		assert.equal(r.$('.card-head h3').firstChild.textContent, 'Asset channels');
+		assert.equal(r.test('asset-channels').getAttribute('data-count'), '1');
+		const rows = r.tests('asset-channel');
+		assert.equal(rows.length, 1);
+		const row = rows[0];
+		assert.equal(row.getAttribute('data-state'), 'NORMAL');
+		assert.equal(row.querySelector('.asset-name').textContent, 'BUSD');
+		assert.match(row.textContent, /with Lightning Labs edge · 02[0-9a-f]{4}…[0-9a-f]{6}/, 'the peer by name, and by key');
+		assert.equal(row.querySelector('.badge').textContent, 'open');
+		assert.equal(row.querySelector('.badge').className, 'badge green');
+
+		assert.match(r.test('asset-channel-local').textContent, /2,400\.00\s*BUSD\s*yours/);
+		assert.match(r.test('asset-channel-remote').textContent, /theirs\s*3,100\.00\s*BUSD/);
+		const bar = row.querySelector('.asset-channel-bar');
+		assert.equal(bar.getAttribute('role'), 'img');
+		assert.equal(bar.getAttribute('aria-label'), "2,400.00 BUSD on your side, 3,100.00 BUSD on the peer's side");
+		assert.equal(bar.querySelector('.balbar-local').style.width, '43.6%');
+
+		const facts = [...row.querySelectorAll('.asset-channel-facts > div')].map((d) => d.textContent.replace(/\s+/g, ' '));
+		assert.deepEqual(facts, [
+			'Can send2,400.00BUSD',
+			'Can receive3,100.00BUSD',
+			'Capacity5,500.00BUSD',
+			'Bitcoin in the channel100,000 sats'
+		]);
+		assert.equal(r.test('asset-channel-close').textContent, 'Close');
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a wallet with no asset channel is told what one is for', async () => {
+	const backend = assetsBackend();
+	const r = await mount(backend, { id: 'demo-testnet' });
+	try {
+		assert.equal(r.test('asset-channels').getAttribute('data-count'), '0');
+		assert.match(r.test('asset-channels').textContent, /No asset channels\. Open one to send and receive an asset over Lightning\./);
+		assert.ok(r.test('asset-channel-open'));
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('opening asks for the asset, the amount, the peer and the fee, says the cost in sats, and opens once', async () => {
+	const backend = assetsBackend();
+	const busd = await busdOf(backend);
+	const r = await mount(backend);
+	try {
+		await click(r.test('asset-channel-open'));
+		await settle(60);
+		const dialog = r.test('asset-channel-open-dialog').closest('[role="dialog"]');
+		assert.equal(document.getElementById(dialog.getAttribute('aria-labelledby')).firstChild.textContent, 'Open asset channel');
+		assert.deepEqual(
+			r.$$('[data-testid="asset-channel-picker"] .asset-chip-name').map((c) => c.textContent),
+			['BUSD', 'Club Points', 'Pico'],
+			'counted assets with some on-chain, and no collectibles'
+		);
+		assert.equal(r.test('asset-channel-amount'), null, 'no amount before there is an asset');
+		assert.equal(r.test('asset-channel-submit').disabled, true);
+		assert.equal(r.test('asset-channel-submit').textContent, 'Open channel');
+		assert.match(r.test('asset-channel-peer-note').textContent, /The peer has to take asset channels\. If it does not, the wallet says so and nothing is opened\./);
+
+		await click(chip(r, 'BUSD'));
+		await type(r.test('asset-channel-amount'), '1000');
+		assert.match(dialog.textContent, /It all starts on your side/);
+		await settle(PRICED_MS);
+		assert.equal(r.test('asset-channel-submit').disabled, true, 'not without a peer');
+
+		await type(r.test('asset-channel-peer-input'), `${PEER}@10.0.0.9:9736`);
+		await settle(PRICED_MS);
+		const cost = [...r.test('asset-channel-cost').querySelectorAll('tr')].map((tr) => [...tr.children].map((td) => td.textContent).join(' | '));
+		assert.deepEqual(cost, [
+			'Goes into the channel | 1,000.00 BUSDand 100,000 sats of bitcoin with it',
+			'Miner fee | 4,320 satsat 18 sat/vB',
+			'Total in bitcoin | 104,320 sats',
+			'On-chain available | 500,000 sats'
+		]);
+		assert.deepEqual(backend.posted('/channels/quote').at(-1).body, { key: busd.key, amount: '100000', feeRate: 18 });
+		assert.equal(backend.posted('/channels/open').length, 0, 'pricing opens nothing');
+
+		const submit = r.test('asset-channel-submit');
+		assert.equal(submit.textContent, 'Open channel with 1,000.00 BUSD');
+		assert.equal(submit.disabled, false);
+		await click(submit);
+		await settle(ANSWERED_MS + 200);
+
+		const opened = backend.posted('/channels/open');
+		assert.equal(opened.length, 1);
+		assert.deepEqual(opened[0].body, { peer: { pubkey: PEER, host: '10.0.0.9', port: 9736 }, key: busd.key, amount: '100000', feeRate: 18 });
+		assert.match(opened[0].headers['X-Idempotency-Key'], /^[0-9a-f-]{16,}$/i);
+		assert.equal(r.test('asset-channel-open-dialog'), null, 'the dialog closes');
+		assert.ok(r.toasts().some((t) => /Opening a BUSD channel\. It can be used once its funding transaction confirms\./.test(t)));
+
+		const rows = r.tests('asset-channel');
+		assert.equal(rows.length, 2, 'and the channel is in the list at once');
+		assert.equal(rows[0].getAttribute('data-state'), 'OPENING');
+		assert.equal(rows[0].querySelector('.badge').textContent, 'opening');
+		assert.match(rows[0].textContent, /It can carry payments once its funding transaction has confirmed\./);
+		assert.match(rows[0].textContent, /Can send0\s*BUSD|Can send0\.00\s*BUSD/, 'nothing moves through it yet');
+		assert.equal((await busdOf(backend)).balance.onchain, '1150000', 'the asset left the on-chain balance');
+
+		await r.pass(16_000);
+		assert.equal(r.tests('asset-channel')[0].querySelector('.badge').textContent, 'open');
+		assert.match(r.tests('asset-channel')[0].textContent, /Can send1,000\.00\s*BUSD/);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a connected peer is chosen from a list, by name', async () => {
+	const backend = assetsBackend();
+	const real = backend.api('demo-main');
+	const api = {
+		...real,
+		get: async (path) => {
+			if (path === '/peers') {
+				return [
+					{ pubkey: PEER, host: '10.0.0.9', port: 9736, state: 'connected', alias: 'Edge One' },
+					{ pubkey: `03${'ef'.repeat(32)}`, host: '10.0.0.10', port: 9735, state: 'disconnected', alias: 'Gone' }
+				];
+			}
+			if (path.startsWith('/graph/node')) throw Object.assign(new Error('Node not found in graph'), { code: 'NOT_FOUND', status: 404 });
+			return real.get(path);
+		}
+	};
+	const r = await mount(backend, { api });
+	try {
+		await click(r.test('asset-channel-open'));
+		await settle(80);
+		const peer = r.test('asset-channel-peer');
+		assert.deepEqual([...peer.options].map((o) => o.textContent), ['Choose a peer', 'Edge One · 02abab…ababab', 'Another peer…'], 'only peers that are connected now');
+		assert.equal(r.test('asset-channel-peer-input'), null, 'no box to type in until another peer is asked for');
+
+		await click(chip(r, 'BUSD'));
+		await type(r.test('asset-channel-amount'), '50');
+		await select(peer, PEER);
+		await settle(PRICED_MS);
+		await click(r.test('asset-channel-submit'));
+		await settle(ANSWERED_MS + 200);
+		assert.deepEqual(backend.posted('/channels/open')[0].body.peer, { pubkey: PEER, host: '10.0.0.9', port: 9736, alias: 'Edge One' });
+		assert.match(r.tests('asset-channel')[0].textContent, /with Edge One · 02abab…ababab/);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test("an asset's own page opens the dialog on that asset, and the request is spent", async () => {
+	const backend = assetsBackend();
+	const points = (await backend.api('demo-main').get('/x/assets/balances')).assets.find((a) => a.name === 'Club Points');
+	const r = await mount(backend, { route: { query: {}, state: { openAsset: points.key } } });
+	try {
+		await settle(80);
+		assert.ok(r.test('asset-channel-open-dialog'), 'opened without a press');
+		assert.equal(chip(r, 'Club Points').getAttribute('aria-checked'), 'true');
+		assert.equal(chip(r, 'BUSD').getAttribute('aria-checked'), 'false');
+		assert.ok(r.test('asset-channel-amount'), 'ready for the amount');
+		assert.deepEqual(r.moves, [['channels', { replace: true }]], 'coming back to the tab does not open it again');
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a peer that does not take asset channels is refused in plain words, and nothing is spent', async () => {
+	const backend = assetsBackend();
+	const r = await mount(backend);
+	try {
+		await filled(r, { peer: PLAIN_PEER });
+		await click(r.test('asset-channel-submit'));
+		await settle(ANSWERED_MS);
+		const refusal = r.test('asset-channel-refusal');
+		assert.equal(refusal.getAttribute('data-code'), 'PEER_NO_ASSET_CHANNELS');
+		assert.equal(refusal.getAttribute('role'), 'alert');
+		assert.match(refusal.textContent, /That peer does not open asset channels, so nothing was opened and nothing was spent\./);
+		assert.ok(r.test('asset-channel-open-dialog'), 'the dialog stays, with what was typed');
+		assert.equal(r.test('asset-channel-amount').value, '1000');
+		assert.equal(r.tests('asset-channel').length, 1);
+		assert.equal((await busdOf(backend)).balance.onchain, '1250000');
+
+		// Naming another peer clears it, and the open goes through.
+		await type(r.test('asset-channel-peer-input'), PEER);
+		assert.equal(r.test('asset-channel-refusal'), null);
+		await click(r.test('asset-channel-submit'));
+		await settle(ANSWERED_MS + 200);
+		assert.deepEqual(backend.posted('/channels/open').at(-1).body.peer, { pubkey: PEER, host: null, port: null }, 'a key alone will do for a peer the wallet can find');
+		assert.equal(r.tests('asset-channel').length, 2);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('without the bitcoin to open, the cost is still shown and the refusal says how much is missing', async () => {
+	const backend = assetsBackend({ spendable: 50_000 });
+	const r = await mount(backend);
+	try {
+		await filled(r);
+		assert.match(r.test('asset-channel-cost').textContent, /Total in bitcoin104,320 sats/);
+		const refusal = r.test('asset-channel-refusal');
+		assert.equal(refusal.getAttribute('data-code'), 'INSUFFICIENT_BTC');
+		assert.match(refusal.textContent, /Opening needs 104,320 sats on-chain and this wallet has 50,000 sats\.\s*Deposit bitcoin on the Receive tab first\./);
+		assert.equal(r.test('asset-channel-submit').disabled, true);
+		assert.equal(backend.posted('/channels/open').length, 0);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('an amount the wallet does not hold on-chain, or a peer that is not one, cannot be opened with', async () => {
+	const backend = assetsBackend();
+	const r = await mount(backend);
+	try {
+		await filled(r, { amount: '99999999', peer: 'not-a-peer' });
+		assert.match(r.test('asset-channel-amount-refusal').textContent, /That is more than the 12,500\.00 BUSD this wallet holds on-chain\./);
+		assert.match(r.test('asset-channel-peer-refusal').textContent, /A peer starts with its node public key/);
+		assert.equal(r.test('asset-channel-cost'), null, 'nothing is priced that cannot be opened');
+		assert.equal(r.test('asset-channel-submit').disabled, true);
+		assert.equal(backend.posted('/channels/quote').length, 0);
+
+		await type(r.test('asset-channel-peer-input'), PEER.slice(0, 40));
+		assert.match(r.test('asset-channel-peer-refusal').textContent, /66 characters, and this is 40/);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('closing is cooperative, and a force close is asked about twice', async () => {
+	const backend = assetsBackend();
+	const channel = (await backend.api('demo-main').get('/x/assets/channels')).channels[0];
+	const r = await mount(backend);
+	try {
+		await click(r.test('asset-channel-close'));
+		await settle(60);
+		const dialog = () => r.test('asset-channel-close-dialog');
+		assert.equal(dialog().getAttribute('data-step'), 'cooperative');
+		assert.match(dialog().textContent, /Close the BUSD channel with Lightning Labs edge\? Your side of it, 2,400\.00 BUSD, comes back to this wallet\s+on-chain/);
+		assert.equal(r.test('asset-channel-close-force-confirm'), null, 'a force close is not on the first page');
+
+		// Asking about a force close closes nothing.
+		await click(r.test('asset-channel-close-force'));
+		assert.equal(dialog().getAttribute('data-step'), 'force');
+		assert.match(dialog().textContent, /A force close does not ask the peer\. It is for a peer that has stopped answering, and for nothing else\./);
+		assert.match(dialog().textContent, /only after the channel's safety delay, which can\s+be days/);
+		assert.equal(backend.posted('/channels/close').length, 0);
+
+		await click(r.test('asset-channel-close-back'));
+		assert.equal(dialog().getAttribute('data-step'), 'cooperative');
+		await click(r.test('asset-channel-close-coop'));
+		await settle(ANSWERED_MS + 200);
+		assert.deepEqual(backend.posted('/channels/close').map((c) => c.body), [{ channelId: channel.channelId, force: false }]);
+		assert.equal(r.test('asset-channel-close-dialog'), null);
+		assert.ok(r.toasts().some((t) => /Closing the BUSD channel\. The funds come back on-chain once it confirms\./.test(t)));
+		assert.equal(r.tests('asset-channel').length, 0, 'it leaves the list');
+		assert.match(r.test('asset-channels').textContent, /No asset channels\./);
+	} finally {
+		await r.unmount();
+	}
+
+	const other = assetsBackend();
+	const forced = await mount(other);
+	try {
+		await click(forced.test('asset-channel-close'));
+		await settle(60);
+		await click(forced.test('asset-channel-close-force'));
+		await click(forced.test('asset-channel-close-force-confirm'));
+		await settle(ANSWERED_MS + 200);
+		assert.deepEqual(other.posted('/channels/close').map((c) => c.body.force), [true]);
+		assert.ok(forced.toasts().some((t) => /Force closing the BUSD channel\. The funds come back after its safety delay\./.test(t)));
+	} finally {
+		await forced.unmount();
+	}
+});
+
+test('a close the wallet refuses keeps the dialog open, with the reason', async () => {
+	const backend = assetsBackend();
+	const real = backend.api('demo-main');
+	const api = {
+		...real,
+		post: async (path, body, options) => {
+			if (path === '/x/assets/channels/close') throw Object.assign(new Error('no such channel'), { code: 'CHANNEL_NOT_FOUND', status: 404 });
+			return real.post(path, body, options);
+		}
+	};
+	const r = await mount(backend, { api });
+	try {
+		await click(r.test('asset-channel-close'));
+		await settle(60);
+		await click(r.test('asset-channel-close-coop'));
+		await settle(ANSWERED_MS);
+		assert.equal(r.test('asset-channel-close-error').textContent, 'This wallet no longer has that channel. It may already be closed.');
+		assert.ok(r.test('asset-channel-close-dialog'));
+		assert.equal(r.test('asset-channel-close-coop').disabled, false, 'and it can be tried again');
+	} finally {
+		await r.unmount();
+	}
+});

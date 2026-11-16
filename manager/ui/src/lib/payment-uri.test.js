@@ -8,11 +8,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+	TAP_NOT_PAYABLE_HERE,
 	bech32Decode,
 	bech32Encode,
 	btcStringToSats,
 	buildBip21,
 	classifyAddress,
+	classifyTapAddress,
 	convertBits,
 	parseBolt11Hrp,
 	parsePayment,
@@ -856,4 +858,85 @@ test('nothing else is taken for a pubky', () => {
 	assert.notEqual(parsePayment(`pubky://${PUBKY}/pub/paykit`).kind, 'pubky');
 	assert.equal(parsePayment('bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4').kind, 'onchain');
 	assert.equal(parsePayment('bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr').kind, 'onchain');
+});
+
+/* --------------------------------------------------- Taproot Assets addresses */
+
+// A whole address is a little over 150 bytes of fields. What they say is the
+// wallet's to read, so any bytes of the right length make a vector here: the
+// parser is held to the prefix, the checksum and the length.
+function tapAddress(hrp, { bytes = 157, encoding = 'bech32m' } = {}) {
+	const body = Array.from({ length: bytes }, (_, i) => (i * 37 + 11) & 255);
+	return bech32Encode(hrp, convertBits(body, 8, 5, true), encoding);
+}
+const TAP = tapAddress('tapbc');
+
+test('a Taproot Assets address is recognised and names its chain', () => {
+	assert.ok(TAP.startsWith('tapbc1') && TAP.length > 250, 'the vector is the size of a real one');
+	const r = parsePayment(TAP, { network: 'mainnet' });
+	assert.equal(r.kind, 'tap');
+	assert.equal(r.address, TAP);
+	assert.equal(r.network, 'mainnet');
+	assert.deepEqual(r.warnings, []);
+	assert.equal(parsePayment(tapAddress('taptb'), { network: 'testnet' }).network, 'testnet');
+	assert.equal(parsePayment(tapAddress('taprt'), { network: 'regtest' }).network, 'regtest');
+	assert.equal(parsePayment(TAP).kind, 'tap', 'with no wallet to check against, the chain is not judged');
+	assert.deepEqual(classifyTapAddress(TAP), { ok: true, address: TAP, network: 'mainnet' });
+	assert.match(TAP_NOT_PAYABLE_HERE, /asks for an asset, not bitcoin/, 'what a bitcoin send card says when handed one');
+});
+
+test('a Taproot Assets address for another chain is refused, and says which', () => {
+	const r = parsePayment(tapAddress('taptb'), { network: 'mainnet' });
+	assert.equal(r.kind, 'invalid');
+	assert.equal(r.code, 'WRONG_NETWORK');
+	assert.match(r.message, /for testnet, and this wallet is on mainnet/);
+	const signet = parsePayment(tapAddress('tapsb'), { network: 'mainnet' });
+	assert.equal(signet.code, 'TAP_NETWORK_UNSUPPORTED');
+	assert.match(signet.message, /for signet, which this app does not run/);
+});
+
+test('a truncated Taproot Assets address is caught by its checksum', () => {
+	const cut = parsePayment(TAP.slice(0, -9), { network: 'mainnet' });
+	assert.equal(cut.kind, 'invalid');
+	assert.equal(cut.code, 'TAP_CHECKSUM');
+	const swapped = TAP.slice(0, 60) + (TAP[60] === 'q' ? 'p' : 'q') + TAP.slice(61);
+	assert.equal(parsePayment(swapped, { network: 'mainnet' }).code, 'TAP_CHECKSUM', 'as is one with a single character wrong');
+	// One that checks out and is far too short to hold an address was cut
+	// before its checksum was worked out, by whatever made it.
+	assert.equal(parsePayment(tapAddress('tapbc', { bytes: 40 }), { network: 'mainnet' }).code, 'TAP_TRUNCATED');
+});
+
+test('a Taproot Assets address in capitals is folded, and says so', () => {
+	const r = parsePayment(TAP.toUpperCase(), { network: 'mainnet' });
+	assert.equal(r.kind, 'tap');
+	assert.equal(r.address, TAP, 'the address handed on is the lower case one');
+	assert.deepEqual(r.warnings.map((w) => w.code), ['CASE_FOLDED_FROM_QR']);
+	const mixed = parsePayment(TAP.slice(0, 40) + TAP.slice(40).toUpperCase(), { network: 'mainnet' });
+	assert.equal(mixed.code, 'TAP_MIXED_CASE', 'half and half is damage, not a QR code');
+});
+
+test('a Taproot Assets address broken across lines is repaired', () => {
+	const wrapped = `${TAP.slice(0, 64)}\n${TAP.slice(64, 128)}\r\n  ${TAP.slice(128)}`;
+	const r = parsePayment(wrapped, { network: 'mainnet' });
+	assert.equal(r.kind, 'tap');
+	assert.equal(r.address, TAP);
+});
+
+test('half a Taproot Assets address is not refused while it is being typed', () => {
+	assert.equal(tooShortToJudge(TAP.slice(0, 80)), true, 'nobody types 250 characters, but a paste can arrive in pieces');
+	assert.equal(tooShortToJudge('tapbc1'), true);
+	assert.equal(tooShortToJudge(TAP), false, 'a whole one is judged');
+	assert.equal(tooShortToJudge(TAP.slice(0, -1)), false, 'and so is one a character short, which is a mistake worth naming');
+});
+
+test('a tap prefix on a plain bech32 string is refused', () => {
+	// Taproot Assets addresses are bech32m. The same bytes under the older
+	// checksum verify as bech32, and nothing that writes these addresses
+	// wrote that.
+	const old = tapAddress('tapbc', { encoding: 'bech32' });
+	assert.equal(bech32Decode(old, { maxLength: 2000 }).ok, true, 'it is a well formed bech32 string');
+	const r = parsePayment(old, { network: 'mainnet' });
+	assert.equal(r.kind, 'invalid');
+	assert.equal(r.code, 'TAP_CHECKSUM');
+	assert.equal(classifyTapAddress('bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq').ok, false, 'and a bitcoin address is not one');
 });

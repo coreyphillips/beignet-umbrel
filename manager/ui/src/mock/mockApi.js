@@ -12,6 +12,7 @@ import {
 } from '../lib/payment-uri.js';
 
 import { decodeFundingEnvelope, encodeFundingEnvelope } from '../lib/funding-envelope.js';
+import { createAssetsMock } from './mockAssets.js';
 import { MODES, hostForUri, usesOnion, usesPublic } from '../lib/node-uris.js';
 
 const HEX = '0123456789abcdef';
@@ -1366,6 +1367,125 @@ export const mockEvents = {
 	}
 };
 
+// ---------- Taproot Assets (mockAssets.js) ----------
+
+// Sats leave the wallet's coins largest first, the way a fee and an anchor
+// output would be paid for.
+function spendOnchain(id, sats) {
+	let left = Math.max(0, Math.floor(sats));
+	const utxos = store.state[id].utxos.slice().sort((a, b) => b.valueSats - a.valueSats);
+	for (const u of utxos) {
+		if (left <= 0) break;
+		const take = Math.min(u.valueSats, left);
+		u.valueSats -= take;
+		left -= take;
+	}
+	store.state[id].utxos = store.state[id].utxos.filter((u) => u.valueSats > 0);
+}
+
+function demoStorage() {
+	try {
+		return globalThis.sessionStorage || null;
+	} catch (_) {
+		return null;
+	}
+}
+
+const assetsMock = createAssetsMock({
+	wallets: () => store.wallets,
+	// A lightning-first wallet's coins are on their way into its channel, so
+	// none of them are there to pay an asset fee with.
+	spendable: (id) => (store.wallets.find((w) => w.id === id)?.lfbw?.enabled ? 0 : store.state[id] ? onchainBalance(id) : 0),
+	spend: spendOnchain,
+	height: (id) => store.state[id]?.blockHeight || 0,
+	fees: () => ({ fast: 18, normal: 7, slow: 2 }),
+	emit,
+	err: (message, code) => err(message, code),
+	storage: demoStorage(),
+	lightning: true
+});
+
+/**
+ * The on-chain transactions behind a wallet's asset operations. A real
+ * wallet's history has them like any other transaction, and its daemon lists
+ * the unconfirmed ones as boostable because it cannot tell them apart. The
+ * demo's history has them too, so the Activity tab has something to name and
+ * something to withhold Bump fee from.
+ */
+function assetAnchorTxs(id) {
+	let rows = [];
+	try {
+		rows = assetsMock.request(id, '/x/assets/activity', 'limit=200', 'GET').rows || [];
+	} catch (_) {
+		return [];
+	}
+	const tip = store.state[id]?.blockHeight || 0;
+	return rows
+		.filter((r) => r.txid && !String(r.kind).startsWith('ln-') && !r.failed)
+		.map((r) => {
+			const received = r.kind === 'receive';
+			const confirmed = !!(r.at && r.at.confirmed);
+			return {
+				txid: r.txid,
+				type: received ? 'received' : 'sent',
+				// What moves in bitcoin is the output the asset sits in, and the fee.
+				valueSats: received ? r.anchorSats || 1000 : -((r.feeSats || 0) + (r.anchorSats || 0)),
+				feeSats: received ? null : r.feeSats ?? null,
+				satsPerVbyte: received ? null : r.satsPerVbyte ?? null,
+				confirmed,
+				height: confirmed ? r.blockHeight || Math.max(1, tip - Math.max(0, (r.confirmations || 1) - 1)) : null,
+				timestamp: (r.at && (r.at.broadcast || r.at.created)) || Date.now(),
+				confirmTimestamp: (r.at && r.at.confirmed) || null
+			};
+		});
+}
+
+/** A wallet's transactions with its asset transactions among them, newest first. */
+function withAssetAnchors(id, txs) {
+	const have = new Set(txs.map((t) => t.txid));
+	const out = txs.slice();
+	for (const anchor of assetAnchorTxs(id)) {
+		if (have.has(anchor.txid)) continue;
+		const at = out.findIndex((t) => (t.timestamp || 0) < anchor.timestamp);
+		out.splice(at === -1 ? out.length : at, 0, anchor);
+	}
+	return out;
+}
+
+// Wallets whose assets the last demo archive was written without, and why
+// ('no-file' or 'too-large'), as the manager records it against each wallet.
+const assetsLeftOut = new Map();
+
+// The universe servers the app knows (the manager's PUBLIC_UNIVERSE_SERVERS).
+const UNIVERSE_SERVERS = [
+	{
+		id: 'lightning-labs',
+		label: 'Lightning Labs',
+		courier: 'universerpc://universe.lightning.finance:10029',
+		rest: 'https://universe.lightning.finance',
+		networks: ['mainnet'],
+		note: "Lightning Labs' universe, the default of their own daemon"
+	},
+	{
+		id: 'lightning-labs-testnet',
+		label: 'Lightning Labs testnet3',
+		courier: 'universerpc://testnet.universe.lightning.finance:10029',
+		rest: 'https://testnet.universe.lightning.finance',
+		networks: ['testnet'],
+		chain: 'testnet3',
+		note: "Lightning Labs' testnet3 universe"
+	},
+	{
+		id: 'lightning-labs-testnet4',
+		label: 'Lightning Labs testnet4',
+		courier: 'universerpc://testnet4.universe.lightning.finance:443',
+		rest: 'https://testnet4.universe.lightning.finance',
+		networks: ['testnet'],
+		chain: 'testnet4',
+		note: "Lightning Labs' testnet4 universe"
+	}
+];
+
 // ---------- Request handling ----------
 
 const latency = () => new Promise((r) => setTimeout(r, 150 + rnd() * 250));
@@ -1623,6 +1743,18 @@ function publicRecord(w) {
 	rec.fforEnforced = w.fforEnforced || null;
 	rec.fforSetup = w.fforSetup || null;
 	rec.fforIssuance = w.fforIssuance || {};
+	// Taproot Assets, in the manager's shape: whether the wallet runs the
+	// host and how the host is doing, its own proof server if it has one,
+	// whether it holds anything, and where its assets stand against the box
+	// backup (the file an archive carries, and why the last one left it out).
+	const held = assetsMock.recordOf(w.id);
+	rec.assets = {
+		...held,
+		phase: w.status === 'running' || w.status === 'restore-required' ? 'ready' : null,
+		error: null,
+		backupFile: held.holdsAssets ? true : null,
+		notArchived: held.holdsAssets ? assetsLeftOut.get(w.id) || null : null
+	};
 	return rec;
 }
 
@@ -1881,7 +2013,12 @@ function managerRequest(path, method, body) {
 			recoveryAutoApplyAvailable: true,
 			guardianHostingAvailable: true,
 			guardianRotationAvailable: true,
-			fforAvailable: true
+			fforAvailable: true,
+			// Taproot Assets: the app's assets host is up, and so are asset
+			// channels, so the demo shows the whole Assets tab.
+			assetsAvailable: true,
+			assetChannelsAvailable: true,
+			universeServers: UNIVERSE_SERVERS.map((s) => ({ ...s, chain: s.chain || null, networks: s.networks.slice() }))
 		};
 	}
 	if ((path === '/backup/inspect' || path === '/backup/restore') && method === 'POST') {
@@ -2061,6 +2198,20 @@ function managerRequest(path, method, body) {
 			}
 			if (body.name) w.name = body.name;
 			if (body.electrum) w.electrum = body.electrum;
+			// The proof server is a wallet setting: null puts the default back.
+			if (body.assets !== undefined) {
+				const universe = body.assets && body.assets.universe;
+				if (universe && (!String(universe.courier || '').trim() || !String(universe.rest || '').trim())) {
+					throw err('A universe server is a courier address and a web address.', 'BAD_UNIVERSE');
+				}
+				if (universe && !/^universerpc:\/\/[a-z0-9.\-[\]:]+$/i.test(String(universe.courier).trim())) {
+					throw err('The proof courier address looks like universerpc://universe.example.com:10029.', 'BAD_UNIVERSE');
+				}
+				if (universe && !/^https:\/\//i.test(String(universe.rest).trim()) && w.network !== 'regtest') {
+					throw err('The universe server is on plain http. Only https, or an onion address, is used.', 'BAD_UNIVERSE');
+				}
+				w.assets = { ...(w.assets || {}), universe: universe ? { courier: String(universe.courier).trim(), rest: String(universe.rest).trim() } : null };
+			}
 			Object.assign(w, network);
 			delete w.tor;
 			if (body.announce !== undefined) w.announce = !!body.announce;
@@ -2939,7 +3090,7 @@ function closeDemoChannel(id, channelId, force) {
 	}, 6000);
 }
 
-function walletRequest(id, path, method, body) {
+function walletRequest(id, path, method, body, headers) {
 	const w = store.wallets.find((x) => x.id === id);
 	if (!w) throw err('Wallet not found', 'NOT_FOUND');
 	const st = store.state[id];
@@ -2966,6 +3117,11 @@ function walletRequest(id, path, method, body) {
 
 	if (route.startsWith('/ffor/')) {
 		const answer = fforRequest(w, st, route, query, method, body);
+		if (answer !== undefined) return answer;
+	}
+	// Taproot Assets, the host extension's namespace (mockAssets.js).
+	if (route === '/x/assets' || route.startsWith('/x/assets/')) {
+		const answer = assetsMock.request(w.id, route, query, method, body, headers);
 		if (answer !== undefined) return answer;
 	}
 
@@ -3597,7 +3753,7 @@ function walletRequest(id, path, method, body) {
 			return { txid, hex: hex(400) };
 		}
 		case '/transactions/boostable': {
-			const pending = st.txs.filter((t) => !t.confirmed);
+			const pending = withAssetAnchors(w.id, st.txs).filter((t) => !t.confirmed);
 			return {
 				rbf: pending.filter((t) => t.type === 'sent'),
 				cpfp: pending.filter((t) => t.type === 'received')
@@ -3982,7 +4138,7 @@ function walletRequest(id, path, method, body) {
 			return { valid: false, pubkey: null, knownNode: false };
 		}
 		case '/transactions':
-			return st.txs;
+			return withAssetAnchors(w.id, st.txs);
 		case '/payments':
 			return st.payments;
 		case '/direct-funding/received':
@@ -4092,16 +4248,24 @@ export async function mockDownload(path, body) {
 	const text = demoArchive(body.passphrase, createdAt);
 	store.settings.lastBackupAt = createdAt;
 	for (const w of store.wallets) w.lastBackupAt = createdAt;
+	// A wallet's assets go into the archive from the file its host writes. The
+	// demo takes a stopped wallet to be one that has not written it, which is
+	// the usual way an archive comes to be without them.
+	for (const w of store.wallets) {
+		if (assetsMock.recordOf(w.id).holdsAssets && w.status === 'stopped') assetsLeftOut.set(w.id, 'no-file');
+		else assetsLeftOut.delete(w.id);
+	}
+	assetsMock.backedUp(createdAt);
 	return {
 		blob: new Blob([text], { type: 'application/octet-stream' }),
 		filename: `beignet-backup-${createdAt.replace(/[:.]/g, '-')}.beignet`
 	};
 }
 
-export async function mockRequest(path, { method = 'GET', body } = {}) {
+export async function mockRequest(path, { method = 'GET', body, headers } = {}) {
 	await latency();
 	if (path.startsWith('/api/')) return managerRequest(path.slice(4), method, body);
 	const m = path.match(/^\/wallets\/([^/]+)\/api(\/.*)$/);
-	if (m) return walletRequest(m[1], m[2], method, body);
+	if (m) return walletRequest(m[1], m[2], method, body, headers);
 	throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
 }

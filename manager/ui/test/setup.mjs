@@ -37,6 +37,8 @@ globalThis.Node = dom.window.Node;
 globalThis.Event = dom.window.Event;
 globalThis.MouseEvent = dom.window.MouseEvent;
 globalThis.KeyboardEvent = dom.window.KeyboardEvent;
+// node has a CustomEvent of its own, which this window will not dispatch.
+globalThis.CustomEvent = dom.window.CustomEvent;
 globalThis.getComputedStyle = dom.window.getComputedStyle;
 globalThis.sessionStorage = dom.window.sessionStorage;
 globalThis.localStorage = dom.window.localStorage;

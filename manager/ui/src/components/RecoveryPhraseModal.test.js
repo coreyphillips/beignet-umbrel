@@ -74,6 +74,47 @@ test('an on-chain only wallet is not told about channels', async () => {
 	}
 });
 
+test('a wallet that holds assets is told the phrase alone does not restore them, before the words are shown', async () => {
+	const restore = stub(async () => ({ mnemonic: PHRASE }));
+	const assets = { enabled: true, universe: null, holdsAssets: true, phase: 'ready', error: null, backupFile: true, notArchived: null };
+	const r = await mount({ id: 'w1', name: 'Main', assets });
+	try {
+		const note = r.$('[data-testid="phrase-assets-note"]');
+		assert.ok(note, 'said on the warning, not after the reveal');
+		assert.ok(note.classList.contains('info-note'), 'a calm note, not a second alarm');
+		assert.match(note.textContent, /^This wallet holds Taproot Assets\. The phrase alone does not restore them/);
+		assert.match(note.textContent, /box backup \(Settings, Back up all wallets\)/);
+		await click(button(r, 'Show phrase'));
+		await settle(20);
+		assert.ok(r.$('[data-testid="seed-words"]'));
+		assert.ok(r.$('[data-testid="phrase-assets-note"]'), 'and it stays beside the words');
+	} finally {
+		await r.unmount();
+		restore();
+	}
+});
+
+test('a wallet that holds no assets is told nothing about them', async () => {
+	const restore = stub(async () => ({ mnemonic: PHRASE }));
+	const records = [
+		{ id: 'w1', name: 'Main' },
+		{ id: 'w1', name: 'Main', assets: { enabled: true, universe: null, holdsAssets: false, backupFile: null, notArchived: null } }
+	];
+	try {
+		for (const wallet of records) {
+			const r = await mount(wallet);
+			try {
+				assert.equal(r.$('[data-testid="phrase-assets-note"]'), null);
+				assert.doesNotMatch(r.text(), /Taproot Assets/);
+			} finally {
+				await r.unmount();
+			}
+		}
+	} finally {
+		restore();
+	}
+});
+
 test('a wallet whose seed is not on this box says so, with no words and Show phrase still there', async () => {
 	const restore = stub(async () => {
 		const e = new Error("This wallet's recovery phrase is not on this Umbrel.");

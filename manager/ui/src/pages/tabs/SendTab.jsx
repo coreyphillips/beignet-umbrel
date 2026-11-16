@@ -5,7 +5,7 @@ import { AmountField, Button, Card, Field, FeeField, Badge, Help, Segmented } fr
 import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
 import { formatInvoiceWarning } from '../../lib/hints.js';
-import { parsePayment } from '../../lib/payment-uri.js';
+import { TAP_NOT_PAYABLE_HERE, parsePayment } from '../../lib/payment-uri.js';
 import { beginOwnPayment, endOwnPayment } from '../../lib/own-payments.js';
 import {
 	describeFallback,
@@ -813,6 +813,11 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					{parsed.message}
 				</div>
 			)}
+			{parsed.kind === 'tap' && (
+				<div className="error-note" role="alert" data-testid="send-tap-refusal">
+					{TAP_NOT_PAYABLE_HERE}
+				</div>
+			)}
 			{parsed.kind === 'pubky' && pubkyRead.looking && (
 				<div className="wallet-meta" role="status">
 					Reading {pubkyRead.who}'s payment details…
@@ -1548,6 +1553,11 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 			{parsed.kind === 'invalid' && mayRefuse && (
 				<div className="error-note" role="alert">
 					{parsed.message}
+				</div>
+			)}
+			{parsed.kind === 'tap' && (
+				<div className="error-note" role="alert" data-testid="send-tap-refusal">
+					{TAP_NOT_PAYABLE_HERE}
 				</div>
 			)}
 			{error && (

@@ -3,6 +3,7 @@ import { manager } from '../api.js';
 import { useToast } from './Toast.jsx';
 import { Button, ErrorNote, Modal, SeedWords } from './ui.jsx';
 import { copy } from '../lib/format.js';
+import { PHRASE_ASSETS_NOTE } from '../lib/wallet-assets.js';
 
 /**
  * A wallet's recovery phrase, shown again after the create dialog has closed.
@@ -40,6 +41,13 @@ export default function RecoveryPhraseModal({ wallet, origin, onClose }) {
 					? 'Importing this phrase brings back the wallet and its on-chain funds.'
 					: "Importing this phrase brings back the wallet's on-chain funds and its Lightning node. Channels also depend on the channel backup shown on the Overview tab: from the phrase alone, they close and their funds return on-chain."}
 			</div>
+			{/* The phrase recreates keys. What makes an output an asset is a proof
+			    that only the wallet's own records hold (docs/ASSETS.md). */}
+			{wallet.assets?.holdsAssets && (
+				<div className="info-note" style={{ marginTop: 10 }} data-testid="phrase-assets-note">
+					{PHRASE_ASSETS_NOTE}
+				</div>
+			)}
 			{phrase && <SeedWords mnemonic={phrase} />}
 			<ErrorNote error={error} />
 			<div className="center-actions">

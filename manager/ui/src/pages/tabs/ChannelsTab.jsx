@@ -12,6 +12,8 @@ import { watchChannelOpen } from '../../lib/channel-open.js';
 import { nodeNames } from '../../lib/node-names.js';
 import PeerName from '../../components/PeerName.jsx';
 import { manager, walletApi } from '../../api.js';
+import { assetChannelsOffered } from '../../lib/asset-lightning.js';
+import AssetChannelsCard from './assets/lightning/AssetChannelsCard.jsx';
 
 const STATE_TONE = {
 	NORMAL: 'green',
@@ -30,10 +32,14 @@ const SATVB_TO_PERKW = 250;
 
 const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
 
-export default function ChannelsTab({ id, api, rec, tick, bump }) {
+export default function ChannelsTab({ id, api, rec, tick, bump, config, route, go, assets }) {
 	const toast = useToast();
 	const [modal, setModal] = useState(null);
 	const [view, setView] = useState('open');
+	// Channels funded with a Taproot Asset have a card of their own under the
+	// bitcoin ones. Only a wallet whose engine and assets host both carry them
+	// gets it; for every other wallet this tab is exactly what it was.
+	const assetChannels = assetChannelsOffered({ config, rec, status: assets?.status });
 	const { data: channels, refresh } = usePoll(
 		async () => {
 			const list = await api.get('/channels').catch(() => []);
@@ -212,6 +218,10 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 					renderRows(shown, { withActions: view === 'open' })
 				)}
 			</Card>
+
+			{assetChannels && view === 'open' && (
+				<AssetChannelsCard id={id} api={api} tick={tick} bump={bump} route={route} go={go} />
+			)}
 
 			{modal?.type === 'open' && (
 				<OpenChannelModal id={id} api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { ASSET_EVENTS } from '../lib/assets-api.js';
 
 /**
  * Subscribes to a wallet's SSE event stream. Calls onEvent(name, data) for each
@@ -83,7 +84,12 @@ export function useSSE(url, onEvent) {
 			'ffor:witness-recorded',
 			'ffor:witness-released',
 			'ffor:issuer-provisioned',
-			'ffor:issuer-issued'
+			'ffor:issuer-issued',
+			// Taproot Assets (the app's assets host, on the same stream): a
+			// mint, a transfer, a receive or a proof moving on a step, a
+			// balance changing, and the asset channel, invoice and payment
+			// events. A daemon without the host never sends them.
+			...ASSET_EVENTS
 		];
 		let es;
 		try {

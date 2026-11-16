@@ -364,6 +364,10 @@
 }
 
 .btn.primary:hover:not(:disabled) {
+	/* Said again: the plain button's hover above sets a background, and it
+	   outranks .btn.primary. Without this a hovered primary button loses its
+	   colour and keeps its dark text. */
+	background: linear-gradient(180deg, var(--accent-2), var(--accent));
 	color: #221200;
 	box-shadow: var(--glass-highlight), 0 2px 24px var(--accent-glow);
 	filter: brightness(1.06);
@@ -1446,6 +1450,11 @@ tbody tr:hover {
 	color: #2b579a;
 }
 
+:root[data-theme='light'] .tl-step.failed .tl-detail,
+:root[data-theme='light'] .field-hint.refusal {
+	color: #a3282d;
+}
+
 :root[data-theme='light'] select option {
 	background: #ffffff;
 }
@@ -1864,4 +1873,459 @@ tbody tr:hover {
 	gap: 8px;
 	align-items: center;
 	font-size: 13px;
+}
+
+/* ---------- Visually hidden ---------- */
+/* On the page for a screen reader and for nothing else: the word that says
+   what a glyph or a colour is showing. */
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* A dialog takes focus on its box when it opens, so Tab starts inside it.
+   The box is not a control, and it keeps its own shape and shadow. */
+.modal-box:focus,
+.modal-box:focus-visible {
+	outline: none;
+	border-radius: var(--r-lg);
+	box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+
+/* A hint that is a refusal: the same line under a field, in the tone of one. */
+.field-hint.refusal {
+	color: #ffb4b6;
+}
+
+/* ---------- Timeline ---------- */
+/* The steps something goes through, top to bottom, joined by a line that
+   fills as each one finishes. The marks are glyphs as well as colours. */
+.timeline {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+}
+
+.tl-step {
+	position: relative;
+	display: grid;
+	grid-template-columns: 24px minmax(0, 1fr) auto;
+	column-gap: 12px;
+	align-items: start;
+	padding-bottom: 18px;
+}
+
+.tl-step:last-child {
+	padding-bottom: 0;
+}
+
+.tl-step::before,
+.tl-step::after {
+	content: '';
+	position: absolute;
+	left: 11px;
+	top: 27px;
+	bottom: 3px;
+	width: 2px;
+	border-radius: 2px;
+}
+
+.tl-step::before {
+	background: var(--glass-inner-2);
+}
+
+.tl-step::after {
+	background: var(--green);
+	opacity: 0.7;
+	transform: scaleY(0);
+	transform-origin: top;
+	transition: transform 600ms var(--ease-out-expo);
+}
+
+.tl-step.done::after {
+	transform: scaleY(1);
+}
+
+.tl-step:last-child::before,
+.tl-step:last-child::after {
+	display: none;
+}
+
+.tl-mark {
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	display: grid;
+	place-items: center;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1;
+	color: var(--faint);
+	background: var(--glass-inner);
+	border: 1.5px solid var(--glass-border-bright);
+}
+
+.tl-step.done .tl-mark {
+	color: var(--green);
+	border-color: rgba(61, 220, 151, 0.6);
+	background: rgba(61, 220, 151, 0.12);
+	animation: tl-pop 420ms var(--ease-out-expo) 1;
+}
+
+.tl-step.current .tl-mark {
+	color: var(--yellow);
+	border-color: rgba(240, 194, 63, 0.7);
+	background: rgba(240, 194, 63, 0.1);
+	animation: tl-pulse 1.8s ease-in-out infinite;
+}
+
+.tl-step.failed .tl-mark {
+	color: var(--red);
+	border-color: rgba(255, 92, 97, 0.6);
+	background: rgba(255, 92, 97, 0.1);
+}
+
+.tl-body {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+	padding-top: 2px;
+}
+
+.tl-label {
+	font-size: 14px;
+	color: var(--faint);
+}
+
+.tl-step.done .tl-label,
+.tl-step.failed .tl-label {
+	color: var(--text);
+}
+
+.tl-step.current .tl-label {
+	color: var(--text);
+	font-weight: 600;
+}
+
+.tl-detail {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 10px;
+	font-size: 12.5px;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+.tl-step.failed .tl-detail {
+	color: #ffb4b6;
+}
+
+.tl-time {
+	padding-top: 4px;
+	font-size: 11.5px;
+	color: var(--faint);
+	white-space: nowrap;
+}
+
+/* The same steps in one row, for a list of several things in progress: the
+   marks and their names, with the line running between them. */
+.timeline.compact {
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(0, 1fr);
+}
+
+.timeline.compact .tl-step {
+	grid-template-columns: minmax(0, 1fr);
+	justify-items: center;
+	row-gap: 6px;
+	padding-bottom: 0;
+	text-align: center;
+}
+
+.timeline.compact .tl-step::before,
+.timeline.compact .tl-step::after {
+	left: calc(50% + 13px);
+	top: 8px;
+	bottom: auto;
+	width: calc(100% - 26px);
+	height: 2px;
+}
+
+.timeline.compact .tl-step::after {
+	transform: scaleX(0);
+	transform-origin: left;
+}
+
+.timeline.compact .tl-step.done::after {
+	transform: scaleX(1);
+}
+
+.timeline.compact .tl-mark {
+	width: 18px;
+	height: 18px;
+	font-size: 10px;
+}
+
+.timeline.compact .tl-body {
+	padding-top: 0;
+}
+
+.timeline.compact .tl-label {
+	font-size: 11px;
+	line-height: 1.3;
+}
+
+.timeline.compact .tl-step.current .tl-label {
+	font-weight: 600;
+}
+
+.timeline.compact .tl-detail,
+.timeline.compact .tl-time {
+	display: none;
+}
+
+@media (max-width: 480px) {
+	.tl-step {
+		grid-template-columns: 24px minmax(0, 1fr);
+	}
+
+	.tl-time {
+		grid-column: 2;
+		padding-top: 0;
+	}
+
+	.timeline.compact .tl-label {
+		font-size: 10px;
+	}
+}
+
+/* ---------- Confirmation meter ---------- */
+/* One segment per block needed, in the fill the balance bars use. */
+.conf-meter {
+	display: inline-flex;
+	gap: 3px;
+	vertical-align: middle;
+}
+
+.conf-seg {
+	width: 16px;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--glass-inner-2);
+	box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.conf-seg.on {
+	background: linear-gradient(90deg, var(--accent), var(--accent-2));
+	box-shadow: 0 0 8px rgba(247, 147, 26, 0.35);
+	animation: conf-pop 320ms var(--ease-out-expo) 1;
+}
+
+/* ---------- Countdown ---------- */
+.countdown {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.countdown-bar {
+	width: 72px;
+	height: 4px;
+	border-radius: var(--r-full);
+	background: var(--glass-inner-2);
+	overflow: hidden;
+}
+
+.countdown-fill {
+	display: block;
+	height: 100%;
+	border-radius: var(--r-full);
+	background: linear-gradient(90deg, var(--accent), var(--accent-2));
+	transition: width 250ms linear;
+}
+
+.countdown.low .countdown-fill {
+	background: var(--red);
+}
+
+.countdown-clock {
+	font-size: 12px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* ---------- QR, shrinking and enlarged ---------- */
+.qr.fluid {
+	max-width: 100%;
+}
+
+.qr.fluid svg {
+	width: min(232px, 100%);
+	height: auto;
+}
+
+.qr-zoom {
+	text-align: center;
+}
+
+.qr-zoom .qr {
+	max-width: 100%;
+}
+
+.qr-zoom .qr svg {
+	width: min(420px, calc(100vw - 108px));
+	height: auto;
+}
+
+/* ---------- Nav count ---------- */
+/* How many things are in progress behind a tab, beside its name. */
+.wnav-count {
+	display: inline-grid;
+	place-items: center;
+	min-width: 18px;
+	height: 18px;
+	margin-left: 8px;
+	padding: 0 5px;
+	border-radius: var(--r-full);
+	background: var(--accent-dim);
+	color: var(--accent-2);
+	font-size: 11px;
+	font-weight: 650;
+	line-height: 1;
+	font-variant-numeric: tabular-nums;
+	vertical-align: 1px;
+}
+
+:root[data-theme='light'] .wnav-count {
+	color: #a85d00;
+}
+
+/* ---------- Amount unit ---------- */
+/* What an amount field is counting in, beside the box it is typed into. */
+.amount-unit {
+	flex: 0 0 auto;
+	max-width: 42%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 5px 10px;
+	border-radius: var(--r-full);
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 550;
+}
+
+/* ---------- Assets outside the Assets tab ---------- */
+/* The Overview's holdings: a few rows, each a way into that asset's page. */
+.overview-assets {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.overview-assets li + li {
+	border-top: 1px solid var(--hairline);
+}
+
+.overview-asset {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	padding: 9px 6px;
+	border: 0;
+	border-radius: var(--r-sm);
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition: background var(--dur-fast) ease;
+}
+
+.overview-asset:hover {
+	background: var(--glass-inner);
+}
+
+.overview-asset:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+.overview-asset-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 550;
+}
+
+.overview-asset-amount {
+	flex: none;
+	font-weight: 600;
+}
+
+.overview-asset-kind {
+	flex: none;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.overview-assets + .wallet-meta {
+	margin-top: 8px;
+	padding-left: 6px;
+}
+
+/* The help "?" after a stat's sub line sits on the text, not below it. */
+.stat-sub .help-btn {
+	vertical-align: -1px;
+}
+
+/* A transaction that carries an asset operation, named beside its type. */
+.badge.asset {
+	color: var(--accent-2);
+	border-color: var(--accent-glow);
+	background: var(--accent-dim);
+}
+
+:root[data-theme='light'] .badge.asset {
+	color: #a85d00;
+}
+
+/* Where Bump fee would be, for a transaction that cannot be bumped. */
+.tx-no-bump {
+	display: inline-block;
+	max-width: 150px;
+	font-size: 12px;
+	white-space: normal;
+	line-height: 1.35;
+}
+
+.tx-asset-link {
+	margin-left: 10px;
+}
+
+/* A wallet's assets and the backup, under its row in Settings. */
+.backup-list li {
+	flex-wrap: wrap;
+}
+
+.backup-assets {
+	flex-basis: 100%;
+	color: var(--yellow);
+	line-height: 1.4;
+	overflow-wrap: anywhere;
 }

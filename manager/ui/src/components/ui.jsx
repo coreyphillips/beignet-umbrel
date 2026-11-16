@@ -369,6 +369,7 @@ export function Segmented({ id, options, value, onChange }) {
 					type="button"
 					disabled={disabled}
 					title={disabled ? hint : undefined}
+					aria-pressed={value === key}
 					className={`pill ${value === key ? 'active' : ''}`}
 					onClick={() => !disabled && onChange(key)}
 				>
@@ -479,14 +480,27 @@ class QRFallback extends Component {
 	}
 }
 
-export function QR({ value, size = 180 }) {
+/**
+ * `title` is what the code is, said aloud, since a QR is a picture of a string
+ * and a screen reader gets nothing from it otherwise.
+ *
+ * `caps` is for bech32 strings and only for them. Bech32 reads the same in
+ * either case, and a QR code packs capitals and digits far tighter than lower
+ * case, so a long address in capitals is a coarser code that a phone reads
+ * from further away. The string on screen and in the clipboard stays lower
+ * case; only the picture is capitalised.
+ *
+ * `fluid` lets the code shrink with a narrow card instead of overflowing it.
+ */
+export function QR({ value, size = 180, title, caps = false, fluid = false }) {
 	if (!value) return null;
 	return (
-		<div className="qr">
+		<div className={`qr${fluid ? ' fluid' : ''}`} role="img" aria-label={title || 'QR code'}>
 			<QRFallback key={value}>
 				<QRCodeSVG
-					value={value}
+					value={caps ? value.toUpperCase() : value}
 					size={size}
+					title={title}
 					bgColor="#ffffff"
 					fgColor="#111111"
 					includeMargin
@@ -496,11 +510,43 @@ export function QR({ value, size = 180 }) {
 	);
 }
 
+/**
+ * An "Enlarge" button that opens the same code as large as the screen allows,
+ * for scanning across a room or off a small laptop.
+ */
+export function QRZoom({ value, title, caps = false, label = 'Enlarge' }) {
+	const [origin, setOrigin] = useState(null);
+	if (!value) return null;
+	return (
+		<>
+			<button type="button" className="btn sm" data-testid="qr-zoom-open" onClick={(e) => setOrigin({ x: e.clientX, y: e.clientY })}>
+				{label}
+			</button>
+			{/* Through a portal: the button sits inside a card, and a card's
+			    backdrop filter makes it the box a fixed overlay is laid out in,
+			    which would clip the dialog to the card. */}
+			{origin &&
+				createPortal(
+					<Modal title={title || 'QR code'} origin={origin} onClose={() => setOrigin(null)} wide>
+						<div className="qr-zoom" data-testid="qr-zoom">
+							<QR value={value} size={420} title={title} caps={caps} />
+						</div>
+					</Modal>,
+					document.body
+				)}
+		</>
+	);
+}
+
 const CLOSE_MS = 160;
 
 // Open modals, oldest first. A dialog can open over another one, and every
 // open modal listens on window, so Escape is left to the newest.
 const openModals = [];
+
+// What Tab can land on inside a dialog.
+const FOCUSABLE =
+	'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
 /**
  * Glass modal that grows out of its trigger. Pass `origin` ({x, y} client
@@ -510,12 +556,23 @@ const openModals = [];
  *
  * A modal opened over another is rendered after it, as a sibling rather than
  * a child: the box's transform would pin a nested overlay to the box.
+ *
+ * It is a dialog to assistive technology too: named by its title, focus is
+ * moved into it when it opens and handed back to whatever had it when it
+ * closes, and Tab stays inside the one in front. Without that a keyboard
+ * walks out of the dialog into the page behind it, which is still there and
+ * cannot be seen.
  */
 export function Modal({ title, help, onClose, children, wide = false, origin = null }) {
 	const [closing, setClosing] = useState(false);
 	const closeTimer = useRef(null);
 	const self = useRef(null);
+	const box = useRef(null);
+	const titleId = useId();
 	const reduced = useReducedMotion();
+	// Read during the first render, before anything inside can take focus by
+	// itself (an autoFocus field does so as it mounts).
+	const [opener] = useState(() => (typeof document !== 'undefined' ? document.activeElement : null));
 
 	const close = () => {
 		if (closing) return;
@@ -530,7 +587,40 @@ export function Modal({ title, help, onClose, children, wide = false, origin = n
 		return () => openModals.splice(openModals.indexOf(self), 1);
 	}, []);
 	useEffect(() => {
-		const onKey = (e) => e.key === 'Escape' && openModals[openModals.length - 1] === self && close();
+		// A field that asked for focus already has it, and keeps it.
+		if (box.current && !box.current.contains(document.activeElement)) box.current.focus({ preventScroll: true });
+		return () => {
+			if (opener && opener !== document.body && document.contains(opener) && typeof opener.focus === 'function') {
+				opener.focus({ preventScroll: true });
+			}
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+	useEffect(() => {
+		const onKey = (e) => {
+			if (openModals[openModals.length - 1] !== self) return;
+			if (e.key === 'Escape') return close();
+			if (e.key !== 'Tab' || !box.current) return;
+			const stops = [...box.current.querySelectorAll(FOCUSABLE)].filter((el) => !el.closest('[hidden]'));
+			if (stops.length === 0) {
+				e.preventDefault();
+				box.current.focus({ preventScroll: true });
+				return;
+			}
+			const first = stops[0];
+			const last = stops[stops.length - 1];
+			const at = document.activeElement;
+			// Focus that has wandered out, or sits on the box itself, is brought
+			// to the end Tab was heading for.
+			const outside = !box.current.contains(at) || at === box.current;
+			if (e.shiftKey && (outside || at === first)) {
+				e.preventDefault();
+				last.focus();
+			} else if (!e.shiftKey && (outside || at === last)) {
+				e.preventDefault();
+				first.focus();
+			}
+		};
 		window.addEventListener('keydown', onKey);
 		return () => window.removeEventListener('keydown', onKey);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -552,6 +642,11 @@ export function Modal({ title, help, onClose, children, wide = false, origin = n
 			onMouseDown={(e) => e.target.classList.contains('modal') && close()}
 		>
 			<m.div
+				ref={box}
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby={titleId}
+				tabIndex={-1}
 				className={`modal-box ${wide ? 'wide' : ''}`}
 				initial={{ opacity: 0, ...from }}
 				animate={
@@ -566,7 +661,7 @@ export function Modal({ title, help, onClose, children, wide = false, origin = n
 				}
 			>
 				<div className="modal-head">
-					<h3>
+					<h3 id={titleId}>
 						{title}
 						{help && <Help>{help}</Help>}
 					</h3>
@@ -576,6 +671,135 @@ export function Modal({ title, help, onClose, children, wide = false, origin = n
 			</m.div>
 		</m.div>
 	);
+}
+
+/* ------------------------------------------------------------- progress */
+
+const TL_MARK = { done: '\u2713', current: '\u2026', pending: '', failed: '\u2715' };
+const TL_SAID = { done: 'done', current: 'in progress', pending: 'not started', failed: 'failed' };
+
+function fmtClock(at) {
+	const d = new Date(Number(at));
+	if (Number.isNaN(d.getTime())) return '';
+	return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * The steps something goes through, in order, with where it has got to.
+ *
+ * `steps` is [{ key, label, state, detail, at }] with state one of done,
+ * current, pending, failed. Each mark is a glyph as well as a colour, and the
+ * state is said in words for a screen reader, so nothing rests on telling
+ * green from yellow.
+ *
+ * `live` is one sentence about what just changed. It goes in a polite live
+ * region of its own, so a step completing is announced once, as a sentence,
+ * instead of the whole list being read again.
+ *
+ * `compact` is the one-line-per-step form for a list of things in progress.
+ */
+export function Timeline({ label, steps, compact = false, live, testId }) {
+	return (
+		<>
+			<ol className={`timeline${compact ? ' compact' : ''}`} aria-label={label} data-testid={testId}>
+				{(steps || []).map((s) => (
+					<li
+						key={s.key}
+						className={`tl-step ${s.state}`}
+						data-state={s.state}
+						data-step={s.key}
+						aria-current={s.state === 'current' ? 'step' : undefined}
+					>
+						<span className="tl-mark" aria-hidden="true">
+							{TL_MARK[s.state]}
+						</span>
+						<span className="tl-body">
+							<span className="tl-label">
+								{s.label}
+								<span className="visually-hidden">, {TL_SAID[s.state]}</span>
+							</span>
+							{s.detail && <span className="tl-detail">{s.detail}</span>}
+						</span>
+						{s.at && (
+							<time className="tl-time mono" dateTime={new Date(Number(s.at)).toISOString()}>
+								{fmtClock(s.at)}
+							</time>
+						)}
+					</li>
+				))}
+			</ol>
+			{live !== undefined && (
+				<div className="visually-hidden" role="status" aria-live="polite">
+					{live}
+				</div>
+			)}
+		</>
+	);
+}
+
+/**
+ * Confirmations as segments: one per block needed, filled as they arrive.
+ * Six on a real chain, one on regtest. The count is in its label, so the bar
+ * is a picture of a number that is also there as a number.
+ */
+export function ConfirmationMeter({ have, need }) {
+	const total = Math.max(1, Math.min(24, Math.floor(Number(need) || 1)));
+	const got = Math.max(0, Math.min(total, Math.floor(Number(have) || 0)));
+	return (
+		<span className="conf-meter" role="img" aria-label={`${got} of ${total} confirmations`} data-testid="conf-meter" data-have={got}>
+			{Array.from({ length: total }, (_, i) => (
+				<span key={i} className={`conf-seg${i < got ? ' on' : ''}`} />
+			))}
+		</span>
+	);
+}
+
+/**
+ * Time running out on something that is only good for a while, such as a
+ * quoted price: a draining bar and the seconds left.
+ *
+ * It is spoken three times and no more: when it starts, at ten seconds, and
+ * when it ends. A counter read aloud every second would bury the thing it is
+ * counting down to.
+ */
+export function Countdown({ until, total, label = 'Time left', onExpire }) {
+	const [now, setNow] = useState(() => Date.now());
+	const fired = useRef(null);
+	useEffect(() => {
+		setNow(Date.now());
+		const t = setInterval(() => setNow(Date.now()), 250);
+		return () => clearInterval(t);
+	}, [until]);
+	const left = Math.max(0, Math.ceil((Number(until) - now) / 1000));
+	const span = Math.max(1, Number(total) || left || 1);
+	useEffect(() => {
+		if (left === 0 && fired.current !== until) {
+			fired.current = until;
+			if (onExpire) onExpire();
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [left, until]);
+	const said = left === 0 ? `${label}: expired` : left <= 10 ? `${label}: 10 seconds` : `${label}: about ${fmtSpan(span)}`;
+	const clock = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+	return (
+		<span className={`countdown${left <= 10 ? ' low' : ''}`} data-testid="countdown" data-left={left}>
+			<span className="countdown-bar" aria-hidden="true">
+				<span className="countdown-fill" style={{ width: `${Math.min(100, (left / span) * 100)}%` }} />
+			</span>
+			<span className="countdown-clock mono" aria-hidden="true">
+				{clock}
+			</span>
+			<span className="visually-hidden" role="status" aria-live="polite">
+				{said}
+			</span>
+		</span>
+	);
+}
+
+function fmtSpan(seconds) {
+	if (seconds < 60) return `${Math.round(seconds)} seconds`;
+	const minutes = Math.round(seconds / 60);
+	return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
 export function Empty({ children }) {

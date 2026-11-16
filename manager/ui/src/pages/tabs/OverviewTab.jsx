@@ -10,10 +10,15 @@ import {
 	Help,
 	Modal,
 	QR,
+	Skeleton,
 	Stat,
 	StatAmount,
 	StatRow
 } from '../../components/ui.jsx';
+import AssetAvatar from '../../components/AssetAvatar.jsx';
+import { AssetAmount } from '../../components/AssetAmount.jsx';
+import { useAssetBalances } from '../../hooks/useAssets.js';
+import { assetsShown } from '../../lib/wallet-assets.js';
 import { fmtSats, pct } from '../../lib/format.js';
 import { isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
@@ -22,7 +27,24 @@ import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
 import { nodeUris } from '../../lib/node-uris.js';
 import { liquiditySendableSats } from '../../lib/sendable.js';
 
-export default function OverviewTab({ id, api, info, health, recovery, rec, tick, bump, config }) {
+// How many holdings the Overview lists before it hands over to the Assets tab.
+const HOLDINGS_SHOWN = 3;
+
+export default function OverviewTab({ id, api, info, health, recovery, rec, tick, bump, config, assets, go }) {
+	// Taproot Assets, from the one summary the page already keeps (WalletPage):
+	// the sats sitting under the wallet's assets, and whether it holds any.
+	const assetStatus = assetsShown(config, rec) ? assets?.status || null : null;
+	const lockedSats = Number(assetStatus?.lockedSats) || 0;
+	const lockedSub =
+		lockedSats > 0 ? (
+			<span data-testid="overview-locked-sats">
+				+ {fmtSats(lockedSats)} locked with assets
+				<Help label="About sats locked with assets">
+					Every asset sits in a bitcoin output of about 1,000 sats. Those sats are yours, and they stay out of
+					this balance while the asset is there. They come back when the asset is sent or burned.
+				</Help>
+			</span>
+		) : undefined;
 	// A liquidity provider fronts its own coins for lightning-first wallets;
 	// what it is willing to front and what it has committed is the one figure
 	// its owner cannot see anywhere else (GET /jit/status, beignet 0.10+).
@@ -155,11 +177,11 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 			<StatRow stagger style={{ marginBottom: 18 }}>
 				{onchainOnly
 					? [
-							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
+							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" sub={lockedSub} />,
 							<Stat key="height" label="Block height" num={info?.blockHeight} />
 					  ]
 					: [
-							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" />,
+							<Stat key="on" label="On-chain" num={bal?.onchain ?? info?.onchainBalanceSats} suffix=" sats" sub={lockedSub} />,
 							<Stat
 								key="ln"
 								label="Lightning"
@@ -178,6 +200,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 			</StatRow>
 
 			<div className="card-flow">
+				{assetStatus?.holdsAssets && <HoldingsCard api={api} tick={tick} go={go} />}
 				<Card title="Node status">
 					<table className="kv">
 						<tbody>
@@ -994,6 +1017,61 @@ function IssuerCard({ status }) {
 							))}
 						</tbody>
 					</table>
+				</div>
+			)}
+		</Card>
+	);
+}
+
+/**
+ * The wallet's assets at a glance: the first few it holds, each a way into
+ * its page in the Assets tab, and the way to the rest. Mounted only for a
+ * wallet that holds assets, so a wallet without any never asks for them.
+ */
+function HoldingsCard({ api, tick, go }) {
+	const { holdings, error } = useAssetBalances(api, tick);
+	// The summary said the wallet holds assets and the list came back empty:
+	// they left between the two answers, and the card goes with them.
+	if (holdings && holdings.length === 0) return null;
+	const shown = (holdings || []).slice(0, HOLDINGS_SHOWN);
+	const more = (holdings || []).length - shown.length;
+	const open = (key) => go?.('assets', key ? { query: { asset: key } } : {});
+	return (
+		<Card
+			title="Assets"
+			help="Taproot Assets this wallet holds. Each sits in a bitcoin output of its own, apart from the balances above."
+			actions={
+				<Button className="sm" data-testid="overview-assets-all" onClick={() => open()}>
+					View all
+				</Button>
+			}
+		>
+			{!holdings ? (
+				error ? (
+					<div className="wallet-meta">The assets could not be read just now. The Assets tab has them.</div>
+				) : (
+					<Skeleton height={104} />
+				)
+			) : (
+				<ul className="overview-assets" data-testid="overview-assets">
+					{shown.map((a) => (
+						<li key={a.key}>
+							<button type="button" className="overview-asset" onClick={() => open(a.key)}>
+								<AssetAvatar asset={a} size="sm" />
+								<span className="overview-asset-name">{a.name}</span>
+								{a.type === 'collectible' ? (
+									<span className="overview-asset-kind">Collectible</span>
+								) : (
+									<AssetAmount value={a.balance?.total} asset={a} unit={false} className="overview-asset-amount" />
+								)}
+							</button>
+						</li>
+					))}
+				</ul>
+			)}
+			{more > 0 && (
+				<div className="wallet-meta" data-testid="overview-assets-more">
+					and {more} more
 				</div>
 			)}
 		</Card>
