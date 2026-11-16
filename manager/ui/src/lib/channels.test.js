@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bitcoinChannels, isAssetChannel, isClosedChannel } from './channels.js';
+import { bitcoinChannels, bitcoinInvoices, bitcoinPayments, isAssetChannel, isAssetRow, isClosedChannel } from './channels.js';
 
 const btc = { channelId: 'a'.repeat(64), state: 'NORMAL', localBalanceSats: 500_000 };
 const asset = { channelId: 'b'.repeat(64), state: 'NORMAL', localBalanceSats: 98_292, auxiliary: true };
@@ -36,4 +36,32 @@ test('an answer that is not a list is handed back as it came, so a list that was
 test('an asset channel is still a channel to the question "does this wallet have one open"', () => {
 	assert.equal(isClosedChannel(asset), false);
 	assert.equal([btc, asset].filter((c) => !isClosedChannel(c)).length, 2);
+});
+
+test('only a payment, an invoice or an event the daemon marks auxiliary is one an asset channel carried', () => {
+	const paid = { paymentHash: 'd'.repeat(64), direction: 'OUTGOING', amountSats: 354, auxiliary: true };
+	const plain = { paymentHash: 'e'.repeat(64), direction: 'OUTGOING', amountSats: 21_000 };
+	assert.equal(isAssetRow(paid), true);
+	assert.equal(isAssetRow(plain), false);
+	assert.equal(isAssetRow({ ...plain, auxiliary: false }), false);
+	assert.equal(isAssetRow({ ...plain, auxiliary: 1 }), false);
+	assert.equal(isAssetRow(null), false);
+	assert.equal(isAssetRow(undefined), false);
+});
+
+test('the bitcoin payments and invoices of a list leave out what an asset channel carried, and keep their order', () => {
+	const out = { paymentHash: '1'.repeat(64), direction: 'OUTGOING', amountSats: 21_000 };
+	const assetOut = { paymentHash: '2'.repeat(64), direction: 'OUTGOING', amountSats: 354, auxiliary: true };
+	const assetIn = { paymentHash: '3'.repeat(64), direction: 'INCOMING', amountSats: 2_500, auxiliary: true };
+	const inn = { paymentHash: '4'.repeat(64), direction: 'INCOMING', amountSats: 900 };
+	assert.deepEqual(bitcoinPayments([out, assetOut, assetIn, inn]), [out, inn]);
+	assert.deepEqual(bitcoinPayments([assetOut]), []);
+	const invoice = { bolt11: 'lnbc1', status: 'PENDING', amountSats: 5_000 };
+	const assetInvoice = { bolt11: 'lnbc2', status: 'PENDING', amountSats: 2_500, auxiliary: true };
+	assert.deepEqual(bitcoinInvoices([assetInvoice, invoice]), [invoice]);
+});
+
+test('a payment or invoice answer that is not a list is handed back as it came', () => {
+	assert.equal(bitcoinPayments(null), null);
+	assert.equal(bitcoinInvoices(undefined), undefined);
 });

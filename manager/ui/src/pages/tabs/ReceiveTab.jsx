@@ -11,7 +11,7 @@ import { createReceiveInvoice, isConnectedPeer } from '../../lib/receive-invoice
 import { protocolText } from '../../lib/protocol-text.js';
 import OfflineReceiveCard from '../../components/OfflineReceiveCard.jsx';
 import { manager } from '../../api.js';
-import { bitcoinChannels } from '../../lib/channels.js';
+import { bitcoinChannels, bitcoinInvoices } from '../../lib/channels.js';
 
 // A direct-funding request is re-minted when the amount changes (the
 // receiver signs the amount into it), after the hand has settled.
@@ -50,7 +50,7 @@ export default function ReceiveTab({ id, api, rec, tick, lastReceive, config, in
 		setJitInfo(null);
 	}, [id]);
 	const { data: invoices, refresh } = usePoll(
-		() => (onchainOnly ? Promise.resolve([]) : api.get('/invoices').catch(() => [])),
+		() => (onchainOnly ? Promise.resolve([]) : api.get('/invoices').then(bitcoinInvoices).catch(() => [])),
 		10000,
 		[id, tick, onchainOnly]
 	);

@@ -14,6 +14,7 @@ import {
 	Segmented
 } from '../../components/ui.jsx';
 import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
+import { bitcoinPayments } from '../../lib/channels.js';
 import { addressUrl, txUrl } from '../../lib/explorer.js';
 import { describeFallback, persistFallback } from '../../lib/direct-funding.js';
 import { manager } from '../../api.js';
@@ -57,7 +58,9 @@ export default function ActivityTab({ id, api, info, rec, tick, bump, config, go
 		async () => {
 			const [txs, payments, utxos, fallbacks] = await Promise.all([
 				api.get('/transactions').catch(() => []),
-				api.get('/payments').catch(() => []),
+				// Without the payments an asset channel carried: those are told in
+				// units of the asset, under Assets.
+				api.get('/payments').then(bitcoinPayments).catch(() => []),
 				api.get('/utxos').catch(() => []),
 				// Payments that were meant to be direct fundings and are not. The
 				// daemon has no idea: it was asked for an ordinary send and made

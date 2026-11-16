@@ -111,3 +111,36 @@ test("the demo daemon lists a wallet's asset channel beside its bitcoin ones, ma
 	const none = await mockRequest('/wallets/demo-testnet/api/channels');
 	assert.equal(none.some((c) => c.auxiliary === true), false);
 });
+
+test('the demo daemon lists the payments and invoices an asset channel carried beside the bitcoin ones, marked auxiliary', async () => {
+	const base = '/wallets/demo-main/api';
+	const { rows } = await mockRequest(`${base}/x/assets/activity?limit=200`);
+	const carried = rows.filter((r) => (r.kind === 'ln-send' || r.kind === 'ln-receive') && r.state === 'complete');
+	assert.ok(carried.length >= 2, 'the demo wallet has paid and been paid in an asset');
+	const payments = await mockRequest(`${base}/payments`);
+	const marked = payments.filter((p) => p.auxiliary === true);
+	assert.deepEqual(marked.map((p) => p.paymentHash).sort(), carried.map((r) => r.paymentHash).sort());
+	// One out counts the sats that carried it, never a bitcoin amount.
+	for (const p of marked.filter((x) => x.direction === 'OUTGOING')) assert.equal(p.amountSats, 354);
+	assert.ok(marked.some((p) => p.direction === 'INCOMING') && marked.some((p) => p.direction === 'OUTGOING'));
+	// No bitcoin payment carries the key at all, as on a daemon.
+	for (const p of payments.filter((x) => x.auxiliary !== true)) assert.equal('auxiliary' in p, false);
+
+	// An asset invoice is listed by the daemon too, and marked.
+	const before = (await mockRequest(`${base}/invoices`)).filter((i) => i.auxiliary === true).length;
+	const { assets } = await mockRequest(`${base}/x/assets/balances`);
+	const busd = assets.find((a) => BigInt(a.balance.lightningReceivable || '0') > 0n);
+	const quote = await mockRequest(`${base}/x/assets/invoices/quote`, { method: 'POST', body: { key: busd.key, amount: '1000' } });
+	const made = await mockRequest(`${base}/x/assets/invoices`, { method: 'POST', body: { key: busd.key, amount: '1000', quoteId: quote.quoteId } });
+	const invoices = await mockRequest(`${base}/invoices`);
+	const listed = invoices.filter((i) => i.auxiliary === true);
+	assert.equal(listed.length, before + 1);
+	const mine = listed.find((i) => i.paymentHash === made.paymentHash);
+	assert.equal(mine.bolt11, made.bolt11);
+	assert.equal(mine.status, 'PENDING');
+	for (const i of invoices.filter((x) => x.auxiliary !== true)) assert.equal('auxiliary' in i, false);
+
+	// A wallet with no asset channel lists neither.
+	assert.equal((await mockRequest('/wallets/demo-testnet/api/payments')).some((p) => p.auxiliary === true), false);
+	assert.equal((await mockRequest('/wallets/demo-testnet/api/invoices')).some((i) => i.auxiliary === true), false);
+});

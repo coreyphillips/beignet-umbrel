@@ -504,6 +504,10 @@ export function createAssetsMock(ctx) {
 			row.at.completed = row._t0 + INVOICE_SETTLES_MS;
 			row._done = true;
 			ctx.emit(id, 'assets:balance', { key: row.assets[0].key });
+			// The daemon says it too, as it says every settled invoice, and marks it.
+			const settled = { paymentHash: row.paymentHash, amountSats: invoice ? invoice.amountSats : 354, auxiliary: true };
+			ctx.emit(id, 'payment:received', settled);
+			ctx.emit(id, 'invoice:settled', { ...settled, bolt11: invoice ? invoice.bolt11 : null });
 		}
 	}
 
@@ -1453,6 +1457,8 @@ export function createAssetsMock(ctx) {
 				save();
 				ctx.emit(id, 'assets:payment', { row: pubRow(row) });
 				ctx.emit(id, 'assets:balance', { key: identity.key });
+				// The daemon's own word on it, marked as one an asset channel carried.
+				ctx.emit(id, 'payment:sent', { paymentHash, amountSats: 354, feeSats: 2, auxiliary: true });
 				resolve({ status: 'COMPLETED', paymentHash, assetAmount: quote.assetAmount, feeSats: 2, failureDescription: null });
 			}, ctx.ticker === false ? 0 : PAY_ANSWERS_MS);
 		});
@@ -1925,9 +1931,55 @@ export function createAssetsMock(ctx) {
 			});
 	}
 
+	// The sats an asset payment carries beside the asset, as the daemon counts them.
+	const CARRIER_SATS = 354;
+
+	/**
+	 * This wallet's asset payments as its daemon lists them on GET /payments:
+	 * beside the bitcoin ones, marked `auxiliary`. One out counts the sats
+	 * that carried it, one in the face value of its invoice.
+	 */
+	function daemonPayments(id) {
+		if (!state.wallets[id]) return [];
+		const s = state.wallets[id];
+		return s.rows
+			.filter((r) => (r.kind === 'ln-send' || r.kind === 'ln-receive') && r.state === 'complete' && r.paymentHash)
+			.map((r) => {
+				const invoice = r.kind === 'ln-receive' ? s.invoices.find((i) => i.paymentHash === r.paymentHash) : null;
+				return {
+					paymentHash: r.paymentHash,
+					direction: r.kind === 'ln-send' ? 'OUTGOING' : 'INCOMING',
+					amountSats: r.kind === 'ln-send' ? CARRIER_SATS : invoice ? invoice.amountSats : CARRIER_SATS,
+					feeSats: r.kind === 'ln-send' ? r.feeSats : null,
+					status: 'COMPLETED',
+					createdAt: r.at.created,
+					completedAt: r.at.completed || r.at.created,
+					auxiliary: true
+				};
+			});
+	}
+
+	/** This wallet's asset invoices as its daemon lists them on GET /invoices, marked `auxiliary`. */
+	function daemonInvoices(id) {
+		if (!state.wallets[id]) return [];
+		const t = now();
+		return state.wallets[id].invoices.map((i) => ({
+			bolt11: i.bolt11,
+			paymentHash: i.paymentHash,
+			amountSats: i.amountSats,
+			description: i.description,
+			expiry: Math.round((i.invoiceExpiresAt - i.createdAt) / 1000),
+			createdAt: Math.round(i.createdAt / 1000),
+			status: i.status === 'PAID' ? 'PAID' : i.invoiceExpiresAt < t ? 'EXPIRED' : 'PENDING',
+			auxiliary: true
+		}));
+	}
+
 	return {
 		request,
 		daemonChannels,
+		daemonPayments,
+		daemonInvoices,
 		/** What the wallet record's `assets` block says, for the manager routes. */
 		recordOf: (id) => ({
 			enabled: true,

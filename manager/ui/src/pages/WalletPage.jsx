@@ -28,7 +28,7 @@ import { describeAssetEvent, pendingCount } from '../lib/assets.js';
 import { assetsShown } from '../lib/wallet-assets.js';
 import { isOwnPayment } from '../lib/own-payments.js';
 
-import { bitcoinChannels, isClosedChannel } from '../lib/channels.js';
+import { bitcoinChannels, isAssetRow, isClosedChannel } from '../lib/channels.js';
 import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
 import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
@@ -266,6 +266,10 @@ export default function WalletPage() {
 	// bypasses the hold, and restore progress rides it.
 	useSSE(running || restoreHold ? api.eventsUrl() : null, (name, data) => {
 		bump();
+		// What the daemon says of an asset channel, or of a payment or an
+		// invoice one carried, is not announced as bitcoin: the assets host
+		// says the same thing in units of the asset, a few lines down.
+		if (isAssetRow(data) && !name.startsWith('assets:')) return;
 		receiveEvent(name, data);
 		// A payment this page made has already been announced by the card that
 		// made it, from the daemon's answer; its event is announced only when it

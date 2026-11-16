@@ -3324,7 +3324,8 @@ function walletRequest(id, path, method, body, headers) {
 			return invoiceInfo(inv);
 		}
 		case '/invoices':
-			return st.invoices.map(invoiceInfo);
+			// The daemon lists an asset invoice beside the bitcoin ones, marked.
+			return st.invoices.map(invoiceInfo).concat(assetsMock.daemonInvoices(w.id));
 
 		case '/receive/status':
 			return { available: true, reservedChannelIds: [], requests: [] };
@@ -4146,7 +4147,8 @@ function walletRequest(id, path, method, body, headers) {
 		case '/transactions':
 			return withAssetAnchors(w.id, st.txs);
 		case '/payments':
-			return st.payments;
+			// And the payments an asset channel carried, marked the same way.
+			return st.payments.concat(assetsMock.daemonPayments(w.id));
 		case '/direct-funding/received':
 			// The engine's record of direct-funding payments this wallet took.
 			return st.dfReceived || [];

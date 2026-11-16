@@ -38,3 +38,26 @@ export function isAssetChannel(c) {
 export function bitcoinChannels(list) {
 	return Array.isArray(list) ? list.filter((c) => !isAssetChannel(c)) : list;
 }
+
+/**
+ * A payment, an invoice or an event of the daemon's that an asset channel
+ * carried. The daemon marks each `auxiliary: true`, as it marks the channel,
+ * and marks nothing else so. The sats on such a row are not bitcoin the
+ * wallet was paid or spent: a payment out carries a few hundred sats beside
+ * the asset, and an invoice has a face value in sats only because an invoice
+ * must. The assets host tells the same payment in units of the asset, and
+ * that telling is the one the dashboard shows.
+ */
+export function isAssetRow(row) {
+	return !!row && row.auxiliary === true;
+}
+
+/** The payments of a GET /payments answer that moved bitcoin. Anything that is not a list is handed back as it came. */
+export function bitcoinPayments(list) {
+	return Array.isArray(list) ? list.filter((p) => !isAssetRow(p)) : list;
+}
+
+/** The invoices of a GET /invoices answer that ask for bitcoin. Anything that is not a list is handed back as it came. */
+export function bitcoinInvoices(list) {
+	return Array.isArray(list) ? list.filter((i) => !isAssetRow(i)) : list;
+}

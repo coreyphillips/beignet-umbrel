@@ -203,6 +203,14 @@ channel with "Lightning Labs edge" (2,400.00 yours, 3,100.00 theirs).
   `data-priced="no"` (Who can pay it, Can receive now), and the made invoice
   says only the channel peer can pay it (`asset-invoice-unpriced`,
   `asset-invoice-who`), never that any wallet can.
+- The demo daemon lists what an asset channel carried the way a real one
+  does, marked `auxiliary: true`: the BUSD channel on `GET /channels`, the
+  asset payments on `GET /payments`, an asset invoice on `GET /invoices`, and
+  `payment:received`, `invoice:settled` and `payment:sent` on the stream. None
+  of it may show as bitcoin. On `demo-main`, Activity's Lightning view must
+  list the bitcoin payments only (40 rows), the bitcoin Receive tab must not
+  list an invoice made on the Assets tab, and when that invoice is paid there
+  is one toast, "Received 250.00 BUSD over Lightning", and none in sats.
 - `demo-testnet` has Lightning and no asset channel: an empty Asset channels
   card, an invoice card that says nothing can be received, and `asset-pay-none`
   for a pasted `lntb` invoice. `demo-savings` (on-chain only) must show none of
