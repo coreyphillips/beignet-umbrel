@@ -34,13 +34,28 @@ const {
 const ASSET_CHANNEL_OVER = new Set(['CLOSED', 'FORCE_CLOSED']);
 
 // What the engine itself refuses over stored asset channels, in the words a
-// wallet's owner is shown. This is the one place that knows the engine's
-// codes for them: a code the engine settles on later is changed here.
+// wallet's owner is shown. This is the one place in the manager that knows
+// the engine's codes for them. The dashboard words the two restore refusals
+// itself (ui/src/lib/recovery.js, assetRestoreRefusal), since a restore is
+// asked of the daemon through the proxy and its answer is not rewritten.
+const NOT_RUN_UNWATCHED =
+	'so the wallet was not started: an asset channel is never run unwatched. The channels and the assets in them are untouched. Start the wallet again with assets turned on.';
 const ENGINE_ASSET_REFUSALS = {
-	ASSET_PROVIDER_REQUIRED:
-		'This wallet has an asset channel, and was started in a way that cannot keep one: with assets off, on-chain only, or on a channel backup kept by guardians. Undo that change, start the wallet, and close the channel on the Channels tab first.',
+	// The daemon's own form of ASSET_CHANNELS_OPEN (_refuseStartOverAssetChannels),
+	// for a start the manager's count did not catch. It refuses before the
+	// node is built, so nothing reached a guardian.
+	ASSET_GUARDIAN_START_REFUSED:
+		'This wallet has an asset channel and is on a channel backup kept by guardians, which does not cover asset channels, so it was not started and nothing was sent to the guardians. Take it off the guardian backup, start it, and close the channel on the Channels tab. Once the assets are back on-chain it can go back on a guardian backup.',
+	// Asset channels are stored and the assets part of the wallet is not
+	// there to watch them: it did not come up, came up twice, or failed.
+	ASSET_PROVIDER_REQUIRED: `This wallet has an asset channel, and the assets part of the wallet did not come up, ${NOT_RUN_UNWATCHED}`,
+	ASSET_PROVIDER_CONFLICT: `This wallet has an asset channel, and the assets part of the wallet came up twice, ${NOT_RUN_UNWATCHED}`,
+	ASSET_PROVIDER_FAILED: `This wallet has an asset channel, and the assets part of the wallet failed while it was starting, ${NOT_RUN_UNWATCHED}`,
+	// A restore of channel state that holds an asset channel.
 	ASSET_RESTORE_REFUSED:
-		'This wallet has an asset channel, and a channel backup restored over it would not cover that channel. Close the channel on the Channels tab first, and wait for the assets to be back on-chain.'
+		'The channel state that was to be restored holds an asset channel, which a restore does not bring back, so nothing was restored and nothing was written. The wallet is as it was.',
+	AUXILIARY_GUARDIAN_RESTORE_REFUSED:
+		'The channel state the guardians keep for this wallet holds an asset channel, which a guardian backup does not cover, so nothing was restored and nothing was written. The wallet is as it was.'
 };
 
 /** The sentence for an engine refusal over asset channels named by `code` or in `text`, or null. */
@@ -3276,7 +3291,9 @@ class WalletManager {
 			/* non-JSON body */
 		}
 		if (!res.ok || data.ok === false) {
-			const err = new Error((data.error && data.error.message) || `${apiPath} failed (${res.status})`);
+			// What the engine refuses over asset channels is said in the manager's words.
+			const refused = engineAssetRefusal(data.error && data.error.code, '');
+			const err = new Error(refused ? refused.message : (data.error && data.error.message) || `${apiPath} failed (${res.status})`);
 			err.code = (data.error && data.error.code) || 'DAEMON_ERROR';
 			throw err;
 		}

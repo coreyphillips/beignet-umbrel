@@ -177,6 +177,22 @@ test('what the engine itself refuses is worded in one place, wherever in the err
 	assert.equal(odd.message, "This wallet's own spending limit refused the payment, so nothing was paid.");
 	// The engine's code alone says the same.
 	assert.equal(mapLightning(coded('ASSET_PAYMENT_REFUSED', 'no')).extensionCode, 'SPENDING_LIMIT');
+	// The refusal says why, in the library's details or on the engine's own error. A limit is the limit's sentence.
+	const over = mapLightning(Object.assign(within('ERR_BEIGNET_LN_SPENDING_LIMIT', coded('ASSET_PAYMENT_REFUSED', 'no')), { details: { reason: 'SPENDING_LIMIT_EXCEEDED' } }));
+	assert.deepEqual([over.extensionCode, over.message], ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid."]);
+	// A wallet on its way down is no limit, and is said on its own.
+	const draining = 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.';
+	for (const err of [
+		Object.assign(within('ERR_BEIGNET_LN_SPENDING_LIMIT', coded('ASSET_PAYMENT_REFUSED', 'no')), { details: { reason: 'SERVICE_DRAINING' } }),
+		within('ERR_BEIGNET_LN_SPENDING_LIMIT', Object.assign(coded('ASSET_PAYMENT_REFUSED', 'draining'), { reason: 'SERVICE_DRAINING' })),
+		Object.assign(coded('ASSET_PAYMENT_REFUSED', 'no'), { details: { reason: 'SERVICE_DRAINING', limit: 'daily' } })
+	]) {
+		const said = mapLightning(err);
+		assert.deepEqual([said.extensionCode, said.status, said.message], ['SERVICE_DRAINING', 409, draining]);
+		assert.equal('details' in said, false);
+	}
+	// A reason this host has no words for is the limit's, as before.
+	assert.equal(mapLightning(Object.assign(coded('ASSET_PAYMENT_REFUSED', 'no'), { reason: 'SOMETHING_NEW' })).extensionCode, 'SPENDING_LIMIT');
 	// Every sentence here is the host's own.
 	for (const [code, message, status] of Object.values(ENGINE_REFUSALS)) {
 		assert.match(code, /^[A-Z_]+$/);

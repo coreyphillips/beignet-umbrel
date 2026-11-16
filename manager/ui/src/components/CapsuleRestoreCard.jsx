@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button, Card } from './ui.jsx';
 import { shortId } from '../lib/format.js';
+import { assetRestoreRefusal } from '../lib/recovery.js';
 
 /**
  * A channel checkpoint a storage peer returned (beignet 0.9.3+, peer-storage
@@ -53,7 +54,7 @@ export default function CapsuleRestoreCard({ api, offer, onRestored }) {
 			setResult({ kind: 'capsule', ...r });
 			if (onRestored) onRestored(r);
 		} catch (e) {
-			setRefusal(e.message);
+			setRefusal(assetRestoreRefusal(e) || e.message);
 		} finally {
 			setBusy(null);
 		}

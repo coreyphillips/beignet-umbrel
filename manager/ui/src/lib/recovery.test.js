@@ -321,3 +321,12 @@ test('a node URI is not an entry, a bolt8 entry names a beignet node, and both r
 	assert.equal(guardianEntryLabel(`${key}@http://127.0.0.1:8701`), 'guardian at 127.0.0.1:8701');
 	assert.equal(guardianEntryLabel('garbage'), 'garbage');
 });
+
+test('a restore the engine refused over an asset channel is said in a sentence, and any other error is left alone', async () => {
+	const { assetRestoreRefusal } = await import('./recovery.js');
+	assert.match(assetRestoreRefusal({ code: 'ASSET_RESTORE_REFUSED', message: 'aux channel 03ab' }), /holds an asset channel, which a restore does not bring back, so nothing was restored and nothing was written\. The wallet is as it was\.$/);
+	assert.match(assetRestoreRefusal({ code: 'AUXILIARY_GUARDIAN_RESTORE_REFUSED' }), /^The channel state the guardians keep for this wallet holds an asset channel, which a guardian backup does not cover, so nothing was restored and nothing was written\./);
+	for (const other of [null, undefined, {}, { code: 'RESTORE_NO_QUORUM', message: 'no' }, { code: 'toString' }, new Error('the wire gave out')]) {
+		assert.equal(assetRestoreRefusal(other), null);
+	}
+});

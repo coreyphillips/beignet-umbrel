@@ -202,12 +202,32 @@ test('what the engine refuses over asset channels at boot is said in the manager
 	};
 	const provider = failed({ code: 'ASSET_PROVIDER_REQUIRED', message: 'channel 03ab needs its auxiliary provider' });
 	assert.equal(provider.code, 'ASSET_PROVIDER_REQUIRED');
-	assert.match(provider.message, /^This wallet has an asset channel, and was started in a way that cannot keep one/);
+	assert.equal(
+		provider.message,
+		'This wallet has an asset channel, and the assets part of the wallet did not come up, so the wallet was not started: an asset channel is never run unwatched. The channels and the assets in them are untouched. Start the wallet again with assets turned on.'
+	);
 	assert.equal(provider.message.includes('03ab'), false);
+	// The assets part coming up twice, or failing as it starts, is said as that, with the same way forward.
+	const way = /so the wallet was not started: an asset channel is never run unwatched\. The channels and the assets in them are untouched\. Start the wallet again with assets turned on\.$/;
+	const twice = failed({ code: 'ASSET_PROVIDER_CONFLICT', message: 'two providers registered' });
+	assert.match(twice.message, /the assets part of the wallet came up twice, /);
+	assert.match(twice.message, way);
+	const broke = failed({ code: 'ASSET_PROVIDER_FAILED', message: 'provider threw: ENOENT /data/x' });
+	assert.match(broke.message, /the assets part of the wallet failed while it was starting, /);
+	assert.match(broke.message, way);
+	assert.equal(broke.message.includes('ENOENT'), false);
+	// The daemon's own refusal of a wallet on a guardian backup: the advice of the manager's own.
+	const guarded = failed({ code: 'ASSET_GUARDIAN_START_REFUSED', message: 'auxiliary channels and guardian recovery' });
+	assert.equal(guarded.code, 'ASSET_GUARDIAN_START_REFUSED');
+	assert.match(guarded.message, /is on a channel backup kept by guardians, which does not cover asset channels, so it was not started and nothing was sent to the guardians\./);
+	assert.match(guarded.message, /Take it off the guardian backup, start it, and close the channel on the Channels tab\. Once the assets are back on-chain it can go back on a guardian backup\.$/);
 	// Named only in the text of a failed start.
 	const restore = failed({ code: 'START_FAILED', message: 'restore refused: ASSET_RESTORE_REFUSED (2 channels)' });
 	assert.equal(restore.code, 'ASSET_RESTORE_REFUSED');
-	assert.match(restore.message, /a channel backup restored over it would not cover that channel/);
+	assert.match(restore.message, /holds an asset channel, which a restore does not bring back, so nothing was restored and nothing was written\. The wallet is as it was\.$/);
+	const fromGuardians = failed({ code: 'AUXILIARY_GUARDIAN_RESTORE_REFUSED', message: 'no' });
+	assert.equal(fromGuardians.code, 'AUXILIARY_GUARDIAN_RESTORE_REFUSED');
+	assert.match(fromGuardians.message, /The channel state the guardians keep for this wallet holds an asset channel, which a guardian backup does not cover, so nothing was restored and nothing was written\./);
 	// Any other failed start is kept as the daemon wrote it.
 	assert.equal(failed({ code: 'START_FAILED', message: 'Another beignet instance is already using this directory' }).message, 'Another beignet instance is already using this directory');
 	assert.equal(failed({ code: 'SOMETHING_ELSE', message: 'no' }), null);

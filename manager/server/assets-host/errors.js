@@ -165,6 +165,18 @@ const ENGINE_REFUSALS = {
 	ASSET_PAYMENT_REFUSED: ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid.", 409]
 };
 
+// Why the engine's gate refused an asset payment: the `reason` its refusal
+// carries, which the library hands on in the error's details. A refusal
+// that names none, or one not listed here, is the spending limit's.
+const PAYMENT_REFUSED_BECAUSE = {
+	SPENDING_LIMIT_EXCEEDED: ENGINE_REFUSALS.ASSET_PAYMENT_REFUSED,
+	SERVICE_DRAINING: [
+		'SERVICE_DRAINING',
+		'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.',
+		409
+	]
+};
+
 /** Every error in the chain of causes of `err`, itself first. Never more than a few. */
 function causesOf(err) {
 	const out = [];
@@ -179,6 +191,16 @@ function engineCodeOf(err) {
 	for (const e of chain) {
 		const text = String(e.message || '');
 		for (const code of Object.keys(ENGINE_REFUSALS)) if (new RegExp(`\\b${code}\\b`).test(text)) return code;
+	}
+	return '';
+}
+
+/** Why the engine's gate refused a payment, when the refusal or one of its causes says so in a word this host knows. '' otherwise. */
+function refusalReasonOf(err) {
+	for (const e of causesOf(err)) {
+		for (const said of [e.reason, e.details && e.details.reason, e.data && e.data.reason]) {
+			if (typeof said === 'string' && Object.prototype.hasOwnProperty.call(PAYMENT_REFUSED_BECAUSE, said)) return said;
+		}
 	}
 	return '';
 }
@@ -203,6 +225,11 @@ function mapLightning(err, context = {}) {
 	if (isRefusal(err)) return err;
 	const engine = engineCodeOf(err);
 	if (engine === 'ASSET_PAYMENT_REFUSED' || codeOf(err) === 'ERR_BEIGNET_LN_SPENDING_LIMIT') {
+		// Not a limit at all: the wallet is on its way down, and takes nothing new.
+		if (refusalReasonOf(err) === 'SERVICE_DRAINING') {
+			const [code, message, status] = PAYMENT_REFUSED_BECAUSE.SERVICE_DRAINING;
+			return refusal(code, message, status);
+		}
 		const limit = spendingLimitOf(err);
 		const [code, , status] = ENGINE_REFUSALS.ASSET_PAYMENT_REFUSED;
 		return refusal(code, `This wallet's own spending limit${limit ? ` (${limit})` : ''} refused the payment, so nothing was paid.`, status, limit ? { limit } : undefined);
@@ -307,6 +334,7 @@ module.exports = {
 	workingSats,
 	LIGHTNING_REFUSALS,
 	ENGINE_REFUSALS,
+	PAYMENT_REFUSED_BECAUSE,
 	engineCodeOf,
 	PAYMENT_FAILURES,
 	paymentFailure

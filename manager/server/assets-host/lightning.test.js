@@ -2169,6 +2169,11 @@ test('the wallet\'s own spending limit refuses a payment before anything is sent
 	assert.deepEqual([named.status, named.failureDescription], ['FAILED', "This wallet's own spending limit (daily) refused the payment, so nothing was paid."]);
 	const row = (await h.get('/activity', 'kind=ln-send')).rows[0];
 	assert.deepEqual([row.state, row.failure.code], ['failed', 'SPENDING_LIMIT']);
+	// A wallet that is shutting down refuses through the same gate, and is said as that.
+	h.ln.opts.payCause = Object.assign(new Error('ASSET_PAYMENT_REFUSED'), { code: 'ASSET_PAYMENT_REFUSED', reason: 'SERVICE_DRAINING' });
+	const draining = await pay('third-key');
+	assert.deepEqual([draining.status, draining.failureDescription], ['FAILED', 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.']);
+	assert.equal((await h.get('/activity', 'kind=ln-send')).rows[0].failure.code, 'SERVICE_DRAINING');
 	// Nothing was recorded and nothing left.
 	assert.equal(h.ln.payments.size, 0);
 	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');

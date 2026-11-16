@@ -21,6 +21,23 @@ export const MODE_LABELS = {
 	quorum: 'Guardians (strict quorum)'
 };
 
+// A restore of channel state that holds an asset channel is refused by the
+// engine, whole: these are its two codes for it. The same sentences as the
+// manager's table (server/wallet-manager.js, ENGINE_ASSET_REFUSALS), kept
+// here too because a restore is asked of the daemon directly.
+const ASSET_RESTORE_REFUSALS = {
+	ASSET_RESTORE_REFUSED:
+		'The channel state that was to be restored holds an asset channel, which a restore does not bring back, so nothing was restored and nothing was written. The wallet is as it was.',
+	AUXILIARY_GUARDIAN_RESTORE_REFUSED:
+		'The channel state the guardians keep for this wallet holds an asset channel, which a guardian backup does not cover, so nothing was restored and nothing was written. The wallet is as it was.'
+};
+
+/** The sentence for a restore the engine refused over an asset channel, or null for any other error. */
+export function assetRestoreRefusal(error) {
+	const code = error && error.code;
+	return typeof code === 'string' && Object.prototype.hasOwnProperty.call(ASSET_RESTORE_REFUSALS, code) ? ASSET_RESTORE_REFUSALS[code] : null;
+}
+
 export function isGuardianMode(mode) {
 	return mode === 'async-remote' || mode === 'quorum';
 }
