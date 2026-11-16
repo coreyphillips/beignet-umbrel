@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
 	LIMITS,
 	assetWarnings,
+	channelWarnings,
 	describeAssetEvent,
 	describeProofServerTest,
 	describeSplit,
@@ -512,4 +513,26 @@ test('a proof file is saved as the bytes the wallet gave, and the size it takes 
 	assert.deepEqual(proofFileBytes(btoa(String.fromCharCode(...bytes))), bytes);
 	assert.deepEqual(proofFileBytes(''), new Uint8Array(0));
 	assert.equal(MAX_PROOF_FILE_BYTES, 4 * 1024 * 1024);
+});
+
+test("what the host says is wrong with a channel is said in its own words, a wait in blue and anything else in red", () => {
+	const missing = { code: 'CHANNEL_MISSING', text: 'An asset channel is on record that the wallet\'s node does not hold.' };
+	const stuck = { code: 'RECOVERY_STUCK', text: 'The assets of a closed channel have not come back on-chain yet.' };
+	const status = { ...STATUS, lightning: { mode: 'full', usableChannels: 0, warning: `${missing.text} ${stuck.text}`, warnings: [missing, stuck] } };
+	assert.deepEqual(channelWarnings(status), [
+		{ code: 'CHANNEL_MISSING', tone: 'error', text: missing.text },
+		{ code: 'RECOVERY_STUCK', tone: 'info', text: stuck.text }
+	]);
+	// A host that names no codes is believed all the same.
+	assert.deepEqual(channelWarnings({ lightning: { mode: 'full', warning: ' Something is wrong. ' } }), [{ code: 'CHANNEL_WARNING', tone: 'error', text: 'Something is wrong.' }]);
+	// Nothing wrong, or no status yet, says nothing.
+	assert.deepEqual(channelWarnings({ lightning: { mode: 'full', usableChannels: 1 } }), []);
+	assert.deepEqual(channelWarnings({ lightning: { mode: 'full', warnings: [{ code: 'X', text: '  ' }, null] } }), []);
+	assert.deepEqual(channelWarnings(null), []);
+	// The Assets tab says them too: the assets in a channel are part of what it counts.
+	const notes = assetWarnings({ status, btc: { spendableSats: 50000 }, holdings: [BUSD], now: NOW });
+	assert.deepEqual(notes.map((n) => [n.code, n.tone, n.parts.join('')]), [
+		['CHANNEL_MISSING', 'error', missing.text],
+		['RECOVERY_STUCK', 'info', stuck.text]
+	]);
 });

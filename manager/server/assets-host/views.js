@@ -382,11 +382,13 @@ function statusView({ cfg, phase, error = null, tip = 0, summary = {}, startup =
 		// 'off' for a wallet that was not asked for asset channels, and for
 		// one whose engine or library cannot carry them whatever was asked.
 		// `warning` is there only when something of the wallet's channels
-		// needs saying: a sentence, as `backup.importError` is.
+		// needs saying: a sentence, as `backup.importError` is. `warnings`
+		// is the same said one by one, each with its code.
 		lightning: {
 			mode: lightning.mode === 'full' ? 'full' : 'off',
 			usableChannels: lightning.usableChannels || 0,
-			...(lightning.warning ? { warning: lightning.warning } : {})
+			...(lightning.warning ? { warning: lightning.warning } : {}),
+			...(Array.isArray(lightning.warnings) && lightning.warnings.length ? { warnings: lightning.warnings.map((w) => ({ code: String(w.code), text: String(w.text) })) } : {})
 		},
 		proofServer: {
 			host: universe ? universe.host : null,

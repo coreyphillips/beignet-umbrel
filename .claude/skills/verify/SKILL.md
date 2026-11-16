@@ -170,6 +170,10 @@ channel with "Lightning Labs edge" (2,400.00 yours, 3,100.00 theirs).
   gives the cooperative page, with force close behind a second page. The same
   dialog opens from an asset's page (`asset-action-open-channel`) with that
   asset already chosen.
+  The demo daemon also lists that BUSD channel on `GET /channels`, marked
+  `auxiliary: true`, as a real daemon does. The bitcoin table above the card
+  must not show it (four open rows on `demo-main`), and no bitcoin figure on
+  Overview, Send or Receive may count its sats.
 - Receive, `/w/demo-main/assets?view=receive`: pick BUSD and type 250. The
   "Lightning invoice" card (`asset-invoice-card`) prices it
   (`data-state="priced"`), Create invoice shows the QR and a 60 s countdown,
@@ -220,6 +224,7 @@ wallet in the address, and stick until switched back:
 | `proof-refused` | Use `demo-testnet`. Its finished mint carries a blue note, `asset-proof-unpublished`, in the In progress list and on the asset's page: created and held, the proof server has not taken its proof. Never red, never "failed". Try again clears it. |
 | `send-refused` | A send six blocks deep whose proof the proof server answered "no" to. Its In progress row carries a red note, `asset-proof-undelivered` (`data-code="PROOF_REFUSED"`): the server answered, the recipient does not have the asset yet, nothing is lost. The headline reads "the proof server did not take the proof", the In progress tile and the dialog's pill read "proof refused" (red), and the timeline's proof step gives the server's reason and never says "not answering". Offer it again now clears it and the send completes. |
 | `unwatched` | Use `demo-testnet` with `view=receive`. An address nine days unpaid reads "not checked" in Recent receives, and its dialog has `asset-not-watched` with Check now, which finds the payment. |
+| `channel-missing` | Use `demo-main` on `/w/demo-main/channels`. Its BUSD channel becomes one the node does not hold, as after a restore from a backup: the badge reads "not held here" (`asset-channel` with `data-state="MISSING"`), Can send and Can receive read 0.00, there is no Close button, and a red note above the list (`asset-channels-warning`, `data-code="CHANNEL_MISSING"`) says it cannot be used or closed from this wallet. The Assets tab says the same across its top. |
 
 What to look at, in dark, in light (`localStorage['beignet-theme'] = 'light'`
 before load) and at 480 px wide:

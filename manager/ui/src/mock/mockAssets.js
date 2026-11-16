@@ -713,7 +713,25 @@ export function createAssetsMock(ctx) {
 				_unwatched: true
 			});
 			return true;
+		},
+		// A channel on the wallet's record that its node does not hold: what a
+		// restore from a backup leaves. It carries nothing from then on.
+		'channel-missing'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL');
+			if (!c) return false;
+			c.state = 'MISSING';
+			c.sendable = '0';
+			c.receivable = '0';
+			return true;
 		}
+	};
+
+	// The host's own sentence for it, as its status says it.
+	const CHANNEL_MISSING_TEXT =
+		"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known. This wallet cannot bring the assets in it back by itself.";
+	const channelWarningsOf = (s) => {
+		const said = s.channels.some((c) => c.state === 'MISSING') ? [{ code: 'CHANNEL_MISSING', text: CHANNEL_MISSING_TEXT }] : [];
+		return said.length ? { warning: said.map((w) => w.text).join(' '), warnings: said } : {};
 	};
 
 	function putState(id, what) {
@@ -793,7 +811,7 @@ export function createAssetsMock(ctx) {
 			lockedSats: anchors * ANCHOR_SATS,
 			anchorCount: anchors,
 			startup: null,
-			lightning: { mode, usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL').length },
+			lightning: { mode, usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL').length, ...(mode === 'off' ? {} : channelWarningsOf(s)) },
 			proofServer: proofServer(id),
 			backup: { ...s.backup },
 			limits: { ...FEE_LIMITS }
@@ -1278,6 +1296,9 @@ export function createAssetsMock(ctx) {
 		const s = S(id);
 		const c = s.channels.find((x) => x.channelId === body?.channelId);
 		if (!c) throw notFound('This wallet has no asset channel with that id', 'CHANNEL_NOT_FOUND');
+		if (c.state === 'MISSING') {
+			throw fail("This channel is on record, but the wallet's node does not hold it, as happens after a restore from a backup. It cannot be closed from this wallet.", 'CHANNEL_MISSING');
+		}
 		c.state = 'CLOSED';
 		const rec = s.assets[c.asset.key];
 		if (rec) rec.onchain = addUnits(rec.onchain, c.localBalance);
@@ -1884,7 +1905,7 @@ export function createAssetsMock(ctx) {
 	function daemonChannels(id) {
 		if (!state.wallets[id]) return [];
 		return state.wallets[id].channels
-			.filter((c) => c.state !== 'CLOSED')
+			.filter((c) => c.state !== 'CLOSED' && c.state !== 'MISSING')
 			.map((c) => {
 				const capacitySats = Number(c.channelSats) || 0;
 				const remoteBalanceSats = Math.min(capacitySats, CHANNEL_PUSH_SATS);

@@ -145,6 +145,23 @@ export function onHandShortage(details, what) {
 }
 
 /**
+ * What the assets host says is wrong with the wallet's asset channels, one
+ * note each: { code, tone, text }, the sentence being the host's own. A
+ * recovery that is taking long is a wait, and is said in blue. Anything else
+ * is something the wallet cannot put right by itself, and is said in red. A
+ * host that names no codes is believed all the same, in one red note.
+ */
+export function channelWarnings(status) {
+	const ln = status && status.lightning;
+	if (!ln) return [];
+	const said = Array.isArray(ln.warnings) ? ln.warnings.filter((w) => w && typeof w.text === 'string' && w.text.trim()) : [];
+	if (said.length > 0) {
+		return said.map((w) => ({ code: String(w.code || 'CHANNEL_WARNING'), tone: w.code === 'RECOVERY_STUCK' ? 'info' : 'error', text: w.text.trim() }));
+	}
+	return typeof ln.warning === 'string' && ln.warning.trim() ? [{ code: 'CHANNEL_WARNING', tone: 'error', text: ln.warning.trim() }] : [];
+}
+
+/**
  * The notes across the top of the Assets tab. Errors first, then the things
  * worth knowing. Each is { code, tone: 'error' | 'info', text, action }, the
  * action being 'backup' where the reader can do something about it now.
@@ -191,6 +208,10 @@ export function assetWarnings({ status, rec, info, health, btc, holdings, rows, 
 			]
 		});
 	}
+
+	// What is wrong with an asset channel is said here too: the assets in it
+	// are part of what this tab counts.
+	for (const w of channelWarnings(status)) out.push({ code: w.code, tone: w.tone, parts: [w.text] });
 
 	if (health && health.electrumConnected === false) {
 		out.push({

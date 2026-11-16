@@ -305,30 +305,32 @@ function statusOf(host) {
 	} catch (_) {
 		usableChannels = 0;
 	}
-	const warning = warningOf(host);
-	return { mode: modeOf(host), usableChannels, ...(warning ? { warning } : {}) };
+	const warnings = warningsOf(host);
+	return { mode: modeOf(host), usableChannels, ...(warnings.length ? { warning: warnings.map((w) => w.text).join(' '), warnings } : {}) };
 }
 
 const CHANNEL_MISSING =
-	"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known.";
+	"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known. This wallet cannot bring the assets in it back by itself.";
 const CHANGE_NOT_BACK =
 	"Part of an asset went into the funding transaction of a channel as change and is not in this wallet's records, so it is not in the balance shown. The wallet's log says which asset and how much.";
 const RECOVERY_STUCK = 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.';
 
 /**
- * What the status says is wrong with the wallet's asset channels, in
- * sentences of the host's, or null. Never throws: the status must not.
+ * What the status says is wrong with the wallet's asset channels: each a
+ * code the dashboard can tell apart and a sentence of the host's. A wait
+ * (RECOVERY_STUCK) is not a loss, and the reader should not be shown the
+ * two alike. Never throws: the status must not.
  */
-function warningOf(host) {
+function warningsOf(host) {
 	const said = [];
 	try {
-		if (channelList(host).some((c) => c.missing)) said.push(CHANNEL_MISSING);
-		if (host.rows.list('l-change/').length > 0) said.push(CHANGE_NOT_BACK);
-		if (recoveryStuck(host)) said.push(RECOVERY_STUCK);
+		if (channelList(host).some((c) => c.missing)) said.push({ code: 'CHANNEL_MISSING', text: CHANNEL_MISSING });
+		if (host.rows.list('l-change/').length > 0) said.push({ code: 'CHANGE_NOT_BACK', text: CHANGE_NOT_BACK });
+		if (recoveryStuck(host)) said.push({ code: 'RECOVERY_STUCK', text: RECOVERY_STUCK });
 	} catch (_) {
 		/* what could not be read is not said */
 	}
-	return said.length ? said.join(' ') : null;
+	return said;
 }
 
 /**

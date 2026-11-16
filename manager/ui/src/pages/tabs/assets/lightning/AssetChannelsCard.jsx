@@ -4,6 +4,7 @@ import { Button, Card, Empty, Skeleton } from '../../../../components/ui.jsx';
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { lightningRefusal } from '../../../../lib/asset-lightning.js';
+import { channelWarnings } from '../../../../lib/assets.js';
 import AssetChannelRows, { CloseAssetChannelModal } from './AssetChannelRows.jsx';
 import OpenAssetChannelModal from './OpenAssetChannelModal.jsx';
 
@@ -19,8 +20,12 @@ const clickOrigin = (e) => (e && typeof e.clientX === 'number' ? { x: e.clientX,
  *
  * An asset's own page sends its "Open channel" button here with the asset
  * in hand (`route.state.openAsset`), and the dialog opens on that asset.
+ *
+ * `status` is the assets host's status. What it says is wrong with a
+ * channel (one the node no longer holds, a close whose assets are not back)
+ * is said above the list, in the host's own sentences.
  */
-export default function AssetChannelsCard({ id, api, tick, bump, route, go }) {
+export default function AssetChannelsCard({ id, api, tick, bump, route, go, status }) {
 	const toast = useToast();
 	const assets = useAssetsApi(api);
 	const [modal, setModal] = useState(null);
@@ -74,6 +79,17 @@ export default function AssetChannelsCard({ id, api, tick, bump, route, go }) {
 					</Button>
 				}
 			>
+				{channelWarnings(status).map((w) => (
+					<div
+						key={w.code}
+						className={w.tone === 'info' ? 'info-note' : 'error-note'}
+						role={w.tone === 'info' ? 'status' : 'alert'}
+						data-testid="asset-channels-warning"
+						data-code={w.code}
+					>
+						{w.text}
+					</div>
+				))}
 				<div data-testid="asset-channels" data-count={channels ? channels.length : ''}>
 					{!channels && error ? (
 						<div className="error-note" role="alert">

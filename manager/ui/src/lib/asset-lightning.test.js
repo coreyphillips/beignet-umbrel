@@ -221,3 +221,9 @@ test('a failed payment says why, and that nothing was paid', () => {
 	assert.equal(payFailure({ failureDescription: '' }), 'The payment did not go through, and nothing was paid. The wallet did not say why.');
 	assert.equal(payFailure(null), 'The payment did not go through, and nothing was paid. The wallet did not say why.');
 });
+
+test('a channel the node no longer holds is said to be not held here, carries nothing and cannot be closed', () => {
+	assert.deepEqual(channelState('MISSING'), { word: 'not held here', tone: 'red', usable: false });
+	assert.equal(canClose({ state: 'MISSING' }), false);
+	assert.equal(canClose({ state: 'NORMAL' }), true);
+});

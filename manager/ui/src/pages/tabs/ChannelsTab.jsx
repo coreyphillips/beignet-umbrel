@@ -220,7 +220,7 @@ export default function ChannelsTab({ id, api, rec, tick, bump, config, route, g
 			</Card>
 
 			{assetChannels && view === 'open' && (
-				<AssetChannelsCard id={id} api={api} tick={tick} bump={bump} route={route} go={go} />
+				<AssetChannelsCard id={id} api={api} tick={tick} bump={bump} route={route} go={go} status={assets?.status} />
 			)}
 
 			{modal?.type === 'open' && (

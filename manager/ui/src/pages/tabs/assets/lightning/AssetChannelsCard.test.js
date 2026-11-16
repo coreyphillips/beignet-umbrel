@@ -26,7 +26,7 @@ const PRICED_MS = 350;
 const ANSWERED_MS = 80;
 
 /** The card over a backend, as the Channels tab mounts it, with a way to make it ask again. */
-async function mount(backend, { id = 'demo-main', api, route, go } = {}) {
+async function mount(backend, { id = 'demo-main', api, route, go, status } = {}) {
 	let bump = () => {};
 	const moves = [];
 	function Page() {
@@ -41,7 +41,8 @@ async function mount(backend, { id = 'demo-main', api, route, go } = {}) {
 				tick,
 				bump: () => {},
 				route: route || { query: {}, state: null },
-				go: go || ((to, options) => moves.push([to, options || {}]))
+				go: go || ((to, options) => moves.push([to, options || {}])),
+				status
 			})
 		);
 	}
@@ -375,6 +376,46 @@ test('a close the wallet refuses keeps the dialog open, with the reason', async 
 		assert.equal(r.test('asset-channel-close-error').textContent, 'This wallet no longer has that channel. It may already be closed.');
 		assert.ok(r.test('asset-channel-close-dialog'));
 		assert.equal(r.test('asset-channel-close-coop').disabled, false, 'and it can be tried again');
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a channel the node no longer holds is listed as that, cannot be closed, and the card says what it means', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'channel-missing'), true);
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	assert.equal(status.lightning.usableChannels, 0);
+	const r = await mount(backend, { status });
+	try {
+		const row = r.test('asset-channel');
+		assert.equal(row.getAttribute('data-state'), 'MISSING');
+		assert.match(row.textContent, /not held here/);
+		// Its last known balance is still shown, and nothing offers to close it.
+		assert.match(row.textContent, /2,400\.00/);
+		assert.equal(r.test('asset-channel-close'), null);
+		const notes = r.tests('asset-channels-warning');
+		assert.equal(notes.length, 1);
+		assert.equal(notes[0].getAttribute('data-code'), 'CHANNEL_MISSING');
+		assert.equal(notes[0].getAttribute('role'), 'alert');
+		assert.match(notes[0].textContent, /as happens after a restore from a backup/);
+		assert.match(notes[0].textContent, /cannot bring the assets in it back by itself/);
+		// The wallet refuses a close all the same, in words.
+		await assert.rejects(backend.api('demo-main').post('/x/assets/channels/close', { channelId: row.getAttribute('data-channel') || (await backend.api('demo-main').get('/x/assets/channels')).channels[0].channelId }), (e) => e.code === 'CHANNEL_MISSING');
+		// The daemon does not list a channel it does not hold.
+		assert.equal(backend.mock.daemonChannels('demo-main').length, 0);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a wallet with nothing wrong with its channels shows no warning', async () => {
+	const backend = assetsBackend();
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	assert.equal('warning' in status.lightning, false);
+	const r = await mount(backend, { status });
+	try {
+		assert.equal(r.tests('asset-channels-warning').length, 0);
 	} finally {
 		await r.unmount();
 	}

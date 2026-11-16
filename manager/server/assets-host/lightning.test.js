@@ -1139,7 +1139,9 @@ test('a recovery that keeps failing is logged, and after a while the status says
 	assert.deepEqual(status.lightning, {
 		mode: 'full',
 		usableChannels: 0,
-		warning: 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.'
+		warning: 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.',
+		// The same said with its code, so the dashboard can tell a wait from a loss.
+		warnings: [{ code: 'RECOVERY_STUCK', text: 'The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why.' }]
 	});
 	assert.equal(JSON.stringify(status).includes('missingorspent'), false);
 	assert.equal(h.events.some(([name, data]) => name === 'status' && data.lightning && data.lightning.warning), true);
@@ -1776,6 +1778,7 @@ test('an open the node no longer holds a channel for is undone, and a channel on
 	const status = (await h.get('/status')).lightning;
 	assert.deepEqual([status.mode, status.usableChannels], ['full', 0]);
 	assert.match(status.warning, /^An asset channel is on record that the wallet's node does not hold/);
+	assert.deepEqual(status.warnings, [{ code: 'CHANNEL_MISSING', text: status.warning }]);
 	const close = await refused(h.call('POST /channels/close', { channelId: listed[0].channelId, force: true }));
 	assert.deepEqual([close.extensionCode, close.status], ['CHANNEL_MISSING', 409]);
 	assert.equal(close.message, "This channel is on record, but the wallet's node does not hold it, as happens after a restore from a backup. It cannot be closed from this wallet.");
@@ -1863,7 +1866,7 @@ function leftFor(dir, file) {
 
 const pairs = (part) => part.rows.map((r) => [r.key, r.value]);
 const MISSING_WARNING =
-	"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known.";
+	"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known. This wallet cannot bring the assets in it back by itself.";
 const CHANGE_WARNING =
 	"Part of an asset went into the funding transaction of a channel as change and is not in this wallet's records, so it is not in the balance shown. The wallet's log says which asset and how much.";
 
@@ -1931,7 +1934,7 @@ test('a wallet restored from a backup knows its channels and cannot run them: li
 			listed.map((c) => [c.channelId, c.pendingChannelId, c.peerPubkey, c.state, c.localBalance, c.remoteBalance, c.sendable, c.receivable, c.asset.name]),
 			[[source.channel.channelId, source.id, PEER.pubkey, 'MISSING', '400', '200', '0', '0', 'coin']]
 		);
-		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: MISSING_WARNING });
+		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: MISSING_WARNING, warnings: [{ code: 'CHANNEL_MISSING', text: MISSING_WARNING }] });
 		// It counts as a channel for the manager, and its units are in the books.
 		assert.equal(h.host.mem.summary.channels, 1);
 		const { balance } = (await h.get('/balances')).assets[0];
@@ -2010,7 +2013,15 @@ test('after a restore, what a channel funding had set aside is settled from the 
 			{ id: source.id, channelId: source.channel.channelId, fundingTxid, change: [{ assetId: source.asset.assetId, amount: '400' }], at: h.clock.t }
 		]);
 		// The status says so in a sentence, and the log says which asset and how much.
-		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: `${MISSING_WARNING} ${CHANGE_WARNING}` });
+		assert.deepEqual((await h.get('/status')).lightning, {
+			mode: 'full',
+			usableChannels: 0,
+			warning: `${MISSING_WARNING} ${CHANGE_WARNING}`,
+			warnings: [
+				{ code: 'CHANNEL_MISSING', text: MISSING_WARNING },
+				{ code: 'CHANGE_NOT_BACK', text: CHANGE_WARNING }
+			]
+		});
 		assert.equal(h.logs.some(([level, text]) => level === 'warn' && text.includes(`400 of ${source.asset.assetId}`)), true);
 		assert.equal(h.logs.some(([, text]) => text.includes('is free again') && text.includes(`70 of ${source.asset.assetId}`)), true);
 		// Settled: not asked again, by a block or by a restart of the loop's look.
@@ -2022,7 +2033,7 @@ test('after a restore, what a channel funding had set aside is settled from the 
 		h.tap.records.push({ ...like, spent: false, reservedBy: undefined, amount: '400', anchorOutPoint: `${fundingTxid}:1` });
 		await h.host.pass({ block: true });
 		assert.deepEqual(h.host.rows.list('l-change/'), []);
-		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: MISSING_WARNING });
+		assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, warning: MISSING_WARNING, warnings: [{ code: 'CHANNEL_MISSING', text: MISSING_WARNING }] });
 		assert.deepEqual(await books(), ['1070', '470', '600']);
 	});
 });
