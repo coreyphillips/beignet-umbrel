@@ -132,7 +132,7 @@ node 20-ln-open.mjs           # what an open costs, the refusals before anything
 node 21-ln-pay.mjs            # an invoice and its payment both ways, replay, the limits each way, a price that is gone, both daemons restarted
 node 22-ln-close.mjs          # closed together: each side's share back on-chain
 node 23-ln-force-close.mjs    # closed alone with the peer stopped: the delay, the sweeps, the peer coming back
-node 24-ln-crash-restore.mjs  # daemons killed as an open is handed over and with a payment in flight, then the opener restored from an archive
+node 24-ln-crash-restore.mjs  # daemons killed before an open has answered, as it answers and with a payment in flight, then the opener restored from an archive
 ```
 
 Each one makes two wallets, mints 100,000 units of an asset of its own on the
@@ -145,8 +145,12 @@ someone else's software, and not only listed by this app.
 
 `23-ln-force-close.mjs` stops the peer's wallet, and mines twelve blocks at a
 time until the closer's share has waited out its delay and been swept.
-`24-ln-crash-restore.mjs` kills daemons the way `06-crash.mjs` does, then
-deletes the opener with its data and restores it from an archive of the box.
+`24-ln-crash-restore.mjs` kills daemons the way `06-crash.mjs` does. An open
+cut before it has answered must end, on both wallets, as a channel that was
+carried on or as an open that failed and says why, never as an open the peer
+heard of that is simply gone; an open cut as it answers must become a channel
+on both. Then it deletes the opener with its data and restores it from an
+archive of the box.
 What a restore cannot bring back is part of what it checks: the restored
 wallet lists the channel as one its node does not hold, keeps everything it
 had on-chain, and the peer, which still holds the channel, force closes it and
@@ -157,6 +161,8 @@ takes its own share home.
 | `MANAGER_URL` | `http://127.0.0.1:3900` | The manager |
 | `ASSETS_REGTEST_PROJECT` | `umbrel-assets-regtest` | The compose project the scripts mine and call tapd in |
 | `PRIMARY_LOCAL_HOST` | `127.0.0.1` | The host one wallet's node reaches the other's on, in the Lightning scripts |
+| `CUT_OPEN_AFTER_MS` | `300` | How long after the open is asked for `24-ln-crash-restore.mjs` kills the opener the first time |
+| `CUT_OPEN_WAIT_MS` | `60000` | How long it waits for both wallets to settle after that cut |
 
 What the scripts do not cover, and why: a preview expiring by time (three
 minutes, covered by the host's unit tests with a clock), fee bumping (the
