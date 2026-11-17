@@ -1715,7 +1715,8 @@ test('a signed funding the library gives up as unable to confirm is over: said o
 	assert.deepEqual([keys(h, 'committed/funding:'), keys(h, 'chan/'), keys(h, 'idem/channels/')], [[], [], []]);
 	// What the library wrote of it is in the log, and nowhere else.
 	assert.equal(h.logs.some(([level, text]) => level === 'warn' && /was spent by 77c1/.test(text)), true);
-	assert.equal(JSON.stringify(h.events).includes('77c1'), false);
+	// (The outpoint and the phrase, not the bare 77c1: the channel's own id is random hex, and can hold those four characters.)
+	assert.equal(/4f2a:0|was spent by 77c1/.test(JSON.stringify(h.events)), false);
 	// The library was asked to let go of it, and keeps it while the engine does. It is said once all the same.
 	assert.deepEqual(named(h, 'forgetChannel').map((c) => c[1]), [id]);
 	assert.equal(h.ln.flows.has(id), true);
