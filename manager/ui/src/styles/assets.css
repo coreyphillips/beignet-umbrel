@@ -1410,6 +1410,14 @@ pre.asset-meta {
 }
 
 /* A note that follows a channel's figures stands a little off them. */
+/* What the wallet's node said of a failed open, beneath the wallet's own sentence. */
+.asset-channel-failure-detail {
+	margin-top: 6px;
+	font-size: 12px;
+	opacity: 0.8;
+	overflow-wrap: anywhere;
+}
+
 .asset-channel-facts + .info-note {
 	margin-top: 12px;
 }

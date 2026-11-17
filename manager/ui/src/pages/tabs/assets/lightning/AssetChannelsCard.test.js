@@ -848,16 +848,17 @@ test('a channel that has not taken in the results of earlier payments says so on
 	}
 });
 
-test('a failed open the library gave a reason for says the reason after the wallet\'s own sentence', async () => {
+test('a failed open says the wallet\'s own sentence, and what the wallet\'s node said small beneath it', async () => {
 	const backend = assetsBackend();
 	assert.equal(backend.mock.seed('demo-main', 'open-failed'), true);
 	const { channels } = await backend.api('demo-main').get('/x/assets/channels');
 	const failed = channels.find((c) => c.state === 'FAILED');
 	assert.equal(failed.failure.code, 'CHANNEL_OPEN_FAILED');
-	assert.equal(
-		failed.failure.message,
-		"This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again. The wallet's record of it says: the peer did not answer the funding in time."
-	);
+	assert.deepEqual(failed.failure, {
+		code: 'CHANNEL_OPEN_FAILED',
+		message: 'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.',
+		detail: 'Funding wallet terms changed'
+	});
 	assert.equal(backend.mock.daemonChannels('demo-main').some((c) => c.channelId === failed.channelId), false, 'it is no channel to the daemon');
 	const r = await mount(backend, { status: await backend.api('demo-main').get('/x/assets/status') });
 	try {
@@ -865,7 +866,22 @@ test('a failed open the library gave a reason for says the reason after the wall
 		assert.match(row.textContent, /not opened/);
 		const note = row.querySelector('[data-testid="asset-channel-failure"]');
 		assert.equal(note.getAttribute('data-code'), 'CHANNEL_OPEN_FAILED');
-		assert.match(note.textContent, /It can be tried again\. The wallet's record of it says: the peer did not answer the funding in time\./);
+		// The sentence is the wallet's own, and the node's words are no part of it.
+		assert.match(note.textContent, /^This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent\. It can be tried again\. It was for /);
+		const detail = note.querySelector('[data-testid="asset-channel-failure-detail"]');
+		assert.equal(detail.textContent, "The wallet's node said: Funding wallet terms changed.");
+		// An open that failed with nothing said by the node has no such line.
+		const other = assetsBackend();
+		assert.equal(other.mock.seed('demo-main', 'open-interrupted'), true);
+		const cut = (await other.api('demo-main').get('/x/assets/channels')).channels.find((c) => c.state === 'FAILED');
+		assert.deepEqual(Object.keys(cut.failure), ['code', 'message']);
+		const plain = await mount(other, { status: await other.api('demo-main').get('/x/assets/status') });
+		try {
+			assert.equal(plain.tests('asset-channel-failure').length, 1);
+			assert.equal(plain.tests('asset-channel-failure-detail').length, 0);
+		} finally {
+			await plain.unmount();
+		}
 		assert.equal(row.querySelector('[data-testid="asset-channel-close"]'), null, 'nothing to close');
 	} finally {
 		await r.unmount();

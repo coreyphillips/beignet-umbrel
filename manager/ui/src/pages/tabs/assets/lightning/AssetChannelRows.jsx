@@ -89,6 +89,12 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 							<div className="error-note" role="note" data-testid="asset-channel-failure" data-code={failed.code}>
 								{failed.message || 'This channel was not opened, and nothing was spent.'} It was for{' '}
 								<AssetAmount value={c.capacity} asset={c.asset} />.
+								{/* The words of the wallet's node, which are its internals: small, and said as its. */}
+								{typeof failed.detail === 'string' && failed.detail.trim() !== '' && (
+									<div className="asset-channel-failure-detail" data-testid="asset-channel-failure-detail">
+										The wallet&apos;s node said: {failed.detail.trim().replace(/[.\s]+$/, '')}.
+									</div>
+								)}
 							</div>
 						)}
 						{!failed && (

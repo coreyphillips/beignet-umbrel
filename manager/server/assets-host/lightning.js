@@ -188,17 +188,41 @@ const OPEN_FAILURES = Object.freeze({
 	// Ended by the library with nothing signed, after this host had answered for it.
 	CHANNEL_OPEN_FAILED: 'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.'
 });
-// The library's own reason for an open it ended, on one line, to follow a sentence.
+// Why the library ended an open, by the reason code it names on the flow:
+// a closed set, each with a sentence of the host's own. The names here
+// stand in until the library's own arrive (adapter.js reads the code from
+// the entry, and this is the one table that knows the names). A code not
+// listed here gets the general sentence of OPEN_FAILURES.
+const OPEN_ENDED_TAIL = 'so nothing was opened and nothing was spent. It can be tried again.';
+const OPEN_ENDED_BECAUSE = Object.freeze({
+	INTERRUPTED_BEFORE_SIGNED: `This channel open was interrupted before the peer had signed for it, and before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	PEER_REFUSED: `The peer refused this channel open before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	PEER_ENDED: `The peer's side of this channel open ended before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	TERMS_EXPIRED: `The terms of this channel open ran out before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	ENGINE_DROPPED: `The wallet's node dropped this channel open before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	NEVER_FUNDED: `This channel open was never funded, and no bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`
+});
+// The library's own words for an open it ended, on one line. They are its
+// internals ("Funding wallet terms changed"): for the log, and for the
+// detail a row shows beneath the host's sentence. Never part of a sentence.
 const reasonOf = (text) =>
 	String(text || '')
 		.replace(/\s+/g, ' ')
 		.trim()
 		.replace(/[.!]+$/, '')
 		.slice(0, 200);
-const failedOpen = (code, reason) => {
-	const sentence = OPEN_FAILURES[code] || 'This channel was not opened, and nothing was spent.';
-	const why = reasonOf(reason);
-	return { code, message: why ? `${sentence} The wallet's record of it says: ${why}.` : sentence };
+/**
+ * What a failed open says: { code, message, detail? }. The message is the
+ * host's own sentence, whatever the library said: that of the reason code
+ * the library named (`because`) where this host knows it, else the general
+ * one of the host's code. `detail` is the library's words (`reason`), when
+ * it gave any.
+ */
+const failedOpen = (code, { reason, because } = {}) => {
+	const known = typeof because === 'string' && Object.prototype.hasOwnProperty.call(OPEN_ENDED_BECAUSE, because);
+	const message = known ? OPEN_ENDED_BECAUSE[because] : OPEN_FAILURES[code] || 'This channel was not opened, and nothing was spent.';
+	const detail = reasonOf(reason);
+	return detail ? { code, message, detail } : { code, message };
 };
 const cancelledError = () => Object.assign(new Error('the open was cancelled'), { code: 'ERR_BEIGNET_LN_CANCELLED' });
 
@@ -402,7 +426,7 @@ function channelList(host) {
 	}
 	for (const note of notes.values()) {
 		// An open that failed stays listed for a while, as what it is.
-		const failed = note.failed ? failedOpen(note.failed.code, note.failed.reason) : null;
+		const failed = note.failed ? failedOpen(note.failed.code, note.failed) : null;
 		if (seen.has(note.id) || (note.closedAt && !failed)) continue;
 		// An open the user confirmed that the library has not heard of yet is
 		// on its way. Anything else the library no longer lists was a channel,
@@ -954,13 +978,13 @@ async function undoOpen(host, id, err, { again = false } = {}) {
 	const note = again && !asked ? host.rows.get(`chan/${id}`) : null;
 	if (note && !note.closedAt && host.rows.get(`committed/funding:${id}`)) {
 		const why = reasonOf(plainMessage(err, ''));
-		const failed = failedOpen('CHANNEL_OPEN_FAILED', why);
+		const failed = failedOpen('CHANNEL_OPEN_FAILED', { reason: why });
 		await endOpen(
 			host,
 			id,
 			note,
 			failed,
-			why || null,
+			{ reason: why },
 			(channelId) => `assets: a channel open a restart interrupted (${channelId}) could not be begun again${why ? `: ${why}` : ''}. Nothing left the wallet, and it can be asked for again.`
 		);
 		return { error: refusal(failed.code, failed.message, 409) };
@@ -2254,7 +2278,7 @@ async function endLost(host, id, note) {
 		id,
 		note,
 		failedOpen('CHANNEL_OPEN_INTERRUPTED'),
-		null,
+		{},
 		(channelId) =>
 			`assets: a channel open (${channelId}) was cut short before its funding was signed, and neither the library nor the node holds anything of it. It is ended, and can be asked for again.`
 	);
@@ -2272,23 +2296,27 @@ async function endFailed(host, id, note, flow) {
 	if (host.mem.stopped || host.mem.opens.has(id)) return;
 	if ((await giveUp(host, id)) !== true) return;
 	const why = reasonOf(flow.error);
+	// The library's reason code for the flow it ended, where it names one.
+	const because = flow.because || null;
 	await endOpen(
 		host,
 		id,
 		note,
-		failedOpen('CHANNEL_OPEN_FAILED', why),
-		why || null,
+		failedOpen('CHANNEL_OPEN_FAILED', { reason: why, because }),
+		{ reason: why, because },
 		(channelId) => `assets: a channel open (${channelId}) was ended by the library before its funding was signed${why ? `: ${why}` : ''}. Nothing left the wallet, and it can be asked for again.`
 	);
 }
 
 /**
  * An open that is over with nothing signed becomes a failed open: its
- * marker goes, its note says why (the code, and the library's reason when
- * it gave one), and the key that asked for it answers the failure from
- * now on. Said, announced, and only then taken off the library's list.
+ * marker goes, its note says why (the code, and the library's words and
+ * reason code when it gave them), and the key that asked for it answers
+ * the failure from now on, in the host's sentence. The library's words go
+ * to the log (`line`) and to the row's detail, and nowhere else. Said,
+ * announced, and only then taken off the library's list.
  */
-async function endOpen(host, id, note, failure, reason, line) {
+async function endOpen(host, id, note, failure, { reason, because } = {}, line) {
 	const { mem, rows } = host;
 	const channelId = note.channelId || id;
 	const done = await host.lock.run(() =>
@@ -2297,7 +2325,7 @@ async function endOpen(host, id, note, failure, reason, line) {
 			if (!current || current.closedAt || !rows.get(`committed/funding:${id}`)) return false;
 			const at = host.now();
 			rows.del(`committed/funding:${id}`);
-			rows.put(`chan/${id}`, { ...current, closedAt: at, failed: reason ? { code: failure.code, at, reason } : { code: failure.code, at } });
+			rows.put(`chan/${id}`, { ...current, closedAt: at, failed: { code: failure.code, at, ...(reason ? { reason } : {}), ...(because ? { because } : {}) } });
 			// The key that asked for it answers what became of it from now on.
 			const entry = current.journal ? rows.get(current.journal) : null;
 			if (entry) rows.put(current.journal, { at: entry.at, body: entry.body, refusal: { code: failure.code, message: failure.message, status: 409 } });
@@ -2718,6 +2746,8 @@ module.exports = {
 	channelList,
 	channelCount,
 	liveChannels,
+	failedOpen,
+	OPEN_ENDED_BECAUSE,
 	statusOf,
 	listChannels,
 	paymentLimits,

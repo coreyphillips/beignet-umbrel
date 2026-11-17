@@ -726,7 +726,7 @@ export function createAssetsMock(ctx) {
 	// (OPEN_FAILURES.CHANNEL_OPEN_FAILED), and the library's own reason after it.
 	const OPEN_FAILED_TEXT =
 		'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
-	const OPEN_FAILED_REASON = 'the peer did not answer the funding in time';
+	const OPEN_FAILED_REASON = 'Funding wallet terms changed';
 	// The host's sentence for a payment a channel refuses while results of earlier ones are not taken in (errors.js).
 	const OUTCOMES_UNDELIVERED_TEXT =
 		'This wallet has not yet taken in the results of earlier payments on that channel, so nothing was paid. Nothing is wrong with this payment. Restart the wallet, and if this is said again afterwards, its log says why.';
@@ -744,7 +744,8 @@ export function createAssetsMock(ctx) {
 				peerPubkey: `03${derivedHex('seed-peer:stuck-open', 64)}`,
 				peerAlias: 'Meridian edge',
 				state: 'FAILED',
-				failure: { code: 'CHANNEL_OPEN_FAILED', message: `${OPEN_FAILED_TEXT} The wallet's record of it says: ${OPEN_FAILED_REASON}.` },
+				// As the host: its own sentence, and the library's words apart, as the detail.
+				failure: { code: 'CHANNEL_OPEN_FAILED', message: OPEN_FAILED_TEXT, detail: OPEN_FAILED_REASON },
 				asset: brief(rec),
 				capacity: '50000',
 				localBalance: '0',

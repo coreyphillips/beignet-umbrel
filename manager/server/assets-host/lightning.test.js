@@ -3116,14 +3116,16 @@ test('a payment that never entered the channel says nothing left the wallet and 
 
 const ENDED = 'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
 
-test('an open the library ended across a restart is a failed open that carries the reason the library gives, and its key answers that', async () => {
+test('an open the library ended across a restart is a failed open in the wallet\'s own sentence, with what the library said kept apart as a detail and in the log', async () => {
 	// What the library's resume() makes of an open the engine forgot: ended with a reason, and still on its list.
-	const why = 'the engine dropped the channel open before the peer signed';
-	const said = `${ENDED} The wallet's record of it says: ${why}.`;
+	const why = 'Funding wallet terms changed';
+	// The sentence is the host's own. The library's words are no part of it.
+	const said = ENDED;
 	const { h, asset, id, channelId } = await cutShort({ before: (old, pending) => old.ln.set(pending, { phase: 'failed', error: `${why}.` }) });
 	assert.deepEqual(keys(h, 'committed/funding:'), []);
-	assert.deepEqual(await brief(h), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said }]]);
+	assert.deepEqual(await brief(h), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said, detail: why }]]);
 	assert.deepEqual(events(h, 'error'), [{ code: 'CHANNEL_OPEN_FAILED', message: said, channelId }]);
+	assert.equal(h.logs.some(([level, text]) => level === 'warn' && text.includes(`was ended by the library before its funding was signed: ${why}.`)), true, 'the library\'s words are in the log');
 	assert.deepEqual((await h.get('/balances')).assets[0].balance, ALL_ON_CHAIN);
 	// The same key answers what became of it, with the reason, and opens nothing.
 	const opens = named(h, 'openChannel').length;
@@ -3137,10 +3139,51 @@ test('an open the library ended across a restart is a failed open that carries t
 	await later.boot();
 	await passes(later);
 	assert.equal(events(later, 'error').length, 1);
-	assert.deepEqual(await brief(later), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said }]]);
+	assert.deepEqual(await brief(later), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said, detail: why }]]);
 });
 
-test('an open a restart interrupted that the library refuses when the wallet begins it again is a failed open with the reason: listed, said, and what its key answers', async () => {
+test('an open the library ended with a reason code it names gets the sentence of that reason, and one it does not name the general sentence', async () => {
+	const { failedOpen, OPEN_ENDED_BECAUSE } = lightning;
+	const tail = 'so nothing was opened and nothing was spent. It can be tried again.';
+	// The closed set the library is to name. The names here stand in until its own arrive.
+	const table = [
+		['INTERRUPTED_BEFORE_SIGNED', `This channel open was interrupted before the peer had signed for it, and before any bitcoin or asset left the wallet, ${tail}`],
+		['PEER_REFUSED', `The peer refused this channel open before any bitcoin or asset left the wallet, ${tail}`],
+		['PEER_ENDED', `The peer's side of this channel open ended before any bitcoin or asset left the wallet, ${tail}`],
+		['TERMS_EXPIRED', `The terms of this channel open ran out before any bitcoin or asset left the wallet, ${tail}`],
+		['ENGINE_DROPPED', `The wallet's node dropped this channel open before any bitcoin or asset left the wallet, ${tail}`],
+		['NEVER_FUNDED', `This channel open was never funded, and no bitcoin or asset left the wallet, ${tail}`]
+	];
+	assert.deepEqual(Object.keys(OPEN_ENDED_BECAUSE), table.map(([code]) => code));
+	for (const [because, sentence] of table) {
+		assert.deepEqual(failedOpen('CHANNEL_OPEN_FAILED', { because }), { code: 'CHANNEL_OPEN_FAILED', message: sentence }, because);
+		// The library's words never change the sentence: they ride along as the detail.
+		assert.deepEqual(failedOpen('CHANNEL_OPEN_FAILED', { because, reason: 'Funding wallet session was cancelled.' }), { code: 'CHANNEL_OPEN_FAILED', message: sentence, detail: 'Funding wallet session was cancelled' }, because);
+	}
+	// A code this host has not met, a name that is no code, and none at all: the general sentence of the host's code.
+	const INTERRUPTED = `This channel open was interrupted before any bitcoin or asset left the wallet, ${tail}`;
+	for (const because of ['SOMETHING_NEW', 'constructor', 'toString', '', null, undefined, 7]) {
+		assert.deepEqual(failedOpen('CHANNEL_OPEN_FAILED', { because }), { code: 'CHANNEL_OPEN_FAILED', message: ENDED }, String(because));
+		assert.deepEqual(failedOpen('CHANNEL_OPEN_INTERRUPTED', { because }), { code: 'CHANNEL_OPEN_INTERRUPTED', message: INTERRUPTED }, String(because));
+	}
+	assert.deepEqual(failedOpen('CHANNEL_OPEN_FAILED', { reason: 'Asset channel is not ready for funding (channel ab12)' }), {
+		code: 'CHANNEL_OPEN_FAILED',
+		message: ENDED,
+		detail: 'Asset channel is not ready for funding (channel ab12)'
+	});
+	assert.deepEqual(failedOpen('SOME_OTHER_CODE'), { code: 'SOME_OTHER_CODE', message: 'This channel was not opened, and nothing was spent.' });
+
+	// End to end: the library names its reason on the flow it ended, and the row says that reason's sentence.
+	const { h, id } = await cutShort({ before: (old, pending) => old.ln.set(pending, { phase: 'failed', error: 'Funding wallet terms changed', reasonCode: 'TERMS_EXPIRED' }) });
+	assert.deepEqual(await brief(h), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: table[3][1], detail: 'Funding wallet terms changed' }]]);
+	// And still after a restart, from the note alone.
+	const later = h.restart();
+	made.push(later);
+	await later.boot();
+	assert.deepEqual(await brief(later), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: table[3][1], detail: 'Funding wallet terms changed' }]]);
+});
+
+test('an open a restart interrupted that the library refuses when the wallet begins it again is a failed open: listed, said in the wallet\'s own sentence, and what its key answers', async () => {
 	const { h, asset } = await funded();
 	// Asked of the library, which had answered nothing when the daemon stopped.
 	h.ln.opts.openHangs = true;
@@ -3155,9 +3198,9 @@ test('an open a restart interrupted that the library refuses when the wallet beg
 	await again.boot();
 	for (let i = 0; i < 100 && !(await brief(again)).some((row) => row[1] === 'FAILED'); i += 1) await new Promise((r) => setTimeout(r, 5));
 	again.ln.opts.openFails = null;
-	const said = `${ENDED} The wallet's record of it says: The channel was turned down: the peer said no.`;
+	const said = ENDED;
 	assert.equal(named(again, 'openChannel').length, 2);
-	assert.deepEqual(await brief(again), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said }]]);
+	assert.deepEqual(await brief(again), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said, detail: 'The channel was turned down: the peer said no' }]]);
 	assert.deepEqual(keys(again, 'committed/funding:'), []);
 	assert.deepEqual(events(again, 'error'), [{ code: 'CHANNEL_OPEN_FAILED', message: said, channelId: id }]);
 	assert.deepEqual((await again.get('/balances')).assets[0].balance, ALL_ON_CHAIN);

@@ -96,8 +96,8 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 		recovery: 'a word this host has not met'
 	};
 	// One this wallet gave up before the channel was negotiated, and one a peer's offer came to.
-	const cancelled = { pendingChannelId: buf(0xdd), peer: PEER, initiator: true, phase: 'failed', engine: 'absent', error: 'cancelled', fundingSatoshis: 100000n, assets: [], recovery: 'none' };
-	const offered = { pendingChannelId: buf(0xee), peer: PEER, phase: 'accepted', engine: 'somewhere new', state: 'SENT_ACCEPT', groupKey: GROUP, fundingSatoshis: 100000n, assets: [{ assetId: ASSET, amount: 5n }], recovery: 'none' };
+	const cancelled = { pendingChannelId: buf(0xdd), peer: PEER, initiator: true, phase: 'failed', engine: 'absent', error: 'cancelled', reasonCode: 'TERMS_EXPIRED', fundingSatoshis: 100000n, assets: [], recovery: 'none' };
+	const offered = { pendingChannelId: buf(0xee), peer: PEER, phase: 'accepted', engine: 'somewhere new', state: 'SENT_ACCEPT', reasonCode: 'words that are no code', groupKey: GROUP, fundingSatoshis: 100000n, assets: [{ assetId: ASSET, amount: 5n }], recovery: 'none' };
 	const service = {
 		channels: () => [channel, opening, cancelled, offered],
 		peerSupports: (peer) => {
@@ -516,7 +516,8 @@ test('channels: every one and every open that ended, in plain values', () => {
 		fundingInputs: [],
 		recovery: 'none',
 		cancelled: false,
-		error: null
+		error: null,
+		because: null
 	});
 	// A signed funding the node holds no channel for: the name its inputs sit
 	// under in the on-chain records, and what they hold, which is more than the channel takes.
@@ -547,11 +548,14 @@ test('channels: every one and every open that ended, in plain values', () => {
 			// A word for its recovery this host has not met is not "nothing owed".
 			recovery: 'pending',
 			cancelled: false,
-			error: null
+			error: null,
+			because: null
 		}
 	);
 	// An open this wallet gave up, listed as failed with that for a reason.
 	assert.deepEqual([cancelled.phase, cancelled.engine, cancelled.signed, cancelled.cancelled, cancelled.error, cancelled.assetId], ['failed', 'absent', false, true, 'cancelled', null]);
+	// The reason code the library names for a flow it ended is passed on as it is, and anything that is no code is none.
+	assert.deepEqual([cancelled.because, offered.because, channel.because], ['TERMS_EXPIRED', null, null]);
 	// Whether the node holds one is read from its state when the library's word for it is new.
 	assert.deepEqual([offered.initiator, offered.engine, offered.state, offered.groupKey, offered.cancelled], [false, 'held', 'SENT_ACCEPT', hexOf(GROUP), false]);
 });

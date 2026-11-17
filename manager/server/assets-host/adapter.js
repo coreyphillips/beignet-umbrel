@@ -966,8 +966,14 @@ function plainChannel(c) {
 		// An open this wallet gave up, however far it had got: listed as
 		// `cancelled`, or as turned down or failed with that for a reason.
 		cancelled: phase === 'cancelled' || ((phase === 'rejected' || phase === 'failed') && c.error === 'cancelled'),
-		// The library's own account. For the log, and for nobody else.
-		error: c.error ? String(c.error) : null
+		// The library's own account. For the log, and for the detail of a
+		// failed open's row. Never part of a sentence of the host's.
+		error: c.error ? String(c.error) : null,
+		// Why the library ended the flow, as the reason code it names: one of
+		// a closed set the host has sentences for (lightning.js
+		// OPEN_ENDED_BECAUSE). Read from `reasonCode`, a name that stands in
+		// until the library's own arrives. Null from a library that names none.
+		because: typeof c.reasonCode === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(c.reasonCode) ? c.reasonCode : null
 	};
 }
 
