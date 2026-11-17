@@ -357,6 +357,12 @@ function channelList(host) {
 			couldSend: steady ? spare : 0n,
 			couldReceive: steady ? c.remote : 0n,
 			over: isOver(word),
+			// Its funding transaction is not on chain, as the library says it:
+			// an open under way or one that ended, with nothing on chain to close.
+			unfunded: !c.confirmed,
+			// The node has given the channel up. With its funding on chain
+			// that is a failed channel. Without, an open that will not go through.
+			gaveUp: c.state === 'ERRORED',
 			// Not usable yet and not on its way out: an open still under way.
 			opening: !isOver(word) && word !== 'MISSING' && word !== 'ERRORED' && !views.CHANNEL_CLOSING.includes(word) && c.recovery === 'none' && (word === 'OPENING' || !c.confirmed),
 			// Its units are the channel's from the point of no return of its
@@ -1165,6 +1171,22 @@ async function openChannel(host, body, key) {
 	return answer;
 }
 
+/**
+ * A close refused because the channel's funding transaction is not on
+ * chain: there is nothing on chain to close. An open this wallet funded
+ * says what can be done instead. One a peer began ends by itself.
+ */
+function notFunded(c) {
+	return refusal(
+		'CHANNEL_NOT_FUNDED',
+		c.reclaimable
+			? 'The funding transaction of this channel is not on chain yet, so there is nothing on chain to close and nothing was done. The channel can be closed once that transaction has confirmed. If it will not confirm, its bitcoin can be taken back instead, which ends the open.'
+			: 'The funding transaction of this channel is not on chain, so there is nothing on chain to close and nothing was done. An open that does not go through ends by itself, and the channel then goes from the list.',
+		409,
+		c.reclaimable ? { reclaimable: true } : undefined
+	);
+}
+
 async function closeChannel(host, body) {
 	requireProvider(host);
 	const wanted = hexKey(body.channelId);
@@ -1186,6 +1208,9 @@ async function closeChannel(host, body) {
 		if (how === 'busy') throw refusal('CHANNEL_OPENING', 'This channel is still being opened, and the open could not be stopped yet. Try again in a moment.', 409);
 		return { channelId: c.id, closing: true, force };
 	}
+	// A force close spends the funding transaction, and this one is on no
+	// chain. Nor is there a close with the peer for an open the node gave up.
+	if (c.unfunded && (force || c.gaveUp)) throw notFunded(c);
 	if (!force) {
 		// Neither would work, and the library's own no to them is not one a
 		// person can act on: said here, before anything is asked of the peer.
@@ -1195,7 +1220,7 @@ async function closeChannel(host, body) {
 		if (c.peerConnected === false) {
 			throw refusal(
 				'PEER_OFFLINE',
-				`The peer of this channel, ${peerSaid(c)}, is not connected, and a channel is closed together with its peer only while it is. Try again once it is back, or force close the channel.`,
+				`The peer of this channel, ${peerSaid(c)}, is not connected, and a channel is closed together with its peer only while it is. Try again once it is back${c.unfunded ? '' : ', or force close the channel'}.`,
 				409,
 				{ peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null }
 			);

@@ -345,10 +345,16 @@ const CHANNEL_NO_COOPERATIVE = Object.freeze(['ERRORED']);
  * and that the node does not hold, with no close on record: what a restore
  * from a backup leaves. It is no open under way and it carries nothing. It
  * is a live channel all the same, with its last known balance.
+ *
+ * ERRORED is a channel the node gave up whose funding transaction is on
+ * chain: a failed channel, closed without its peer. One the node gave up
+ * before its funding was on chain is no failed channel. Nothing is on chain
+ * to close, so it is an open under way until the library ends it.
  */
 function channelWord({ state, confirmed, recovery, engine, signed }) {
 	if (engine === 'missing' && signed) return 'MISSING';
 	if (!state || state === 'NONE' || state.startsWith('SENT_') || CHANNEL_FUNDING.includes(state)) return 'OPENING';
+	if (state === 'ERRORED' && !confirmed) return 'OPENING';
 	if (state === 'NORMAL' || state === 'AWAITING_REESTABLISH') return !confirmed ? 'OPENING' : recovery && recovery !== 'none' ? 'CLOSING' : 'NORMAL';
 	if (state === 'CLOSED') return recovery === 'complete' ? 'CLOSED' : 'CLOSING';
 	if (state === 'FORCE_CLOSED') return recovery === 'complete' ? 'FORCE_CLOSED' : 'FORCE_CLOSING';

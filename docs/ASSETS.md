@@ -393,7 +393,7 @@ An open, a reclaim and a payment carry an `X-Idempotency-Key`, and the same key 
 | `unavailable` | Only when the node does not offer asset channels to its peers: `{ code: 'NOT_ADVERTISED', message, reason }` |
 | `warnings` | `[{ code, text }]`, each a sentence to show: `CHANNEL_MISSING`, `CHANGE_NOT_BACK`, `RECOVERY_STUCK`, `FEE_COINS_UNAVAILABLE`, `FEE_BUDGET_EXHAUSTED`, `FEE_POLICY_REFUSED`. `warning` is the same sentences joined |
 
-A channel in the list has a `state`: `OPENING`, `NORMAL`, `CLOSING`, `FORCE_CLOSING`, `CLOSED`, `FORCE_CLOSED`, `FAILED` (an open that ended, with `failure: { code, message }`), `ERRORED` (the node gave it up) or `MISSING` (on record, not held by the node). A state the host has no word for is passed on in the node's own. `peerConnected` says whether the peer is there, and amounts of an asset are strings. `undeliveredOutcomes` is on a channel only while above zero: how many results of earlier payments the wallet has not taken in yet. A payment through that channel is refused with `OUTCOMES_UNDELIVERED` until it has, and the row says so.
+A channel in the list has a `state`: `OPENING`, `NORMAL`, `CLOSING`, `FORCE_CLOSING`, `CLOSED`, `FORCE_CLOSED`, `FAILED` (an open that ended, with `failure: { code, message }`), `ERRORED` (the node gave it up after its funding was on chain; one it gives up before that stays `OPENING` until the open ends, since nothing is on chain to close) or `MISSING` (on record, not held by the node). A state the host has no word for is passed on in the node's own. `peerConnected` says whether the peer is there, and amounts of an asset are strings. `undeliveredOutcomes` is on a channel only while above zero: how many results of earlier payments the wallet has not taken in yet. A payment through that channel is refused with `OUTCOMES_UNDELIVERED` until it has, and the row says so.
 
 Every refusal carries a `code` and a sentence that can be shown as it is. The codes a client of these routes meets:
 
@@ -401,7 +401,7 @@ Every refusal carries a `code` and a sentence that can be shown as it is. The co
 | --- | --- |
 | The wallet cannot use asset channels now | `LIGHTNING_UNAVAILABLE`, `LIGHTNING_NOT_ADVERTISED`, `ASSETS_STARTING`, `ASSETS_STOPPING` |
 | Opening | `PEER_UNREACHABLE`, `PEER_NO_ASSET_CHANNELS`, `CHANNEL_MODE_UNAVAILABLE`, `FUNDING_INPUTS`, `INSUFFICIENT_BTC`, `CHANNEL_ASSETS`, `NO_PROOF_SERVER`, `FEE_TOO_HIGH`, `FEE_POLICY_REFUSED`, `IDEMPOTENCY_KEY_REQUIRED`, `CHANNEL_CANCELLED`, `CHANNEL_OPEN_INTERRUPTED`, `CHANNEL_OPEN_FAILED` |
-| Closing and taking a funding back | `CHANNEL_NOT_FOUND`, `CHANNEL_OPENING`, `CHANNEL_MISSING`, `CHANNEL_ERRORED`, `PEER_OFFLINE`, `CHANNEL_CLOSE_FAILED` |
+| Closing and taking a funding back | `CHANNEL_NOT_FOUND`, `CHANNEL_OPENING`, `CHANNEL_MISSING`, `CHANNEL_NOT_FUNDED` (a force close of a channel whose funding transaction is not on chain), `CHANNEL_ERRORED`, `PEER_OFFLINE`, `CHANNEL_CLOSE_FAILED` |
 | Asking the peer | `PEER_GAVE_NO_PRICE`, `TOO_MANY_QUOTES`, `QUOTE_EXPIRED`, `QUOTE_CHANGED`, `RATE_TOO_COARSE`, `PEER_OFFLINE` |
 | Invoices and payments | `BAD_INVOICE`, `ALREADY_PAID`, `PAYMENT_IN_FLIGHT`, `INSUFFICIENT_OUTBOUND`, `INSUFFICIENT_INBOUND`, `PAYMENT_UNSUPPORTED`, `PAYMENT_NOT_SENT`, `OUTCOMES_UNDELIVERED`, `SPENDING_LIMIT`, `FEE_BUDGET_EXHAUSTED` |
 | Backups and wallet settings | `ASSET_CHANNELS_OPEN`, from the host for an import over a channel and from the manager for a change that would take asset channels away from a wallet that has one |

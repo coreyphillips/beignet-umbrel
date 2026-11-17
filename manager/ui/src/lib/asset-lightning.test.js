@@ -216,10 +216,13 @@ test('a channel that failed, and a word this page has not met: a badge, never us
 	assert.deepEqual(channelState(''), { word: 'unknown', tone: 'muted', usable: false });
 	for (const state of ['ERRORED', 'SOMETHING_NEW', 'SPLICING']) assert.equal(canClose({ state }), true, state);
 	// A failed channel closes only without its peer. Anything else may be closed with it, peer willing.
-	assert.deepEqual(closeWays({ state: 'ERRORED', peerConnected: true }), { cooperative: false, peerAway: false });
-	assert.deepEqual(closeWays({ state: 'NORMAL', peerConnected: false }), { cooperative: true, peerAway: true });
-	assert.deepEqual(closeWays({ state: 'SOMETHING_NEW' }), { cooperative: true, peerAway: false });
-	assert.deepEqual(closeWays({ state: 'NORMAL', peerConnected: true }), { cooperative: true, peerAway: false });
+	assert.deepEqual(closeWays({ state: 'ERRORED', peerConnected: true }), { cooperative: false, peerAway: false, force: true });
+	assert.deepEqual(closeWays({ state: 'NORMAL', peerConnected: false }), { cooperative: true, peerAway: true, force: true });
+	assert.deepEqual(closeWays({ state: 'SOMETHING_NEW' }), { cooperative: true, peerAway: false, force: true });
+	assert.deepEqual(closeWays({ state: 'NORMAL', peerConnected: true }), { cooperative: true, peerAway: false, force: true });
+	// An open: its funding transaction is on no chain, so there is nothing a force close could close.
+	assert.deepEqual(closeWays({ state: 'OPENING', peerConnected: true }), { cooperative: true, peerAway: false, force: false });
+	assert.deepEqual(closeWays({ state: 'OPENING', peerConnected: false }), { cooperative: true, peerAway: true, force: false });
 });
 
 test('a peer that is away is said of a live channel only, and only on the wallet\'s plain no', () => {

@@ -358,8 +358,8 @@ test('a channel state: every word the engine has for a channel, and the word the
 		['NEGOTIATING_CLOSING', 'NEGOTIATING_CLOSING', 'NEGOTIATING_CLOSING', 'NEGOTIATING_CLOSING'],
 		// Not something an asset channel does: shown as the engine's own word, live and carrying nothing.
 		['SPLICING', 'SPLICING', 'SPLICING', 'SPLICING'],
-		// A channel that failed is that whatever else is said of it, also before its funding has confirmed.
-		['ERRORED', 'ERRORED', 'ERRORED', 'ERRORED'],
+		// A channel the node gave up is a failed channel once its funding is on chain. Before that nothing is on chain to close: an open under way.
+		['ERRORED', 'OPENING', 'ERRORED', 'ERRORED'],
 		// Closed is not over until the assets are back on-chain.
 		['CLOSED', 'CLOSING', 'CLOSING', 'CLOSING'],
 		['FORCE_CLOSED', 'FORCE_CLOSING', 'FORCE_CLOSING', 'FORCE_CLOSING'],
@@ -562,4 +562,15 @@ test('a channel that has not taken in the results of earlier payments says how m
 	for (const none of [{}, { undeliveredOutcomes: 0 }, { undeliveredOutcomes: -1 }, { undeliveredOutcomes: 1.5 }, { undeliveredOutcomes: '3' }, { undeliveredOutcomes: null }]) {
 		assert.equal('undeliveredOutcomes' in row(none), false, JSON.stringify(none));
 	}
+});
+
+test('a channel the node gave up reads as failed only once its funding is on chain', () => {
+	const { channelWord } = require('./views');
+	const word = (extra) => channelWord({ state: 'ERRORED', confirmed: true, recovery: 'none', engine: 'held', signed: true, ...extra });
+	assert.equal(word({}), 'ERRORED');
+	// Its funding transaction is on no chain: an open under way, whoever began it and whatever was signed.
+	assert.equal(word({ confirmed: false }), 'OPENING');
+	assert.equal(word({ confirmed: false, signed: false }), 'OPENING');
+	// What a restore leaves is still said as what it is.
+	assert.equal(word({ confirmed: false, engine: 'missing' }), 'MISSING');
 });

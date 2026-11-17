@@ -267,6 +267,7 @@ export function ReclaimFundingModal({ channel, fees, origin, onClose, onConfirm 
  * A channel whose peer is away says, before anything is tried, that a
  * close with the peer needs the peer. A channel that failed has no close
  * with its peer at all: its dialog is the force close, worded for that.
+ * An open has no force close at all: nothing of it is on chain to close.
  *
  * `onConfirm(force)` does the close and may reject; the dialog stays open
  * with the reason when it does.
@@ -306,8 +307,10 @@ export function CloseAssetChannelModal({ channel, origin, onClose, onConfirm }) 
 						{ways.peerAway && (
 							<div className="info-note" role="note" data-testid="asset-channel-close-offline">
 								The peer is not connected. A channel is closed together with its peer only while it is, so this will be
-								refused until the peer is back. If the peer is gone for good, a force close brings your side back
-								without it.
+								refused until the peer is back.{' '}
+								{ways.force
+									? 'If the peer is gone for good, a force close brings your side back without it.'
+									: 'An open that does not go through ends by itself.'}
 							</div>
 						)}
 					</>
@@ -345,17 +348,19 @@ export function CloseAssetChannelModal({ channel, origin, onClose, onConfirm }) 
 							<Button variant="primary" busy={busy} data-testid="asset-channel-close-coop" onClick={() => run(false)}>
 								Close cooperatively
 							</Button>
-							<Button
-								variant="danger"
-								disabled={busy}
-								data-testid="asset-channel-close-force"
-								onClick={() => {
-									setError(null);
-									setForcing(true);
-								}}
-							>
-								Force close…
-							</Button>
+							{ways.force && (
+								<Button
+									variant="danger"
+									disabled={busy}
+									data-testid="asset-channel-close-force"
+									onClick={() => {
+										setError(null);
+										setForcing(true);
+									}}
+								>
+									Force close…
+								</Button>
+							)}
 							<Button onClick={onClose}>Cancel</Button>
 						</>
 					) : (

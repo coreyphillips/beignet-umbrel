@@ -85,14 +85,17 @@ export function peerAway(channel) {
 }
 
 /**
- * How a channel can be closed: { cooperative, peerAway }. A channel that
- * failed is closed only without its peer. Any other may be closed with it,
- * which the wallet refuses while the peer is away: `peerAway` says so
- * before it is tried.
+ * How a channel can be closed: { cooperative, peerAway, force }. A channel
+ * that failed is closed only without its peer. Any other may be closed with
+ * it, which the wallet refuses while the peer is away: `peerAway` says so
+ * before it is tried. An open has no force close: its funding transaction
+ * is on no chain, so there is nothing on chain to close, and the wallet
+ * refuses one.
  */
 export function closeWays(channel) {
-	const failed = String((channel && channel.state) || '').toUpperCase() === 'ERRORED';
-	return { cooperative: !failed, peerAway: !failed && peerAway(channel) };
+	const s = String((channel && channel.state) || '').toUpperCase();
+	const failed = s === 'ERRORED';
+	return { cooperative: !failed, peerAway: !failed && peerAway(channel), force: s !== 'OPENING' };
 }
 
 /**

@@ -605,7 +605,8 @@ export function createAssetsMock(ctx) {
 				continue;
 			}
 			// `_stuck` is a funding no block takes (the `open-stuck` state).
-			if (c._stuck || t < c._openedAt + CHANNEL_OPEN_MS) continue;
+			// `_unfunded` is an open whose funding is on no chain at all.
+			if (c._stuck || c._unfunded || t < c._openedAt + CHANNEL_OPEN_MS) continue;
 			c.state = 'NORMAL';
 			c.sendable = c.localBalance;
 			c.receivable = c.remoteBalance;
@@ -918,6 +919,35 @@ export function createAssetsMock(ctx) {
 				_openedAt: now() - HOUR,
 				_fundingRate: 2,
 				_stuck: true
+			});
+			return true;
+		},
+		// An open a peer began whose opener went away as it opened: the node
+		// has given the channel up, its funding transaction is on no chain,
+		// and the open has not ended yet. As the host, it reads as an open
+		// under way and never as a failed channel.
+		'open-unfunded'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c._unfunded)) return false;
+			const rec = Object.values(s.assets).find((a) => a.type !== 'collectible');
+			if (!rec) return false;
+			const amount = '30000';
+			s.channels.unshift({
+				channelId: derivedHex(`seed-unfunded-open:${id}`, 64),
+				peerPubkey: `03${derivedHex('seed-peer:unfunded-open', 64)}`,
+				peerAlias: 'Harbor relay',
+				peerConnected: false,
+				state: 'OPENING',
+				asset: brief(rec),
+				capacity: amount,
+				localBalance: '0',
+				remoteBalance: amount,
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				_unpriced: true,
+				_openedAt: now() - 20000,
+				_unfunded: true
 			});
 			return true;
 		},
@@ -1759,6 +1789,16 @@ export function createAssetsMock(ctx) {
 		if (c.state === 'MISSING') {
 			throw fail("This channel is on record, but the wallet's node does not hold it, as happens after a restore from a backup. It cannot be closed from this wallet.", 'CHANNEL_MISSING');
 		}
+		// As the host: the funding transaction of an open is on no chain, so
+		// there is nothing a force close could close. Nor is there a close
+		// with the peer for an open the node has given up.
+		if (c.state === 'OPENING' && !pubChannel(c).reclaimable && (body.force || c._unfunded)) {
+			throw fail(
+				'The funding transaction of this channel is not on chain, so there is nothing on chain to close and nothing was done. An open that does not go through ends by itself, and the channel then goes from the list.',
+				'CHANNEL_NOT_FUNDED',
+				{ status: 409 }
+			);
+		}
 		// As the host: a close with the peer is refused where it cannot work.
 		if (!body.force) {
 			if (c.state === 'ERRORED') {
@@ -1766,7 +1806,7 @@ export function createAssetsMock(ctx) {
 			}
 			if (c.peerConnected === false) {
 				throw fail(
-					`The peer of this channel, ${peerSaid(c)}, is not connected, and a channel is closed together with its peer only while it is. Try again once it is back, or force close the channel.`,
+					`The peer of this channel, ${peerSaid(c)}, is not connected, and a channel is closed together with its peer only while it is. Try again once it is back${c.state === 'OPENING' ? '' : ', or force close the channel'}.`,
 					'PEER_OFFLINE',
 					{ status: 409, details: { peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null } }
 				);

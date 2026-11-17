@@ -871,3 +871,47 @@ test('a failed open the library gave a reason for says the reason after the wall
 		await r.unmount();
 	}
 });
+
+test('an open a peer began whose opener went away reads as opening, offers no force close, and the wallet refuses one in a sentence', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'open-unfunded'), true);
+	const api = backend.api('demo-main');
+	const listed = (await api.get('/x/assets/channels')).channels;
+	for (const c of listed) assert.deepEqual(Object.keys(c), CHANNEL_KEYS);
+	const open = listed[0];
+	assert.deepEqual([open.state, open.failure, open.reclaimable, open.peerConnected, open.sendable, open.receivable], ['OPENING', null, false, false, '0', '0']);
+	// As the host: nothing is on chain to close, whichever way it is asked.
+	const sentence =
+		'The funding transaction of this channel is not on chain, so there is nothing on chain to close and nothing was done. An open that does not go through ends by itself, and the channel then goes from the list.';
+	for (const force of [true, false]) {
+		await assert.rejects(api.post('/x/assets/channels/close', { channelId: open.channelId, force }), (err) => {
+			assert.deepEqual([err.code, err.status, err.message], ['CHANNEL_NOT_FUNDED', 409, sentence]);
+			return true;
+		});
+	}
+	assert.equal((await api.get('/x/assets/channels')).channels[0].state, 'OPENING');
+	const status = await api.get('/x/assets/status');
+	const r = await mount(backend, { status });
+	try {
+		const row = r.tests('asset-channel')[0];
+		assert.match(row.textContent, /opening/);
+		assert.doesNotMatch(row.textContent, /failed/);
+		assert.equal(r.tests('asset-channel-errored').length, 0);
+		await click(r.tests('asset-channel-close')[0]);
+		await settle(10);
+		const dialog = r.test('asset-channel-close-dialog');
+		assert.equal(dialog.getAttribute('data-step'), 'cooperative');
+		// No force close is offered, and none is suggested.
+		assert.equal(r.tests('asset-channel-close-force').length, 0);
+		assert.equal(
+			r.test('asset-channel-close-offline').textContent.replace(/\s+/g, ' ').trim(),
+			'The peer is not connected. A channel is closed together with its peer only while it is, so this will be refused until the peer is back. An open that does not go through ends by itself.'
+		);
+		assert.doesNotMatch(dialog.textContent, /force close/i);
+		await click(r.test('asset-channel-close-coop'));
+		await settle(ANSWERED_MS);
+		assert.equal(r.test('asset-channel-close-error').textContent, sentence);
+	} finally {
+		await r.unmount();
+	}
+});

@@ -3198,3 +3198,51 @@ test('a channel that has not taken in the results of earlier payments lists how 
 	h.ln.set(id, { undeliveredOutcomes: 0 });
 	assert.equal('undeliveredOutcomes' in (await row()), false);
 });
+
+/* ---------------------------------- a channel whose funding is not on chain */
+
+test('an open a peer began that was never funded reads as an open under way, never as a failed channel, and a force close of it is refused', async () => {
+	const { h, asset } = await funded();
+	const flow = h.ln.inbound({ assetId: asset.assetId, amount: 300n });
+	// The opener was cut as it opened: the node holds the channel as failed,
+	// its funding transaction is on no chain, and the library has not ended
+	// the flow yet.
+	h.ln.set(flow.pendingChannelId, { state: 'ERRORED', confirmed: false, phase: 'funded', signed: false });
+	h.ln.opts.offlinePeers = [flow.peerPubkey];
+	const row = async () => (await h.get('/channels')).channels.find((c) => c.pendingChannelId === flow.pendingChannelId);
+	const seen = await row();
+	assert.deepEqual([seen.state, seen.failure, seen.reclaimable, seen.sendable, seen.receivable], ['OPENING', null, false, '0', '0']);
+	assert.equal((await h.get('/status')).lightning.usableChannels, 0);
+	// Nothing is on chain to close: said in a sentence, and the library is not asked.
+	const forced = await refused(h.call('POST /channels/close', { channelId: seen.channelId, force: true }));
+	assert.deepEqual([forced.extensionCode, forced.status], ['CHANNEL_NOT_FUNDED', 409]);
+	assert.equal(
+		forced.message,
+		'The funding transaction of this channel is not on chain, so there is nothing on chain to close and nothing was done. An open that does not go through ends by itself, and the channel then goes from the list.'
+	);
+	// The node has given the channel up, so it cannot be closed together with its peer either, and no force close is suggested.
+	const together = await refused(h.call('POST /channels/close', { channelId: seen.channelId }));
+	assert.deepEqual([together.extensionCode, together.status], ['CHANNEL_NOT_FUNDED', 409]);
+	assert.doesNotMatch(together.message, /force close/i);
+	assert.deepEqual(named(h, 'closeChannel'), []);
+	assert.equal((await row()).state, 'OPENING', 'the row is as it was');
+	// When the library ends the flow, the row goes as it does today.
+	h.ln.set(flow.pendingChannelId, { state: null, phase: 'failed', error: 'never funded' });
+	await h.host.pass({ block: true });
+	assert.equal(await row(), undefined);
+});
+
+test('a channel this wallet funded whose funding has not confirmed is an open too when the node gives it up, with its funding to take back and no force close', async () => {
+	const { h, id, channel } = await channelled({ remote: 200n });
+	h.ln.set(id, { state: 'ERRORED', confirmed: false });
+	const row = (await h.get('/channels')).channels[0];
+	assert.equal(row.state, 'OPENING');
+	const forced = await refused(h.call('POST /channels/close', { channelId: channel.channelId, force: true }));
+	assert.deepEqual([forced.extensionCode, forced.status], ['CHANNEL_NOT_FUNDED', 409]);
+	assert.deepEqual(named(h, 'closeChannel'), []);
+	// Once its funding is on chain, a channel the node gave up is a failed channel, closed without its peer.
+	h.ln.set(id, { state: 'ERRORED', confirmed: true });
+	assert.equal((await h.get('/channels')).channels[0].state, 'ERRORED');
+	await h.call('POST /channels/close', { channelId: channel.channelId, force: true });
+	assert.deepEqual(named(h, 'closeChannel'), [['closeChannel', channel.channelId, true]]);
+});
