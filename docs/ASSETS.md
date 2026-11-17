@@ -354,13 +354,15 @@ Three layers, each of which can be run again.
 
 The regtest stack runs its `tapd` with today's proof rules in force from the first block (`--proofactivationheight=1`), so the scenarios exercise what mainnet, testnet3 and testnet4 require of a proof and not the older rules a stock regtest `tapd` keeps.
 
-The unit tests and the regtest scenarios were first run on an engine built from the pull request that added the host extension contract, and run again on the published Beignet 0.42.0.
+The unit tests and the regtest scenarios were first run on an engine built from the pull request that added the host extension contract, run again on the published Beignet 0.42.0, and run again on the published Beignet 0.43.0, the engine this app bundles.
 
 Nothing was spent on mainnet to test this. Mainnet runs the same code with a different address prefix, activation height and universe server, and its universe server is the one unknown above.
 
 What is covered by unit tests only, because the regtest stack cannot produce it: a preview expiring by the clock, a transaction that waits an hour unconfirmed, and Tor mode.
 
-**Asset channels** have so far been run on regtest only, with engine and library builds that are not released yet. The results will be written here when the runs on released builds are done.
+**Asset channels** were run on regtest on the builds this app ships: Beignet 0.43.0 as published and the library under `vendor/`, installed by `scripts/engine-prefix.sh` with no installed file changed, through a real manager and real daemons, between two wallets of this app. The five scenarios `20-ln-open` to `24-ln-crash-restore` passed, 121 checks. They cover: what an open costs and the refusals before anything is funded; one open however often it is asked for; an invoice and its payment in both directions, repeated with its key, at the limits each way, at a price that is gone, and across a restart of both daemons; a close agreed by both sides; a close by force with the peer stopped, the wait before a share can be swept, both sweeps, and the swept units sent on; daemons killed before an open has answered, as it answers and during a payment; and the opener restored from an archive, where the channel reads as one its node no longer holds and the peer closes it by force. At each stage the two wallets held between them exactly what was minted, and after each close the units that came back were handed to `tapd`, which verified their proofs and credited them. Two more runs, by scripts that are not among the scenarios here, passed on the same builds: a side with too little bitcoin left to carry a payment was refused in words and could pay again once it had been paid (7 checks), and a channel was closed by force with a payment in flight, the payer took the payment back on chain after its expiry, and `tapd` credited everything both sides held (15 checks). The nine on-chain scenarios passed beside them, 171 checks.
+
+Not run through this app: an asset channel with a peer that is not this app (Lightning Labs' `litd`), an asset channel on testnet or mainnet, a payment in flight that its payee claims on chain, and a commitment that was revoked and is punished. ts-tap's own regtest example, which drives two nodes of this engine without the app, passed on Beignet 0.43.0 and does cover the last two.
 
 ## For operators and developers
 
