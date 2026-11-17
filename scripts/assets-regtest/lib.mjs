@@ -212,8 +212,10 @@ export async function daemonPid(id) {
  * manager to bring it back with its assets host ready. Nothing is flushed
  * and no stop handler runs.
  */
-export async function crash(id) {
-	const pid = await daemonPid(id);
+export async function crash(id, { pid: known } = {}) {
+	// A pid found beforehand makes the kill land at once: looking it up takes
+	// long enough for a daemon to finish what it was doing.
+	const pid = known || (await daemonPid(id));
 	if (!pid) throw new Error(`no daemon found for ${id}`);
 	process.kill(pid, 'SIGKILL');
 	await waitFor(`daemon of ${id.slice(0, 8)} is back`, async () => {
