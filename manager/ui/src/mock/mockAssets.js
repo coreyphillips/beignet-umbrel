@@ -773,6 +773,14 @@ export function createAssetsMock(ctx) {
 			Object.assign(c, { peerConnected: false, sendable: '0', receivable: '0' });
 			return true;
 		},
+		// The peer of that channel is back, and the channel carries again what it could.
+		'peer-back'(id) {
+			const c = S(id).channels.find((x) => x.peerConnected === false && x._could);
+			if (!c) return false;
+			Object.assign(c, { peerConnected: true, ...c._could });
+			delete c._could;
+			return true;
+		},
 		// A channel closed without its peer whose delay still runs: it carries
 		// nothing, and its bitcoin is on its way back (GET /balance says so).
 		'channel-closing'(id) {
@@ -1692,8 +1700,8 @@ export function createAssetsMock(ctx) {
 	}
 	/** The host's refusal of a price whose channel has a peer that is away, word for word (peerOffline). */
 	function peerOffline(c, way) {
-		const through = way === 'pay' ? 'this would be paid through' : 'this would be received through';
-		const so = way === 'pay' ? 'so nothing was priced and nothing was paid' : 'so no invoice was made';
+		const through = way === 'pay' || way === 'send' ? 'this would be paid through' : 'this would be received through';
+		const so = way === 'pay' ? 'so nothing was priced and nothing was paid' : way === 'send' ? 'so nothing was paid' : 'so no invoice was made';
 		return fail(`The peer of the asset channel ${through}, ${peerSaid(c)}, is not connected, ${so}. Try again once it is back.`, 'PEER_OFFLINE', {
 			status: 409,
 			details: { peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null }
@@ -2021,6 +2029,10 @@ export function createAssetsMock(ctx) {
 		if (s.lost && s.lost[String(body.bolt11)]) throw fail(PAY_NOTICES.PAYMENT_UNACCOUNTED.message, 'PAYMENT_UNACCOUNTED', { status: 409 });
 		const identity = identityFor(id, quote._key);
 		const ch = s.channels.find((c) => c.channelId === quote._channelId);
+		// As the host: the peer of the channel may have gone since the price
+		// was given. That is said before anything is sent or recorded, with
+		// the peer named, and the price is kept for when it is back.
+		if (ch && ch.state === 'NORMAL' && ch.peerConnected === false) throw peerOffline(ch, 'send');
 		// As the host: nothing is recorded or sent while the channel has not taken in what earlier payments left.
 		if (ch && ch.undeliveredOutcomes > 0) {
 			throw fail(OUTCOMES_UNDELIVERED_TEXT, 'OUTCOMES_UNDELIVERED', { status: 409, details: { undeliveredOutcomes: ch.undeliveredOutcomes } });

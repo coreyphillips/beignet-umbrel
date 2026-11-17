@@ -163,6 +163,9 @@ const PAY_POLL_MS = 200;
 // is taken to have never left once it is this old.
 const UNSENT_AFTER_MS = 30 * 1000;
 const PRICE_MOVED = ['ERR_BEIGNET_LN_PRICE_BOUND', 'ERR_BEIGNET_LN_QUOTE_EXPIRED'];
+// What the library says when the peer a payment would go through is not
+// connected.
+const PEER_AWAY = 'ERR_BEIGNET_LN_PEER_OFFLINE';
 const CLOSED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 // The phases of an open that came to nothing. They say so only of an open
 // that signed nothing: a signed funding transaction is a channel in being.
@@ -1393,11 +1396,12 @@ function awayChannel(host, key, side, units) {
 /**
  * A price refused because the peer of the channel it would go through is
  * not connected, with the peer named. `c` is that channel, or null where
- * only the library knows which.
+ * only the library knows which. `way` is what was asked: a price to pay
+ * at ('pay'), a payment at a price already given ('send'), or an invoice.
  */
 function peerOffline(c, way) {
-	const through = way === 'pay' ? 'this would be paid through' : 'this would be received through';
-	const so = way === 'pay' ? 'so nothing was priced and nothing was paid' : 'so no invoice was made';
+	const through = way === 'pay' || way === 'send' ? 'this would be paid through' : 'this would be received through';
+	const so = way === 'pay' ? 'so nothing was priced and nothing was paid' : way === 'send' ? 'so nothing was paid' : 'so no invoice was made';
 	return refusal(
 		'PEER_OFFLINE',
 		`The peer of the asset channel ${through}${c ? `, ${peerSaid(c)},` : ''} is not connected, ${so}. Try again once it is back.`,
@@ -1635,6 +1639,17 @@ const cleanInvoice = (text) =>
 		.trim()
 		.replace(/^lightning:/i, '');
 
+/**
+ * The channel a payment at this price would leave through whose peer is
+ * away, or null when a channel that is usable now can carry it. A price
+ * taken while the peer was there is still good when it is back.
+ */
+function awayForPayment(host, quote) {
+	const units = BigInt(quote.assetAmount);
+	const limit = paymentLimits(host).get(quote.key);
+	return units > (limit ? limit.maxSend : 0n) ? awayChannel(host, quote.key, 'couldSend', units) : null;
+}
+
 /** Ask the channel's peer what paying an invoice takes, and keep the answer until it is used or runs out. */
 async function makePayQuote(host, body) {
 	const bolt11 = cleanInvoice(body.bolt11);
@@ -1866,6 +1881,26 @@ async function sendPayment(host, { row, quote, quoteId, bound, key, route, body,
 		const refused = !!error && host.ln.refusals.includes(codeOf(error));
 		const earlier = !!seen && (Number.isInteger(seen.attempt) ? !ofThisTry(row, seen) : seen.status === 'failed');
 		if (refused && (seen === null || earlier)) {
+			// The library saw the peer go after the host's list was read, and
+			// lists that among the rejections it makes before sending. Nothing
+			// was sent, so this is no failed payment: it is said as the peer
+			// being away, with the peer named, and the price is kept for when
+			// it is back, as long as someone is waiting to hear it. From a
+			// library that does not list it, the row waits for the node's record.
+			if (codeOf(error) === PEER_AWAY) {
+				const through =
+					awayChannel(host, quote.key, 'couldSend', BigInt(quote.assetAmount)) || channelList(host).find((c) => c.key === quote.key && c.peerPubkey === quote.peerPubkey && !c.over) || null;
+				const away = peerOffline(through, 'send');
+				if (state.answered) return { row: await failUnsent(host, row.id, { code: away.extensionCode, message: away.message }, { own: true }) };
+				await host.lock.run(() =>
+					host.rows.tx(() => {
+						host.rows.del(`row/${row.id}`);
+						if (key) host.rows.del(ops.journalKey(route, key));
+						if (quote.expiresAt > host.now()) host.rows.put(`l-quote/${quoteId}`, quote);
+					})
+				);
+				return { away };
+			}
 			// A price that moved is shown again, as long as someone is still
 			// waiting to see it.
 			if (PRICE_MOVED.includes(codeOf(error)) && !state.answered) {
@@ -1953,6 +1988,12 @@ async function pay(host, body, key) {
 		if ((seen && seen.status === 'pending') || (prev && prev.state === 'pending')) {
 			throw refusal('PAYMENT_IN_FLIGHT', 'This wallet is already paying that invoice. Wait for it to finish.', 409);
 		}
+		// The peer of the channel may have gone since the price was given.
+		// That is said before anything is sent or written, with the peer
+		// named, and not as a payment that failed. The price and the key are
+		// left as they were, for when the peer is back.
+		const idle = awayForPayment(host, quote);
+		if (idle) throw peerOffline(idle, 'send');
 		const { reg } = knownAsset(host, quote.key);
 		const row = views.newRow({
 			id: rowId,
@@ -2000,6 +2041,7 @@ async function pay(host, body, key) {
 		return payAnswer(host.getRow(row.id) || row);
 	}
 	if (out.fenced) throw out.fenced;
+	if (out.away) throw out.away;
 	if (out.changed) throw quoteChanged(out.quote);
 	return payAnswer(out.row);
 }

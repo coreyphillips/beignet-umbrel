@@ -18,6 +18,7 @@ import { click, settle, type } from '../../../../../test/render.mjs';
 import { cmpUnits, fmtAsset } from '../../../../lib/asset-amount.js';
 import { bech32Encode } from '../../../../lib/payment-uri.js';
 import { CHANGE_HOLD_MS } from './PayInvoice.jsx';
+import { lightningRefusal } from '../../../../lib/asset-lightning.js';
 
 test.beforeEach(() => sessionStorage.clear());
 
@@ -472,4 +473,28 @@ test('with nothing to send because the peer of a channel is away, the pay view s
 		(e) => e.code === 'PEER_OFFLINE' && e.status === 409 && e.details.peerAlias === 'Lightning Labs edge' && /is not connected, so nothing was priced and nothing was paid\. Try again once it is back\.$/.test(e.message)
 	);
 	await assert.rejects(backend.api('demo-main').post('/x/assets/pay/quote', { bolt11: TEN_MILLION, key: busd.key }), (e) => e.code === 'INSUFFICIENT_OUTBOUND');
+});
+
+test('paying on a price taken before the peer went away: the demo refuses as the wallet does, with the peer named, and keeps the price for when it is back', async () => {
+	const backend = assetsBackend();
+	const api = backend.api('demo-main');
+	const busd = (await api.get('/x/assets/balances')).assets.find((a) => a.name === 'BUSD');
+	const bolt11 = 'lnbc50u1x';
+	const quote = await api.post('/x/assets/pay/quote', { bolt11, key: busd.key });
+	const body = { bolt11, key: busd.key, quoteId: quote.quoteId, maxAssetAmount: quote.assetAmount };
+	assert.equal(backend.mock.seed('demo-main', 'peer-offline'), true);
+	const before = (await api.get('/x/assets/activity')).rows.length;
+	await assert.rejects(api.post('/x/assets/pay', body), (err) => {
+		assert.deepEqual([err.code, err.status], ['PEER_OFFLINE', 409]);
+		assert.match(err.message, /^The peer of the asset channel this would be paid through, .+, is not connected, so nothing was paid\. Try again once it is back\.$/);
+		assert.deepEqual(Object.keys(err.details), ['peerPubkey', 'peerAlias']);
+		// Worded for the page as the wallet said it.
+		assert.deepEqual(lightningRefusal(err, { asset: busd }), { code: 'PEER_OFFLINE', text: err.message });
+		return true;
+	});
+	// No payment is on record, and the price is still the one given.
+	assert.equal((await api.get('/x/assets/activity')).rows.length, before);
+	assert.equal(backend.mock.seed('demo-main', 'peer-back'), true);
+	const answer = await api.post('/x/assets/pay', body);
+	assert.equal(answer.assetAmount, quote.assetAmount);
 });

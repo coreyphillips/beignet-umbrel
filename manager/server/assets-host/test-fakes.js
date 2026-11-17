@@ -1525,7 +1525,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
  * is the same before the engine has handed over its node. Left out, the
  * wallet is one that cannot have any.
  */
-function harness({ env = {}, network = 'regtest', shared, timers = false, chainCheck = null, lightning = false } = {}) {
+function harness({ env = {}, network = 'regtest', shared, timers = false, chainCheck = null, lightning = false, paymentRefusals = null } = {}) {
 	const world = shared || { clock: { t: 1_700_000_000_000 }, mem: memoryStorage(), events: [], delivered: [], fetched: [], net: { down: false } };
 	const now = () => world.clock.t;
 	const cfg = parseConfig(network, {
@@ -1570,6 +1570,8 @@ function harness({ env = {}, network = 'regtest', shared, timers = false, chainC
 	// What the fake channels check the lock of: the host of this generation.
 	const lockOf = world.lockOf || (world.lockOf = { held: () => false });
 	const ln = lightning ? world.ln || (world.ln = fakeLightning({ now, tap, storage: world.mem.storage, held: () => lockOf.held() })) : null;
+	// A library that lists more of its rejections as ones made before anything is sent.
+	if (ln && paymentRefusals) ln.entry.ASSET_PAYMENT_REFUSALS = Object.freeze([...new Set([...ln.entry.ASSET_PAYMENT_REFUSALS, ...paymentRefusals])]);
 	const logs = world.logs || (world.logs = []);
 	const logger = { info: (text) => logs.push(['info', text]), warn: (text) => logs.push(['warn', text]), error: (text) => logs.push(['error', text]) };
 	const host = createHost({

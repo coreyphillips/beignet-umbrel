@@ -3263,3 +3263,39 @@ test('the count of asset channels the status gives is taken when it is asked, an
 	assert.deepEqual([(await h.get('/channels')).channels.length, (await h.get('/status')).assetChannels], [0, 0]);
 	assert.equal(lightning.channelCount(h.host), lightning.liveChannels(h.host));
 });
+
+test('paying on a price taken before the peer went away is refused with the peer named before anything is sent, and the price pays once the peer is back', async () => {
+	// A library that lists the peer being away among the rejections it makes before sending.
+	const { h, asset } = await channelled({}, { paymentRefusals: ['ERR_BEIGNET_LN_PEER_OFFLINE'] });
+	assert.equal(h.host.ln.refusals.includes('ERR_BEIGNET_LN_PEER_OFFLINE'), true);
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	const body = { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: quote.assetAmount };
+	const sentence = 'The peer of the asset channel this would be paid through, edge, is not connected, so nothing was paid. Try again once it is back.';
+	h.ln.opts.offlinePeers = [PEER.pubkey];
+	// The amount fits the channel, whose peer is away: that is the reason. The library is not asked, and no payment is on record.
+	const away = await refused(h.call('POST /pay', body, 'pay-away'));
+	assert.deepEqual([away.extensionCode, away.status, away.details, away.message], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }, sentence]);
+	assert.deepEqual(named(h, 'payInvoice'), []);
+	assert.deepEqual(h.host.listRows().filter((r) => r.kind === 'ln-send'), []);
+	// The library sees a peer go that the host's list still had, and refuses its own way: the same answer, and no failed payment is left behind.
+	h.ln.opts.offlinePeers = [];
+	const other = await h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 20000 }), key: asset.key });
+	h.ln.opts.payFails = 'ERR_BEIGNET_LN_PEER_OFFLINE';
+	const late = await refused(h.call('POST /pay', { bolt11: fakeInvoice({ msat: 20000 }), key: asset.key, quoteId: other.quoteId, maxAssetAmount: other.assetAmount }, 'pay-late'));
+	assert.deepEqual([late.extensionCode, late.status, late.details, late.message], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }, sentence]);
+	assert.deepEqual(h.host.listRows().filter((r) => r.kind === 'ln-send'), []);
+	h.ln.opts.payFails = null;
+	// With the peer back the first price is still good: the same request and the same key pay on it.
+	const paid = await h.call('POST /pay', body, 'pay-away');
+	assert.deepEqual([paid.status, paid.assetAmount], ['COMPLETED', quote.assetAmount]);
+	assert.deepEqual(named(h, 'payInvoice').map((c) => c[1]), [other.quoteId, quote.quoteId]);
+	// A price too large for any channel, peer there or not, is still said as an amount.
+	assert.deepEqual(await codeOf(h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 5000000 }), key: asset.key })), ['INSUFFICIENT_OUTBOUND', 409]);
+});
+
+test('a refusal of the library that names the peer as away is mapped for a payment nobody waits for any more', () => {
+	const { mapLightning } = require('./errors');
+	const mapped = mapLightning(Object.assign(new Error('peer offline'), { code: 'ERR_BEIGNET_LN_PEER_OFFLINE' }));
+	assert.equal(mapped.message, 'The peer is not connected, so nothing was done. Try again once it is back.');
+});
