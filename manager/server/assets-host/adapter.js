@@ -1165,6 +1165,25 @@ function createLightning({ entry, storage, cfg, now = null }) {
 			await node.connectPeer(pubkey, host, port);
 		},
 		peerSupports: (pubkey) => !!live().peerSupports(unhex(pubkey)),
+		// Whether the node is connected to that peer and has its greeting,
+		// which is the library's own rule for a peer a channel can be used
+		// with. Null when the node cannot say.
+		peerConnected(pubkey) {
+			live();
+			if (typeof node.listPeers !== 'function') return null;
+			const key = String(pubkey || '').toLowerCase();
+			return node.listPeers().some((p) => !!p && String(p.pubkey).toLowerCase() === key && !!p.remoteInit);
+		},
+		// Whether the node holds a channel under one of these ids, of any
+		// kind and in any state: the id an open was given, or the channel's
+		// own. Null when the node cannot say.
+		engineHolds(ids) {
+			live();
+			if (typeof node.listChannels !== 'function') return null;
+			const wanted = new Set((ids || []).filter(Boolean).map((id) => String(id).toLowerCase()));
+			const named = (value) => !!value && wanted.has(asHex(value));
+			return node.listChannels().some((c) => !!c && (named(c.channelId) || named(c.temporaryChannelId)));
+		},
 		async quoteFunding({ assets, groupKey, fundingSats, feeRate }) {
 			const q = await live().quoteFunding({
 				assets: inUnits(assets),

@@ -25,6 +25,11 @@ import { FeePresets } from '../shared.jsx';
  * offers that, quietly: most fundings confirm by themselves. Once a
  * transaction that takes it back is out, the row says that instead, links
  * it, and the one thing left to offer is a higher fee.
+ *
+ * An open that failed after the wallet had taken it on (`failure`) stays
+ * listed for a while as what it is: the wallet's sentence for why, what it
+ * was for, and no figures, since nothing is in it and nothing left the
+ * wallet.
  */
 export default function AssetChannelRows({ channels, network, onClose, onReclaim }) {
 	return (
@@ -33,6 +38,7 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 				const state = channelState(c.state);
 				const alias = typeof c.peerAlias === 'string' && c.peerAlias.trim() ? c.peerAlias.trim() : null;
 				const takingBack = reclaimSent(c);
+				const failed = c.failure && typeof c.failure === 'object' ? c.failure : null;
 				const reclaim = onReclaim && canReclaim(c) && (
 					<div className="note-actions">
 						<Button className="sm" data-testid="asset-channel-reclaim" onClick={(e) => onReclaim(c, e)}>
@@ -65,6 +71,14 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 							)}
 						</div>
 
+						{failed && (
+							<div className="error-note" role="note" data-testid="asset-channel-failure" data-code={failed.code}>
+								{failed.message || 'This channel was not opened, and nothing was spent.'} It was for{' '}
+								<AssetAmount value={c.capacity} asset={c.asset} />.
+							</div>
+						)}
+						{!failed && (
+							<>
 						<div
 							className="balbar asset-channel-bar"
 							role="img"
@@ -105,6 +119,8 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 								<dd>{fmtSats(c.channelSats)}</dd>
 							</div>
 						</dl>
+							</>
+						)}
 						{takingBack ? (
 							<div className="field-hint note-with-action" data-testid="asset-channel-reclaiming">
 								<span>

@@ -31,7 +31,7 @@ const {
 
 // An asset channel in one of these states holds nothing any more: its assets
 // are back on-chain and the assets host has nothing left to enforce.
-const ASSET_CHANNEL_OVER = new Set(['CLOSED', 'FORCE_CLOSED']);
+const ASSET_CHANNEL_OVER = new Set(['CLOSED', 'FORCE_CLOSED', 'FAILED']);
 
 // What the engine itself refuses over stored asset channels, in the words a
 // wallet's owner is shown. This is the one place in the manager that knows

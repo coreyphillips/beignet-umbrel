@@ -362,8 +362,8 @@ test('a channel state: the three words that are the host\'s, and the engine\'s o
 	for (const state of ['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY']) for (const confirmed of [false, true]) assert.equal(word(state, confirmed), 'OPENING', state);
 	// Everything else is the engine's word, which the dashboard has a wording for or shows as it is.
 	for (const state of ['SHUTTING_DOWN', 'NEGOTIATING_CLOSING', 'AWAITING_REESTABLISH', 'SOMETHING_NEW']) assert.equal(word(state, true), state);
-	// The manager counts every state but these two as a channel the wallet still has.
-	assert.deepEqual(views.CHANNEL_OVER, ['CLOSED', 'FORCE_CLOSED']);
+	// The manager counts every state but these as a channel the wallet still has. FAILED is an open that came to nothing.
+	assert.deepEqual(views.CHANNEL_OVER, ['CLOSED', 'FORCE_CLOSED', 'FAILED']);
 });
 
 test('a channel as the dashboard lists it', () => {
@@ -388,6 +388,7 @@ test('a channel as the dashboard lists it', () => {
 		peerPubkey: `02${'ab'.repeat(32)}`,
 		peerAlias: null,
 		state: 'OPENING',
+		failure: null,
 		asset: { key: A1, assetId: A1, name: 'coin', type: 'normal', decimalDisplay: 2 },
 		capacity: '600',
 		localBalance: '600',
@@ -399,6 +400,10 @@ test('a channel as the dashboard lists it', () => {
 		reclaimable: false,
 		reclaimTxid: null
 	});
+	// An open that failed: why, and what was asked for, with nothing in it.
+	const failure = { code: 'CHANNEL_OPEN_INTERRUPTED', message: 'It was interrupted.' };
+	const failed = views.channelView({ ...c, word: 'FAILED', local: 0n, failure, capacity: 600n }, reg);
+	assert.deepEqual([failed.state, failed.failure, failed.capacity, failed.localBalance], ['FAILED', failure, '600', '0']);
 	// A funding that is made and not confirmed, and what was sent to take it back.
 	const out = views.channelView({ ...c, fundingTxid: 'f1'.repeat(32), reclaimable: true, reclaimTxid: 'f2'.repeat(32) }, reg);
 	assert.deepEqual([out.fundingTxid, out.reclaimable, out.reclaimTxid], ['f1'.repeat(32), true, 'f2'.repeat(32)]);

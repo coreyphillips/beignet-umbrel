@@ -56,6 +56,24 @@
  *   is working on, on every pass, and reads all of this from the library's
  *   list and never from an event alone.
  *
+ *   The library answers an open once its funding is negotiated, before the
+ *   peer has signed, and the id it answers with is written into the note.
+ *   So the note says two things apart: `channelId`, that the library
+ *   answered, and `stage`, 'asked' until the host has itself seen the open
+ *   past its point of no return. An open that was answered, was never seen
+ *   signed, and that the library no longer lists is one a crash cut short
+ *   (endLost). It is ended only once nothing is left of it anywhere: the
+ *   library lists nothing under either id, the node holds no channel
+ *   under either, the library has said it neither keeps what the funding
+ *   set aside nor saw it spent, no on-chain record is set aside under its
+ *   name, and the library answers that nothing will be opened under the
+ *   id. Then it is a failed open: its note stays, as a FAILED row with
+ *   the reason, its marker goes, an `error` event says so, and its request
+ *   key answers that failure from then on, and never `funding` again.
+ *   An open the library was never heard to answer is opened again under
+ *   the same id at the next start, as before, unless the node holds a
+ *   channel under that id; left unlisted after that, it ends the same way.
+ *
  *   Until a funding has confirmed, its inputs stay in the on-chain records,
  *   set aside under its name. What of them goes into the channel is counted
  *   in the channel and taken off the on-chain figure, so nothing is counted
@@ -152,6 +170,8 @@ const FAILED_PHASES = ['rejected', 'failed', 'cancelled'];
 // An open the user confirmed, that nobody is working on and the library has
 // no record of, is taken to have come to nothing once it is this old.
 const OPEN_LOST_AFTER_MS = 30 * 1000;
+// How long an open that failed stays on the channel list.
+const FAILED_OPEN_SHOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 // An open that came to nothing before anything was signed.
 const isEnded = (c) => !c.signed && FAILED_PHASES.includes(c.phase);
@@ -159,6 +179,11 @@ const isEnded = (c) => !c.signed && FAILED_PHASES.includes(c.phase);
 // the one way a signed funding ends. What it had set aside is released by
 // then. Until it is, the flow is still a channel in being.
 const isAbandoned = (c) => c.signed && c.phase === 'failed' && !c.fundingReservation;
+// Why an open that failed after it was answered did, by the code its note keeps.
+const OPEN_FAILURES = Object.freeze({
+	CHANNEL_OPEN_INTERRUPTED: 'This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.'
+});
+const failedOpen = (code) => ({ code, message: OPEN_FAILURES[code] || 'This channel was not opened, and nothing was spent.' });
 const cancelledError = () => Object.assign(new Error('the open was cancelled'), { code: 'ERR_BEIGNET_LN_CANCELLED' });
 
 const hexKey = (value) => String(value || '').trim().toLowerCase();
@@ -304,6 +329,9 @@ function channelList(host) {
 			phase: c.phase,
 			engine: c.engine,
 			known: true,
+			// Past the point of no return of its open, as the library has it.
+			past: !!(c.signed || c.committed || c.confirmed),
+			failure: null,
 			// What it was funded with, by issuance: while its funding has not
 			// confirmed, that much of the on-chain records is the channel's.
 			assets: c.assets,
@@ -317,11 +345,15 @@ function channelList(host) {
 		});
 	}
 	for (const note of notes.values()) {
-		if (seen.has(note.id) || note.closedAt) continue;
+		// An open that failed stays listed for a while, as what it is.
+		const failed = note.failed ? failedOpen(note.failed.code) : null;
+		if (seen.has(note.id) || (note.closedAt && !failed)) continue;
 		// An open the user confirmed that the library has not heard of yet is
 		// on its way. Anything else the library no longer lists was a channel,
 		// and is over: it is never taken for an open still to be made.
-		const coming = !!note.initiator && !note.channelId;
+		// One the library answered and the host never saw signed is still an
+		// open, on its way or cut short: the loop finds out which (endLost).
+		const coming = !failed && !!note.initiator && (!note.channelId || note.stage === 'asked');
 		out.push({
 			id: note.id,
 			channelId: note.channelId || null,
@@ -331,7 +363,7 @@ function channelList(host) {
 			assetId: note.assetId,
 			groupKey: note.groupKey || null,
 			key: note.key,
-			word: coming ? 'OPENING' : 'CLOSED',
+			word: failed ? 'FAILED' : coming ? 'OPENING' : 'CLOSED',
 			usable: false,
 			over: !coming,
 			opening: coming,
@@ -340,10 +372,13 @@ function channelList(host) {
 			reclaimable: false,
 			reclaimTxid: null,
 			missing: false,
-			signed: !coming,
+			signed: !coming && !failed,
 			phase: '',
 			engine: 'absent',
 			known: false,
+			past: false,
+			failure: failed,
+			...(failed ? { capacity: BigInt(note.amount || 0) } : {}),
 			assets: [],
 			local: coming ? BigInt(note.amount) : 0n,
 			remote: 0n,
@@ -351,7 +386,7 @@ function channelList(host) {
 			receivable: 0n,
 			fundingSats: note.fundingSats || 0,
 			createdAt: note.createdAt || null,
-			closedAt: null
+			closedAt: note.closedAt || null
 		});
 	}
 	return out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -547,7 +582,8 @@ function listChannels(host) {
 	// One that might, and cannot be asked yet, must not be read as "none".
 	if (!host.ln.ready()) throw starting();
 	const now = host.now();
-	const shown = (c) => c.word !== 'CLOSED' && !(c.word === 'FORCE_CLOSED' && c.closedAt && now - c.closedAt >= FORCE_CLOSED_SHOWN_MS);
+	const gone = (c, word, after) => c.word === word && !!c.closedAt && now - c.closedAt >= after;
+	const shown = (c) => c.word !== 'CLOSED' && !gone(c, 'FORCE_CLOSED', FORCE_CLOSED_SHOWN_MS) && !gone(c, 'FAILED', FAILED_OPEN_SHOWN_MS);
 	return {
 		channels: channelList(host)
 			.filter(shown)
@@ -588,19 +624,22 @@ async function noteChannels(host) {
 		// Its id as a channel is written down once the funding is signed, and
 		// not before: an open with one is never opened a second time.
 		const learnt = c.signed && c.channelId && note && !note.channelId;
+		// Seen past its point of no return: a channel from here on, and never
+		// again an open that may have come to nothing.
+		const past = c.past && note && note.stage === 'asked';
 		const ended = c.over && !c.closedAt;
-		if (!learnt && !ended) continue;
+		if (!learnt && !past && !ended) continue;
 		await host.lock.run(() =>
 			rows.tx(() => {
 				const current = rows.get(`chan/${c.id}`) || { id: c.id, initiator: c.initiator, peerPubkey: c.peerPubkey, key: c.key, assetId: c.assetId, groupKey: c.groupKey, createdAt: null };
-				rows.put(`chan/${c.id}`, { ...current, channelId: c.channelId || current.channelId || null, ...(ended ? { closedAt: host.now() } : {}) });
+				rows.put(`chan/${c.id}`, { ...current, channelId: c.channelId || current.channelId || null, ...(past ? { stage: 'signed' } : {}), ...(ended ? { closedAt: host.now() } : {}) });
 				// It is over: nothing is left for a restart to carry on.
 				if (ended) rows.del(`committed/funding:${c.id}`);
 			})
 		);
 	}
 	// The note of a channel long over, once the library has let go of it too.
-	const listed = new Set(list.map((c) => c.id));
+	const listed = new Set(list.filter((c) => c.known).map((c) => c.id));
 	const old = host.now() - CLOSED_KEEP_MS;
 	for (const { key, value } of rows.list('chan/')) {
 		if (value.closedAt && value.closedAt < old && !listed.has(value.id)) await host.lock.run(() => rows.del(key));
@@ -1017,6 +1056,8 @@ async function openChannel(host, body, key) {
 			host.rows.put(`chan/${id}`, {
 				id,
 				initiator: true,
+				// Until the host has seen it past its point of no return (noteChannels).
+				stage: 'asked',
 				peerPubkey: peer.pubkey,
 				peerAlias: peer.alias,
 				host: peer.host,
@@ -1894,7 +1935,11 @@ async function settleOpens(host, { first = false } = {}) {
 			await endAbandoned(host, id, note, flow);
 			continue;
 		}
-		const kept = !!note.channelId || (!!flow && (flow.signed || flow.confirmed || flow.phase === 'active'));
+		// The note alone says it was a channel only where it does not say the
+		// open was merely asked for: the id the library answers with is given
+		// before the peer has signed.
+		const was = !!note.channelId && note.stage !== 'asked';
+		const kept = was || (!!flow && (flow.signed || flow.confirmed || flow.phase === 'active'));
 		if (mem.dropping.has(id)) {
 			// A drop that could not be finished while the open was out.
 			if (kept) mem.dropping.delete(id);
@@ -1909,11 +1954,22 @@ async function settleOpens(host, { first = false } = {}) {
 			await undoOpen(host, id, flow.cancelled ? cancelledError() : new Error(`the open ended as ${flow.phase}${flow.error ? ` (${flow.error})` : ''}`));
 			continue;
 		}
+		// Answered by the library once, and not on its list now: cut short.
+		if (!flow && note.channelId) {
+			await endLost(host, id, note);
+			continue;
+		}
 		if (modeOf(host) !== 'full') {
 			await undoOpen(host, id, new Error('asset channels are off for this wallet'));
 			continue;
 		}
 		if (first) {
+			// A channel the node holds under the id, that the library does not
+			// list, is not this host's to open a second time.
+			if (!flow && host.ln.engineHolds([id]) !== false) {
+				sayOnce(host, 'warn', `assets: a channel open a restart interrupted (${id}) is not opened again: the node holds a channel under its id, or could not be asked`);
+				continue;
+			}
 			// Not waited for: the loop goes on, and the open reports through its note.
 			startOpen(host, id, { reconnect: true });
 			continue;
@@ -1926,8 +1982,71 @@ async function settleOpens(host, { first = false } = {}) {
 			continue;
 		}
 		// Nobody is opening it and the library has no record of it.
-		if (host.now() - (note.createdAt || 0) >= OPEN_LOST_AFTER_MS) await undoOpen(host, id, new Error('the library has no record of the open'));
+		if (host.now() - (note.createdAt || 0) >= OPEN_LOST_AFTER_MS) await endLost(host, id, note);
 	}
+}
+
+/**
+ * A confirmed open that the library does not list and nobody is opening:
+ * what a daemon killed between the library's answer and its own record of
+ * the open leaves. It is ended only once it cannot be an open whose funding
+ * was published, which is asked of everything that could know, by the id
+ * the open was given and by the id the library answered with:
+ *
+ *   the library's list, read again, since the one the pass began with is
+ *   older than every wait since;
+ *   the node itself, for a channel of any kind under either id;
+ *   what the library said became of the funding's inputs, once it has
+ *   been asked in this generation: kept (it has seen the funding
+ *   transaction) and taken by the funding are both a no;
+ *   the on-chain records, for anything still set aside under the open's
+ *   name, spent or not;
+ *   and last the library, which is told to give the open up and answers
+ *   whether anything will still be opened under the id.
+ *
+ * Any of them holding anything leaves the open as it is, listed as on its
+ * way, to be looked at on the next pass. With nothing anywhere, the open is
+ * over and said: its note becomes a failed open, its marker goes, and its
+ * request key answers the failure. In that order of care, said before it
+ * is taken off the library's list.
+ */
+async function endLost(host, id, note) {
+	const { mem, rows } = host;
+	const ids = [id, note.channelId].filter(Boolean);
+	const waits = (why) => sayOnce(host, 'warn', `assets: a channel open the library has no record of (${id}) is not ended: ${why}`);
+	if (host.ln.channels().some((c) => ids.includes(c.pendingChannelId) || (!!c.channelId && ids.includes(c.channelId)))) return;
+	const held = host.ln.engineHolds(ids);
+	if (held !== false) return waits(held ? 'the node holds a channel under its id' : 'the node could not be asked for its channels');
+	// Asked on every start, right after the opens are looked at: the next pass knows.
+	if (!mem.lnReservations) return;
+	const funding = mem.lnFundings.get(id);
+	if (funding) return waits(funding === 'kept' ? 'the library keeps what its funding set aside' : 'the library says its funding took what was set aside');
+	const name = `funding:${id}`;
+	if ((await host.tap.stores.assets.listAssets()).some((r) => r.reservedBy === name)) return waits('what its funding set aside is still set aside in the on-chain records');
+	if (mem.stopped || mem.opens.has(id)) return;
+	if ((await giveUp(host, id)) !== true) return waits('the library would not give it up');
+	const failure = failedOpen('CHANNEL_OPEN_INTERRUPTED');
+	const channelId = note.channelId || id;
+	const done = await host.lock.run(() =>
+		rows.tx(() => {
+			const current = rows.get(`chan/${id}`);
+			if (!current || current.closedAt || !rows.get(`committed/funding:${id}`)) return false;
+			const at = host.now();
+			rows.del(`committed/funding:${id}`);
+			rows.put(`chan/${id}`, { ...current, closedAt: at, failed: { code: failure.code, at } });
+			// The key that asked for it answers what became of it from now on.
+			const entry = current.journal ? rows.get(current.journal) : null;
+			if (entry) rows.put(current.journal, { at: entry.at, body: entry.body, refusal: { code: failure.code, message: failure.message, status: 409 } });
+			return true;
+		})
+	);
+	if (!done) return;
+	mem.dropping.delete(id);
+	host.say('warn', `assets: a channel open (${channelId}) was cut short before its funding was signed, and neither the library nor the node holds anything of it. It is ended, and can be asked for again.`);
+	host.emitEvent('error', { code: failure.code, message: failure.message, channelId });
+	letGo(host, id);
+	host.markDirty();
+	await noteChannels(host);
 }
 
 const FUNDING_GIVEN_UP =
@@ -2007,6 +2126,10 @@ async function settleReservations(host, { block = false } = {}) {
 	let kept = false;
 	for (const r of reports) {
 		const id = r.pendingChannelId || r.reservation;
+		// Remembered by the open's id: an open is never ended as one that
+		// came to nothing while its funding holds, or took, what was set aside.
+		if (r.outcome === 'released') mem.lnFundings.delete(id);
+		else mem.lnFundings.set(id, r.outcome === 'kept' ? 'kept' : 'moved');
 		if (r.outcome === 'kept') {
 			kept = true;
 			sayOnce(host, 'info', `assets: what the funding of a channel (${id}) set aside stays set aside for now: ${plainMessage({ message: r.reason || 'the library gave no reason' })}`);

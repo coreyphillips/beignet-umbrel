@@ -68,6 +68,8 @@ function replay(host, route, key, body) {
 		if (!row) throw refusal('IDEMPOTENCY_KEY_REUSED', 'That request was already made, and what it did is no longer on record.', 409);
 		return { row: host.view(row) };
 	}
+	// What the request came to, where that was learnt after it was answered.
+	if (entry.refusal) throw refusal(entry.refusal.code, entry.refusal.message, entry.refusal.status);
 	return entry.answer;
 }
 

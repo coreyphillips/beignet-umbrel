@@ -292,7 +292,8 @@ function activeReceives(records, { now, windowMs, max }) {
 
 /* ---------------------------------------------------------------- channels */
 
-const CHANNEL_OVER = Object.freeze(['CLOSED', 'FORCE_CLOSED']);
+// FAILED is an open that came to nothing after it was answered: no channel.
+const CHANNEL_OVER = Object.freeze(['CLOSED', 'FORCE_CLOSED', 'FAILED']);
 // The engine's states of a channel whose funding is signed and not yet usable.
 const CHANNEL_FUNDING = Object.freeze(['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY']);
 // The words of a channel that is on its way out and not over yet.
@@ -334,6 +335,8 @@ function channelWord({ state, confirmed, recovery, engine, signed }) {
  * the host's notes still know) is the sum of its last balances.
  */
 function channelCapacity(c) {
+	// An open that failed holds nothing: this is what was asked for.
+	if (typeof c.capacity === 'bigint') return c.capacity;
 	const funded = (c.assets || []).reduce((sum, a) => sum + BigInt(a.amount || 0), 0n);
 	return funded > 0n ? funded : c.local + c.remote;
 }
@@ -347,6 +350,8 @@ function channelView(c, reg) {
 		peerPubkey: c.peerPubkey,
 		peerAlias: c.peerAlias || null,
 		state: c.word,
+		// Why an open that failed did, as { code, message }. Null for a channel.
+		failure: c.failure || null,
 		asset: brief(reg || { assetId: c.assetId, groupKey: c.groupKey, name: null, type: 'normal', decimalDisplay: 0 }),
 		capacity: channelCapacity(c).toString(),
 		localBalance: c.local.toString(),

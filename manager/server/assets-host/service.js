@@ -175,6 +175,9 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		// Whether what channel fundings left set aside has been settled:
 		// null before it was asked, then 'kept' or 'done'.
 		lnReservations: null,
+		// What the library last said became of a funding's inputs, by the
+		// open's id, where it kept them or the funding took them.
+		lnFundings: new Map(),
 		lnChangeLooked: false,
 		// The fee budget for channel fees: met used up since the last pass
 		// finished, and what the status says of it.
@@ -961,6 +964,10 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		// on-chain records is settled again from the chain (lightning.js).
 		mem.lnReservations = null;
 		mem.lnChangeLooked = false;
+		// That an open was only asked for held for the store that wrote it.
+		// A backup is older than the wallet, and the open may have become a
+		// channel since: nothing is read from that word after a restore.
+		for (const { key, value } of rows.list('chan/')) if (value && value.stage === 'asked' && value.channelId) rows.put(key, { ...value, stage: 'restored' });
 		if (!res.same) host.markDirty();
 		return res;
 	};

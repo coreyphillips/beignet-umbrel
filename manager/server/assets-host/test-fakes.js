@@ -430,6 +430,10 @@ const fakeInvoice = ({ msat, hash } = {}) =>
  * a negotiated channel, and is listed as cancelled and not as failed),
  * closeFails (a code a close rejects with), recoveryErrors (what bringing
  * a closed channel's assets home reports as having gone wrong),
+ * openAnswersUnsigned (the open answers as the real service does, once the
+ * funding is negotiated and before the peer has signed), engineChannels
+ * (channels the node holds that the service does not list, as { channelId,
+ * temporaryChannelId }), offlinePeers (the peers that are not connected),
  * peerOffline (no channel's peer is connected), settleKeeps (the reason a
  * funding reservation with no flow is left reserved), rate, priced (whether
  * the peer sets a price), quoteMs, quoteFails, payStatus, payFailure (the
@@ -495,6 +499,9 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		openGate: null,
 		openFails: null,
 		openTimesOut: false,
+		openAnswersUnsigned: false,
+		engineChannels: [],
+		offlinePeers: [],
 		openFailsSigned: null,
 		// What the engine refused the loop's own step with, as the cause of what resume() throws.
 		resumeFails: null,
@@ -707,6 +714,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 
 	/* --------------------------------------------------------------- the node */
 
+	const dialed = new Set();
 	const node = {
 		async connectPeer(pubkey, host, port) {
 			if (held()) violations.push("connect with the host's lock held");
@@ -714,6 +722,21 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			log('connect', { pubkey, host, port });
 			if (opts.connectGate) await opts.connectGate;
 			if (opts.connectFails) throw new Error('connection refused');
+			dialed.add(pubkey);
+		},
+		// Every peer of a channel, and every peer that was dialed, unless a test says it is away.
+		listPeers() {
+			if (opts.peerOffline) return [];
+			const all = new Set([...dialed, ...[...flows.values()].map((f) => f.peerPubkey)]);
+			return [...all].filter((pubkey) => !opts.offlinePeers.includes(pubkey)).map((pubkey) => ({ pubkey, host: 'peer.example.com', port: 9735, state: 'ready', remoteInit: {} }));
+		},
+		// What the node itself holds: the channels the service lists with a state, and what a test adds.
+		listChannels() {
+			const held = [...flows.values()].filter((f) => f.state && f.engine !== 'missing' && f.engine !== 'absent');
+			return [
+				...held.map((f) => ({ channelId: bytes(f.channelId || f.pendingChannelId), temporaryChannelId: bytes(f.pendingChannelId), peerPubkey: f.peerPubkey, state: f.state })),
+				...opts.engineChannels.map((c) => ({ channelId: bytes(c.channelId || c.temporaryChannelId), temporaryChannelId: bytes(c.temporaryChannelId || c.channelId), peerPubkey: c.peerPubkey || '', state: c.state || 'SENT_FUNDING_CREATED' }))
+			];
 		}
 	};
 
@@ -897,6 +920,12 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 						release(flow);
 						cancelled.add(pending);
 						throw tapError(opts.openFailsUnsigned, 'the open ended before the peer signed: the peer hung up');
+					}
+					// Answered as the real service answers: once the funding is negotiated,
+					// a moment before the peer's signature on the first commitment.
+					if (opts.openAnswersUnsigned) {
+						flow.channelId = flow.channelId || id('channel');
+						return { pendingChannelId: request.pendingChannelId, channelId: bytes(flow.channelId) };
 					}
 					// No word on the peer's signature in time: kept, for resume to carry on.
 					if (opts.openStopsUnsigned) throw refuse('TIMEOUT', 'the peer did not sign in time');
@@ -1369,9 +1398,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		return flow;
 	};
 	/** The library loses every record of an open: its flow, and what the flow had set aside. */
-	ln.lose = (pendingChannelId) => {
+	ln.lose = (pendingChannelId, { reserved = false } = {}) => {
 		const flow = flows.get(pendingChannelId);
-		if (flow) release(flow);
+		// `reserved`: its inputs stay set aside in the on-chain records, under its name.
+		if (flow && !reserved) release(flow);
 		flows.delete(pendingChannelId);
 		persist();
 	};

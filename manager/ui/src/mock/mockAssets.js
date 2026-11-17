@@ -299,6 +299,7 @@ export function createAssetsMock(ctx) {
 		peerPubkey: c.peerPubkey,
 		peerAlias: c.peerAlias || null,
 		state: c.state,
+		failure: c.failure || null,
 		asset: c.asset,
 		capacity: c.capacity,
 		localBalance: c.localBalance,
@@ -715,7 +716,35 @@ export function createAssetsMock(ctx) {
 	 * Four states the demo does not reach by itself, put on a wallet by the
 	 * address bar (`?assets-demo=`) or by a test. Each is added once.
 	 */
+	// The host's sentence for an open a restart cut short (assets-host/lightning.js OPEN_FAILURES).
+	const OPEN_INTERRUPTED_TEXT =
+		'This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
 	const SEEDS = {
+		// An open the wallet had taken on that a restart cut short before its
+		// funding was signed. Nothing left the wallet: the row says so for a
+		// while, and it is no channel to anything that counts them.
+		'open-interrupted'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c.state === 'FAILED')) return false;
+			const rec = Object.values(s.assets).find((a) => a.type !== 'collectible');
+			if (!rec) return false;
+			s.channels.unshift({
+				channelId: derivedHex(`seed-interrupted-open:${id}`, 64),
+				peerPubkey: `03${derivedHex('seed-peer:stuck-open', 64)}`,
+				peerAlias: 'Meridian edge',
+				state: 'FAILED',
+				failure: { code: 'CHANNEL_OPEN_INTERRUPTED', message: OPEN_INTERRUPTED_TEXT },
+				asset: brief(rec),
+				capacity: '50000',
+				localBalance: '0',
+				remoteBalance: '0',
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				_unpriced: true
+			});
+			return true;
+		},
 		// A send no block has taken for two hours, at a rate under the going one.
 		stuck(id) {
 			const s = S(id);
@@ -992,7 +1021,7 @@ export function createAssetsMock(ctx) {
 		// the wallet holds, and no bitcoin for a fee coin only while there is a
 		// channel that is not over.
 		if (s.feePolicyRefused) said.push({ code: 'FEE_POLICY_REFUSED', text: FEE_POLICY_TEXT });
-		else if (s.noFeeCoins && s.channels.some((c) => c.state !== 'CLOSED' && c.state !== 'MISSING')) said.push({ code: 'FEE_COINS_UNAVAILABLE', text: FEE_COINS_TEXT });
+		else if (s.noFeeCoins && s.channels.some((c) => c.state !== 'CLOSED' && c.state !== 'MISSING' && c.state !== 'FAILED')) said.push({ code: 'FEE_COINS_UNAVAILABLE', text: FEE_COINS_TEXT });
 		return said.length ? { warning: said.map((w) => w.text).join(' '), warnings: said } : {};
 	};
 
@@ -1624,7 +1653,8 @@ export function createAssetsMock(ctx) {
 	function closeChannel(id, body) {
 		const s = S(id);
 		const c = s.channels.find((x) => x.channelId === body?.channelId);
-		if (!c) throw notFound('This wallet has no asset channel with that id', 'CHANNEL_NOT_FOUND');
+		// As the host: an open that failed is no channel.
+		if (!c || c.state === 'FAILED') throw notFound('This wallet has no asset channel with that id', 'CHANNEL_NOT_FOUND');
 		if (c.state === 'MISSING') {
 			throw fail("This channel is on record, but the wallet's node does not hold it, as happens after a restore from a backup. It cannot be closed from this wallet.", 'CHANNEL_MISSING');
 		}
@@ -2353,7 +2383,7 @@ export function createAssetsMock(ctx) {
 	function daemonChannels(id) {
 		if (!state.wallets[id]) return [];
 		return state.wallets[id].channels
-			.filter((c) => c.state !== 'CLOSED' && c.state !== 'MISSING')
+			.filter((c) => c.state !== 'CLOSED' && c.state !== 'MISSING' && c.state !== 'FAILED')
 			.map((c) => {
 				const capacitySats = Number(c.channelSats) || 0;
 				const remoteBalanceSats = Math.min(capacitySats, CHANNEL_PUSH_SATS);

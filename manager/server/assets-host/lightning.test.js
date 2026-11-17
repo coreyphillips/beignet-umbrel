@@ -255,6 +255,7 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 		peerPubkey: PEER.pubkey,
 		peerAlias: 'edge',
 		state: 'OPENING',
+		failure: null,
 		asset: { key: asset.key, assetId: asset.assetId, name: 'coin', type: 'normal', decimalDisplay: 2 },
 		capacity: '600',
 		localBalance: '600',
@@ -750,8 +751,10 @@ test('an open the library has lost all record of is undone once it has had its t
 	h.clock.t += 31000;
 	await h.host.pass({ block: true });
 	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${kept}`]);
-	assert.deepEqual(events(h, 'error').map((e) => [e.code, e.channelId]), [['CHANNEL_OPEN_FAILED', lost]]);
-	assert.deepEqual((await h.get('/channels')).channels.map((c) => [c.pendingChannelId, c.state]), [[kept, 'OPENING']]);
+	assert.deepEqual(events(h, 'error').map((e) => [e.code, e.channelId]), [['CHANNEL_OPEN_INTERRUPTED', lost]]);
+	// It stays on the list as what it is, and its key answers what became of it.
+	assert.deepEqual((await h.get('/channels')).channels.map((c) => [c.pendingChannelId, c.state]).sort(), [[kept, 'OPENING'], [lost, 'FAILED']].sort());
+	assert.deepEqual(await codeOf(h.call('POST /channels/open', openBody(asset, '100'), 'lost-key')), ['CHANNEL_OPEN_INTERRUPTED', 409]);
 	// And never opened a second time, by the loop or by a start.
 	assert.equal(named(h, 'openChannel').length, 2);
 });
@@ -2787,4 +2790,127 @@ test('a node that refused its fee settings opens no new asset channel, is logged
 	h.ln.opts.feeStatus = feePool();
 	assert.equal((await h.call('POST /channels/quote', { key: asset.key, amount: '100', feeRate: 2 })).sufficient, true);
 	assert.equal((await h.get('/status')).lightning.warnings, undefined);
+});
+
+/* ------------------------------------------- an open a crash cut short */
+
+const INTERRUPTED = 'This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
+const ALL_ON_CHAIN = { total: '1000', onchain: '1000', channelable: '1000', pendingIn: '0', pendingOut: '0', channelLocal: '0', lightningSendable: '0', lightningReceivable: '0' };
+const passes = async (h, n = 3) => {
+	for (let i = 0; i < n; i += 1) await h.host.pass({ block: true });
+};
+/** An open the library answered before the peer signed, as the real one does, and the daemon that then starts over it. */
+async function cutShort({ lose = null, before = () => undefined } = {}) {
+	const { h, asset } = await funded();
+	h.ln.opts.openAnswersUnsigned = true;
+	const answer = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	const id = answer.pendingChannelId;
+	const channelId = h.ln.flow(id).channelId;
+	assert.deepEqual([answer.phase, h.ln.flow(id).signed, typeof channelId], ['funding', false, 'string']);
+	if (lose) h.ln.lose(id, lose);
+	before(h, id, channelId);
+	const again = h.restart();
+	made.push(again);
+	await again.boot();
+	await passes(again);
+	return { h: again, asset, answer, id, channelId };
+}
+const brief = async (h) => (await h.get('/channels')).channels.map((c) => [c.pendingChannelId, c.state, c.failure]);
+
+test('an open the library answered and had not stored when the daemon was killed is a failed open: listed, said, its marker gone, nothing held back, and its key answers the failure', async () => {
+	const { h, asset, id, channelId } = await cutShort({ lose: {} });
+	assert.deepEqual(keys(h, 'committed/funding:'), []);
+	const rows = (await h.get('/channels')).channels;
+	assert.deepEqual(
+		rows.map((c) => [c.pendingChannelId, c.channelId, c.state, c.capacity, c.localBalance, c.sendable, c.reclaimable, c.failure]),
+		[[id, channelId, 'FAILED', '600', '0', '0', false, { code: 'CHANNEL_OPEN_INTERRUPTED', message: INTERRUPTED }]]
+	);
+	assert.deepEqual(events(h, 'error'), [{ code: 'CHANNEL_OPEN_INTERRUPTED', message: INTERRUPTED, channelId }]);
+	assert.deepEqual(events(h, 'channel').filter((e) => e.state === 'FAILED'), [{ channelId, state: 'FAILED' }]);
+	// Nothing of it is held back, and it is no channel to anything that counts them.
+	assert.deepEqual((await h.get('/balances')).assets[0].balance, ALL_ON_CHAIN);
+	assert.equal((await h.get('/status')).lightning.usableChannels, 0);
+	assert.deepEqual(await codeOf(h.call('POST /channels/close', { channelId: id })), ['CHANNEL_NOT_FOUND', 404]);
+	// The same key answers what became of it, never `funding`, and opens nothing.
+	const opens = named(h, 'openChannel').length;
+	const replay = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([replay.extensionCode, replay.status, replay.message], ['CHANNEL_OPEN_INTERRUPTED', 409, INTERRUPTED]);
+	assert.equal(named(h, 'openChannel').length, opens);
+	// Said once, however often the loop looks, and also after the next start.
+	await passes(h);
+	const later = h.restart();
+	made.push(later);
+	await later.boot();
+	await passes(later);
+	assert.equal(events(later, 'error').length, 1);
+	assert.deepEqual(await brief(later), [[id, 'FAILED', { code: 'CHANNEL_OPEN_INTERRUPTED', message: INTERRUPTED }]]);
+	// And a new key opens a channel, with every unit there to open it with.
+	later.ln.opts.openAnswersUnsigned = false;
+	const next = await later.call('POST /channels/open', openBody(asset, '1000'), 'next-key');
+	assert.notEqual(next.pendingChannelId, id);
+	// The row of the failed one goes once it has been shown for a while.
+	later.clock.t += 8 * 24 * 60 * 60 * 1000;
+	assert.deepEqual((await later.get('/channels')).channels.map((c) => c.pendingChannelId), [next.pendingChannelId]);
+});
+
+test('an open whose flow the library had stored when the daemon was killed is carried on, and is not failed', async () => {
+	const { h, asset, answer, id } = await cutShort();
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.deepEqual(await brief(h), [[id, 'OPENING', null]]);
+	assert.deepEqual(events(h, 'error'), []);
+	assert.deepEqual(await h.call('POST /channels/open', openBody(asset), 'open-key'), answer);
+	// Never opened a second time by the host: the library carries on what it has.
+	assert.equal(named(h, 'openChannel').length, 1);
+	assert.equal(named(h, 'resume').length > 0, true);
+	h.clock.t += 60 * 60 * 1000;
+	await passes(h);
+	assert.deepEqual(await brief(h), [[id, 'OPENING', null]]);
+	h.ln.confirm(id);
+	await passes(h, 1);
+	assert.deepEqual(await brief(h), [[id, 'NORMAL', null]]);
+});
+
+test('an open is never failed while the library holds a signed funding, also one the host had not seen signed', async () => {
+	const { h, asset, answer, id } = await cutShort({
+		// The peer's signature arrived as the daemon died: the host's note still says it was only asked for.
+		before: (old, pending) => old.ln.set(pending, { signed: true, committed: true, phase: 'committed' })
+	});
+	h.clock.t += 24 * 60 * 60 * 1000;
+	await passes(h);
+	assert.deepEqual(keys(h, 'committed/funding:'), [`h/committed/funding:${id}`]);
+	assert.deepEqual(await brief(h), [[id, 'OPENING', null]]);
+	assert.deepEqual(events(h, 'error'), []);
+	assert.deepEqual(await h.call('POST /channels/open', openBody(asset), 'open-key'), answer);
+	// Seen signed, it is a channel from then on: should the library lose it later, it is not an open that came to nothing.
+	h.ln.lose(id);
+	await passes(h);
+	assert.deepEqual(events(h, 'error'), []);
+	assert.equal((await brief(h)).some(([, state]) => state === 'FAILED'), false);
+});
+
+test('an open the library has no record of is not ended while the node holds a channel under its id, or while what its funding set aside is kept', async () => {
+	// The node holds a channel under the id the open was given.
+	const held = await cutShort({ lose: {}, before: (old, pending, channelId) => old.ln.opts.engineChannels.push({ channelId, temporaryChannelId: pending }) });
+	held.h.clock.t += 60 * 60 * 1000;
+	await passes(held.h);
+	assert.deepEqual(await brief(held.h), [[held.id, 'OPENING', null]]);
+	assert.deepEqual([keys(held.h, 'committed/funding:').length, events(held.h, 'error').length], [1, 0]);
+	assert.deepEqual(await held.h.call('POST /channels/open', openBody(held.asset), 'open-key'), held.answer);
+	assert.equal(held.h.logs.some(([, text]) => /the node holds a channel under its id/.test(text)), true);
+	// Once the node has let go of it, nothing is left, and the open is ended.
+	held.h.ln.opts.engineChannels.length = 0;
+	await passes(held.h);
+	assert.deepEqual((await brief(held.h)).map(([, state]) => state), ['FAILED']);
+
+	// The library keeps what the funding set aside: it has seen the funding transaction.
+	const kept = await cutShort({ lose: { reserved: true }, before: (old) => Object.assign(old.ln.opts, { settleKeeps: 'the funding transaction is known and not buried' }) });
+	kept.h.clock.t += 60 * 60 * 1000;
+	await passes(kept.h);
+	assert.deepEqual(await brief(kept.h), [[kept.id, 'OPENING', null]]);
+	assert.deepEqual([keys(kept.h, 'committed/funding:').length, events(kept.h, 'error').length], [1, 0]);
+	// Released by the library, the units are free again and the open is over.
+	kept.h.ln.opts.settleKeeps = null;
+	await passes(kept.h);
+	assert.deepEqual((await brief(kept.h)).map(([, state]) => state), ['FAILED']);
+	assert.deepEqual((await kept.h.get('/balances')).assets[0].balance, ALL_ON_CHAIN);
 });

@@ -53,6 +53,9 @@ export function channelState(state) {
 	if (s === 'AWAITING_REESTABLISH') return { word: 'reconnecting', tone: 'yellow', usable: false };
 	if (s === 'FORCE_CLOSED') return { word: 'force closed', tone: 'red', usable: false };
 	if (s === 'CLOSED') return { word: 'closed', tone: 'muted', usable: false };
+	// An open that came to nothing after the wallet had taken it on. No
+	// channel: the row says why (`failure`), and there is nothing to close.
+	if (s === 'FAILED') return { word: 'not opened', tone: 'red', usable: false };
 	// On the wallet's record and not held by its node: what a restore from a
 	// backup leaves. It carries nothing and cannot be closed from here.
 	if (s === 'MISSING') return { word: 'not held here', tone: 'red', usable: false };
@@ -62,7 +65,7 @@ export function channelState(state) {
 /** Whether a close can still be asked for: not for one already on its way out. */
 export function canClose(channel) {
 	const s = String((channel && channel.state) || '').toUpperCase();
-	return !CLOSING.has(s) && s !== 'CLOSED' && s !== 'FORCE_CLOSED' && s !== 'MISSING';
+	return !CLOSING.has(s) && s !== 'CLOSED' && s !== 'FORCE_CLOSED' && s !== 'MISSING' && s !== 'FAILED';
 }
 
 /**

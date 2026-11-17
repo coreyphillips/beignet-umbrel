@@ -381,6 +381,38 @@ test('a close the wallet refuses keeps the dialog open, with the reason', async 
 	}
 });
 
+test('an open a restart cut short is listed as not opened, with the wallet\'s sentence, what it was for, and nothing to close', async () => {
+	const backend = assetsBackend();
+	const before = await backend.api('demo-main').get('/x/assets/status');
+	assert.equal(backend.mock.seed('demo-main', 'open-interrupted'), true);
+	const { channels } = await backend.api('demo-main').get('/x/assets/channels');
+	const failed = channels.find((c) => c.state === 'FAILED');
+	assert.deepEqual([failed.failure.code, failed.localBalance, failed.sendable, failed.reclaimable], ['CHANNEL_OPEN_INTERRUPTED', '0', '0', false]);
+	// Every row has the key, as the host's has: null for a channel.
+	assert.equal(channels.every((c) => 'failure' in c), true);
+	assert.equal(channels.filter((c) => c.failure).length, 1);
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	// It is no channel: nothing that counts them counts it.
+	assert.equal(status.lightning.usableChannels, before.lightning.usableChannels);
+	assert.equal(backend.mock.daemonChannels('demo-main').some((c) => c.channelId === failed.channelId), false);
+	const r = await mount(backend, { status });
+	try {
+		const row = r.tests('asset-channel').find((el) => el.getAttribute('data-state') === 'FAILED');
+		assert.match(row.textContent, /not opened/);
+		const note = row.querySelector('[data-testid="asset-channel-failure"]');
+		assert.equal(note.getAttribute('data-code'), 'CHANNEL_OPEN_INTERRUPTED');
+		assert.match(note.textContent, /interrupted before any bitcoin or asset left the wallet/);
+		assert.match(note.textContent, /can be tried again\. It was for 500\.00/);
+		// No figures of a channel, and nothing to close or take back.
+		assert.equal(row.querySelector('.asset-channel-facts'), null);
+		assert.equal(row.querySelector('[data-testid="asset-channel-close"]'), null);
+		assert.equal(row.querySelector('[data-testid="asset-channel-reclaim"]'), null);
+		await assert.rejects(backend.api('demo-main').post('/x/assets/channels/close', { channelId: failed.channelId }), (e) => e.code === 'CHANNEL_NOT_FOUND');
+	} finally {
+		await r.unmount();
+	}
+});
+
 test('a channel the node no longer holds is listed as that, cannot be closed, and the card says what it means', async () => {
 	const backend = assetsBackend();
 	assert.equal(backend.mock.seed('demo-main', 'channel-missing'), true);
@@ -421,7 +453,7 @@ test('a wallet with nothing wrong with its channels shows no warning', async () 
 	}
 });
 
-const CHANNEL_KEYS = ['channelId', 'pendingChannelId', 'peerPubkey', 'peerAlias', 'state', 'asset', 'capacity', 'localBalance', 'remoteBalance', 'sendable', 'receivable', 'channelSats', 'fundingTxid', 'reclaimable', 'reclaimTxid'];
+const CHANNEL_KEYS = ['channelId', 'pendingChannelId', 'peerPubkey', 'peerAlias', 'state', 'failure', 'asset', 'capacity', 'localBalance', 'remoteBalance', 'sendable', 'receivable', 'channelSats', 'fundingTxid', 'reclaimable', 'reclaimTxid'];
 const keyed = (key) => ({ headers: { 'X-Idempotency-Key': key } });
 
 test('the funding of an open that will not confirm can be taken back: asked once, said on the row, and the asset comes back', async () => {
