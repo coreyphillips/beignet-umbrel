@@ -55,7 +55,7 @@ packages installed beside it. Make a prefix the way the image does:
 
 ```sh
 scripts/engine-prefix.sh .engine-prefix                    # the release the image is built on
-scripts/engine-prefix.sh .engine-prefix /path/to/beignet-0.42.0.tgz   # or an `npm pack` of a checkout
+scripts/engine-prefix.sh .engine-prefix /path/to/beignet-0.43.0.tgz   # or an `npm pack` of a checkout
 ```
 
 It ends by saying whether assets are available on that prefix, and prints
@@ -121,11 +121,10 @@ reorganisation.
 The scripts from 20 up drive asset channels between two wallets of this app.
 They need an engine that can carry asset channels: `GET
 http://127.0.0.1:3900/api/config` then answers `assetChannelsAvailable: true`,
-and a wallet's assets status reads `lightning.mode: "full"`. Beignet 0.42.0
-cannot, so on a prefix of that release both read off, the first check of
-`20-ln-open.mjs` fails saying so, and the scripts above are unaffected. Until
-a release can, make the prefix from an `npm pack` of an engine checkout that
-does (the second form under "The engine").
+and a wallet's assets status reads `lightning.mode: "full"`. Beignet 0.43.0,
+the release the image is built on, is the first that can. On a prefix of an
+older release both read off, the first check of `20-ln-open.mjs` fails saying
+so, and the scripts above are unaffected.
 
 ```sh
 node 20-ln-open.mjs           # what an open costs, the refusals before anything is funded, one open however often it is asked for

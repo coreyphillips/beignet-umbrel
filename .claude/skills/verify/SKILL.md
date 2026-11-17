@@ -149,10 +149,11 @@ Flows:
   file is refused in a sentence, and the same file on `demo-savings` says it
   is not for an address that wallet made.
 
-Lightning (asset channels). Real wallets hide all of it until the engine can
-carry asset channels: the manager answers `assetChannelsAvailable: false` and
-the host `status.lightning.mode: 'off'`. The demo answers true, so it shows on
-every demo wallet that has Lightning. Use `demo-main`, which has one open BUSD
+Lightning (asset channels). Real wallets show it on an engine that can carry
+asset channels (Beignet 0.43.0, which the app bundles, or later). On an older
+engine they hide all of it: the manager answers `assetChannelsAvailable: false`
+and the host `status.lightning.mode: 'off'`. The demo answers true, so it shows
+on every demo wallet that has Lightning. Use `demo-main`, which has one open BUSD
 channel with "Lightning Labs edge" (2,400.00 yours, 3,100.00 theirs).
 
 - Channels, `/w/demo-main/channels`: the "Asset channels" card

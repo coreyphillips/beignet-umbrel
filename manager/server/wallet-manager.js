@@ -277,9 +277,9 @@ class WalletManager {
 			String(process.env.BEIGNET_ASSETS || '').toLowerCase() !== 'off';
 		// Assets in Lightning channels (Milestone B): the engine's contract
 		// has to hand an extension the node, and the adapter has to carry
-		// its Lightning entry. The adapter under vendor/ carries it. The
-		// engine this app is built on, Beignet 0.42.0, does not hand over the
-		// node, so on it this is false.
+		// its Lightning entry. The adapter under vendor/ carries it, and the
+		// engine this app is built on, Beignet 0.43.0, hands over the node, so
+		// on the bundled engine this is true. On an older engine it is false.
 		this.assetChannelsSupported = this.assetsSupported && assetChannelsAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
