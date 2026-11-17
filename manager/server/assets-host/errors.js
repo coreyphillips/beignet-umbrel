@@ -87,6 +87,10 @@ const PARAM_MESSAGES = {
 // What the library's Lightning service rejects with, as the dashboard's code,
 // a sentence and a status. The caller adds what only it knows: how much a
 // channel can send or receive, or a new price (lightning.js).
+// The engine refused the fee settings it was given: said by the status, and
+// by an open the library turns down for it.
+const FEE_POLICY_REFUSED =
+	"The wallet's node did not take the settings this app gives it for the miner fees of asset channels, so no new asset channel is opened. The channels there already are keep working. This is for whoever runs the wallet to put right, and the wallet's log says what the node refused.";
 const LIGHTNING_REFUSALS = {
 	ERR_BEIGNET_LN_UNSUPPORTED: ['LIGHTNING_UNAVAILABLE', 'This wallet has no Lightning for its assets, so it has no asset channels to use.', 409],
 	ERR_BEIGNET_LN_NOT_READY: ['ASSETS_STARTING', 'Lightning is still starting. Try again in a moment.', 503],
@@ -94,6 +98,12 @@ const LIGHTNING_REFUSALS = {
 	ERR_BEIGNET_LN_TIMEOUT: ['PEER_UNREACHABLE', 'The peer did not answer in time, so nothing was done. Try again in a moment.', 502],
 	ERR_BEIGNET_LN_PEER_OFFLINE: ['PEER_UNREACHABLE', 'The peer is not connected, so nothing was done. Try again once it is back.', 502],
 	ERR_BEIGNET_LN_PEER_UNSUPPORTED: ['PEER_NO_ASSET_CHANNELS', 'That peer does not open asset channels, so nothing was opened and nothing was spent.', 409],
+	// This node's own no to an open: its engine and the peer agree on no way
+	// to carry an asset payment, or it does not offer asset channels. Never
+	// worded as the peer's. The engine's reason is added (modeUnavailable).
+	ERR_BEIGNET_LN_MODE_UNAVAILABLE: ['CHANNEL_MODE_UNAVAILABLE', "This wallet's node cannot open an asset channel with that peer. Nothing was opened and nothing was spent.", 409],
+	// An open on an engine that refused its fee policy, before anything is written.
+	ERR_BEIGNET_LN_FEE_POLICY_REFUSED: ['FEE_POLICY_REFUSED', FEE_POLICY_REFUSED, 409],
 	ERR_BEIGNET_LN_FUNDING_REJECTED: ['PEER_NO_ASSET_CHANNELS', 'The peer turned the channel down, so nothing was opened and nothing was spent.', 409],
 	ERR_BEIGNET_LN_CANCELLED: ['CHANNEL_CANCELLED', 'This channel open was cancelled before anything was signed, so nothing was opened and nothing was spent.', 409],
 	ERR_BEIGNET_LN_FEE_BOUND: [
@@ -128,6 +138,16 @@ const LIGHTNING_REFUSALS = {
 	// The wallet's own limits, before anything was recorded or sent. The
 	// limit is named when the engine's refusal carries it (mapLightning).
 	ERR_BEIGNET_LN_SPENDING_LIMIT: ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid.", 409],
+	// The engine sends an asset payment in one part, and this one would
+	// have needed several. Nothing was recorded or sent.
+	ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED: ['PAYMENT_UNSUPPORTED', 'This payment would have to go out in several parts, and an asset payment goes out in one, so nothing was paid.', 409],
+	// The wallet has not taken in what became of earlier payments on the
+	// channel. Not the payer's doing: it is for a restart, or for a look.
+	ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED: [
+		'OUTCOMES_UNDELIVERED',
+		'This wallet has not yet taken in the results of earlier payments on that channel, so nothing was paid. Nothing is wrong with this payment. Restart the wallet, and if this is said again afterwards, its log says why.',
+		409
+	],
 	ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND: ['INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409],
 	ERR_BEIGNET_LN_INSUFFICIENT_INBOUND: ['INSUFFICIENT_INBOUND', 'No asset channel of this wallet can receive that much.', 409],
 	ERR_BEIGNET_LN_BAD_INVOICE: ['BAD_INVOICE', 'That is not a Lightning invoice this wallet can read.', 400],
@@ -160,8 +180,12 @@ const PAYMENT_FAILURES = Object.freeze({
 });
 const PAYMENT_FAILED = 'The payment did not go through, so nothing was paid.';
 
+// A try whose HTLC never entered the channel, as the library marks it (`neverSent`).
+const PAYMENT_NEVER_SENT = 'This payment never left the wallet, so nothing was paid. The invoice can be paid again.';
+
 /** A failed payment's reason as a sentence, and whether the record's text for it was one this host knows. */
-function paymentFailure(text) {
+function paymentFailure(text, { neverSent = false } = {}) {
+	if (neverSent) return { known: true, message: PAYMENT_NEVER_SENT };
 	const known = typeof text === 'string' && Object.prototype.hasOwnProperty.call(PAYMENT_FAILURES, text);
 	return { known, message: known ? PAYMENT_FAILURES[text] : PAYMENT_FAILED };
 }
@@ -268,6 +292,36 @@ function spendingLimitOf(err) {
 	return null;
 }
 
+/** What an error of the library's, or a cause of it, carries under `name` in its details. */
+function detailOf(err, name) {
+	for (const e of causesOf(err)) {
+		const d = e.details || e.data;
+		if (d && d[name] !== undefined && d[name] !== null) return d[name];
+	}
+	return undefined;
+}
+
+/**
+ * ERR_BEIGNET_LN_MODE_UNAVAILABLE in the host's words: this wallet's own
+ * node cannot open an asset channel with the peer, and why, where the
+ * engine said why. The reason is the engine's, on one line and no longer
+ * than a reason needs to be.
+ */
+function modeUnavailable(reason) {
+	const [code, message, status] = LIGHTNING_REFUSALS.ERR_BEIGNET_LN_MODE_UNAVAILABLE;
+	const why =
+		typeof reason === 'string'
+			? reason
+					.replace(/[\u0000-\u001f\u007f]+/g, ' ')
+					.replace(/\s+/g, ' ')
+					.trim()
+					.slice(0, 300)
+					.replace(/[.\s]+$/, '')
+			: '';
+	if (!why) return refusal(code, message, status);
+	return refusal(code, `This wallet's node cannot open an asset channel with that peer: ${why}. Nothing was opened and nothing was spent.`, status, { reason: why });
+}
+
 /**
  * As mapError, for what a call into the Lightning service threw: a refusal
  * in the host's own words, or null when the host has none for it. What the
@@ -277,6 +331,12 @@ function spendingLimitOf(err) {
 function mapLightning(err, context = {}) {
 	if (isRefusal(err)) return err;
 	const engine = engineCodeOf(err);
+	if (codeOf(err) === 'ERR_BEIGNET_LN_MODE_UNAVAILABLE') return modeUnavailable(detailOf(err, 'reason'));
+	if (codeOf(err) === 'ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED') {
+		const [code, message, status] = LIGHTNING_REFUSALS.ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED;
+		const count = Number(detailOf(err, 'undeliveredOutcomes'));
+		return refusal(code, message, status, Number.isInteger(count) && count > 0 ? { undeliveredOutcomes: count } : undefined);
+	}
 	if (codeOf(err) === 'ERR_BEIGNET_LN_FUNDING_INPUTS') return fundingInputs(err);
 	if (engine === 'ASSET_PAYMENT_REFUSED' || codeOf(err) === 'ERR_BEIGNET_LN_SPENDING_LIMIT') {
 		// Not a limit at all: the wallet is on its way down, and takes nothing new.
@@ -391,5 +451,7 @@ module.exports = {
 	PAYMENT_REFUSED_BECAUSE,
 	engineCodeOf,
 	PAYMENT_FAILURES,
-	paymentFailure
+	paymentFailure,
+	modeUnavailable,
+	FEE_POLICY_REFUSED
 };

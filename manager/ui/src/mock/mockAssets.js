@@ -300,6 +300,7 @@ export function createAssetsMock(ctx) {
 		peerAlias: c.peerAlias || null,
 		state: c.state,
 		failure: c.failure || null,
+		peerConnected: c.peerConnected !== false,
 		asset: c.asset,
 		capacity: c.capacity,
 		localBalance: c.localBalance,
@@ -720,6 +721,23 @@ export function createAssetsMock(ctx) {
 	const OPEN_INTERRUPTED_TEXT =
 		'This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
 	const SEEDS = {
+		// The peer of the wallet's asset channel is away. The channel is still
+		// open, and carries nothing until the peer is back.
+		'peer-offline'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL' && x.peerConnected !== false);
+			if (!c) return false;
+			c._could = { sendable: c.sendable, receivable: c.receivable };
+			Object.assign(c, { peerConnected: false, sendable: '0', receivable: '0' });
+			return true;
+		},
+		// A channel the wallet's node gave up: it carries nothing, and is closed
+		// only without its peer.
+		'channel-failed'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL');
+			if (!c) return false;
+			Object.assign(c, { state: 'ERRORED', sendable: '0', receivable: '0' });
+			return true;
+		},
 		// An open the wallet had taken on that a restart cut short before its
 		// funding was signed. Nothing left the wallet: the row says so for a
 		// while, and it is no channel to anything that counts them.
@@ -1119,7 +1137,7 @@ export function createAssetsMock(ctx) {
 			// reason beside it, and its channels still counted and warned of.
 			lightning: {
 				mode: mode !== 'off' && s.notAdvertised ? 'off' : mode,
-				usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL').length,
+				usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL' && c.peerConnected !== false).length,
 				feeCoins: mode === 'off' ? null : feeCoinsOf(id, s),
 				...(mode !== 'off' && s.notAdvertised ? { unavailable: { ...NOT_ADVERTISED } } : {}),
 				...(mode === 'off' ? {} : channelWarningsOf(s))
@@ -1565,6 +1583,23 @@ export function createAssetsMock(ctx) {
 		if (S(id).notAdvertised) throw fail(NOT_ADVERTISED.message, 'LIGHTNING_NOT_ADVERTISED', { status: 409, details: { reason: NOT_ADVERTISED.reason } });
 	}
 
+	// As the host words a peer (assets-host/lightning.js peerSaid): the name the user gave it, or its key cut short.
+	const peerSaid = (c) => c.peerAlias || `${String(c.peerPubkey).slice(0, 8)}\u2026${String(c.peerPubkey).slice(-6)}`;
+	/** As the host: the channel that could carry the amount were its peer there (awayChannel). */
+	function awayChannel(id, key, direction, amount) {
+		const field = direction === 'in' ? 'receivable' : 'sendable';
+		return S(id).channels.find((c) => c.asset.key === key && c.state === 'NORMAL' && c.peerConnected === false && c._could && cmpUnits(c._could[field], amount) >= 0) || null;
+	}
+	/** The host's refusal of a price whose channel has a peer that is away, word for word (peerOffline). */
+	function peerOffline(c, way) {
+		const through = way === 'pay' ? 'this would be paid through' : 'this would be received through';
+		const so = way === 'pay' ? 'so nothing was priced and nothing was paid' : 'so no invoice was made';
+		return fail(`The peer of the asset channel ${through}, ${peerSaid(c)}, is not connected, ${so}. Try again once it is back.`, 'PEER_OFFLINE', {
+			status: 409,
+			details: { peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null }
+		});
+	}
+
 	function usableChannel(id, key, direction, amount, only = () => true) {
 		const field = direction === 'in' ? 'receivable' : 'sendable';
 		return S(id).channels.find((c) => c.asset.key === key && c.state === 'NORMAL' && only(c) && cmpUnits(c[field], amount) >= 0) || null;
@@ -1658,6 +1693,19 @@ export function createAssetsMock(ctx) {
 		if (c.state === 'MISSING') {
 			throw fail("This channel is on record, but the wallet's node does not hold it, as happens after a restore from a backup. It cannot be closed from this wallet.", 'CHANNEL_MISSING');
 		}
+		// As the host: a close with the peer is refused where it cannot work.
+		if (!body.force) {
+			if (c.state === 'ERRORED') {
+				throw fail('This channel has failed and can no longer be closed together with its peer. Force close it to bring what is in it back on-chain.', 'CHANNEL_ERRORED', { status: 409 });
+			}
+			if (c.peerConnected === false) {
+				throw fail(
+					`The peer of this channel, ${peerSaid(c)}, is not connected, and a channel is closed together with its peer only while it is. Try again once it is back, or force close the channel.`,
+					'PEER_OFFLINE',
+					{ status: 409, details: { peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null } }
+				);
+			}
+		}
 		// As the host: an open whose funding is signed and not yet on the chain
 		// cannot be closed. Its bitcoin can be taken back instead.
 		if (pubChannel(c).reclaimable) {
@@ -1736,6 +1784,8 @@ export function createAssetsMock(ctx) {
 		const maxReceivable = channels.reduce((m, c) => (cmpUnits(c.receivable, m) > 0 ? c.receivable : m), '0');
 		const ch = usableChannel(id, identity.key, 'in', amount);
 		if (!ch) {
+			const idle = awayChannel(id, identity.key, 'in', amount);
+			if (idle) throw peerOffline(idle, 'receive');
 			throw fail('No asset channel can receive that much', 'INSUFFICIENT_INBOUND', { details: { maxReceivable } });
 		}
 		const plain = unpriced(ch);
@@ -1820,7 +1870,11 @@ export function createAssetsMock(ctx) {
 				assetAmount = face;
 			}
 		}
-		if (!ch) throw fail('No asset channel can send that much', 'INSUFFICIENT_OUTBOUND', { details: { sendable } });
+		if (!ch) {
+			const idle = awayChannel(id, identity.key, 'out', assetAmount);
+			if (idle) throw peerOffline(idle, 'pay');
+			throw fail('No asset channel can send that much', 'INSUFFICIENT_OUTBOUND', { details: { sendable } });
+		}
 		const plain = unpriced(ch);
 		const quote = {
 			quoteId: nextId('rfq'),

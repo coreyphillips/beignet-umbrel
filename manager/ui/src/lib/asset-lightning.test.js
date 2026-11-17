@@ -9,24 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-	assetChannelsOffered,
-	canClose,
-	channelAssets,
-	channelState,
-	invoiceDeadline,
-	invoiceStanding,
-	lightningRefusal,
-	parsePeer,
-	payFailure,
-	payLabel,
-	payableAssets,
-	peerName,
-	quoteChange,
-	quoteExpired,
-	quoteLeft,
-	sharePct
-} from './asset-lightning.js';
+import { assetChannelsOffered, canClose, channelAssets, channelState, invoiceDeadline, invoiceStanding, lightningRefusal, parsePeer, payFailure, payLabel, payableAssets, peerName, quoteChange, quoteExpired, quoteLeft, sharePct, closeWays, peerAway } from './asset-lightning.js';
 
 const NOW = 1_800_000_000_000;
 const BUSD = {
@@ -225,6 +208,34 @@ test('a failed payment says why, and that nothing was paid', () => {
 	assert.equal(payFailure({ failureDescription: 'no route found' }), 'The payment did not go through, and nothing was paid. No route found.');
 	assert.equal(payFailure({ failureDescription: '' }), 'The payment did not go through, and nothing was paid. The wallet did not say why.');
 	assert.equal(payFailure(null), 'The payment did not go through, and nothing was paid. The wallet did not say why.');
+});
+
+test('a channel that failed, and a word this page has not met: a badge, never usable, and closable', () => {
+	assert.deepEqual(channelState('ERRORED'), { word: 'failed', tone: 'red', usable: false });
+	assert.deepEqual(channelState('SOMETHING_NEW'), { word: 'something new', tone: 'muted', usable: false });
+	assert.deepEqual(channelState(''), { word: 'unknown', tone: 'muted', usable: false });
+	for (const state of ['ERRORED', 'SOMETHING_NEW', 'SPLICING']) assert.equal(canClose({ state }), true, state);
+	// A failed channel closes only without its peer. Anything else may be closed with it, peer willing.
+	assert.deepEqual(closeWays({ state: 'ERRORED', peerConnected: true }), { cooperative: false, peerAway: false });
+	assert.deepEqual(closeWays({ state: 'NORMAL', peerConnected: false }), { cooperative: true, peerAway: true });
+	assert.deepEqual(closeWays({ state: 'SOMETHING_NEW' }), { cooperative: true, peerAway: false });
+	assert.deepEqual(closeWays({ state: 'NORMAL', peerConnected: true }), { cooperative: true, peerAway: false });
+});
+
+test('a peer that is away is said of a live channel only, and only on the wallet\'s plain no', () => {
+	assert.equal(peerAway({ state: 'NORMAL', peerConnected: false }), true);
+	assert.equal(peerAway({ state: 'OPENING', peerConnected: false }), true);
+	assert.equal(peerAway({ state: 'ERRORED', peerConnected: false }), true);
+	for (const state of ['CLOSED', 'FORCE_CLOSED', 'FAILED', 'MISSING', 'CLOSING', 'FORCE_CLOSING']) assert.equal(peerAway({ state, peerConnected: false }), false, state);
+	for (const peerConnected of [true, undefined, null]) assert.equal(peerAway({ state: 'NORMAL', peerConnected }), false);
+	// The wallet's sentence is the one shown. Without one, the page has its own, with the peer named.
+	const said = 'The peer of the asset channel this would be paid through, edge, is not connected, so nothing was priced and nothing was paid. Try again once it is back.';
+	assert.deepEqual(lightningRefusal({ code: 'PEER_OFFLINE', message: said, details: { peerPubkey: `02${'ab'.repeat(32)}`, peerAlias: 'edge' } }), { code: 'PEER_OFFLINE', text: said });
+	assert.deepEqual(lightningRefusal({ code: 'PEER_OFFLINE', details: { peerPubkey: `02${'ab'.repeat(32)}`, peerAlias: null } }), {
+		code: 'PEER_OFFLINE',
+		text: 'The peer of the asset channel this would go through, 02ababab…ababab, is not connected, so nothing was done. Try again once it is back.'
+	});
+	assert.match(lightningRefusal({ code: 'PEER_OFFLINE' }).text, /^The peer of the asset channel this would go through is not connected/);
 });
 
 test('an open that failed is said to be not opened, carries nothing and has nothing to close', () => {

@@ -3,7 +3,7 @@ import AssetAvatar from '../../../../components/AssetAvatar.jsx';
 import { AssetAmount } from '../../../../components/AssetAmount.jsx';
 import { Badge, Button, CopyText, ExplorerLink, FeeField, Modal } from '../../../../components/ui.jsx';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
-import { canClose, canReclaim, channelState, peerName, reclaimSent, sharePct } from '../../../../lib/asset-lightning.js';
+import { canClose, canReclaim, channelState, closeWays, peerAway, peerName, reclaimSent, sharePct } from '../../../../lib/asset-lightning.js';
 import { txUrl } from '../../../../lib/explorer.js';
 import { FEE_CAP_MULTIPLE } from '../../../../lib/fees.js';
 import { fmtSats, shortId } from '../../../../lib/format.js';
@@ -26,6 +26,12 @@ import { FeePresets } from '../shared.jsx';
  * transaction that takes it back is out, the row says that instead, links
  * it, and the one thing left to offer is a higher fee.
  *
+ * A channel whose peer is away keeps its badge and says "peer offline"
+ * beside it, in grey: it is still open, and carries nothing until the
+ * peer is back. A channel the wallet's node gave up is badged "failed" and
+ * says what to do about it. A state this page has not met is shown in the
+ * wallet's own word, and can be closed like any other.
+ *
  * An open that failed after the wallet had taken it on (`failure`) stays
  * listed for a while as what it is: the wallet's sentence for why, what it
  * was for, and no figures, since nothing is in it and nothing left the
@@ -39,6 +45,8 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 				const alias = typeof c.peerAlias === 'string' && c.peerAlias.trim() ? c.peerAlias.trim() : null;
 				const takingBack = reclaimSent(c);
 				const failed = c.failure && typeof c.failure === 'object' ? c.failure : null;
+				const away = peerAway(c);
+				const errored = String(c.state || '').toUpperCase() === 'ERRORED';
 				const reclaim = onReclaim && canReclaim(c) && (
 					<div className="note-actions">
 						<Button className="sm" data-testid="asset-channel-reclaim" onClick={(e) => onReclaim(c, e)}>
@@ -63,6 +71,12 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 								</div>
 							</div>
 							<Badge tone={state.tone}>{takingBack ? 'taking back' : state.word}</Badge>
+							{/* Beside the state, where a narrow screen does not cut it short. */}
+							{away && (
+								<span className="badge muted" data-testid="asset-channel-peer-offline">
+									peer offline
+								</span>
+							)}
 							{/* An open whose funding is being taken back cannot be closed: it ends by itself. */}
 							{onClose && canClose(c) && !takingBack && (
 								<Button className="sm" data-testid="asset-channel-close" onClick={(e) => onClose(c, e)}>
@@ -120,6 +134,16 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 							</div>
 						</dl>
 							</>
+						)}
+						{errored && (
+							<div className="error-note" role="note" data-testid="asset-channel-errored">
+								This channel has failed and carries no payments. Force close it to bring what is in it back on-chain.
+							</div>
+						)}
+						{away && !errored && state.word !== 'opening' && (
+							<div className="field-hint" data-testid="asset-channel-away">
+								The peer of this channel is not connected, so it carries no payments until it is back.
+							</div>
 						)}
 						{takingBack ? (
 							<div className="field-hint note-with-action" data-testid="asset-channel-reclaiming">
@@ -235,11 +259,16 @@ export function ReclaimFundingModal({ channel, fees, origin, onClose, onConfirm 
  * and is only for a peer that has stopped answering, so it is never one
  * misplaced press away.
  *
+ * A channel whose peer is away says, before anything is tried, that a
+ * close with the peer needs the peer. A channel that failed has no close
+ * with its peer at all: its dialog is the force close, worded for that.
+ *
  * `onConfirm(force)` does the close and may reject; the dialog stays open
  * with the reason when it does.
  */
 export function CloseAssetChannelModal({ channel, origin, onClose, onConfirm }) {
-	const [forcing, setForcing] = useState(false);
+	const ways = closeWays(channel);
+	const [forcing, setForcing] = useState(!ways.cooperative);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState(null);
 	const who = peerName(channel);
@@ -268,6 +297,24 @@ export function CloseAssetChannelModal({ channel, origin, onClose, onConfirm }) 
 						<p className="wallet-meta">
 							After that this wallet can no longer send or receive {channel.asset?.name} over Lightning through this
 							peer.
+						</p>
+						{ways.peerAway && (
+							<div className="info-note" role="note" data-testid="asset-channel-close-offline">
+								The peer is not connected. A channel is closed together with its peer only while it is, so this will be
+								refused until the peer is back. If the peer is gone for good, a force close brings your side back
+								without it.
+							</div>
+						)}
+					</>
+				) : !ways.cooperative ? (
+					<>
+						<div className="error-note" role="alert">
+							This channel has failed, so it can no longer be closed together with its peer. A force close is the way to
+							bring what is in it back.
+						</div>
+						<p className="wallet-meta">
+							Your {mine} and the channel&apos;s bitcoin come back only after the channel&apos;s safety delay, which can
+							be days, and the transaction costs more in mining fees than an agreed close.
 						</p>
 					</>
 				) : (
@@ -311,16 +358,20 @@ export function CloseAssetChannelModal({ channel, origin, onClose, onConfirm }) 
 							<Button variant="danger" busy={busy} data-testid="asset-channel-close-force-confirm" onClick={() => run(true)}>
 								Force close anyway
 							</Button>
-							<Button
-								disabled={busy}
-								data-testid="asset-channel-close-back"
-								onClick={() => {
-									setError(null);
-									setForcing(false);
-								}}
-							>
-								Back
-							</Button>
+							{ways.cooperative ? (
+								<Button
+									disabled={busy}
+									data-testid="asset-channel-close-back"
+									onClick={() => {
+										setError(null);
+										setForcing(false);
+									}}
+								>
+									Back
+								</Button>
+							) : (
+								<Button onClick={onClose}>Cancel</Button>
+							)}
 						</>
 					)}
 				</div>

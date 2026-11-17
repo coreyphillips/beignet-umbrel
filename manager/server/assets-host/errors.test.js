@@ -108,6 +108,10 @@ test('each refusal of the Lightning service becomes the code the dashboard words
 		['ERR_BEIGNET_LN_CHANNEL_ASSETS', 'CHANNEL_ASSETS', 400],
 		['ERR_BEIGNET_LN_GROUP_PROOF', 'GROUP_PROOF', 409],
 		['ERR_BEIGNET_LN_SERVICE_DRAINING', 'SERVICE_DRAINING', 409],
+		['ERR_BEIGNET_LN_MODE_UNAVAILABLE', 'CHANNEL_MODE_UNAVAILABLE', 409],
+		['ERR_BEIGNET_LN_FEE_POLICY_REFUSED', 'FEE_POLICY_REFUSED', 409],
+		['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'PAYMENT_UNSUPPORTED', 409],
+		['ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', 'OUTCOMES_UNDELIVERED', 409],
 		['ERR_BEIGNET_LN_SPENDING_LIMIT', 'SPENDING_LIMIT', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_OUTBOUND', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_INBOUND', 'INSUFFICIENT_INBOUND', 409],
@@ -346,4 +350,38 @@ test('bitcoin that is not on native SegWit addresses is said with what is there,
 	assert.match(bare.message, /has to come from native SegWit addresses of this wallet/);
 	// The library's own name for a wallet on its way down is the sentence the engine's reason has.
 	assert.equal(mapLightning(Object.assign(new Error('draining'), { code: 'ERR_BEIGNET_LN_SERVICE_DRAINING', details: { reason: 'SERVICE_DRAINING' } })).message, 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.');
+});
+
+test('the refusals the library added: this node\'s own no to an open, a refused fee policy, a payment in parts, and results not taken in', () => {
+	const said = (code, extra = {}) => mapLightning(Object.assign(new Error('the engine wrote: aux htlc mode 7 of 03aa'), { code, ...extra }));
+	// A refusal that is this node's own is never worded as the peer's, and carries the engine's reason.
+	const mode = said('ERR_BEIGNET_LN_MODE_UNAVAILABLE', { details: { reason: 'the peer and this node agree on no way\n to carry an asset payment' } });
+	assert.deepEqual([mode.extensionCode, mode.status, mode.details], ['CHANNEL_MODE_UNAVAILABLE', 409, { reason: 'the peer and this node agree on no way to carry an asset payment' }]);
+	assert.equal(mode.message, "This wallet's node cannot open an asset channel with that peer: the peer and this node agree on no way to carry an asset payment. Nothing was opened and nothing was spent.");
+	assert.equal(/does not open asset channels|turned the channel down/.test(mode.message), false);
+	const bare = said('ERR_BEIGNET_LN_MODE_UNAVAILABLE');
+	assert.deepEqual([bare.extensionCode, bare.status, bare.details], ['CHANNEL_MODE_UNAVAILABLE', 409, undefined]);
+	assert.equal(bare.message, "This wallet's node cannot open an asset channel with that peer. Nothing was opened and nothing was spent.");
+	// The engine refused its fee settings: the code and the sentence the status has for it.
+	const policy = said('ERR_BEIGNET_LN_FEE_POLICY_REFUSED');
+	assert.deepEqual([policy.extensionCode, policy.status], ['FEE_POLICY_REFUSED', 409]);
+	assert.match(policy.message, /did not take the settings this app gives it for the miner fees of asset channels/);
+	// Nothing was recorded or sent by either of these.
+	const parts = said('ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED');
+	assert.deepEqual([parts.extensionCode, parts.status], ['PAYMENT_UNSUPPORTED', 409]);
+	assert.equal(parts.message, 'This payment would have to go out in several parts, and an asset payment goes out in one, so nothing was paid.');
+	const undelivered = said('ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', { details: { undeliveredOutcomes: 3 } });
+	assert.deepEqual([undelivered.extensionCode, undelivered.status, undelivered.details], ['OUTCOMES_UNDELIVERED', 409, { undeliveredOutcomes: 3 }]);
+	assert.equal(
+		undelivered.message,
+		'This wallet has not yet taken in the results of earlier payments on that channel, so nothing was paid. Nothing is wrong with this payment. Restart the wallet, and if this is said again afterwards, its log says why.'
+	);
+	assert.equal(said('ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED').details, undefined);
+	// What the library wrote is in none of them.
+	for (const r of [mode, bare, policy, parts, undelivered]) assert.equal(/aux htlc mode|03aa/.test(r.message), false);
+	// A peer that is away, where the library says so: its own code only on a quote (lightning.js), the old one elsewhere.
+	assert.deepEqual([said('ERR_BEIGNET_LN_PEER_OFFLINE').extensionCode, said('ERR_BEIGNET_LN_PEER_OFFLINE').status], ['PEER_UNREACHABLE', 502]);
+	// A try that never entered the channel.
+	assert.equal(paymentFailure('anything at all', { neverSent: true }).message, 'This payment never left the wallet, so nothing was paid. The invoice can be paid again.');
+	assert.equal(paymentFailure('anything at all', { neverSent: true }).known, true);
 });

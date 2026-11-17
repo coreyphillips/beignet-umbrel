@@ -257,6 +257,10 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 
 const NODE = {
 	connected: [],
+	peers: [],
+	channels: [],
+	listPeers: () => NODE.peers,
+	listChannels: () => NODE.channels,
 	connectPeer: async (...args) => {
 		NODE.connected.push(args);
 	}
@@ -651,6 +655,33 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 	// A library with no such call says nothing.
 	delete entry.service.fixedOutputFeeStatus;
 	assert.equal(ln.feeStatus(), null);
+
+	// A peer is there once the node lists it with its greeting, which is the library's own rule.
+	NODE.peers = [{ pubkey: hexOf(PEER), remoteInit: null }];
+	assert.equal(ln.peerConnected(hexOf(PEER)), false);
+	NODE.peers = [{ pubkey: hexOf(PEER).toUpperCase(), remoteInit: {} }];
+	assert.deepEqual([ln.peerConnected(hexOf(PEER)), ln.peerConnected(`03${'ee'.repeat(32)}`)], [true, false]);
+	// What the node itself holds under an id, the open's or the channel's own, whatever kind of channel it is.
+	NODE.channels = [{ channelId: buf(0x51), temporaryChannelId: buf(0x52) }, { channelId: 'AB'.repeat(32) }];
+	assert.deepEqual([[hexOf(buf(0x51))], [hexOf(buf(0x52))], ['ab'.repeat(32)], [null, hexOf(buf(0x53))], []].map((ids) => ln.engineHolds(ids)), [true, true, true, false, false]);
+	// A node that cannot be asked says neither yes nor no.
+	const { listPeers, listChannels } = NODE;
+	delete NODE.listPeers;
+	delete NODE.listChannels;
+	assert.deepEqual([ln.peerConnected(hexOf(PEER)), ln.engineHolds([hexOf(buf(0x51))])], [null, null]);
+	Object.assign(NODE, { listPeers, listChannels, peers: [], channels: [] });
+
+	// Whose refusal it is that no channel can be opened with a peer: the library's code, and the engine's reason on one line.
+	assert.equal(ln.peerRefusal(hexOf(PEER)), null);
+	entry.service.peerRefusal = () => ({ code: 'ERR_BEIGNET_LN_MODE_UNAVAILABLE', message: 'this node opens no asset channel with the peer: no mode', reason: 'no mode\n in common' });
+	assert.deepEqual(ln.peerRefusal(hexOf(PEER)), { code: 'ERR_BEIGNET_LN_MODE_UNAVAILABLE', reason: 'no mode in common' });
+	entry.service.peerRefusal = () => ({ code: 'ERR_BEIGNET_LN_PEER_OFFLINE', message: 'the peer is not connected' });
+	assert.deepEqual(ln.peerRefusal(hexOf(PEER)), { code: 'ERR_BEIGNET_LN_PEER_OFFLINE', reason: null });
+	// A library that only says yes or no: a no is the peer's.
+	delete entry.service.peerRefusal;
+	assert.equal(ln.peerRefusal(hexOf(PEER)), null);
+	entry.service.peerSupports = () => false;
+	assert.deepEqual(ln.peerRefusal(hexOf(PEER)), { code: 'ERR_BEIGNET_LN_PEER_UNSUPPORTED', reason: null });
 });
 
 test('invoices and payments: amounts as bigint, times in milliseconds, a status the host knows', async () => {

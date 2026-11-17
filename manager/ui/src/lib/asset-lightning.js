@@ -56,6 +56,9 @@ export function channelState(state) {
 	// An open that came to nothing after the wallet had taken it on. No
 	// channel: the row says why (`failure`), and there is nothing to close.
 	if (s === 'FAILED') return { word: 'not opened', tone: 'red', usable: false };
+	// A channel the wallet's node gave up. It is still the wallet's, carries
+	// nothing, and is closed only without its peer.
+	if (s === 'ERRORED') return { word: 'failed', tone: 'red', usable: false };
 	// On the wallet's record and not held by its node: what a restore from a
 	// backup leaves. It carries nothing and cannot be closed from here.
 	if (s === 'MISSING') return { word: 'not held here', tone: 'red', usable: false };
@@ -66,6 +69,30 @@ export function channelState(state) {
 export function canClose(channel) {
 	const s = String((channel && channel.state) || '').toUpperCase();
 	return !CLOSING.has(s) && s !== 'CLOSED' && s !== 'FORCE_CLOSED' && s !== 'MISSING' && s !== 'FAILED';
+}
+
+const NOT_LIVE = new Set(['CLOSED', 'FORCE_CLOSED', 'FAILED', 'MISSING']);
+
+/**
+ * Whether the wallet says the channel's peer is away (`peerConnected` is a
+ * plain false), for a channel that is live and not on its way out. Such a
+ * channel keeps the word it would have with the peer there, and carries
+ * nothing until the peer is back.
+ */
+export function peerAway(channel) {
+	const s = String((channel && channel.state) || '').toUpperCase();
+	return !!channel && channel.peerConnected === false && !NOT_LIVE.has(s) && !CLOSING.has(s);
+}
+
+/**
+ * How a channel can be closed: { cooperative, peerAway }. A channel that
+ * failed is closed only without its peer. Any other may be closed with it,
+ * which the wallet refuses while the peer is away: `peerAway` says so
+ * before it is tried.
+ */
+export function closeWays(channel) {
+	const failed = String((channel && channel.state) || '').toUpperCase() === 'ERRORED';
+	return { cooperative: !failed, peerAway: !failed && peerAway(channel) };
 }
 
 /**
@@ -325,6 +352,13 @@ export function lightningRefusal(error, { asset } = {}) {
 				code,
 				text: `The most this wallet can receive over Lightning right now is ${units(max, asset)}: that is what its peer holds on the other side of the channel. Ask for that much or less, or use an on-chain address for the whole amount.`
 			};
+		}
+		case 'PEER_OFFLINE': {
+			// The wallet names the peer and says what was not done. Where a
+			// page says it from the channel list, these are the words.
+			if (error.message) return { code, text: sentence(error.message) };
+			const who = details.peerAlias || (details.peerPubkey ? peerName({ peerPubkey: details.peerPubkey }) : '');
+			return { code, text: `The peer of the asset channel this would go through${who ? `, ${who},` : ''} is not connected, so nothing was done. Try again once it is back.` };
 		}
 		case 'INSUFFICIENT_OUTBOUND': {
 			const can = details.sendable;

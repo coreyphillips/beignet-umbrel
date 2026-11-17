@@ -5,8 +5,9 @@ import AssetPicker, { NO_ASSET } from '../../../../components/AssetPicker.jsx';
 import { useToast } from '../../../../components/Toast.jsx';
 import { Button, CopyText, Countdown, Field } from '../../../../components/ui.jsx';
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
+import { usePoll } from '../../../../hooks/usePoll.js';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
-import { lightningRefusal, payFailure, payLabel, payableAssets, quoteChange, quoteExpired, quotePriced } from '../../../../lib/asset-lightning.js';
+import { lightningRefusal, payFailure, payLabel, payableAssets, peerAway, peerName, quoteChange, quoteExpired, quotePriced } from '../../../../lib/asset-lightning.js';
 import { noticeOf } from '../../../../lib/asset-progress.js';
 import { submitOnce } from '../../../../lib/assets.js';
 import { idempotencyKey } from '../../../../lib/assets-api.js';
@@ -54,6 +55,12 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 	const toast = useToast();
 	const assets = useAssetsApi(api);
 	const payable = useMemo(() => payableAssets(holdings), [holdings]);
+	// Nothing can be sent now. Whether a channel's peer being away is why,
+	// the channel list says, and then that is what is said, with the peer
+	// named, in the wallet's own words for it.
+	const nothing = holdings !== null && holdings !== undefined && payable.length === 0;
+	const { data: listed } = usePoll(() => (nothing ? assets.channels().catch(() => null) : Promise.resolve(null)), nothing ? 8000 : 0, [assets, nothing]);
+	const gone = nothing && listed ? (listed.channels || []).find((c) => String(c.state).toUpperCase() === 'NORMAL' && peerAway(c)) || null : null;
 	const saved = state?.pay && state.pay.bolt11 === invoice ? state.pay : NO_PAY;
 	const setPay = (changes) => patch({ pay: { ...saved, bolt11: invoice, ...changes } });
 
@@ -243,6 +250,15 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 
 			{holdings === null || holdings === undefined ? (
 				<div className="wallet-meta">Reading what this wallet holds…</div>
+			) : gone ? (
+				<div className="error-note" role="alert" data-testid="asset-pay-refusal" data-code="PEER_OFFLINE">
+					{
+						lightningRefusal({
+							code: 'PEER_OFFLINE',
+							message: `The peer of the asset channel this would be paid through, ${peerName(gone)}, is not connected, so nothing was priced and nothing was paid. Try again once it is back.`
+						}).text
+					}
+				</div>
 			) : payable.length === 0 ? (
 				<div className="info-note note-with-action" role="status" data-testid="asset-pay-none">
 					<span>

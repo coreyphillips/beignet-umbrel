@@ -7,7 +7,7 @@ import { Button, Card, Countdown, Empty, Field, QR, QRZoom } from '../../../../c
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { fmtAsset, isZero } from '../../../../lib/asset-amount.js';
-import { invoiceDeadline, invoiceShortfall, invoiceStanding, lightningRefusal, quotePriced } from '../../../../lib/asset-lightning.js';
+import { invoiceDeadline, invoiceShortfall, invoiceStanding, lightningRefusal, peerAway, quotePriced } from '../../../../lib/asset-lightning.js';
 import { copy, fmtSats } from '../../../../lib/format.js';
 import { useLightningQuote } from './useLightningQuote.js';
 
@@ -76,7 +76,13 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 	const amount = !collectible && units && !isZero(units) ? units : null;
 	// Nothing on the far side of any channel: said from what the wallet
 	// already holds, without asking the peer for a price it cannot use.
-	const noInbound = !!asset && !collectible && isZero(asset.balance?.lightningReceivable);
+	const nothingNow = !!asset && !collectible && isZero(asset.balance?.lightningReceivable);
+	// Nothing can be received now. Where that is because a channel's peer is
+	// away, the wallet is asked all the same: it names the peer, or says the
+	// amount is too much for the channel even with the peer there.
+	const { data: ownChannels } = usePoll(() => (nothingNow ? assets.channels().catch(() => null) : Promise.resolve(null)), nothingNow ? 8000 : 0, [assets, nothingNow, asset?.key]);
+	const peerGone = nothingNow && !!ownChannels && (ownChannels.channels || []).some((c) => c.asset?.key === asset.key && String(c.state).toUpperCase() === 'NORMAL' && peerAway(c));
+	const noInbound = nothingNow && !peerGone;
 	const scope = asset && amount && !noInbound ? `${asset.key}|${amount}` : null;
 	// `held` is why the wallet's node takes nothing new over asset channels
 	// (lightningHeld): no price is asked for, and the card says why.

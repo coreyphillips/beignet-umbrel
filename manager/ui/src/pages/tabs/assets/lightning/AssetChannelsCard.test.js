@@ -413,6 +413,96 @@ test('an open a restart cut short is listed as not opened, with the wallet\'s se
 	}
 });
 
+test('a channel whose peer is away says so quietly, carries nothing, and its Close says the peer has to be there', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'peer-offline'), true);
+	const listed = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	assert.deepEqual(listed.map((c) => [c.state, c.peerConnected, c.sendable, c.receivable]), [['NORMAL', false, '0', '0']]);
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	assert.equal(status.lightning.usableChannels, 0);
+	const r = await mount(backend, { status });
+	try {
+		const row = r.test('asset-channel');
+		assert.equal(row.getAttribute('data-state'), 'NORMAL');
+		assert.equal(row.querySelector('[data-testid="asset-channel-peer-offline"]').textContent, 'peer offline');
+		assert.match(row.querySelector('[data-testid="asset-channel-away"]').textContent, /^The peer of this channel is not connected, so it carries no payments until it is back\./);
+		// Close is still offered, and says what a close with the peer needs before it is tried.
+		await click(r.test('asset-channel-close'));
+		await settle(10);
+		const dialog = r.test('asset-channel-close-dialog');
+		assert.equal(dialog.getAttribute('data-step'), 'cooperative');
+		assert.match(r.test('asset-channel-close-offline').textContent, /^The peer is not connected\. A channel is closed together with its peer only while it is, so this will be refused until the peer is back\./);
+		await click(r.test('asset-channel-close-coop'));
+		await settle(20);
+		assert.match(r.test('asset-channel-close-error').textContent, /^The peer of this channel, Lightning Labs edge, is not connected, and a channel is closed together with its peer only while it is\./);
+		assert.equal((await backend.api('demo-main').get('/x/assets/channels')).channels[0].state, 'NORMAL');
+	} finally {
+		await r.unmount();
+	}
+	// The wallet's own refusals, word for word, and a close without the peer goes through.
+	const id = listed[0].channelId;
+	await assert.rejects(backend.api('demo-main').post('/x/assets/channels/close', { channelId: id }), (e) => e.code === 'PEER_OFFLINE' && e.status === 409 && e.details.peerAlias === 'Lightning Labs edge');
+	assert.equal((await backend.api('demo-main').post('/x/assets/channels/close', { channelId: id, force: true })).force, true);
+});
+
+test('a channel that failed is badged as that, and is closed only by force, on a page that says why', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'channel-failed'), true);
+	const listed = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	assert.deepEqual(listed.map((c) => [c.state, c.peerConnected, c.sendable, c.receivable]), [['ERRORED', true, '0', '0']]);
+	const id = listed[0].channelId;
+	await assert.rejects(backend.api('demo-main').post('/x/assets/channels/close', { channelId: id }), (e) => e.code === 'CHANNEL_ERRORED' && e.status === 409);
+	const status = await backend.api('demo-main').get('/x/assets/status');
+	assert.equal(status.lightning.usableChannels, 0);
+	const r = await mount(backend, { status });
+	try {
+		const row = r.test('asset-channel');
+		assert.equal(row.getAttribute('data-state'), 'ERRORED');
+		assert.match(row.textContent, /failed/);
+		assert.match(row.querySelector('[data-testid="asset-channel-errored"]').textContent, /^This channel has failed and carries no payments\. Force close it to bring what is in it back on-chain\./);
+		assert.equal(row.querySelector('[data-testid="asset-channel-peer-offline"]'), null);
+		// Its balance is still shown: it is the wallet's until the close brings it back.
+		assert.match(row.textContent, /2,400\.00/);
+		await click(r.test('asset-channel-close'));
+		await settle(10);
+		// Straight to the force close, with no cooperative close to go back to.
+		assert.equal(r.test('asset-channel-close-dialog').getAttribute('data-step'), 'force');
+		assert.equal(r.test('asset-channel-close-coop'), null);
+		assert.equal(r.test('asset-channel-close-back'), null);
+		assert.match(r.test('asset-channel-close-dialog').textContent, /This channel has failed, so it can no longer be closed together with its peer\./);
+		await click(r.test('asset-channel-close-force-confirm'));
+		await settle(30);
+		assert.deepEqual(backend.posted('/channels/close').slice(-1).map((c) => c.body), [{ channelId: id, force: true }]);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a state this page has not met is shown as it stands, with Close and its force close on offer', async () => {
+	const backend = assetsBackend();
+	const real = backend.api('demo-main');
+	const api = {
+		...real,
+		get: async (path, ...rest) => {
+			const answer = await real.get(path, ...rest);
+			return path === '/x/assets/channels' ? { channels: answer.channels.map((c) => ({ ...c, state: 'SOMETHING_NEW', sendable: '0', receivable: '0' })) } : answer;
+		}
+	};
+	const status = await real.get('/x/assets/status');
+	const r = await mount(backend, { api, status });
+	try {
+		const row = r.test('asset-channel');
+		assert.match(row.textContent, /something new/);
+		assert.equal(row.querySelector('[data-testid="asset-channel-errored"]'), null);
+		await click(r.test('asset-channel-close'));
+		await settle(10);
+		assert.equal(r.test('asset-channel-close-dialog').getAttribute('data-step'), 'cooperative');
+		assert.notEqual(r.test('asset-channel-close-force'), null);
+	} finally {
+		await r.unmount();
+	}
+});
+
 test('a channel the node no longer holds is listed as that, cannot be closed, and the card says what it means', async () => {
 	const backend = assetsBackend();
 	assert.equal(backend.mock.seed('demo-main', 'channel-missing'), true);
@@ -453,7 +543,7 @@ test('a wallet with nothing wrong with its channels shows no warning', async () 
 	}
 });
 
-const CHANNEL_KEYS = ['channelId', 'pendingChannelId', 'peerPubkey', 'peerAlias', 'state', 'failure', 'asset', 'capacity', 'localBalance', 'remoteBalance', 'sendable', 'receivable', 'channelSats', 'fundingTxid', 'reclaimable', 'reclaimTxid'];
+const CHANNEL_KEYS = ['channelId', 'pendingChannelId', 'peerPubkey', 'peerAlias', 'state', 'failure', 'peerConnected', 'asset', 'capacity', 'localBalance', 'remoteBalance', 'sendable', 'receivable', 'channelSats', 'fundingTxid', 'reclaimable', 'reclaimTxid'];
 const keyed = (key) => ({ headers: { 'X-Idempotency-Key': key } });
 
 test('the funding of an open that will not confirm can be taken back: asked once, said on the row, and the asset comes back', async () => {

@@ -335,35 +335,60 @@ test('a channel whose funding has not confirmed: what it set aside is counted in
 	assert.deepEqual(books([set(1000, `funding:${id}`, 'x')], [{ ...channel, counted: false }]), ['1000', '1000', '0']);
 });
 
-test('a channel state: the three words that are the host\'s, and the engine\'s own for the rest', () => {
+test('a channel state: every word the engine has for a channel, and the word the dashboard is told', () => {
 	const word = (state, confirmed = false, recovery = 'none') => views.channelWord({ state, confirmed, recovery });
-	// No channel in the engine yet, or one still exchanging its first messages.
-	for (const state of [null, undefined, '', 'NONE', 'SENT_OPEN', 'SENT_ACCEPT', 'SENT_FUNDING']) assert.equal(word(state), 'OPENING', String(state));
-	// NORMAL for the engine is not usable until the library has confirmed the funding.
-	assert.equal(word('NORMAL', false), 'OPENING');
-	assert.equal(word('NORMAL', true), 'NORMAL');
-	// Closed is not over until the assets are back on-chain.
-	assert.equal(word('CLOSED', true, 'pending'), 'CLOSING');
+	// The engine's ChannelState, word for word (beignet dist/types/lightning/channel/types.d.ts), and no word at all
+	// for a channel the engine does not have yet. [state, not confirmed, confirmed, confirmed with a close under way]
+	const TABLE = [
+		[null, 'OPENING', 'OPENING', 'OPENING'],
+		['NONE', 'OPENING', 'OPENING', 'OPENING'],
+		['SENT_OPEN', 'OPENING', 'OPENING', 'OPENING'],
+		['SENT_ACCEPT', 'OPENING', 'OPENING', 'OPENING'],
+		['SENT_FUNDING_CREATED', 'OPENING', 'OPENING', 'OPENING'],
+		['SENT_FUNDING_SIGNED', 'OPENING', 'OPENING', 'OPENING'],
+		['AWAITING_FUNDING_CONFIRMED', 'OPENING', 'OPENING', 'OPENING'],
+		['AWAITING_CHANNEL_READY', 'OPENING', 'OPENING', 'OPENING'],
+		['DUAL_FUNDING_V2', 'OPENING', 'OPENING', 'OPENING'],
+		['AWAITING_TX_SIGNATURES', 'OPENING', 'OPENING', 'OPENING'],
+		// Usable only once the library has confirmed the funding, and on its way out from the moment a close is asked for.
+		['NORMAL', 'OPENING', 'NORMAL', 'CLOSING'],
+		// Waiting for its peer: the word it would have with the peer there. That the peer is away is the row's `peerConnected`.
+		['AWAITING_REESTABLISH', 'OPENING', 'NORMAL', 'CLOSING'],
+		['SHUTTING_DOWN', 'SHUTTING_DOWN', 'SHUTTING_DOWN', 'SHUTTING_DOWN'],
+		['NEGOTIATING_CLOSING', 'NEGOTIATING_CLOSING', 'NEGOTIATING_CLOSING', 'NEGOTIATING_CLOSING'],
+		// Not something an asset channel does: shown as the engine's own word, live and carrying nothing.
+		['SPLICING', 'SPLICING', 'SPLICING', 'SPLICING'],
+		// A channel that failed is that whatever else is said of it, also before its funding has confirmed.
+		['ERRORED', 'ERRORED', 'ERRORED', 'ERRORED'],
+		// Closed is not over until the assets are back on-chain.
+		['CLOSED', 'CLOSING', 'CLOSING', 'CLOSING'],
+		['FORCE_CLOSED', 'FORCE_CLOSING', 'FORCE_CLOSING', 'FORCE_CLOSING'],
+		// A word this host has not met is handed on as it is.
+		['SOMETHING_NEW', 'SOMETHING_NEW', 'SOMETHING_NEW', 'SOMETHING_NEW']
+	];
+	for (const [state, unconfirmed, confirmed, closing] of TABLE) {
+		assert.deepEqual([word(state, false), word(state, true), word(state, true, 'pending')], [unconfirmed, confirmed, closing], String(state));
+	}
+	// Every state the engine names is in the table.
+	const engine = ['NONE', 'SENT_OPEN', 'SENT_ACCEPT', 'SENT_FUNDING_CREATED', 'SENT_FUNDING_SIGNED', 'AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY', 'NORMAL', 'SHUTTING_DOWN', 'NEGOTIATING_CLOSING', 'AWAITING_REESTABLISH', 'DUAL_FUNDING_V2', 'AWAITING_TX_SIGNATURES', 'SPLICING', 'CLOSED', 'FORCE_CLOSED', 'ERRORED'];
+	assert.deepEqual(engine.filter((state) => !TABLE.some(([s]) => s === state)), []);
+	for (const state of [undefined, '', 'SENT_FUNDING']) assert.equal(word(state), 'OPENING', String(state));
 	assert.equal(word('CLOSED', true, 'complete'), 'CLOSED');
-	assert.equal(word('FORCE_CLOSED', true, 'pending'), 'FORCE_CLOSING');
 	assert.equal(word('FORCE_CLOSED', true, 'complete'), 'FORCE_CLOSED');
 	// Only a recovery that is complete makes a closed channel over. No word on it, or one this host has not met, does not.
 	for (const recovery of ['none', undefined, null, 'something-new']) {
 		assert.equal(word('CLOSED', true, recovery), 'CLOSING', String(recovery));
 		assert.equal(word('FORCE_CLOSED', true, recovery), 'FORCE_CLOSING', String(recovery));
 	}
-	// A channel whose close was asked for carries nothing from that moment, whatever the engine still calls it.
-	for (const recovery of ['pending', 'something-new']) assert.equal(word('NORMAL', true, recovery), 'CLOSING', recovery);
+	for (const state of ['NORMAL', 'AWAITING_REESTABLISH']) assert.equal(word(state, true, 'something-new'), 'CLOSING', state);
 	// On record and signed for, and the node does not hold it: missing, whatever else is said of it.
-	for (const state of [null, 'NORMAL', 'CLOSED']) assert.equal(views.channelWord({ state, confirmed: true, recovery: 'none', engine: 'missing', signed: true }), 'MISSING', String(state));
+	for (const state of [null, 'NORMAL', 'CLOSED', 'ERRORED']) assert.equal(views.channelWord({ state, confirmed: true, recovery: 'none', engine: 'missing', signed: true }), 'MISSING', String(state));
 	// An open that signed nothing is no channel to miss.
 	assert.equal(views.channelWord({ state: null, confirmed: false, recovery: 'none', engine: 'missing', signed: false }), 'OPENING');
-	// A funding the chain or the peer has still to confirm is opening, whatever the library says of it.
-	for (const state of ['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY']) for (const confirmed of [false, true]) assert.equal(word(state, confirmed), 'OPENING', state);
-	// Everything else is the engine's word, which the dashboard has a wording for or shows as it is.
-	for (const state of ['SHUTTING_DOWN', 'NEGOTIATING_CLOSING', 'AWAITING_REESTABLISH', 'SOMETHING_NEW']) assert.equal(word(state, true), state);
 	// The manager counts every state but these as a channel the wallet still has. FAILED is an open that came to nothing.
 	assert.deepEqual(views.CHANNEL_OVER, ['CLOSED', 'FORCE_CLOSED', 'FAILED']);
+	// A channel is closed together with its peer only where that can work: not one that failed, or is on its way out.
+	assert.deepEqual(['NORMAL', 'OPENING', 'SPLICING', 'SOMETHING_NEW', 'ERRORED', 'CLOSING', 'MISSING'].map((w) => views.CHANNEL_NO_COOPERATIVE.includes(w)), [false, false, false, false, true, false, false]);
 });
 
 test('a channel as the dashboard lists it', () => {
@@ -389,6 +414,7 @@ test('a channel as the dashboard lists it', () => {
 		peerAlias: null,
 		state: 'OPENING',
 		failure: null,
+		peerConnected: true,
 		asset: { key: A1, assetId: A1, name: 'coin', type: 'normal', decimalDisplay: 2 },
 		capacity: '600',
 		localBalance: '600',
@@ -404,6 +430,8 @@ test('a channel as the dashboard lists it', () => {
 	const failure = { code: 'CHANNEL_OPEN_INTERRUPTED', message: 'It was interrupted.' };
 	const failed = views.channelView({ ...c, word: 'FAILED', local: 0n, failure, capacity: 600n }, reg);
 	assert.deepEqual([failed.state, failed.failure, failed.capacity, failed.localBalance], ['FAILED', failure, '600', '0']);
+	// A peer that is away is said on the row, and only a plain false says so.
+	assert.deepEqual([false, true, undefined, null].map((peerConnected) => views.channelView({ ...c, peerConnected }, reg).peerConnected), [false, true, true, true]);
 	// A funding that is made and not confirmed, and what was sent to take it back.
 	const out = views.channelView({ ...c, fundingTxid: 'f1'.repeat(32), reclaimable: true, reclaimTxid: 'f2'.repeat(32) }, reg);
 	assert.deepEqual([out.fundingTxid, out.reclaimable, out.reclaimTxid], ['f1'.repeat(32), true, 'f2'.repeat(32)]);

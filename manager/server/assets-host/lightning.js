@@ -139,7 +139,7 @@
 const crypto = require('crypto');
 const { sha256Hex } = require('./store');
 const { CHANNEL_SATS, CARRIER_SATS, unhex } = require('./adapter');
-const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS } = require('./errors');
+const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS, modeUnavailable, FEE_POLICY_REFUSED } = require('./errors');
 const views = require('./views');
 const ops = require('./ops');
 
@@ -285,6 +285,21 @@ function channelList(host) {
 	const notes = new Map(host.rows.list('chan/').map((r) => [r.value.id, r.value]));
 	const seen = new Set();
 	const out = [];
+	// Whether the node is connected to a peer, asked once for each. A node
+	// that cannot say is not taken to say no.
+	const there = new Map();
+	const connected = (pubkey) => {
+		if (!there.has(pubkey)) {
+			let said = null;
+			try {
+				said = ln.peerConnected(pubkey);
+			} catch (_) {
+				said = null;
+			}
+			there.set(pubkey, said !== false);
+		}
+		return there.get(pubkey);
+	};
 	for (const c of ln.channels()) {
 		seen.add(c.pendingChannelId);
 		// An open that came to nothing is not a channel. One whose funding
@@ -297,8 +312,12 @@ function channelList(host) {
 		if (!c.signed && !c.initiator && c.engine === 'missing') continue;
 		const note = notes.get(c.pendingChannelId) || {};
 		const word = views.channelWord(c);
-		// Only a channel the node holds, with no close asked for, carries a payment.
-		const usable = word === 'NORMAL' && c.engine === 'held' && c.recovery === 'none';
+		// Its peer is there, and the two have agreed where the channel stands.
+		const peerConnected = connected(c.peerPubkey) && c.state !== 'AWAITING_REESTABLISH';
+		// A channel the node holds, with no close asked for: all a payment
+		// needs of it but its peer. Only with the peer there does it carry one.
+		const steady = word === 'NORMAL' && c.engine === 'held' && c.recovery === 'none';
+		const usable = steady && c.state === 'NORMAL' && peerConnected;
 		const spare = c.local > c.reserved ? c.local - c.reserved : 0n;
 		const assetId = c.assetId || note.assetId || null;
 		const groupKey = c.groupKey || note.groupKey || null;
@@ -313,9 +332,15 @@ function channelList(host) {
 			key: keyOf(assetId, groupKey),
 			word,
 			usable,
+			peerConnected,
+			// Kept from carrying a payment by nothing but its peer being away,
+			// and what it could send and receive were the peer there.
+			away: steady && !usable,
+			couldSend: steady ? spare : 0n,
+			couldReceive: steady ? c.remote : 0n,
 			over: isOver(word),
 			// Not usable yet and not on its way out: an open still under way.
-			opening: !isOver(word) && word !== 'MISSING' && !views.CHANNEL_CLOSING.includes(word) && c.recovery === 'none' && (word === 'OPENING' || !c.confirmed),
+			opening: !isOver(word) && word !== 'MISSING' && word !== 'ERRORED' && !views.CHANNEL_CLOSING.includes(word) && c.recovery === 'none' && (word === 'OPENING' || !c.confirmed),
 			// Its units are the channel's from the point of no return of its
 			// open (`signed`). Before it, what the open set aside is still
 			// the wallet's, and comes back when the open is given up.
@@ -365,6 +390,10 @@ function channelList(host) {
 			key: note.key,
 			word: failed ? 'FAILED' : coming ? 'OPENING' : 'CLOSED',
 			usable: false,
+			peerConnected: connected(note.peerPubkey),
+			away: false,
+			couldSend: 0n,
+			couldReceive: 0n,
 			over: !coming,
 			opening: coming,
 			counted: false,
@@ -445,8 +474,6 @@ function statusOf(host) {
 // takes a small confirmed coin of the wallet's own bitcoin for the miner
 // fee, and a block to prepare it. The engine says whether it could prepare
 // one now (the adapter's feeStatus), and the status hands that on.
-const FEE_POLICY_REFUSED =
-	"The wallet's node did not take the settings this app gives it for the miner fees of asset channels, so no new asset channel is opened. The channels there already are keep working. This is for whoever runs the wallet to put right, and the wallet's log says what the node refused.";
 const feeCoinsText = (neededSats) =>
 	`Keep at least ${neededSats} sats of confirmed bitcoin on-chain in this wallet. A payment caught in an asset channel that has to be closed without the peer is claimed with an on-chain transaction, and its miner fee comes from the wallet's own bitcoin. The wallet has no confirmed coin large enough for that now, so such a claim could come too late.`;
 
@@ -1038,7 +1065,13 @@ async function openChannel(host, body, key) {
 		if (isFenced(err)) throw err;
 		throw refusal('PEER_UNREACHABLE', 'The peer could not be reached, so nothing was opened and nothing was spent. Check its address, and that it is online.', 502);
 	}
-	if (!host.ln.peerSupports(peer.pubkey)) {
+	// Whose refusal it is decides what is said: the peer's, or this node's own.
+	const no = host.ln.peerRefusal(peer.pubkey);
+	if (no) {
+		if (no.code === 'ERR_BEIGNET_LN_MODE_UNAVAILABLE') throw modeUnavailable(no.reason);
+		if (no.code === 'ERR_BEIGNET_LN_PEER_OFFLINE') {
+			throw refusal('PEER_UNREACHABLE', 'The peer could not be reached, so nothing was opened and nothing was spent. Check its address, and that it is online.', 502);
+		}
 		throw refusal('PEER_NO_ASSET_CHANNELS', 'That peer does not open asset channels, so nothing was opened and nothing was spent.', 409);
 	}
 	await publishProvenance(host, plan);
@@ -1110,6 +1143,21 @@ async function closeChannel(host, body) {
 		if (how === 'signed') throw openSigned(channelList(host).find((x) => x.id === c.id) || c);
 		if (how === 'busy') throw refusal('CHANNEL_OPENING', 'This channel is still being opened, and the open could not be stopped yet. Try again in a moment.', 409);
 		return { channelId: c.id, closing: true, force };
+	}
+	if (!force) {
+		// Neither would work, and the library's own no to them is not one a
+		// person can act on: said here, before anything is asked of the peer.
+		if (views.CHANNEL_NO_COOPERATIVE.includes(c.word)) {
+			throw refusal('CHANNEL_ERRORED', 'This channel has failed and can no longer be closed together with its peer. Force close it to bring what is in it back on-chain.', 409);
+		}
+		if (c.peerConnected === false) {
+			throw refusal(
+				'PEER_OFFLINE',
+				`The peer of this channel, ${peerSaid(c)}, is not connected, and a channel is closed together with its peer only while it is. Try again once it is back, or force close the channel.`,
+				409,
+				{ peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null }
+			);
+		}
 	}
 	try {
 		await host.ln.closeChannel({ channelId: c.channelId, force });
@@ -1252,8 +1300,37 @@ function lightningError(host, err, details) {
 	}
 	// Only those whose figures the dashboard words carry them: the two that
 	// are about a channel's balance, and bitcoin on the wrong address types.
-	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS'].includes(mapped.extensionCode)) delete mapped.details;
+	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS', 'PEER_OFFLINE', 'CHANNEL_MODE_UNAVAILABLE', 'OUTCOMES_UNDELIVERED'].includes(mapped.extensionCode)) delete mapped.details;
 	return mapped;
+}
+
+/** A channel's peer as a person is told of it: the name the user gave it, or its key cut short. */
+const peerSaid = (c) => c.peerAlias || `${String(c.peerPubkey).slice(0, 8)}\u2026${String(c.peerPubkey).slice(-6)}`;
+
+/**
+ * The channel of an asset that could carry `units` one way were its peer
+ * there, and cannot now for that reason alone: the one that could carry
+ * the most. Null when there is none, which leaves the amount as the reason.
+ */
+function awayChannel(host, key, side, units) {
+	const idle = channelList(host).filter((c) => c.key === key && c.away && c[side] >= units && c[side] > 0n);
+	return idle.sort((a, b) => (b[side] > a[side] ? 1 : b[side] < a[side] ? -1 : 0))[0] || null;
+}
+
+/**
+ * A price refused because the peer of the channel it would go through is
+ * not connected, with the peer named. `c` is that channel, or null where
+ * only the library knows which.
+ */
+function peerOffline(c, way) {
+	const through = way === 'pay' ? 'this would be paid through' : 'this would be received through';
+	const so = way === 'pay' ? 'so nothing was priced and nothing was paid' : 'so no invoice was made';
+	return refusal(
+		'PEER_OFFLINE',
+		`The peer of the asset channel ${through}${c ? `, ${peerSaid(c)},` : ''} is not connected, ${so}. Try again once it is back.`,
+		409,
+		c ? { peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null } : undefined
+	);
 }
 
 /** Drop the prices that have run out. The caller holds the lock. */
@@ -1274,12 +1351,18 @@ async function invoiceQuote(host, body) {
 	const best = limit ? limit.receive : null;
 	const maxReceivable = best ? limit.maxReceive : 0n;
 	const short = () => refusal('INSUFFICIENT_INBOUND', 'No asset channel of this wallet can receive that much.', 409, { maxReceivable: maxReceivable.toString() });
-	if (amount > maxReceivable) throw short();
+	if (amount > maxReceivable) {
+		// A channel that could take it with its peer there: not the amount's fault.
+		const idle = awayChannel(host, key, 'couldReceive', amount);
+		throw idle ? peerOffline(idle, 'receive') : short();
+	}
 	let quoted;
 	try {
 		// The price is asked to stand as long as an invoice may live. The peer may give less.
 		quoted = await host.ln.quoteInvoice({ assetId: best.assetId, groupKey: best.groupKey, amount, peerPubkey: best.peerPubkey, expirySeconds: INVOICE_SECONDS });
 	} catch (err) {
+		// The library saw the peer go after the host's list was read.
+		if (codeOf(err) === 'ERR_BEIGNET_LN_PEER_OFFLINE') throw peerOffline(awayChannel(host, key, 'couldReceive', amount) || best, 'receive');
 		throw lightningError(host, err, { maxReceivable: maxReceivable.toString() });
 	}
 	const price = priceFields(reg, quoted.amountMsat, quoted.unitsPerBtc, quoted.priced);
@@ -1484,15 +1567,21 @@ async function makePayQuote(host, body) {
 	const limit = paymentLimits(host).get(key);
 	const most = limit ? limit.maxSend : 0n;
 	const short = () => refusal('INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409, { sendable: most.toString() });
-	if (most === 0n) throw short();
+	// Nothing can be sent now, and a channel could send were its peer there.
+	const idle = (units) => awayChannel(host, key, 'couldSend', units);
+	if (most === 0n) throw idle(1n) ? peerOffline(idle(1n), 'pay') : short();
 	let quoted;
 	try {
 		quoted = await host.ln.quotePayment({ bolt11, assetId: reg.assetId, groupKey: reg.groupKey || null, amountMsat });
 	} catch (err) {
+		// The library saw the peer go after the host's list was read.
+		if (codeOf(err) === 'ERR_BEIGNET_LN_PEER_OFFLINE') throw peerOffline(idle(1n) || limit.send, 'pay');
 		throw lightningError(host, err, { sendable: most.toString() });
 	}
 	const through = usable.find((c) => c.channelId === quoted.channelId) || null;
-	if (quoted.assetAmount > (through && through.sendable < most ? through.sendable : most)) throw short();
+	if (quoted.assetAmount > (through && through.sendable < most ? through.sendable : most)) {
+		throw idle(quoted.assetAmount) ? peerOffline(idle(quoted.assetAmount), 'pay') : short();
+	}
 	const quote = {
 		kind: 'pay',
 		quoteId: quoted.quoteId,
@@ -1614,7 +1703,7 @@ function recordPayment(host, rowId, seen, { handed = false, own = false } = {}) 
 			if (seen.assetAmount !== null && seen.assetAmount !== undefined && next.assets[0]) next.assets[0].amount = seen.assetAmount.toString();
 			next.feeSats = seen.feeMsat === null || seen.feeMsat === undefined ? 0 : views.satsOf(seen.feeMsat);
 		} else if (seen && seen.status === 'failed') {
-			const why = paymentFailure(seen.failure);
+			const why = paymentFailure(seen.failure, { neverSent: seen.neverSent === true });
 			if (!why.known && seen.failure) host.say('warn', `assets: a Lightning payment failed: ${plainMessage({ message: seen.failure })}`);
 			next.state = 'failed';
 			next.failure = { code: 'PAYMENT_FAILED', message: why.message };

@@ -222,9 +222,9 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 	assert.deepEqual(answer, { pendingChannelId: id, phase: 'funding' });
 	assert.match(id, /^[0-9a-f]{64}$/);
 
-	// In order: connect, ask its features, publish, open.
-	const order = h.ln.calls.map((c) => c[0]).filter((n) => ['connect', 'peerSupports', 'openChannel'].includes(n));
-	assert.deepEqual(order, ['connect', 'peerSupports', 'openChannel']);
+	// In order: connect, ask whether a channel can be opened with it, publish, open.
+	const order = h.ln.calls.map((c) => c[0]).filter((n) => ['connect', 'peerRefusal', 'openChannel'].includes(n));
+	assert.deepEqual(order, ['connect', 'peerRefusal', 'openChannel']);
 	assert.deepEqual(named(h, 'connect')[0][1], { pubkey: PEER.pubkey, host: 'peer.example.com', port: 9735 });
 	// The proof of the asset the channel is funded with is on the proof server.
 	const published = h.world.delivered.slice(delivered);
@@ -256,6 +256,7 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 		peerAlias: 'edge',
 		state: 'OPENING',
 		failure: null,
+		peerConnected: true,
 		asset: { key: asset.key, assetId: asset.assetId, name: 'coin', type: 'normal', decimalDisplay: 2 },
 		capacity: '600',
 		localBalance: '600',
@@ -2913,4 +2914,170 @@ test('an open the library has no record of is not ended while the node holds a c
 	await passes(kept.h);
 	assert.deepEqual((await brief(kept.h)).map(([, state]) => state), ['FAILED']);
 	assert.deepEqual((await kept.h.get('/balances')).assets[0].balance, ALL_ON_CHAIN);
+});
+
+/* ------------------------------ a peer that is away, and a channel that failed */
+
+const rowOf = async (h) => {
+	const c = (await h.get('/channels')).channels[0];
+	return [c.state, c.peerConnected, c.sendable, c.receivable];
+};
+
+test('a channel whose peer is away keeps the word it would have with the peer there, carries nothing, and says the peer is not connected', async () => {
+	const { h, id } = await channelled({ remote: 200n });
+	assert.deepEqual(await rowOf(h), ['NORMAL', true, '400', '200']);
+	assert.equal((await h.get('/status')).lightning.usableChannels, 1);
+	// The node says the peer is gone, while the engine still calls the channel NORMAL.
+	h.ln.opts.offlinePeers = [PEER.pubkey];
+	assert.deepEqual(await rowOf(h), ['NORMAL', false, '0', '0']);
+	assert.equal((await h.get('/status')).lightning.usableChannels, 0);
+	assert.deepEqual((await h.get('/balances')).assets[0].balance.lightningSendable, '0');
+	// The engine's own word for a channel that waits for its peer is never the row's.
+	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
+	assert.deepEqual(await rowOf(h), ['NORMAL', false, '0', '0']);
+	// Still that while the peer is back and the two have not yet agreed where the channel stands.
+	h.ln.opts.offlinePeers = [];
+	assert.deepEqual(await rowOf(h), ['NORMAL', false, '0', '0']);
+	h.ln.set(id, { state: 'NORMAL' });
+	assert.deepEqual(await rowOf(h), ['NORMAL', true, '400', '200']);
+	// It is a live channel throughout: its units are the channel's.
+	assert.equal((await h.get('/balances')).assets[0].balance.channelLocal, '400');
+
+	// An open whose peer went away before its funding confirmed is still opening.
+	const fresh = await funded();
+	const open = await fresh.h.call('POST /channels/open', openBody(fresh.asset), 'open-key');
+	fresh.h.ln.set(open.pendingChannelId, { state: 'AWAITING_REESTABLISH' });
+	assert.deepEqual(await rowOf(fresh.h), ['OPENING', false, '0', '0']);
+});
+
+test('a channel is closed with its peer only while the peer is there, and one that failed only without it', async () => {
+	const { h, id, channel } = await channelled();
+	h.ln.opts.offlinePeers = [PEER.pubkey];
+	const away = await refused(h.call('POST /channels/close', { channelId: channel.channelId }));
+	assert.deepEqual([away.extensionCode, away.status, away.details], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }]);
+	assert.equal(away.message, 'The peer of this channel, edge, is not connected, and a channel is closed together with its peer only while it is. Try again once it is back, or force close the channel.');
+	assert.deepEqual(named(h, 'closeChannel'), []);
+	h.ln.opts.offlinePeers = [];
+
+	// The engine gave the channel up: it is listed as that, carries nothing, and is still the wallet's.
+	h.ln.set(id, { state: 'ERRORED' });
+	await h.host.pass({ block: true });
+	assert.deepEqual(await rowOf(h), ['ERRORED', true, '0', '0']);
+	assert.deepEqual(events(h, 'channel').slice(-1), [{ channelId: channel.channelId, state: 'ERRORED' }]);
+	assert.equal((await h.get('/balances')).assets[0].balance.channelLocal, '600');
+	const failed = await refused(h.call('POST /channels/close', { channelId: channel.channelId }));
+	assert.deepEqual([failed.extensionCode, failed.status], ['CHANNEL_ERRORED', 409]);
+	assert.equal(failed.message, 'This channel has failed and can no longer be closed together with its peer. Force close it to bring what is in it back on-chain.');
+	assert.deepEqual(named(h, 'closeChannel'), []);
+	// Without the peer it closes.
+	assert.deepEqual(await h.call('POST /channels/close', { channelId: channel.channelId, force: true }), { channelId: channel.channelId, closing: true, force: true });
+	assert.equal(named(h, 'closeChannel').length, 1);
+
+	// A word this host has not met: handed on as it is, carrying nothing, and it can be closed either way.
+	const other = await channelled();
+	other.h.ln.set(other.id, { state: 'SOMETHING_NEW' });
+	assert.deepEqual(await rowOf(other.h), ['SOMETHING_NEW', true, '0', '0']);
+	assert.equal((await other.h.get('/status')).lightning.usableChannels, 0);
+	assert.deepEqual(await other.h.call('POST /channels/close', { channelId: other.channel.channelId, force: true }), { channelId: other.channel.channelId, closing: true, force: true });
+	// A peer that is away does not stand in the way of a close without it.
+	const gone = await channelled();
+	gone.h.ln.opts.offlinePeers = [PEER.pubkey];
+	assert.equal((await gone.h.call('POST /channels/close', { channelId: gone.channel.channelId, force: true })).force, true);
+});
+
+test('a price is refused with the peer named when the channel that could carry it has a peer that is away, and with the amount when the amount is the reason', async () => {
+	const { h, asset, id } = await channelled({ remote: 200n });
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	h.ln.opts.offlinePeers = [PEER.pubkey];
+	// Paying: nothing can be sent now, and a channel that could send it is there.
+	const pay = await refused(h.call('POST /pay/quote', { bolt11, key: asset.key }));
+	assert.deepEqual([pay.extensionCode, pay.status, pay.details], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }]);
+	assert.equal(pay.message, 'The peer of the asset channel this would be paid through, edge, is not connected, so nothing was priced and nothing was paid. Try again once it is back.');
+	assert.deepEqual(named(h, 'quotePayment'), []);
+	// Receiving: the amount fits the channel, whose peer is away.
+	const receive = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '150' }));
+	assert.deepEqual([receive.extensionCode, receive.status, receive.details], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }]);
+	assert.equal(receive.message, 'The peer of the asset channel this would be received through, edge, is not connected, so no invoice was made. Try again once it is back.');
+	assert.deepEqual(named(h, 'quoteInvoice'), []);
+	// More than the channel could take with its peer there: the amount is the reason.
+	const much = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '201' }));
+	assert.deepEqual([much.extensionCode, much.details], ['INSUFFICIENT_INBOUND', { maxReceivable: '0' }]);
+	// The same while the channel waits for its peer in the engine's own word.
+	h.ln.opts.offlinePeers = [];
+	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
+	assert.deepEqual(await codeOf(h.call('POST /pay/quote', { bolt11, key: asset.key })), ['PEER_OFFLINE', 409]);
+	assert.deepEqual(await codeOf(h.call('POST /invoices/quote', { key: asset.key, amount: '150' })), ['PEER_OFFLINE', 409]);
+	h.ln.set(id, { state: 'NORMAL' });
+
+	// The library sees a peer go that the host's list still had: its refusal is the same one, with the peer of the channel.
+	h.ln.opts.quoteFails = 'ERR_BEIGNET_LN_PEER_OFFLINE';
+	const late = await refused(h.call('POST /pay/quote', { bolt11, key: asset.key }));
+	assert.deepEqual([late.extensionCode, late.status, late.details], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }]);
+	assert.match(late.message, /^The peer of the asset channel this would be paid through, edge, is not connected/);
+	const lateIn = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '150' }));
+	assert.deepEqual([lateIn.extensionCode, lateIn.status], ['PEER_OFFLINE', 409]);
+	h.ln.opts.quoteFails = null;
+	// With the peer there, the amount is what a quote is refused for.
+	const big = await refused(h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 500000 }), key: asset.key }));
+	assert.deepEqual([big.extensionCode, big.details], ['INSUFFICIENT_OUTBOUND', { sendable: '400' }]);
+
+	// A peer with no alias is named by its key.
+	const plain = await funded();
+	const opened = await plain.h.call('POST /channels/open', { ...openBody(plain.asset), peer: { pubkey: PEER.pubkey, host: PEER.host, port: PEER.port } }, 'open-key');
+	plain.h.ln.confirm(opened.pendingChannelId);
+	await plain.h.host.pass({ block: true });
+	plain.h.ln.opts.offlinePeers = [PEER.pubkey];
+	const named2 = await refused(plain.h.call('POST /pay/quote', { bolt11, key: plain.asset.key }));
+	assert.match(named2.message, /^The peer of the asset channel this would be paid through, 02ababab…ababab, is not connected/);
+});
+
+test('an open this wallet\'s own node cannot make is said as that, with the reason, and never as the peer\'s refusal', async () => {
+	const { h, asset } = await funded();
+	h.ln.opts.peerRefusal = { code: 'ERR_BEIGNET_LN_MODE_UNAVAILABLE', message: 'this node opens no asset channel with the peer: no HTLC mode in common', reason: 'no HTLC mode in common' };
+	const mode = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([mode.extensionCode, mode.status, mode.details], ['CHANNEL_MODE_UNAVAILABLE', 409, { reason: 'no HTLC mode in common' }]);
+	assert.equal(mode.message, "This wallet's node cannot open an asset channel with that peer: no HTLC mode in common. Nothing was opened and nothing was spent.");
+	assert.deepEqual([keys(h, 'committed/funding:'), keys(h, 'chan/'), named(h, 'openChannel')], [[], [], []]);
+	// The peer went away between the dial and the question.
+	h.ln.opts.peerRefusal = { code: 'ERR_BEIGNET_LN_PEER_OFFLINE', message: 'the peer is not connected' };
+	assert.deepEqual(await codeOf(h.call('POST /channels/open', openBody(asset), 'open-key')), ['PEER_UNREACHABLE', 502]);
+	// The peer's own no is still the peer's.
+	h.ln.opts.peerRefusal = { code: 'ERR_BEIGNET_LN_PEER_UNSUPPORTED', message: 'the peer does not take asset channels' };
+	assert.deepEqual(await codeOf(h.call('POST /channels/open', openBody(asset), 'open-key')), ['PEER_NO_ASSET_CHANNELS', 409]);
+	h.ln.opts.peerRefusal = null;
+	// The library's own refusals of the open itself, in the host's codes.
+	h.ln.opts.openFails = 'ERR_BEIGNET_LN_MODE_UNAVAILABLE';
+	assert.deepEqual(await codeOf(h.call('POST /channels/open', openBody(asset), 'open-key')), ['CHANNEL_MODE_UNAVAILABLE', 409]);
+	h.ln.opts.openFails = 'ERR_BEIGNET_LN_FEE_POLICY_REFUSED';
+	const policy = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([policy.extensionCode, policy.status], ['FEE_POLICY_REFUSED', 409]);
+	assert.deepEqual([keys(h, 'committed/funding:'), keys(h, 'chan/')], [[], []]);
+	h.ln.opts.openFails = null;
+	assert.equal((await h.call('POST /channels/open', openBody(asset), 'open-key')).phase, 'funding');
+});
+
+test('a payment that never entered the channel says nothing left the wallet and that the invoice can be paid again, and the two new refusals say nothing was paid', async () => {
+	const { h, asset } = await channelled();
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	Object.assign(h.ln.opts, { payStatus: 'failed', payFailure: 'htlc 9 was never added to channel 03aa', payNeverSent: true });
+	const answer = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: '50' }, 'pay-key');
+	const said = 'This payment never left the wallet, so nothing was paid. The invoice can be paid again.';
+	assert.deepEqual([answer.status, answer.failureDescription], ['FAILED', said]);
+	assert.deepEqual((await h.get('/activity', 'kind=ln-send')).rows[0].failure, { code: 'PAYMENT_FAILED', message: said });
+	assert.equal(h.logs.some(([, text]) => /a Lightning payment failed/.test(text)), false);
+	Object.assign(h.ln.opts, { payStatus: 'complete', payFailure: null, payNeverSent: false });
+
+	// Nothing was recorded or sent by either: the row fails with the host's sentence, and the key is not bound to a payment.
+	for (const [code, hostCode] of [['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'PAYMENT_UNSUPPORTED'], ['ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', 'OUTCOMES_UNDELIVERED']]) {
+		const again = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+		h.ln.opts.payFails = code;
+		const said = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: again.quoteId, maxAssetAmount: '50' }, `key-${hostCode}`);
+		assert.equal(said.status, 'FAILED', code);
+		assert.match(said.failureDescription, /so nothing was paid/);
+		const failure = (await h.get('/activity', 'kind=ln-send')).rows[0].failure;
+		assert.deepEqual([failure.code, failure.message], [hostCode, said.failureDescription], code);
+		h.ln.opts.payFails = null;
+	}
+	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
 });

@@ -706,6 +706,44 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     an asset channel and no confirmed bitcoin to make one from could
  *     miss a deadline. A library that has no such method is one that
  *     cannot say, and nothing is said for it.
+ * 38. The node the engine binds says who it is connected to and what it
+ *     holds, synchronously and without changing anything: listPeers()
+ *     gives { pubkey, remoteInit } for each peer, `remoteInit` set once
+ *     the peer's greeting has arrived, which is the library's own rule
+ *     for a peer a channel can be used with; listChannels() gives every
+ *     channel of any kind with its `channelId`, and its
+ *     `temporaryChannelId` where the engine has one. A channel's state
+ *     word is one of the engine's ChannelState (views.channelWord has
+ *     them all): AWAITING_REESTABLISH is a channel waiting for its peer,
+ *     and ERRORED one the engine gave up, which closes only by force.
+ * 39. openChannel answers once the funding is negotiated, before the
+ *     peer has signed, with the channel's id. An open it answered is on
+ *     its list after a restart, carried on or ended with a reason. The
+ *     host does not rest on that: an answered open that is on no list is
+ *     ended by the host once nothing holds anything of it
+ *     (lightning.js endLost).
+ * 40. peerRefusal(peer) says why no asset channel can be opened with a
+ *     peer, as { code, message, reason? }, or undefined when one can:
+ *     ERR_BEIGNET_LN_PEER_OFFLINE and ERR_BEIGNET_LN_PEER_UNSUPPORTED are
+ *     the peer's, and ERR_BEIGNET_LN_MODE_UNAVAILABLE is this node's own
+ *     (its engine and the peer agree on no HTLC mode, or it does not
+ *     advertise asset channels), with the engine's words in `reason`.
+ *     openChannel rejects with the same code and `details.reason`, and
+ *     with ERR_BEIGNET_LN_FEE_POLICY_REFUSED on an engine that refused
+ *     its fee policy, before anything is written. peerSupports(peer) is
+ *     the same question as a boolean.
+ * 41. quotePayment and quoteInvoice reject with
+ *     ERR_BEIGNET_LN_PEER_OFFLINE when a channel could carry the amount
+ *     and its peer is away. ASSET_PAYMENT_REFUSALS also holds
+ *     ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED (the engine refuses an asset
+ *     payment in several parts) and ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED
+ *     (results of earlier payments on the channel were not taken in;
+ *     `details.undeliveredOutcomes`, and the channel's view carries
+ *     `undeliveredOutcomes` while above zero): nothing was recorded or
+ *     sent by either. A try that ended because its HTLC never entered
+ *     the channel is `failed` with `neverSent: true`: nothing left the
+ *     wallet, and the invoice can be paid again. The library hands over
+ *     no forwarding hooks.
  */
 
 /**
@@ -899,6 +937,9 @@ function plainChannel(c) {
 		// Anything but a plain 'none' or 'complete' is a recovery still to be
 		// done: a word this host has not met must never read as "nothing owed".
 		recovery: c.recovery === 'none' || c.recovery === 'complete' ? c.recovery : 'pending',
+			// How many results of earlier payments the wallet has not taken in,
+		// where the library says there are any.
+		...(Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? { undeliveredOutcomes: c.undeliveredOutcomes } : {}),
 		// An open this wallet gave up, however far it had got: listed as
 		// `cancelled`, or as turned down or failed with that for a reason.
 		cancelled: phase === 'cancelled' || ((phase === 'rejected' || phase === 'failed') && c.error === 'cancelled'),
@@ -917,7 +958,9 @@ const plainPayment = (p) => ({
 	lost: paymentLost(p),
 	// The engine took the try and did not confirm that it left with its
 	// asset records: its units are not known to have left, whatever its status.
-	unconfirmed: p.assetRecordsUnconfirmed === true
+	unconfirmed: p.assetRecordsUnconfirmed === true,
+	// A failed try whose HTLC never entered the channel: nothing left the wallet.
+	...(p.neverSent === true ? { neverSent: true } : {})
 });
 
 const plainInvoice = (i) => ({
@@ -1165,6 +1208,18 @@ function createLightning({ entry, storage, cfg, now = null }) {
 			await node.connectPeer(pubkey, host, port);
 		},
 		peerSupports: (pubkey) => !!live().peerSupports(unhex(pubkey)),
+		// Why no asset channel can be opened with that peer now, as { code,
+		// reason }, or null when one can. The code is the library's and says
+		// whose refusal it is: the peer's (not connected, or no asset
+		// channels), or this node's own, with the engine's reason on one line.
+		peerRefusal(pubkey) {
+			const service = live();
+			if (typeof service.peerRefusal !== 'function') return service.peerSupports(unhex(pubkey)) ? null : { code: 'ERR_BEIGNET_LN_PEER_UNSUPPORTED', reason: null };
+			const said = service.peerRefusal(unhex(pubkey));
+			if (!said) return null;
+			const reason = typeof said.reason === 'string' ? said.reason.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+			return { code: String(said.code || 'ERR_BEIGNET_LN_PEER_UNSUPPORTED'), reason: reason || null };
+		},
 		// Whether the node is connected to that peer and has its greeting,
 		// which is the library's own rule for a peer a channel can be used
 		// with. Null when the node cannot say.

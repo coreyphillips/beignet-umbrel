@@ -389,3 +389,29 @@ test('a node that does not offer asset channels: the tab says so across its top,
 		await r.unmount();
 	}
 });
+
+test('with the peer of the only channel away the wallet is asked all the same, and its refusal names the peer', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'peer-offline'), true);
+	const r = await asking(backend, 'demo-main', 'BUSD', '250');
+	try {
+		await settle(PRICED_MS);
+		const refusal = r.test('asset-invoice-refusal');
+		assert.equal(refusal.getAttribute('data-code'), 'PEER_OFFLINE');
+		assert.equal(refusal.textContent, 'The peer of the asset channel this would be received through, Lightning Labs edge, is not connected, so no invoice was made. Try again once it is back.');
+		assert.equal(r.test('asset-invoice-create').disabled, true);
+		assert.ok(backend.posted('/invoices/quote').length >= 1, 'the wallet was asked, where a wallet with no channel is not');
+		// More than the channel could take with its peer there is still the amount's fault.
+		await type(r.test('asset-receive-amount'), '5000');
+		await settle(PRICED_MS);
+		assert.equal(r.test('asset-invoice-refusal').getAttribute('data-code'), 'INSUFFICIENT_INBOUND');
+	} finally {
+		await r.unmount();
+	}
+	// The demo answers as the wallet does: the code, the status and the peer.
+	const busd = (await backend.api('demo-main').get('/x/assets/balances')).assets.find((a) => a.name === 'BUSD');
+	await assert.rejects(
+		backend.api('demo-main').post('/x/assets/invoices/quote', { key: busd.key, amount: '25000' }),
+		(e) => e.code === 'PEER_OFFLINE' && e.status === 409 && e.details.peerAlias === 'Lightning Labs edge' && /^0[23][0-9a-f]{64}$/.test(e.details.peerPubkey)
+	);
+});

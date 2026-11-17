@@ -294,24 +294,52 @@ function activeReceives(records, { now, windowMs, max }) {
 
 // FAILED is an open that came to nothing after it was answered: no channel.
 const CHANNEL_OVER = Object.freeze(['CLOSED', 'FORCE_CLOSED', 'FAILED']);
-// The engine's states of a channel whose funding is signed and not yet usable.
-const CHANNEL_FUNDING = Object.freeze(['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY']);
+// The engine's states of a channel on its way to being one, past the first
+// messages: its funding negotiated or signed, and not yet usable.
+const CHANNEL_FUNDING = Object.freeze(['AWAITING_FUNDING_CONFIRMED', 'AWAITING_CHANNEL_READY', 'DUAL_FUNDING_V2', 'AWAITING_TX_SIGNATURES']);
 // The words of a channel that is on its way out and not over yet.
 const CHANNEL_CLOSING = Object.freeze(['CLOSING', 'FORCE_CLOSING', 'SHUTTING_DOWN', 'NEGOTIATING_CLOSING']);
+// The words of a live channel that cannot be closed together with its peer,
+// only without it: one the engine gave up.
+const CHANNEL_NO_COOPERATIVE = Object.freeze(['ERRORED']);
 
 /**
  * A channel's state as the dashboard and the manager read it. `state` is the
- * engine's own word, absent while the engine has no channel yet.
+ * engine's own word (its ChannelState), absent while the engine has no
+ * channel yet. Every word the engine has, and what is said for it:
  *
- * Four of the words are the host's. A channel is OPENING until its funding
- * has confirmed and the library has confirmed it, whatever the engine calls
- * it on the way: it cannot carry a payment before. A channel whose close
- * has been asked for is CLOSING from that moment, also while the engine
- * still calls it NORMAL. And a closed channel is CLOSING, or FORCE_CLOSING,
- * until its assets are back on-chain: until then it is not over, and the
- * manager counts every state but CLOSED and FORCE_CLOSED as a live channel.
- * Only the library saying the recovery is complete makes it over. No word
- * on it, or a word this host has not met, does not.
+ *   none, NONE, SENT_OPEN, SENT_ACCEPT, SENT_FUNDING_CREATED,
+ *   SENT_FUNDING_SIGNED, AWAITING_FUNDING_CONFIRMED, AWAITING_CHANNEL_READY,
+ *   DUAL_FUNDING_V2, AWAITING_TX_SIGNATURES
+ *                          OPENING
+ *   NORMAL                 OPENING until the library has confirmed the
+ *                          funding, CLOSING once a close is asked for,
+ *                          NORMAL otherwise
+ *   AWAITING_REESTABLISH   as NORMAL: the word the channel would have with
+ *                          its peer there. That the peer is away is said
+ *                          beside the word (`peerConnected` on the row), and
+ *                          the channel carries nothing meanwhile
+ *   SHUTTING_DOWN, NEGOTIATING_CLOSING
+ *                          the engine's word: on its way out
+ *   CLOSED                 CLOSING until its assets are back on-chain
+ *   FORCE_CLOSED           FORCE_CLOSING until its assets are back on-chain
+ *   ERRORED                the engine's word, whatever else is said of the
+ *                          channel: one the engine gave up. Live, carrying
+ *                          nothing, and closed only without its peer
+ *   SPLICING               the engine's word: not something an asset channel
+ *                          does, so live and carrying nothing
+ *   anything else          the word as it is: live, carrying nothing, for
+ *                          the dashboard to show as it stands
+ *
+ * So OPENING, CLOSING, FORCE_CLOSING and MISSING are the host's own words.
+ * A channel is OPENING until its funding has confirmed and the library has
+ * confirmed it: it cannot carry a payment before. A channel whose close has
+ * been asked for is CLOSING from that moment, also while the engine still
+ * calls it NORMAL. And a closed channel is CLOSING, or FORCE_CLOSING, until
+ * its assets are back on-chain: until then it is not over, and the manager
+ * counts every state but those of CHANNEL_OVER as a live channel. Only the
+ * library saying the recovery is complete makes it over. No word on it, or
+ * a word this host has not met, does not.
  *
  * MISSING is a channel the wallet's records say the node held, signed for,
  * and that the node does not hold, with no close on record: what a restore
@@ -321,7 +349,7 @@ const CHANNEL_CLOSING = Object.freeze(['CLOSING', 'FORCE_CLOSING', 'SHUTTING_DOW
 function channelWord({ state, confirmed, recovery, engine, signed }) {
 	if (engine === 'missing' && signed) return 'MISSING';
 	if (!state || state === 'NONE' || state.startsWith('SENT_') || CHANNEL_FUNDING.includes(state)) return 'OPENING';
-	if (state === 'NORMAL') return !confirmed ? 'OPENING' : recovery && recovery !== 'none' ? 'CLOSING' : 'NORMAL';
+	if (state === 'NORMAL' || state === 'AWAITING_REESTABLISH') return !confirmed ? 'OPENING' : recovery && recovery !== 'none' ? 'CLOSING' : 'NORMAL';
 	if (state === 'CLOSED') return recovery === 'complete' ? 'CLOSED' : 'CLOSING';
 	if (state === 'FORCE_CLOSED') return recovery === 'complete' ? 'FORCE_CLOSED' : 'FORCE_CLOSING';
 	return state;
@@ -352,6 +380,9 @@ function channelView(c, reg) {
 		state: c.word,
 		// Why an open that failed did, as { code, message }. Null for a channel.
 		failure: c.failure || null,
+		// False while the channel's peer is away, or the two have not yet
+		// agreed where the channel stands: it carries nothing meanwhile.
+		peerConnected: c.peerConnected !== false,
 		asset: brief(reg || { assetId: c.assetId, groupKey: c.groupKey, name: null, type: 'normal', decimalDisplay: 0 }),
 		capacity: channelCapacity(c).toString(),
 		localBalance: c.local.toString(),
@@ -491,6 +522,7 @@ module.exports = {
 	activeReceives,
 	CHANNEL_OVER,
 	CHANNEL_CLOSING,
+	CHANNEL_NO_COOPERATIVE,
 	channelWord,
 	channelView,
 	isNominal,

@@ -450,3 +450,26 @@ test('a payment the node did not confirm as an asset payment keeps the wallet\'s
 		await h.unmount();
 	}
 });
+
+test('with nothing to send because the peer of a channel is away, the pay view says that, with the peer named', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'peer-offline'), true);
+	const r = await pasted(backend, 'demo-main', FIVE_THOUSAND);
+	try {
+		await settle(PRICED_MS);
+		const refusal = r.test('asset-pay-refusal');
+		assert.equal(refusal.getAttribute('data-code'), 'PEER_OFFLINE');
+		assert.equal(refusal.textContent, 'The peer of the asset channel this would be paid through, Lightning Labs edge, is not connected, so nothing was priced and nothing was paid. Try again once it is back.');
+		assert.equal(r.test('asset-pay-none'), null, 'not "no asset can be sent": one can, once the peer is back');
+		assert.equal(r.test('asset-pay-submit'), null);
+	} finally {
+		await r.unmount();
+	}
+	// The demo answers a price as the wallet does: refused for the peer, and for the amount only when that is why.
+	const busd = await busdOf(backend);
+	await assert.rejects(
+		backend.api('demo-main').post('/x/assets/pay/quote', { bolt11: FIVE_THOUSAND, key: busd.key }),
+		(e) => e.code === 'PEER_OFFLINE' && e.status === 409 && e.details.peerAlias === 'Lightning Labs edge' && /is not connected, so nothing was priced and nothing was paid\. Try again once it is back\.$/.test(e.message)
+	);
+	await assert.rejects(backend.api('demo-main').post('/x/assets/pay/quote', { bolt11: TEN_MILLION, key: busd.key }), (e) => e.code === 'INSUFFICIENT_OUTBOUND');
+});

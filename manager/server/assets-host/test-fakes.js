@@ -465,7 +465,9 @@ const ASSET_PAYMENT_REFUSALS = Object.freeze(
 		'INVOICE_EXPIRED',
 		'AMOUNT_REQUIRED',
 		'ALREADY_PAID',
-		'PAYMENT'
+		'PAYMENT',
+		'PAYMENT_UNSUPPORTED',
+		'OUTCOMES_UNDELIVERED'
 	].map((name) => LN + name)
 );
 // The rows a backup may carry, as the entry's own list has them.
@@ -500,6 +502,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		openFails: null,
 		openTimesOut: false,
 		openAnswersUnsigned: false,
+		peerRefusal: null,
+		payNeverSent: false,
 		engineChannels: [],
 		offlinePeers: [],
 		openFailsSigned: null,
@@ -810,7 +814,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			...(p.status === 'pending' && p.engineHasNoRecord ? { engineHasNoRecord: true } : {}),
 			...(p.assetRecordsUnconfirmed ? { assetRecordsUnconfirmed: true } : {}),
 			...(p.status === 'pending' || p.feeMsat === undefined || p.feeMsat === null ? {} : { feeMsat: p.feeMsat }),
-			...(p.status === 'failed' ? { failure: p.failure || 'the payment failed' } : {})
+			...(p.status === 'failed' ? { failure: p.failure || 'the payment failed' } : {}),
+			...(p.status === 'failed' && p.neverSent ? { neverSent: true } : {})
 		});
 		const service = {
 			channels() {
@@ -821,6 +826,13 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				reads('peerSupports');
 				log('peerSupports', hexOf(peer));
 				return !!opts.supports;
+			},
+			// Whose refusal it is: the peer's (away, or no asset channels), or this node's own.
+			peerRefusal(peer) {
+				reads('peerRefusal');
+				log('peerRefusal', hexOf(peer));
+				if (opts.peerRefusal) return { ...opts.peerRefusal };
+				return opts.supports ? undefined : { code: `${LN}PEER_UNSUPPORTED`, message: 'the peer does not take asset channels' };
 			},
 			async quoteFunding(request) {
 				reaches('quoteFunding');
@@ -1191,6 +1203,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 					attempt: (before ? before.attempt || 1 : 0) + 1,
 					feeMsat: opts.payFeeMsat,
 					failure: status === 'failed' ? opts.payFailure : null,
+					neverSent: status === 'failed' && !!opts.payNeverSent,
 					channelId: quote.channelId,
 					// Taken by the engine, and not confirmed to carry the asset records.
 					...(opts.payThrowsAfter === `${LN}RECORDS_UNCONFIRMED` ? { assetRecordsUnconfirmed: true } : {})
