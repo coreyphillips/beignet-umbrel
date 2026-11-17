@@ -1118,6 +1118,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				const { quoteId, description, expirySeconds } = request;
 				const wanted = hexOf(quoteId);
 				log('createInvoice', { quoteId: wanted, description, expirySeconds });
+				// A refusal of the library's own, before the price is used: a code, or a function that gives one.
+				if (opts.invoiceFails) throw tapError(typeof opts.invoiceFails === 'function' ? opts.invoiceFails() : opts.invoiceFails, 'the invoice could not be made');
 				const quote = quotes.get(wanted);
 				if (!quote || quote.kind !== 'receive' || quote.expiresAt <= seconds(now())) throw refuse('QUOTE_EXPIRED', 'the invoice quote is used up or too old: ask for a new one');
 				quotes.delete(wanted);

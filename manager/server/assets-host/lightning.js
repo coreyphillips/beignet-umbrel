@@ -1474,6 +1474,16 @@ async function createInvoice(host, body) {
 		(body.amount === undefined || body.amount === null || String(body.amount).trim() === quote.amount);
 	if (!same) throw quoteExpired();
 	const { reg } = knownAsset(host, quote.key);
+	// The peer of the channel may have gone since the price was given. That
+	// is said as it is for a price, with the peer named, and not as an
+	// amount no channel can receive. The price is kept for when it is back.
+	const away = () => {
+		const units = ops.parseUnits(quote.amount);
+		const limit = paymentLimits(host).get(quote.key);
+		return units > (limit ? limit.maxReceive : 0n) ? awayChannel(host, quote.key, 'couldReceive', units) : null;
+	};
+	const idle = away();
+	if (idle) throw peerOffline(idle, 'receive');
 	let made;
 	try {
 		// The invoice lives no longer than the price it is made on: paid after
@@ -1481,6 +1491,9 @@ async function createInvoice(host, body) {
 		const left = Math.ceil((quote.expiresAt - host.now()) / 1000);
 		made = await host.ln.createInvoice({ quoteId, description, expirySeconds: Math.max(1, Math.min(INVOICE_SECONDS, left)) });
 	} catch (err) {
+		// The library saw the peer go after the host's list was read.
+		const late = away();
+		if (late) throw peerOffline(late, 'receive');
 		throw lightningError(host, err);
 	}
 	const now = host.now();

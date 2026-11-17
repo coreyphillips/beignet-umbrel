@@ -2985,6 +2985,38 @@ test('a channel is closed with its peer only while the peer is there, and one th
 	assert.equal((await gone.h.call('POST /channels/close', { channelId: gone.channel.channelId, force: true })).force, true);
 });
 
+test('an invoice asked for on a price taken before the peer went away is refused with the peer named, and the price makes the invoice once the peer is back', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+	h.ln.opts.offlinePeers = [PEER.pubkey];
+	// The amount fits the channel, whose peer is away: that is the reason, and the library is not asked.
+	const away = await refused(h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId }));
+	assert.deepEqual([away.extensionCode, away.status, away.details], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }]);
+	assert.equal(away.message, 'The peer of the asset channel this would be received through, edge, is not connected, so no invoice was made. Try again once it is back.');
+	assert.deepEqual(named(h, 'createInvoice'), []);
+	assert.deepEqual((await h.get('/invoices')).invoices, []);
+	// The library sees a peer go that the host's list still had, and says it its own way: the same refusal.
+	h.ln.opts.offlinePeers = [];
+	h.ln.opts.invoiceFails = () => {
+		h.ln.opts.offlinePeers = [PEER.pubkey];
+		return 'ERR_BEIGNET_LN_INSUFFICIENT_INBOUND';
+	};
+	const late = await refused(h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId }));
+	assert.deepEqual([late.extensionCode, late.status, late.details], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }]);
+	h.ln.opts.invoiceFails = null;
+	// With the peer back the price is still good, and makes one invoice.
+	h.ln.opts.offlinePeers = [];
+	const made = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+	assert.equal(typeof made.bolt11, 'string');
+	assert.equal((await h.get('/invoices')).invoices.length, 1);
+	// A refusal of the library's with the peer there is still worded as the library's.
+	const other = await h.call('POST /invoices/quote', { key: asset.key, amount: '20' });
+	h.ln.opts.invoiceFails = () => 'ERR_BEIGNET_LN_INSUFFICIENT_INBOUND';
+	const short = await refused(h.call('POST /invoices', { key: asset.key, amount: '20', quoteId: other.quoteId }));
+	assert.deepEqual([short.extensionCode, short.status], ['INSUFFICIENT_INBOUND', 409]);
+	h.ln.opts.invoiceFails = null;
+});
+
 test('a price is refused with the peer named when the channel that could carry it has a peer that is away, and with the amount when the amount is the reason', async () => {
 	const { h, asset, id } = await channelled({ remote: 200n });
 	const bolt11 = fakeInvoice({ msat: 50000 });
