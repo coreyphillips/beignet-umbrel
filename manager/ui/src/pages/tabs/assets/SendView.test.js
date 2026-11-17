@@ -271,7 +271,7 @@ test('half an address is not refused while it is still being put in', async () =
 
 test('what is not a Taproot Assets address is named for what it is, and pointed at where it is paid', async () => {
 	const backend = assetsBackend();
-	// An engine that cannot carry asset channels, as every released one is:
+	// An engine that cannot carry asset channels, as every release before Beignet 0.43.0 is:
 	// an invoice is named and pointed elsewhere, and nothing offers to pay it.
 	// (With asset channels it is paid here: lightning/PayInvoice.test.js.)
 	const r = await mountAssets(backend, 'demo-main', { at: { view: 'send' }, config: { assetsAvailable: true, assetChannelsAvailable: false } });

@@ -804,17 +804,27 @@ test('stopping closes the service once and leaves the provider; closing lets go 
 });
 
 /*
- * The real entry, when a path to its built dist/lightning.js is given. On an
- * engine that cannot carry asset channels (Beignet 0.42.0) it must say so,
- * and the host must then be the host it was before there was an entry.
+ * The real entry, when a path to its built dist/lightning.js is given. What
+ * it says of the engine installed beside it is held against that engine's
+ * version. From Beignet 0.43.0 an engine carries asset channels, and the host
+ * then has a Lightning side to hand the daemon. On an older engine the entry
+ * must say no, and the host must be the host it was before there was an
+ * entry.
  *
  * Run: cd manager && ASSETS_LIGHTNING_ENTRY=/path/to/node_modules/@ts-tap/beignet/dist/lightning.js \
  *        node --test server/assets-host/adapter.test.js
  */
 const REAL_ENTRY = process.env.ASSETS_LIGHTNING_ENTRY ? path.resolve(process.env.ASSETS_LIGHTNING_ENTRY) : null;
+/** The first engine release that carries asset channels. */
+const FIRST_WITH_ASSET_CHANNELS = [0, 43, 0];
+const atLeast = (version, floor) => {
+	const got = String(version).split('-')[0].split('.').map(Number);
+	for (let i = 0; i < floor.length; i++) if ((got[i] || 0) !== floor[i]) return (got[i] || 0) > floor[i];
+	return true;
+};
 
 test(
-	'the real entry beside an engine that cannot carry asset channels: no Lightning side, and a host that is as it was',
+	'the real entry beside the installed engine: a Lightning side from Beignet 0.43.0 on, and before it a host that is as it was',
 	{ skip: REAL_ENTRY ? false : 'set ASSETS_LIGHTNING_ENTRY to a built dist/lightning.js to run this against the real entry' },
 	async () => {
 		const entry = require(REAL_ENTRY);
@@ -827,14 +837,32 @@ test(
 		for (const code of Object.keys(LIGHTNING_REFUSALS)) assert.equal(codes.includes(code), true, code);
 		for (const code of ['ERR_BEIGNET_LN_PEER_OFFLINE', 'ERR_BEIGNET_LN_MODE_UNAVAILABLE', 'ERR_BEIGNET_LN_FEE_POLICY_REFUSED']) assert.equal(codes.includes(code), true, code);
 		for (const code of ['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED']) assert.equal(entry.ASSET_PAYMENT_REFUSALS.includes(code), true, code);
+
+		// The engine the entry itself loads, and what its version promises.
+		const engine = require(require.resolve('beignet/package.json', { paths: [path.dirname(REAL_ENTRY)] })).version;
+		const carries = atLeast(engine, FIRST_WITH_ASSET_CHANNELS);
 		const support = entry.assetLightningSupport();
-		assert.equal(support.supported, false, 'this engine carries asset channels: run this against Beignet 0.42.0');
-		assert.equal(Array.isArray(support.missing) && support.missing.length > 0, true);
-		// No Lightning side, and nothing written to the wallet's storage for one.
+		const said = `Beignet ${engine}: ${JSON.stringify(support)}`;
+		assert.equal(support.supported, carries, said);
+		assert.equal(Array.isArray(support.missing), true, said);
+		assert.equal(support.missing.length === 0, carries, said);
+		if (carries) {
+			assert.equal(support.engineVersion, engine, said);
+			assert.equal(support.apiVersion >= 1, true, said);
+		}
+
+		// A Lightning side or none, and nothing written to the wallet's storage for making one.
 		const map = new Map();
 		const { storage } = memoryStorage(map);
-		assert.equal(createLightning({ entry, storage, cfg }), null);
+		const ln = createLightning({ entry, storage, cfg });
 		assert.equal(map.size, 0);
+		if (carries) {
+			// What the daemon is handed: the provider, the fee policy and the way to give the node.
+			assert.deepEqual(Object.keys(ln.attachment).sort(), ['auxiliaryChannels', 'bind', 'fixedOutputFees']);
+			assert.deepEqual(ln.attachment.fixedOutputFees, fixedOutputFees(cfg));
+			// No node has been given yet.
+			assert.equal(ln.ready(), false);
+		} else assert.equal(ln, null);
 
 		// The same through the host's own way in, when the entry sits in a node_modules directory.
 		const modules = path.resolve(path.dirname(REAL_ENTRY), '..', '..', '..');
@@ -843,17 +871,27 @@ test(
 		const context = () => ({ storage: memoryStorage().storage, network: 'regtest', wallet: {}, logger: { info: () => undefined, warn: () => undefined, error: () => undefined } });
 		const wished = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: modules, BEIGNET_ASSETS_LIGHTNING: 'full' });
 		assert.equal(loadLightning(modules), entry);
-		assert.equal(lightningFor(wished, context()), null);
+		assert.equal(lightningFor(wished, context()) !== null, carries);
 		const ask = async () => ({ answered: true, genesis: null, chain: 'regtest' });
 		const attachment = await attach(wished, context(), { ask });
-		// What a wallet with no entry at all is handed, key for key.
+		// What a wallet with no entry at all is handed.
 		const without = await attach(wished, context(), { ask, lightningFor: () => null });
 		try {
-			for (const name of ['auxiliaryChannels', 'fixedOutputFees', 'bind']) assert.equal(name in attachment, false, name);
-			assert.deepEqual(Object.keys(attachment).sort(), Object.keys(without).sort());
+			const members = ['auxiliaryChannels', 'fixedOutputFees', 'bind'];
+			for (const name of members) assert.equal(name in attachment, carries, name);
+			for (const name of members) assert.equal(name in without, false, name);
+			// The three members are the whole difference: the routes are the same.
+			assert.deepEqual(Object.keys(attachment).sort(), [...Object.keys(without), ...(carries ? members : [])].sort());
 			assert.deepEqual(Object.keys(attachment.handlers).sort(), Object.keys(without.handlers).sort());
+			if (carries) {
+				assert.equal(typeof attachment.auxiliaryChannels.provider, 'object');
+				for (const hook of ['resolveIncoming', 'valueIncomingHtlc', 'onHtlcResolved']) assert.equal(typeof attachment.auxiliaryChannels[hook], 'function', hook);
+				assert.equal(typeof attachment.bind, 'function');
+				assert.deepEqual(attachment.fixedOutputFees, fixedOutputFees(wished));
+			}
+			// Nothing has started it and no node was given, so it reads off either way.
 			assert.deepEqual(attachment.status().lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
-			assert.deepEqual({ ...attachment.status(), startup: null }, { ...without.status(), startup: null });
+			if (!carries) assert.deepEqual({ ...attachment.status(), startup: null }, { ...without.status(), startup: null });
 		} finally {
 			await attachment.stop('shutdown');
 			await without.stop('shutdown');

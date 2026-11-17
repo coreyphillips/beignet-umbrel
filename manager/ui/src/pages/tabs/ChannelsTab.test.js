@@ -657,7 +657,7 @@ test('a wallet without asset channels sees the tab exactly as it was, and its as
 		await plain.unmount();
 
 		const cases = [
-			['an engine that cannot carry them, as every released one is', { config: { assetsAvailable: true, assetChannelsAvailable: false }, assets: HOST_ON }],
+			['an engine that cannot carry them, as every release before Beignet 0.43.0 is', { config: { assetsAvailable: true, assetChannelsAvailable: false }, assets: HOST_ON }],
 			['an app with no assets host', { config: { assetsAvailable: false, assetChannelsAvailable: true }, assets: HOST_ON }],
 			['an on-chain only wallet', { config: ASSETS_ON, rec: { onchainOnly: true }, assets: HOST_ON }],
 			['a wallet with assets switched off', { config: ASSETS_ON, rec: { assets: { enabled: false } }, assets: HOST_ON }],

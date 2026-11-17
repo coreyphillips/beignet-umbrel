@@ -308,7 +308,7 @@ test('the bitcoin on this side of asset channels is read from the balance, open 
 
 test('a balance without the keys says nothing of asset channels, and neither does a figure that is no amount', async () => {
 	const { assetChannelBitcoin } = await import('./asset-lightning.js');
-	// The released engine, and any wallet without an asset channel.
+	// An engine from before asset channels, and any wallet without an asset channel.
 	assert.equal(assetChannelBitcoin({ onchain: 1, lightning: 2, total: 3 }), null);
 	assert.equal(assetChannelBitcoin(null), null);
 	assert.equal(assetChannelBitcoin(undefined), null);

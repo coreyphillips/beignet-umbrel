@@ -33,7 +33,7 @@ async function asking(backend, wallet, name, amount, options) {
 
 test('a wallet without asset channels has no invoice card, and its peer is never asked for a price', async () => {
 	const backend = assetsBackend();
-	// An engine that cannot carry asset channels, as every released one is.
+	// An engine that cannot carry asset channels, as every release before Beignet 0.43.0 is.
 	const off = await asking(backend, 'demo-main', 'BUSD', '250', { config: { assetsAvailable: true, assetChannelsAvailable: false } });
 	try {
 		assert.equal(off.test('asset-invoice-card'), null);
