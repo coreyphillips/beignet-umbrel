@@ -18,7 +18,10 @@ export const channels = async (id) => (await x(id, '/channels')).channels || [];
 // transaction gives it its own, and keeps the first as pendingChannelId.
 const isChannel = (c, channelId) => c.channelId === channelId || c.pendingChannelId === channelId;
 export const channelOf = async (id, channelId) => (await channels(id)).find((c) => isChannel(c, channelId)) || null;
-export const liveChannels = async (id) => (await channels(id)).filter((c) => !OVER.has(c.state));
+// Rows that are no channel: one that is over, and an open that failed, which
+// is listed for a week with its reason.
+export const NOT_LIVE = new Set([...OVER, 'FAILED']);
+export const liveChannels = async (id) => (await channels(id)).filter((c) => !NOT_LIVE.has(c.state));
 
 /** How another wallet reaches this one: its node key and the port it listens on, over loopback. */
 export async function peerOf(id) {
@@ -58,7 +61,7 @@ export async function pair(nameA, nameB, { amount = '100000', decimalDisplay = 2
 /** The channel a wallet lists for an open it asked for, or one its peer opened to it. */
 export async function findChannel(id, { channelId, peerPubkey, key }) {
 	const list = await channels(id);
-	return list.find((c) => channelId && isChannel(c, channelId)) || list.find((c) => !OVER.has(c.state) && c.peerPubkey === peerPubkey && c.asset && c.asset.key === key) || null;
+	return list.find((c) => channelId && isChannel(c, channelId)) || list.find((c) => !NOT_LIVE.has(c.state) && c.peerPubkey === peerPubkey && c.asset && c.asset.key === key) || null;
 }
 
 /**
