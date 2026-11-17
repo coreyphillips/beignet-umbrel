@@ -29,6 +29,7 @@ import FforSettleField from '../components/FforSettleField.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
+import { assetChannelBitcoin } from '../lib/asset-lightning.js';
 
 import { isClosedChannel } from '../lib/channels.js';
 import { usesOnion, usesPublic } from '../lib/node-uris.js';
@@ -94,6 +95,12 @@ export default function WalletsPage() {
 								).length;
 							} catch (_) {
 								info.openChannelCount = info.channelCount;
+							}
+							// The bitcoin on a wallet's side of its asset channels is in no
+							// figure of /info. It is asked for only where a wallet can have
+							// such a channel, so a box that cannot carry them asks nothing more.
+							if (config?.assetChannelsAvailable && !w.onchainOnly) {
+								info.assetChannelBalance = await api.get('/balance').catch(() => null);
 							}
 							infos[w.id] = info;
 						} catch (_) {
@@ -220,6 +227,7 @@ export default function WalletsPage() {
 											)}
 										</div>
 									)}
+									<AssetChannelBitcoinLine wallet={w} balance={info?.assetChannelBalance} />
 								</div>
 								<div className="wallet-actions" onClick={(e) => e.stopPropagation()}>
 									<m.span layoutId={`wallet-status-${w.id}`}>
@@ -590,6 +598,22 @@ function SeedModal({ name, mnemonic, onClose }) {
  * list the way its other standing conditions are: one quiet line, with what
  * to do about it. Settings names the same wallets beside the backup buttons.
  */
+/**
+ * The bitcoin on a wallet's side of its asset channels. It is in neither
+ * balance the row totals, so it is said on a quiet line of its own and
+ * added to nothing. `balance` is the daemon's GET /balance, or nothing for
+ * a wallet that was not asked.
+ */
+export function AssetChannelBitcoinLine({ wallet, balance }) {
+	const lines = assetChannelBitcoin(balance);
+	if (!lines) return null;
+	return (
+		<div className="wallet-meta" data-testid={`wallet-asset-channel-sats-${wallet.id}`}>
+			{lines.map((line) => `+ ${fmtSats(line.sats)} ${line.words}`).join(' · ')}
+		</div>
+	);
+}
+
 export function AssetsBackupLine({ wallet }) {
 	const gap = assetsNotArchived(wallet);
 	if (!gap) return null;

@@ -730,6 +730,14 @@ export function createAssetsMock(ctx) {
 			Object.assign(c, { peerConnected: false, sendable: '0', receivable: '0' });
 			return true;
 		},
+		// A channel closed without its peer whose delay still runs: it carries
+		// nothing, and its bitcoin is on its way back (GET /balance says so).
+		'channel-closing'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL');
+			if (!c) return false;
+			Object.assign(c, { state: 'FORCE_CLOSING', sendable: '0', receivable: '0' });
+			return true;
+		},
 		// A channel the wallet's node gave up: it carries nothing, and is closed
 		// only without its peer.
 		'channel-failed'(id) {
@@ -2489,6 +2497,26 @@ export function createAssetsMock(ctx) {
 			});
 	}
 
+	/**
+	 * What the daemon's GET /balance says of the bitcoin on this wallet's side
+	 * of its asset channels, to be spread into that answer:
+	 * `assetChannelSats` for the channels that are neither closing nor over,
+	 * `assetChannelClosingSats` for those that are closing. Each key is there
+	 * only while the wallet has such a channel, as on the engine, and neither
+	 * figure is in `lightning` or `total`.
+	 */
+	function channelBitcoin(id) {
+		if (!state.wallets[id]) return {};
+		let open = null;
+		let closing = null;
+		for (const c of state.wallets[id].channels) {
+			const mine = Math.max(0, (Number(c.channelSats) || 0) - CHANNEL_PUSH_SATS);
+			if (c.state === 'CLOSING' || c.state === 'FORCE_CLOSING') closing = (closing || 0) + mine;
+			else if (c.state === 'OPENING' || c.state === 'NORMAL' || c.state === 'ERRORED') open = (open || 0) + mine;
+		}
+		return { ...(open !== null ? { assetChannelSats: open } : {}), ...(closing !== null ? { assetChannelClosingSats: closing } : {}) };
+	}
+
 	// The sats an asset payment carries beside the asset, as the daemon counts them.
 	const CARRIER_SATS = 354;
 
@@ -2536,6 +2564,7 @@ export function createAssetsMock(ctx) {
 	return {
 		request,
 		daemonChannels,
+		channelBitcoin,
 		daemonPayments,
 		daemonInvoices,
 		/** What the wallet record's `assets` block says, for the manager routes. */

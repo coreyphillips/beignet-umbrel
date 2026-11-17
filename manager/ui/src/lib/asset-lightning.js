@@ -425,3 +425,27 @@ export function payFailure(answer) {
 	const reason = why ? sentence(why.charAt(0).toUpperCase() + why.slice(1)) : 'The wallet did not say why.';
 	return `The payment did not go through, and nothing was paid. ${reason}`;
 }
+
+/* ------------------------------------------- the bitcoin in asset channels */
+
+const wholeSats = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+
+/**
+ * The bitcoin on this wallet's side of its asset channels, from the
+ * daemon's GET /balance: `assetChannelSats` for the channels that are there
+ * (opening, open, waiting for their peer, failed and not yet closed) and
+ * `assetChannelClosingSats` for those that are closing. Neither is in the
+ * daemon's `lightning` or `total`, so a page says each on a quiet line of
+ * its own and adds it to no figure: [{ kind, sats, words }], to follow the
+ * amount. Both keys are absent on a wallet without an asset channel and on
+ * an engine that cannot carry one, and the answer is null then.
+ */
+export function assetChannelBitcoin(balance) {
+	if (!balance || typeof balance !== 'object') return null;
+	const open = wholeSats(balance.assetChannelSats);
+	const closing = wholeSats(balance.assetChannelClosingSats);
+	const lines = [];
+	if (open > 0) lines.push({ kind: 'open', sats: open, words: 'in asset channels' });
+	if (closing > 0) lines.push({ kind: 'closing', sats: closing, words: 'on their way back from a closing asset channel' });
+	return lines.length > 0 ? lines : null;
+}

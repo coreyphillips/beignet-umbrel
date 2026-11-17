@@ -3246,7 +3246,10 @@ function walletRequest(id, path, method, body, headers) {
 				onchain,
 				lightning,
 				total: onchain + lightning,
-				splicingSats: splicingBalance(id)
+				splicingSats: splicingBalance(id),
+				// The bitcoin in the wallet's asset channels: keys of their own, in
+				// neither figure above, and absent without such a channel.
+				...assetsMock.channelBitcoin(id)
 			};
 		}
 		case '/readiness':

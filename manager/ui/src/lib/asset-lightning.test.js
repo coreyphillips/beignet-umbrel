@@ -286,3 +286,32 @@ test('a wallet is short of fee coins only when the node says it has no bitcoin t
 	assert.equal(shortOfFeeCoins(null), false);
 	assert.equal(shortOfFeeCoins(undefined), false);
 });
+
+/* ------------------------------------------- the bitcoin in asset channels */
+
+test('the bitcoin on this side of asset channels is read from the balance, open and closing apart', async () => {
+	const { assetChannelBitcoin } = await import('./asset-lightning.js');
+	assert.deepEqual(assetChannelBitcoin({ onchain: 1, lightning: 2, total: 3, assetChannelSats: 98292 }), [
+		{ kind: 'open', sats: 98292, words: 'in asset channels' }
+	]);
+	assert.deepEqual(assetChannelBitcoin({ assetChannelSats: 98292, assetChannelClosingSats: 40000 }), [
+		{ kind: 'open', sats: 98292, words: 'in asset channels' },
+		{ kind: 'closing', sats: 40000, words: 'on their way back from a closing asset channel' }
+	]);
+	assert.deepEqual(assetChannelBitcoin({ assetChannelClosingSats: 40000 }), [
+		{ kind: 'closing', sats: 40000, words: 'on their way back from a closing asset channel' }
+	]);
+});
+
+test('a balance without the keys says nothing of asset channels, and neither does a figure that is no amount', async () => {
+	const { assetChannelBitcoin } = await import('./asset-lightning.js');
+	// The released engine, and any wallet without an asset channel.
+	assert.equal(assetChannelBitcoin({ onchain: 1, lightning: 2, total: 3 }), null);
+	assert.equal(assetChannelBitcoin(null), null);
+	assert.equal(assetChannelBitcoin(undefined), null);
+	assert.equal(assetChannelBitcoin({ assetChannelSats: 0, assetChannelClosingSats: 0 }), null);
+	assert.equal(assetChannelBitcoin({ assetChannelSats: -5, assetChannelClosingSats: 'many' }), null);
+	assert.deepEqual(assetChannelBitcoin({ assetChannelSats: 0, assetChannelClosingSats: 7 }), [
+		{ kind: 'closing', sats: 7, words: 'on their way back from a closing asset channel' }
+	]);
+});

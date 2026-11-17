@@ -2294,6 +2294,11 @@ tbody tr:hover {
 	vertical-align: -1px;
 }
 
+/* A stat with more than one thing to say under it says each on its own line. */
+.stat-sub .sub-line {
+	display: block;
+}
+
 /* A transaction that carries an asset operation, named beside its type. */
 .badge.asset {
 	color: var(--accent-2);

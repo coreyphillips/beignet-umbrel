@@ -113,6 +113,26 @@ test("the demo daemon lists a wallet's asset channel beside its bitcoin ones, ma
 	assert.equal(none.some((c) => c.auxiliary === true), false);
 });
 
+test("the demo daemon says the bitcoin in a wallet's asset channels on keys of their own, in neither figure, and only for a wallet that has one", async () => {
+	const wallets = await mockRequest('/api/wallets');
+	let withOne = 0;
+	for (const w of wallets.filter((x) => x.status === 'running')) {
+		const base = `/wallets/${w.id}/api`;
+		const balance = await mockRequest(`${base}/balance`);
+		assert.equal(balance.total, balance.onchain + balance.lightning, 'the total is the two figures it always was');
+		const marked = w.onchainOnly ? [] : (await mockRequest(`${base}/channels`)).filter((c) => c.auxiliary === true);
+		const there = marked.filter((c) => c.state !== 'FORCE_CLOSED' && c.state !== 'NEGOTIATING_CLOSING');
+		if (there.length === 0) {
+			assert.equal('assetChannelSats' in balance, false, `${w.id} has no asset channel, and its balance has the keys it always had`);
+		} else {
+			withOne += 1;
+			assert.equal(balance.assetChannelSats, there.reduce((n, c) => n + c.localBalanceSats, 0));
+		}
+		if (marked.length === there.length) assert.equal('assetChannelClosingSats' in balance, false);
+	}
+	assert.ok(withOne >= 1, 'the demo has a wallet with an asset channel');
+});
+
 test('the demo daemon lists the payments and invoices an asset channel carried beside the bitcoin ones, marked auxiliary', async () => {
 	const base = '/wallets/demo-main/api';
 	const { rows } = await mockRequest(`${base}/x/assets/activity?limit=200`);

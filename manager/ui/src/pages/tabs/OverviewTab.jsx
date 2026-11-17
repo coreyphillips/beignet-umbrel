@@ -19,6 +19,7 @@ import AssetAvatar from '../../components/AssetAvatar.jsx';
 import { AssetAmount } from '../../components/AssetAmount.jsx';
 import { useAssetBalances } from '../../hooks/useAssets.js';
 import { assetsShown } from '../../lib/wallet-assets.js';
+import { assetChannelBitcoin } from '../../lib/asset-lightning.js';
 import { fmtSats, pct } from '../../lib/format.js';
 import { bitcoinChannels, isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
@@ -125,6 +126,35 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 	const fees = data?.fees;
 	const feeEst = data?.feeEst;
 	const splicing = bal?.splicingSats ?? info?.splicingBalanceSats ?? 0;
+	// The bitcoin on this wallet's side of its asset channels is in neither
+	// the Lightning figure nor the total (the daemon leaves it out of both),
+	// so without a line of its own an open would read as bitcoin gone. It is
+	// said the way sats locked with assets are: quietly, and added to nothing.
+	const channelBitcoin = assetChannelBitcoin(bal);
+	const lightningSub = channelBitcoin ? (
+		<>
+			{splicing > 0 && <span className="sub-line">+ {fmtSats(splicing)} splicing</span>}
+			{channelBitcoin.map((line, i) => (
+				<span
+					key={line.kind}
+					className="sub-line"
+					data-testid={line.kind === 'closing' ? 'overview-asset-channel-closing-sats' : 'overview-asset-channel-sats'}
+				>
+					+ {fmtSats(line.sats)} {line.words}
+					{i === channelBitcoin.length - 1 && (
+						<Help label="About bitcoin in asset channels">
+							An asset channel is funded with bitcoin as well as the asset. The sats on your side of it are yours,
+							and they stay out of every balance here while the channel is there: they cannot be spent as bitcoin
+							or sent over Lightning. They come back when the channel is closed. While a channel is closing, its
+							bitcoin is on its way back, and it is said here until the close is over.
+						</Help>
+					)}
+				</span>
+			))}
+		</>
+	) : splicing > 0 ? (
+		`+ ${fmtSats(splicing)} splicing`
+	) : undefined;
 	// Both /info's channelCount and the liquidity snapshot's channelCount are
 	// every channel the node has ever had, closed ones included forever. Every
 	// count this page shows is of channels that still OPERATE, so count open
@@ -187,7 +217,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 								label="Lightning"
 								num={bal?.lightning ?? info?.lightningBalanceSats}
 								suffix=" sats"
-								sub={splicing > 0 ? `+ ${fmtSats(splicing)} splicing` : undefined}
+								sub={lightningSub}
 							/>,
 							<Stat key="total" label="Total" num={bal?.total} suffix=" sats" />,
 							<Stat

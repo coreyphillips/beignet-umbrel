@@ -806,3 +806,22 @@ test('a node that refused its fee settings is said in red, and the open dialog h
 		await r.unmount();
 	}
 });
+
+test('the demo counts the bitcoin of a channel that is there, and says that of one being force closed as on its way back', async () => {
+	const backend = assetsBackend();
+	assert.deepEqual(backend.mock.channelBitcoin('demo-main'), { assetChannelSats: 98292 });
+	assert.equal(backend.mock.seed('demo-main', 'channel-closing'), true);
+	const listed = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	assert.deepEqual(listed.map((c) => [c.state, c.sendable, c.receivable]), [['FORCE_CLOSING', '0', '0']]);
+	assert.deepEqual(backend.mock.channelBitcoin('demo-main'), { assetChannelClosingSats: 98292 });
+	// A wallet with no asset channel has neither key, as on the engine.
+	assert.deepEqual(backend.mock.channelBitcoin('demo-savings'), {});
+	const r = await mount(backend, { status: await backend.api('demo-main').get('/x/assets/status') });
+	try {
+		const row = r.$('[data-testid="asset-channel-row"]') || r.$('.asset-channel');
+		assert.ok(row, 'the channel is still listed while it closes');
+		assert.match(row.textContent, /closing/);
+	} finally {
+		await r.unmount();
+	}
+});
