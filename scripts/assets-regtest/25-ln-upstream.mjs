@@ -14,6 +14,13 @@
 // wallet is handed to the stack's tapd, which verifies its proofs.
 //
 // Start the peer first: scripts/assets-regtest/stack.sh upstream.
+//
+// ASSETS_UPSTREAM_PEER=litd runs it against Lightning Terminal v0.17.11 as
+// published instead (stack.sh litd): lnd v0.21.8-beta and tapd from
+// taproot-assets v0.8.8 in one process. It checks macaroons, so each call is
+// given lnd's or tapd's admin macaroon. It signals neither of the asset
+// features that say how a channel's first commitment is derived, which the
+// host answers for every peer.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -26,17 +33,24 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // this app vendors, as installed beside the engine the manager runs.
 const PREFIX = process.env.ENGINE_PREFIX || path.resolve(HERE, '../../.engine-prefix');
 const { lightning } = createRequire(path.join(PREFIX, 'node_modules', 'ts-tap', 'package.json'))('ts-tap');
+const LITD = process.env.ASSETS_UPSTREAM_PEER === 'litd';
+const SERVICE = LITD ? 'litd' : 'integrated';
 const PEER_HOST = process.env.ASSETS_UPSTREAM_HOST || '127.0.0.1';
-const PEER_PORT = Number(process.env.ASSETS_UPSTREAM_P2P_PORT || 19835);
+const PEER_PORT = Number((LITD ? process.env.ASSETS_LITD_P2P_PORT : process.env.ASSETS_UPSTREAM_P2P_PORT) || (LITD ? 19836 : 19835));
+const LND_MACAROON = '/data/lnd/data/chain/bitcoin/regtest/admin.macaroon';
+const TAPD_MACAROON = '/data/tapd/data/regtest/admin.macaroon';
+/** The client's methods that lnd answers; tapd answers the others. */
+const LND_METHODS = new Set(['track-payment', 'send-payment', 'send-route', 'sign-message', 'close-channel', 'lookup-invoice', 'channels', 'channel-info']);
 
 const compose = (args, opts = {}) =>
 	execFileSync('docker', ['compose', '-p', PROJECT, ...args], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, ...opts }).trim();
 const lastJson = (out) => JSON.parse(out.split('\n').filter(Boolean).pop());
 /** One RPC of the peer through the client its image carries (protojson in, protojson out): its last answer. */
-const peerRpc = (method, request = {}) => lastJson(compose(['exec', '-T', 'integrated', 'native-interop-client', method], { input: JSON.stringify(request) }));
-const peerLncli = (...args) => JSON.parse(compose(['exec', '-T', 'integrated', 'lncli', '--lnddir=/data/lnd', '--network=regtest', '--no-macaroons', ...args.map(String)]));
+const peerRpc = (method, request = {}) =>
+	lastJson(compose(['exec', '-T', ...(LITD ? ['-e', `NATIVE_INTEROP_MACAROON=${LND_METHODS.has(method) ? LND_MACAROON : TAPD_MACAROON}`] : []), SERVICE, 'native-interop-client', method], { input: JSON.stringify(request) }));
+const peerLncli = (...args) => JSON.parse(compose(['exec', '-T', SERVICE, 'lncli', '--lnddir=/data/lnd', '--network=regtest', LITD ? `--macaroonpath=${LND_MACAROON}` : '--no-macaroons', ...args.map(String)]));
 const peerTapcli = (...args) => {
-	const out = compose(['exec', '-T', 'integrated', 'tapcli', '--network=regtest', '--rpcserver=127.0.0.1:10009', '--tlscertpath=/data/lnd/tls.cert', '--no-macaroons', ...args.map(String)]);
+	const out = compose(['exec', '-T', SERVICE, 'tapcli', '--network=regtest', '--rpcserver=127.0.0.1:10009', '--tlscertpath=/data/lnd/tls.cert', LITD ? `--macaroonpath=${TAPD_MACAROON}` : '--no-macaroons', ...args.map(String)]);
 	try {
 		return JSON.parse(out);
 	} catch (_) {
@@ -50,14 +64,14 @@ const b64 = (hex) => Buffer.from(hex, 'hex').toString('base64');
 /* ---------------------------------------------------------------- the peer */
 
 const services = compose(['ps', '--status', 'running', '--services']).split('\n');
-if (!services.includes('integrated')) {
-	check('the upstream peer runs beside the stack (scripts/assets-regtest/stack.sh upstream)', false, services.join(', '));
+if (!services.includes(SERVICE)) {
+	check(`the upstream peer runs beside the stack (scripts/assets-regtest/stack.sh ${LITD ? 'litd' : 'upstream'})`, false, services.join(', '));
 	done();
 }
 const peerInfo = peerLncli('getinfo');
 const peerPubkey = peerInfo.identity_pubkey;
 const peerBits = Object.keys(peerInfo.features || {}).map(Number);
-console.log(`  the peer: ${peerPubkey} ${peerInfo.version}, features ${peerBits.join(',')}`);
+console.log(`  the peer${LITD ? ' (litd)' : ''}: ${peerPubkey} ${peerInfo.version}, features ${peerBits.join(',')}`);
 check('the peer offers asset channels and no fixed HTLC outputs', (peerBits.includes(2025) || peerBits.includes(2026)) && !peerBits.includes(450) && !peerBits.includes(451), peerBits.join(','));
 // Its universe takes proofs from outside, as the stack's tapd's does.
 for (const proofType of ['issuance', 'transfer']) peerTapcli('universe', 'federation', 'config', 'global', `--proof_type=${proofType}`, '--allow_insert=true', '--allow_export=true');
@@ -233,7 +247,7 @@ console.log(`  the carrier: the wallet's channel bitcoin moved ${btcOpen.wallet.
 /* ------------------------------------------------------ 3. both restarted */
 
 await restart(A.id);
-compose(['restart', 'integrated']);
+compose(['restart', SERVICE]);
 await waitFor('the channel is back after both restarts', async () => {
 	const c = await channelOf(A.id, first.mine.channelId);
 	const theirs = peerChannel(walletNodeId);
@@ -276,7 +290,20 @@ const inRow = await waitFor('the wallet reads its bitcoin-paid invoice paid', as
 check('a node with no asset pays the wallet in bitcoin, and the wallet receives units through the peer', !!inRow, JSON.stringify(inRow && { received: inRow.receivedAmount, sats: inRow.amountSats }));
 // The wallet pays a bitcoin invoice of the stack's lnd with units: the peer prices them and pays the sats on.
 const outInvoice = thirdLncli('addinvoice', '--amt', 1500, '--memo', 'scenario 25: paid in units');
-const pricedOut = await post(A.id, '/pay/quote', { bolt11: outInvoice.payment_request, key }).catch((e) => ({ refused: { code: e.code, message: e.message } }));
+const askOut = () => post(A.id, '/pay/quote', { bolt11: outInvoice.payment_request, key }).catch((e) => ({ refused: { code: e.code, message: e.message } }));
+let pricedOut = await askOut();
+// A bitcoin channel opened by this run reaches the wallet's graph only once
+// it is announced, 6 blocks deep, and lnd's gossip has passed it on, which
+// lnd batches. Until then the wallet has no route to the stack's lnd and
+// refuses before it asks the peer for a price, so asking again costs the
+// peer nothing.
+if (pricedOut.refused && pricedOut.refused.code === 'PAYMENT_NOT_SENT' && btcChannel.funding_txid !== "(an earlier run's channel)") {
+	console.log('  the wallet has no route over the new bitcoin channel yet: asking again');
+	pricedOut = await waitFor('the wallet routes to the stack lnd over the new bitcoin channel', async () => {
+		const answer = await askOut();
+		return answer.refused && answer.refused.code === 'PAYMENT_NOT_SENT' ? null : answer;
+	}, { timeoutMs: 300000, everyMs: 20000 }).catch(() => pricedOut);
+}
 check('a bitcoin invoice of another node is priced in units by the peer', !pricedOut.refused && pricedOut.priced === true, JSON.stringify(pricedOut));
 if (!pricedOut.refused) {
 	const sent = await post(A.id, '/pay', { bolt11: outInvoice.payment_request, key, quoteId: pricedOut.quoteId, maxAssetAmount: pricedOut.assetAmount }, idem()).catch((e) => ({ refused: { code: e.code, message: e.message } }));
@@ -325,13 +352,13 @@ handed += 17_000n;
 const third = await openToPeer(10_000);
 const p5 = await walletPaysPeer(2_000, 'scenario 25: before the wallet force closes');
 check('a payment on the third channel', p5.paid.status === 'COMPLETED', p5.paid.status);
-compose(['stop', 'integrated']);
+compose(['stop', SERVICE]);
 const forced = await post(A.id, '/channels/close', { channelId: third.mine.channelId, force: true });
 check('the wallet force closes with the peer stopped', forced.closing === true && forced.force === true, JSON.stringify(forced));
 const over3 = await channelOver(A.id, third.mine.channelId, { blocksEach: 12, timeoutMs: 900000 });
 check('after the delay the wallet has swept its share', over3.state === 'FORCE_CLOSED' || over3.state === 'CLOSED', over3.state);
-compose(['start', 'integrated']);
-await waitFor('the peer is back', () => compose(['ps', '--status', 'running', '--services']).split('\n').includes('integrated') && peerLncli('getinfo').synced_to_chain, { timeoutMs: 180000, everyMs: 3000 }).catch(() => null);
+compose(['start', SERVICE]);
+await waitFor('the peer is back', () => compose(['ps', '--status', 'running', '--services']).split('\n').includes(SERVICE) && peerLncli('getinfo').synced_to_chain, { timeoutMs: 180000, everyMs: 3000 }).catch(() => null);
 await sleep(5000);
 const peerBefore3 = peerUnits(assetId);
 await waitFor("the peer takes its share of the wallet's force close", () => (peerUnits(assetId) >= peerBefore3 + 2000n ? true : (mine(1), null)), { timeoutMs: 300000, everyMs: 3000 }).catch(() => null);

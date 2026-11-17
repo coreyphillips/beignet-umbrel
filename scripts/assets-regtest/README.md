@@ -133,6 +133,7 @@ node 22-ln-close.mjs          # closed together: each side's share back on-chain
 node 23-ln-force-close.mjs    # closed alone with the peer stopped: the delay, the sweeps, the peer coming back
 node 24-ln-crash-restore.mjs  # daemons killed before an open has answered, as it answers and with a payment in flight, then the opener restored from an archive
 node 25-ln-upstream.mjs       # the same with a peer that runs Lightning Labs' daemons, and payments it prices to and from a node with no asset
+ASSETS_UPSTREAM_PEER=litd node 25-ln-upstream.mjs   # the same against Lightning Terminal v0.17.11 (stack.sh litd)
 ```
 
 Each one makes two wallets, mints 100,000 units of an asset of its own on the
@@ -186,6 +187,19 @@ close by the peer and a force close by the wallet with the peer stopped,
 every share sent to the stack's tapd. The amounts the peer pays the wallet
 stay under what its bitcoin in the channel can carry: tapd lets an HTLC with
 units out only while its spendable bitcoin covers the payment's whole value.
+
+`ASSETS_UPSTREAM_PEER=litd` runs the same scenario against Lightning
+Terminal v0.17.11 as published, lnd v0.21.8-beta and tapd from
+taproot-assets v0.8.8 in one process. `stack.sh litd` starts it beside the
+stack (`compose.litd.yml`, `127.0.0.1:19836`, `ASSETS_LITD_P2P_PORT`), from
+the image ts-tap's `NATIVE_INTEROP_PEER=litd npm run
+regtest:lightning:upstream` builds: the published image, pinned by digest,
+with only the RPC client added. It has a volume of its own. litd checks
+macaroons, so the scenario gives each call lnd's or tapd's. It advertises
+neither of the asset features that say how a channel's first commitment is
+derived; the wallet takes it to use the negotiated settings, as it does.
+A bitcoin channel the scenario opens for the peer reaches the wallet's
+graph a little after it is 6 blocks deep, and the scenario waits for that.
 
 The Lightning scripts do not yet cover a force close with a payment in
 flight, a held invoice, or a revoked commitment being punished (ts-tap's

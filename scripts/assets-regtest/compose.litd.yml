@@ -1,0 +1,78 @@
+# Laid over ts-tap's docker/compose.yml and compose.override.yml by
+# `stack.sh litd`: Lightning Terminal v0.17.11 (litd) as the peer of
+# 25-ln-upstream.mjs, run with ASSETS_UPSTREAM_PEER=litd, on this stack's
+# bitcoind. litd bundles lnd v0.21.8-beta and tapd from taproot-assets
+# v0.8.8, in one process.
+#
+# The image is the one ts-tap's `NATIVE_INTEROP_PEER=litd npm run
+# regtest:lightning:upstream` builds (docker/native-interop/Dockerfile.litd):
+# the published litd image, pinned by digest, with only the regtest RPC
+# client added. ASSETS_LITD_IMAGE names another. litd cannot run without
+# macaroons, so lncli, tapcli and the client are given lnd's and tapd's
+# admin macaroons. The flags are those of ts-tap's compose.litd.yml, with
+# the changes compose.upstream.yml makes for this stack: the stack's tapd
+# as proof courier, a port of this stack's own, and the price oracle a
+# little away from one unit to the sat (1.01). It has a volume of its own:
+# tapd v0.8.8 never opens the database of the newer tapd of the
+# `integrated` service.
+services:
+  litd:
+    image: ${ASSETS_LITD_IMAGE:-ts-tap-native-interop:litd-v0.17.11}
+    depends_on:
+      bitcoind: { condition: service_healthy }
+    ports: ['127.0.0.1:${ASSETS_LITD_P2P_PORT:-19836}:9735']
+    volumes: ['litd:/data']
+    command:
+      - --lnd-mode=integrated
+      - --taproot-assets-mode=integrated
+      - --faraday-mode=disable
+      - --network=regtest
+      - --disableui
+      - --autopilot.disable
+      - --lit-dir=/data/lit
+      - --lnd.lnddir=/data/lnd
+      - --lnd.noseedbackup
+      - --lnd.norest
+      - --lnd.protocol.option-scid-alias
+      - --lnd.protocol.zero-conf
+      - --lnd.protocol.simple-taproot-chans
+      - --lnd.protocol.simple-taproot-overlay-chans
+      - --lnd.protocol.custom-message=17
+      - --lnd.debuglevel=debug
+      - --lnd.alias=litd
+      - --lnd.bitcoin.regtest
+      - --lnd.bitcoin.node=bitcoind
+      - --lnd.bitcoin.defaultremotedelay=${ASSETS_UPSTREAM_CSV_DELAY:-144}
+      - --lnd.bitcoind.rpchost=bitcoind:18443
+      - --lnd.bitcoind.rpcuser=taptest
+      - --lnd.bitcoind.rpcpass=taptest
+      - --lnd.bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      - --lnd.bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      - --lnd.rpclisten=127.0.0.1:10009
+      - --lnd.listen=0.0.0.0:9735
+      - --lnd.tlsextradomain=litd
+      - --taproot-assets.tapddir=/data/tapd
+      - --taproot-assets.network=regtest
+      - --taproot-assets.universe.no-default-federation
+      - --taproot-assets.universe.public-access=rw
+      - --taproot-assets.proofcourieraddr=universerpc://tapd:10029
+      - --taproot-assets.allow-public-uni-proof-courier
+      - --taproot-assets.experimental.rfq.priceoracleaddress=use_mock_price_oracle_service_promise_to_not_use_on_mainnet
+      - --taproot-assets.experimental.rfq.mockoracleassetsperbtc=${ASSETS_UPSTREAM_UNITS_PER_BTC:-101000000}
+    healthcheck:
+      # tapd starts last, once lnd is up.
+      test:
+        [
+          'CMD',
+          'tapcli',
+          '--network=regtest',
+          '--rpcserver=127.0.0.1:10009',
+          '--tlscertpath=/data/lnd/tls.cert',
+          '--macaroonpath=/data/tapd/data/regtest/admin.macaroon',
+          'getinfo'
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 90
+volumes:
+  litd: {}
