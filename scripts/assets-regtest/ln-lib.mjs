@@ -184,6 +184,39 @@ export async function handToTapd(id, assetId, amount, what) {
 	check(`${what}: tapd verified the proofs and credited ${amount}`, BigInt(tapdBalance(assetId)) === before + BigInt(amount), tapdBalance(assetId));
 }
 
+/**
+ * Where a wallet's bitcoin is, in sats: what it can spend on-chain, what
+ * sits on the outputs its assets live in ("locked with assets"), and its
+ * side of its asset channels, open and closing. The locked figure is one
+ * pass of the host's loop behind a change, so it is read until two looks
+ * a moment apart agree.
+ */
+export async function bitcoinOf(id) {
+	const read = async () => {
+		const b = await w(id, '/balance');
+		const { btc } = await balances(id);
+		return { spendable: btc.spendableSats, locked: btc.anchorSats, anchors: btc.anchorCount, inChannels: b.assetChannelSats || 0, closing: b.assetChannelClosingSats || 0 };
+	};
+	let last = await read();
+	for (let i = 0; i < 10; i += 1) {
+		await sleep(1200);
+		const now = await read();
+		if (JSON.stringify(now) === JSON.stringify(last)) break;
+		last = now;
+	}
+	return { ...last, sum: last.spendable + last.locked + last.inChannels + last.closing };
+}
+
+/** Says where each wallet's bitcoin is, one line a wallet, and returns what it read: { name: bitcoinOf }. */
+export async function noteBitcoin(what, wallets) {
+	const out = {};
+	for (const [name, id] of Object.entries(wallets)) {
+		const b = (out[name] = await bitcoinOf(id));
+		console.log(`  bitcoin ${what}: ${name} spendable ${b.spendable}, locked with assets ${b.locked} on ${b.anchors} output(s), in asset channels ${b.inChannels}, closing ${b.closing}, in all ${b.sum}`);
+	}
+	return out;
+}
+
 /** Stop a wallet and start it again. `assets: false` for one whose assets are off: it has no host to wait for. */
 export async function restart(id, { assets = true } = {}) {
 	await api(`/wallets/${id}/stop`, { method: 'POST', body: {} });
