@@ -158,8 +158,11 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 	// Both /info's channelCount and the liquidity snapshot's channelCount are
 	// every channel the node has ever had, closed ones included forever. Every
 	// count this page shows is of channels that still OPERATE, so count open
-	// ones from the list itself; until the list answers, fall back to the
-	// daemon figure rather than showing nothing.
+	// ones from the list itself, with its asset channels left out. Until the
+	// list answers the tile shows no number: the daemon figure is every
+	// channel it has had, closed ones and asset channels included, so a wallet
+	// with an asset channel read one channel too many while the page loaded,
+	// and for good when the list could not be read.
 	const openCount = data?.channels
 		? data.channels.filter((c) => !isClosedChannel(c)).length
 		: null;
@@ -223,7 +226,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 							<Stat
 								key="ch"
 								label="Channels"
-								num={openCount ?? info?.channelCount}
+								num={openCount}
 								sub={`${info?.peerCount ?? 0} peers`}
 							/>
 					  ]}

@@ -31,7 +31,7 @@ import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
 import { assetChannelBitcoin } from '../lib/asset-lightning.js';
 
-import { isClosedChannel } from '../lib/channels.js';
+import { openBitcoinChannelCount } from '../lib/channels.js';
 import { usesOnion, usesPublic } from '../lib/node-uris.js';
 import { openBackup } from '../lib/backup.js';
 import { assetsNotArchived, deleteAssetsNote } from '../lib/wallet-assets.js';
@@ -88,11 +88,11 @@ export default function WalletsPage() {
 							// closed still reads "2 channels" forever. Count open ones from
 							// the list itself; on any hiccup fall back to the daemon figure
 							// rather than showing nothing.
+							// Bitcoin channels only: an asset channel, open or closing, is
+							// no channel of this count (lib/channels.js).
 							try {
-								const channels = await api.get('/channels');
-								info.openChannelCount = channels.filter(
-									(c) => !isClosedChannel(c)
-								).length;
+								const open = await api.get('/channels').then(openBitcoinChannelCount);
+								info.openChannelCount = open ?? info.channelCount;
 							} catch (_) {
 								info.openChannelCount = info.channelCount;
 							}

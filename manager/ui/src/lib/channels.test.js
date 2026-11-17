@@ -7,7 +7,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bitcoinChannels, bitcoinInvoices, bitcoinPayments, isAssetChannel, isAssetRow, isClosedChannel } from './channels.js';
+import { bitcoinChannels, bitcoinInvoices, bitcoinPayments, isAssetChannel, isAssetRow, isClosedChannel, openBitcoinChannelCount } from './channels.js';
+import { readFileSync } from 'node:fs';
 
 const btc = { channelId: 'a'.repeat(64), state: 'NORMAL', localBalanceSats: 500_000 };
 const asset = { channelId: 'b'.repeat(64), state: 'NORMAL', localBalanceSats: 98_292, auxiliary: true };
@@ -74,4 +75,29 @@ test('a payment or an invoice a restore left unresolved is an asset row, so the 
 	assert.equal(isAssetRow(stuck), true);
 	assert.deepEqual(bitcoinPayments([stuck, plain]), [plain]);
 	assert.deepEqual(bitcoinInvoices([asked]), []);
+});
+
+test('the count of open channels is of bitcoin channels: an asset channel is in it in no state, open, closing or closed', () => {
+	const bitcoin = [{ state: 'NORMAL' }, { state: 'AWAITING_FUNDING_CONFIRMED' }, { state: 'SHUTTING_DOWN' }, { state: 'CLOSED' }, { state: 'FORCE_CLOSED' }];
+	assert.equal(openBitcoinChannelCount(bitcoin), 3);
+	// Every state the daemon has for a channel, on a row marked as an asset channel: the count does not move.
+	for (const state of ['NORMAL', 'AWAITING_FUNDING_CONFIRMED', 'AWAITING_REESTABLISH', 'SHUTTING_DOWN', 'NEGOTIATING_CLOSING', 'FORCE_CLOSED', 'CLOSED', 'ERRORED', 'SOMETHING_NEW']) {
+		assert.equal(openBitcoinChannelCount([...bitcoin, { state, auxiliary: true }]), 3, state);
+	}
+	// No list is no count, which is never taken for none.
+	for (const none of [null, undefined, {}, 'x']) assert.equal(openBitcoinChannelCount(none), null);
+	assert.equal(openBitcoinChannelCount([]), 0);
+});
+
+test('no page counts or lists the daemon\'s channels without leaving its asset channels out, or shows the daemon\'s own count of every channel it has had', () => {
+	const src = (file) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+	// Every read of the daemon's list goes through bitcoinChannels or the count that does.
+	for (const file of ['pages/WalletsPage.jsx', 'pages/WalletPage.jsx', 'pages/tabs/ChannelsTab.jsx', 'pages/tabs/OverviewTab.jsx', 'pages/tabs/SendTab.jsx', 'pages/tabs/ReceiveTab.jsx', 'pages/tabs/ToolsTab.jsx', 'pages/tabs/lfbw/LfbwOverviewTab.jsx', 'components/OfflineReceiveCard.jsx', 'lib/receive-invoice.js', 'lib/channel-open.js']) {
+		const text = src(file).replace(/\s+/g, ' ');
+		const reads = text.split(".get('/channels')").slice(1);
+		assert.ok(reads.length > 0, `${file} reads the list`);
+		for (const after of reads) assert.match(after, /^\s*\.then\((bitcoinChannels|openBitcoinChannelCount)\)/, `${file}: ${after.slice(0, 60)}`);
+	}
+	// The daemon's channelCount is every channel it has had, closed ones and asset channels included: the Channels tile never shows it.
+	assert.doesNotMatch(src('pages/tabs/OverviewTab.jsx'), /openCount \?\? info\?\.channelCount/);
 });

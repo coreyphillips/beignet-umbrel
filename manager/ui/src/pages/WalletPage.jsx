@@ -28,7 +28,7 @@ import { describeAssetEvent, pendingCount } from '../lib/assets.js';
 import { assetsShown } from '../lib/wallet-assets.js';
 import { isOwnPayment } from '../lib/own-payments.js';
 
-import { bitcoinChannels, isAssetRow, isClosedChannel } from '../lib/channels.js';
+import { bitcoinChannels, isAssetRow, openBitcoinChannelCount } from '../lib/channels.js';
 import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
 import { autoApplyState, capsuleOffer, describeRecovery, heardAutoRefusal, isGuardianMode, restoreProgress, skippedAssetChannels } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
@@ -795,7 +795,12 @@ export function EditWalletModal({
 		let alive = true;
 		walletApi(rec.id)
 			.get('/channels')
-			.then((chs) => alive && setOpenChannels(chs.filter((c) => !isClosedChannel(c)).length))
+			.then(openBitcoinChannelCount)
+			.then((open) => {
+				// Bitcoin channels: an asset channel is refused by the manager, in its own words.
+				if (open === null) throw new Error('no list');
+				if (alive) setOpenChannels(open);
+			})
 			.catch(() => alive && setChannelsUnknown(true));
 		return () => {
 			alive = false;

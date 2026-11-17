@@ -525,7 +525,7 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 			// not by the id we get back. This must not be allowed to fail quietly: an
 			// empty snapshot would make a channel we already hold with this peer look
 			// like the one we just opened, and report a failed open as a success.
-			const before = await api.get('/channels');
+			const before = await api.get('/channels').then(bitcoinChannels);
 			const knownIds = new Set((before || []).map((c) => c.channelId));
 			const since = Date.now();
 

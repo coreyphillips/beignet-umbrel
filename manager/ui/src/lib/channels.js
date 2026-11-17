@@ -30,6 +30,19 @@ export function isAssetChannel(c) {
 }
 
 /**
+ * How many bitcoin channels of a GET /channels answer are not closed, or
+ * null when the answer is no list. This is the count a page shows as a
+ * wallet's channels. An asset channel is in it in no state: open, closing
+ * or closed, it is counted on the Asset channels card and nowhere else.
+ * The daemon's own `channelCount` (GET /info) is not this number: it is
+ * every channel the daemon has had, closed ones and asset channels included.
+ */
+export function openBitcoinChannelCount(list) {
+	if (!Array.isArray(list)) return null;
+	return list.filter((c) => !isAssetChannel(c) && !isClosedChannel(c)).length;
+}
+
+/**
  * The bitcoin channels of a GET /channels answer. Every screen that lists,
  * sums or chooses among bitcoin channels reads the list through this; the
  * places that only ask "does this wallet still have a channel of any kind"
