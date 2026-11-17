@@ -541,3 +541,13 @@ test('status: ready when running or degraded, and it says why when it is not', (
 	assert.deepEqual([busy.proofServer.reachable, busy.proofServer.lastError, busy.proofServer.viaTor], [false, 'Could not reach universe.example.com', true]);
 	assert.deepEqual(busy.backup, { exportedAt: T0, dirty: true, importError: 'That assets backup belongs to another wallet' });
 });
+
+test('an open a peer began that the node does not hold is opening, and missing is only a channel that was signed for', () => {
+	const { channelWord } = require('./views');
+	const open = { state: null, confirmed: false, recovery: 'none' };
+	// The acceptor's side of an open with no channel in the node and no confirmed funding: still waiting.
+	assert.equal(channelWord({ ...open, engine: 'absent', signed: false }), 'OPENING');
+	assert.equal(channelWord({ ...open, engine: 'absent', signed: true }), 'OPENING');
+	assert.equal(channelWord({ ...open, engine: 'missing', signed: false }), 'OPENING');
+	assert.equal(channelWord({ ...open, engine: 'missing', signed: true }), 'MISSING');
+});

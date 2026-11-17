@@ -385,3 +385,12 @@ test('the refusals the library added: this node\'s own no to an open, a refused 
 	assert.equal(paymentFailure('anything at all', { neverSent: true }).message, 'This payment never left the wallet, so nothing was paid. The invoice can be paid again.');
 	assert.equal(paymentFailure('anything at all', { neverSent: true }).known, true);
 });
+
+test('a peer that keeps no more unused prices for this wallet: said as a wait of a few minutes, also when it is the cause of what the library threw', () => {
+	const sentence = 'The peer is already keeping as many unused prices for this wallet as it keeps at once, so it gave no new one. Try again in a few minutes.';
+	const own = Object.assign(new Error('too many live quotes for this peer'), { code: 'ERR_LIGHTNING_TOO_MANY_REQUESTS' });
+	const said = mapLightning(own);
+	assert.deepEqual([said.extensionCode, said.status, said.message], ['TOO_MANY_QUOTES', 429, sentence]);
+	const wrapped = Object.assign(new Error('the peer gave no quote'), { code: 'ERR_BEIGNET_LN_NO_QUOTE', cause: own });
+	assert.deepEqual([mapLightning(wrapped).extensionCode, mapLightning(wrapped).status], ['TOO_MANY_QUOTES', 429]);
+});

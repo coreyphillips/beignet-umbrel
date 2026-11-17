@@ -328,8 +328,16 @@ function modeUnavailable(reason) {
  * library wrote is never part of it. The caller logs that, and answers with
  * a sentence of its own.
  */
+// A peer keeps a handful of unused prices for a wallet at once (eight), and
+// refuses one more until some have run out, which they do within minutes.
+const TOO_MANY_REQUESTS = 'ERR_LIGHTNING_TOO_MANY_REQUESTS';
+const TOO_MANY_QUOTES = 'The peer is already keeping as many unused prices for this wallet as it keeps at once, so it gave no new one. Try again in a few minutes.';
+
 function mapLightning(err, context = {}) {
 	if (isRefusal(err)) return err;
+	if (causesOf(err).some((e) => codeOf(e) === TOO_MANY_REQUESTS || new RegExp(`\\b${TOO_MANY_REQUESTS}\\b`).test(String((e && e.message) || '')))) {
+		return refusal('TOO_MANY_QUOTES', TOO_MANY_QUOTES, 429);
+	}
 	const engine = engineCodeOf(err);
 	if (codeOf(err) === 'ERR_BEIGNET_LN_MODE_UNAVAILABLE') return modeUnavailable(detailOf(err, 'reason'));
 	if (codeOf(err) === 'ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED') {

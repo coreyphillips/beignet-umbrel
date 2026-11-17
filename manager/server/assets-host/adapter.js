@@ -744,6 +744,29 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     the channel is `failed` with `neverSent: true`: nothing left the
  *     wallet, and the invoice can be paid again. The library hands over
  *     no forwarding hooks.
+ * 42. Since the library at 83bf1a9: openChannel resolves only once the peer
+ *     has signed, the engine keeps the channel and the flow is stored as
+ *     committed. No signature within the call's timeoutMs rejects with
+ *     ERR_BEIGNET_LN_TIMEOUT and the flow is KEPT: an open still under
+ *     way, to be read from channels(), never a failure. After a restart
+ *     resume() deals with every opener's flow by phase and drops none
+ *     silently: before the peer named a funding it is carried on, or,
+ *     where the engine forgot the open, ended, its inputs released, and
+ *     listed with phase `failed` and its reason in `error`; from
+ *     committed on it is carried on while the engine holds the channel
+ *     and listed `engine: 'missing'` when it holds none. The host makes
+ *     such a failed flow a failed open with that reason (endFailed), and
+ *     keeps its own rule for a marker with no flow at all (endLost).
+ * 43. On the accepting side an open that was never funded ends by
+ *     itself: a `channel` event with phase `failed` and a reason, then
+ *     off the list. `engine: 'missing'` is only a channel this wallet
+ *     funded and the peer signed for, or one whose funding the chain
+ *     showed confirmed. An acceptor's open with no engine channel and an
+ *     unconfirmed funding reads `engine: 'absent'`: an inbound open still
+ *     waiting, worded OPENING and never MISSING (views.channelWord).
+ * 44. A quote can be refused with ERR_LIGHTNING_TOO_MANY_REQUESTS, as its
+ *     own code or as the cause: a peer keeps at most eight live unused
+ *     quotes for a wallet. The host says TOO_MANY_QUOTES (429).
  */
 
 /**

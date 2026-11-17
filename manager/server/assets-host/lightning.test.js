@@ -3081,3 +3081,36 @@ test('a payment that never entered the channel says nothing left the wallet and 
 	}
 	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
 });
+
+const ENDED = 'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
+
+test('an open the library ended across a restart is a failed open that carries the reason the library gives, and its key answers that', async () => {
+	// What the library's resume() makes of an open the engine forgot: ended with a reason, and still on its list.
+	const why = 'the engine dropped the channel open before the peer signed';
+	const said = `${ENDED} The wallet's record of it says: ${why}.`;
+	const { h, asset, id, channelId } = await cutShort({ before: (old, pending) => old.ln.set(pending, { phase: 'failed', error: `${why}.` }) });
+	assert.deepEqual(keys(h, 'committed/funding:'), []);
+	assert.deepEqual(await brief(h), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said }]]);
+	assert.deepEqual(events(h, 'error'), [{ code: 'CHANNEL_OPEN_FAILED', message: said, channelId }]);
+	assert.deepEqual((await h.get('/balances')).assets[0].balance, ALL_ON_CHAIN);
+	// The same key answers what became of it, with the reason, and opens nothing.
+	const opens = named(h, 'openChannel').length;
+	const replay = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([replay.extensionCode, replay.status, replay.message], ['CHANNEL_OPEN_FAILED', 409, said]);
+	assert.equal(named(h, 'openChannel').length, opens);
+	// Said once, however often the loop looks, and also after the next start.
+	await passes(h);
+	const later = h.restart();
+	made.push(later);
+	await later.boot();
+	await passes(later);
+	assert.equal(events(later, 'error').length, 1);
+	assert.deepEqual(await brief(later), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said }]]);
+});
+
+test('an open the library ended without saying why is a failed open all the same, in the wallet\'s own sentence', async () => {
+	const { h, asset, id } = await cutShort({ before: (old, pending) => old.ln.set(pending, { phase: 'failed' }) });
+	assert.deepEqual(await brief(h), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: ENDED }]]);
+	const replay = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([replay.extensionCode, replay.status, replay.message], ['CHANNEL_OPEN_FAILED', 409, ENDED]);
+});

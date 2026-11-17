@@ -181,9 +181,22 @@ const isEnded = (c) => !c.signed && FAILED_PHASES.includes(c.phase);
 const isAbandoned = (c) => c.signed && c.phase === 'failed' && !c.fundingReservation;
 // Why an open that failed after it was answered did, by the code its note keeps.
 const OPEN_FAILURES = Object.freeze({
-	CHANNEL_OPEN_INTERRUPTED: 'This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.'
+	CHANNEL_OPEN_INTERRUPTED: 'This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.',
+	// Ended by the library with nothing signed, after this host had answered for it.
+	CHANNEL_OPEN_FAILED: 'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.'
 });
-const failedOpen = (code) => ({ code, message: OPEN_FAILURES[code] || 'This channel was not opened, and nothing was spent.' });
+// The library's own reason for an open it ended, on one line, to follow a sentence.
+const reasonOf = (text) =>
+	String(text || '')
+		.replace(/\s+/g, ' ')
+		.trim()
+		.replace(/[.!]+$/, '')
+		.slice(0, 200);
+const failedOpen = (code, reason) => {
+	const sentence = OPEN_FAILURES[code] || 'This channel was not opened, and nothing was spent.';
+	const why = reasonOf(reason);
+	return { code, message: why ? `${sentence} The wallet's record of it says: ${why}.` : sentence };
+};
 const cancelledError = () => Object.assign(new Error('the open was cancelled'), { code: 'ERR_BEIGNET_LN_CANCELLED' });
 
 const hexKey = (value) => String(value || '').trim().toLowerCase();
@@ -306,7 +319,12 @@ function channelList(host) {
 		// transaction is signed is, whatever its phase says: the transaction
 		// may confirm, and its units are set aside for it. The one signed
 		// funding that is no channel is the one given up as unable to confirm.
-		if (isEnded(c) || isAbandoned(c)) continue;
+		if (isEnded(c) || isAbandoned(c)) {
+			// One this host has ended as a failed open is listed from its note,
+			// also while the library has not taken it off its list yet.
+			if ((notes.get(c.pendingChannelId) || {}).failed) seen.delete(c.pendingChannelId);
+			continue;
+		}
 		// A channel a peer began to open that the engine let go of before
 		// anything was signed: nothing of this wallet's is in it.
 		if (!c.signed && !c.initiator && c.engine === 'missing') continue;
@@ -371,7 +389,7 @@ function channelList(host) {
 	}
 	for (const note of notes.values()) {
 		// An open that failed stays listed for a while, as what it is.
-		const failed = note.failed ? failedOpen(note.failed.code) : null;
+		const failed = note.failed ? failedOpen(note.failed.code, note.failed.reason) : null;
 		if (seen.has(note.id) || (note.closedAt && !failed)) continue;
 		// An open the user confirmed that the library has not heard of yet is
 		// on its way. Anything else the library no longer lists was a channel,
@@ -2040,7 +2058,14 @@ async function settleOpens(host, { first = false } = {}) {
 		// whatever became of it since: the loop notes it as over.
 		if (kept) continue;
 		if (flow && isEnded(flow)) {
-			await undoOpen(host, id, flow.cancelled ? cancelledError() : new Error(`the open ended as ${flow.phase}${flow.error ? ` (${flow.error})` : ''}`));
+			// Dropped because the user asked, or turned down by the peer: undone
+			// and forgotten, and said. Ended by the library itself (`failed`)
+			// with nobody here opening it: what its resume() makes of an open a
+			// restart interrupted. This host had answered for that open, so it
+			// becomes a failed open with the library's reason.
+			if (flow.cancelled) await undoOpen(host, id, cancelledError());
+			else if (flow.phase === 'failed') await endFailed(host, id, note, flow);
+			else await undoOpen(host, id, new Error(`the open ended as ${flow.phase}${flow.error ? ` (${flow.error})` : ''}`));
 			continue;
 		}
 		// Answered by the library once, and not on its list now: cut short.
@@ -2114,7 +2139,47 @@ async function endLost(host, id, note) {
 	if ((await host.tap.stores.assets.listAssets()).some((r) => r.reservedBy === name)) return waits('what its funding set aside is still set aside in the on-chain records');
 	if (mem.stopped || mem.opens.has(id)) return;
 	if ((await giveUp(host, id)) !== true) return waits('the library would not give it up');
-	const failure = failedOpen('CHANNEL_OPEN_INTERRUPTED');
+	await endOpen(
+		host,
+		id,
+		note,
+		failedOpen('CHANNEL_OPEN_INTERRUPTED'),
+		null,
+		(channelId) =>
+			`assets: a channel open (${channelId}) was cut short before its funding was signed, and neither the library nor the node holds anything of it. It is ended, and can be asked for again.`
+	);
+}
+
+/**
+ * A confirmed open the library lists as ended with nothing signed, that
+ * nobody here is opening: what its resume() makes of an open a restart
+ * interrupted (the engine forgot it before the peer signed), with its
+ * inputs released and its reason on the flow. The library is told to give
+ * it up, which says whether anything will still be opened under the id,
+ * and then the open is a failed open that carries the library's reason.
+ */
+async function endFailed(host, id, note, flow) {
+	if (host.mem.stopped || host.mem.opens.has(id)) return;
+	if ((await giveUp(host, id)) !== true) return;
+	const why = reasonOf(flow.error);
+	await endOpen(
+		host,
+		id,
+		note,
+		failedOpen('CHANNEL_OPEN_FAILED', why),
+		why || null,
+		(channelId) => `assets: a channel open (${channelId}) was ended by the library before its funding was signed${why ? `: ${why}` : ''}. Nothing left the wallet, and it can be asked for again.`
+	);
+}
+
+/**
+ * An open that is over with nothing signed becomes a failed open: its
+ * marker goes, its note says why (the code, and the library's reason when
+ * it gave one), and the key that asked for it answers the failure from
+ * now on. Said, announced, and only then taken off the library's list.
+ */
+async function endOpen(host, id, note, failure, reason, line) {
+	const { mem, rows } = host;
 	const channelId = note.channelId || id;
 	const done = await host.lock.run(() =>
 		rows.tx(() => {
@@ -2122,7 +2187,7 @@ async function endLost(host, id, note) {
 			if (!current || current.closedAt || !rows.get(`committed/funding:${id}`)) return false;
 			const at = host.now();
 			rows.del(`committed/funding:${id}`);
-			rows.put(`chan/${id}`, { ...current, closedAt: at, failed: { code: failure.code, at } });
+			rows.put(`chan/${id}`, { ...current, closedAt: at, failed: reason ? { code: failure.code, at, reason } : { code: failure.code, at } });
 			// The key that asked for it answers what became of it from now on.
 			const entry = current.journal ? rows.get(current.journal) : null;
 			if (entry) rows.put(current.journal, { at: entry.at, body: entry.body, refusal: { code: failure.code, message: failure.message, status: 409 } });
@@ -2131,7 +2196,7 @@ async function endLost(host, id, note) {
 	);
 	if (!done) return;
 	mem.dropping.delete(id);
-	host.say('warn', `assets: a channel open (${channelId}) was cut short before its funding was signed, and neither the library nor the node holds anything of it. It is ended, and can be asked for again.`);
+	host.say('warn', line(channelId));
 	host.emitEvent('error', { code: failure.code, message: failure.message, channelId });
 	letGo(host, id);
 	host.markDirty();
