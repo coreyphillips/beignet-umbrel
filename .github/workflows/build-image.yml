@@ -797,7 +797,20 @@ env:
   # the runtime dependencies are unchanged, BEIGNET_EXTENSIONS is the one
   # new environment setting, and the capability probes in server/engine.js
   # answer as for 0.41.0.
-  BEIGNET_VERSION: "0.42.0"
+  # 0.43.0 adds asset channels (coreyphillips/beignet#2096): a host
+  # extension may supply an auxiliary channel provider, a fee policy for
+  # transactions whose outputs are fixed and a binding to the node, and a
+  # node with a provider can hold Lightning channels whose commitments
+  # carry asset outputs. It is the first release the assets host's
+  # Lightning side (#311) runs on: the probe for asset channels in
+  # server/engine.js now answers yes, and every other probe answers as for
+  # 0.42.0. A daemon started with no extension, or with one that supplies
+  # no provider, behaves as 0.42.0 does. BeignetErrorCode gains
+  # ASSET_PROVIDER_REQUIRED, ASSET_PROVIDER_CONFLICT, ASSET_PROVIDER_FAILED,
+  # ASSET_RESTORE_REFUSED, ASSET_GUARDIAN_START_REFUSED and
+  # PAYMENT_UNRESOLVED. The storage schema (20), the environment settings
+  # and the runtime dependencies are unchanged.
+  BEIGNET_VERSION: "0.43.0"
 
 jobs:
   build:
