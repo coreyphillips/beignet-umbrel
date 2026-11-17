@@ -38,6 +38,13 @@ const RESTORE_REFUSALS = {
 		'The channel state that was to be restored holds an asset channel, and the assets part of this wallet is not running to take it, so nothing was restored and nothing was written. The wallet is as it was.'
 };
 
+// A cancel of a payment the daemon marks as unresolved: it went through an
+// asset channel a restore left out, and its end can no longer be learnt.
+const CANCEL_ROUTE = /^\/payment\/cancel(\?.*)?$/;
+const CANCEL_REFUSALS = {
+	PAYMENT_UNRESOLVED: 'This payment went through an asset channel that was left out of a restore, so this wallet cannot learn how it ended. It stays pending, and cannot be cancelled.'
+};
+
 /**
  * The line the wallet's log gets for a daemon call that failed. A restore
  * refused over an asset channel is said in the manager's sentence, with
@@ -49,7 +56,8 @@ function daemonFailureLine(method, route, status, error) {
 	const err = error && typeof error === 'object' ? error : {};
 	const code = typeof err.code === 'string' ? err.code : '';
 	const restore = RESTORE_ROUTE.test(String(route || ''));
-	const said = restore && Object.prototype.hasOwnProperty.call(RESTORE_REFUSALS, code) ? RESTORE_REFUSALS[code] : err.message || '';
+	const cancel = CANCEL_ROUTE.test(String(route || '')) && Object.prototype.hasOwnProperty.call(CANCEL_REFUSALS, code);
+	const said = cancel ? CANCEL_REFUSALS[code] : restore && Object.prototype.hasOwnProperty.call(RESTORE_REFUSALS, code) ? RESTORE_REFUSALS[code] : err.message || '';
 	const named = restore && said !== (err.message || '') && err.details && Array.isArray(err.details.assetChannels) ? err.details.assetChannels.length : 0;
 	const more = named > 0 ? ` The refusal names ${named} asset channel${named === 1 ? '' : 's'}, and the restore can be run without ${named === 1 ? 'it' : 'them'} from the wallet's page.` : '';
 	return `${method} ${route} failed [${code || status}] ${said}${more}`.trim();
@@ -117,4 +125,4 @@ function createDaemonProxy(manager) {
 	});
 }
 
-module.exports = { createDaemonProxy, daemonFailureLine, RESTORE_REFUSALS, MAX_LOGGED_BODY };
+module.exports = { createDaemonProxy, daemonFailureLine, RESTORE_REFUSALS, CANCEL_REFUSALS, MAX_LOGGED_BODY };

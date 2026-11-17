@@ -150,7 +150,7 @@ function restoreApi(answers) {
 const by = (r, id) => r.$(`[data-testid="${id}"]`);
 
 test('a checkpoint that holds asset channels: the refusal lists them, and the restore without them waits for the typed phrase', async () => {
-	const api = restoreApi([refusedOver('ASSET_RESTORE_REFUSED'), { tier: 2, restartRequired: true, channelCount: 2, omittedAssetChannels: ASSET_CHANNELS }]);
+	const api = restoreApi([refusedOver('ASSET_RESTORE_REFUSED'), { tier: 2, restartRequired: true, channelCount: 2, omittedAssetChannels: ASSET_CHANNELS, unresolvedPayments: ['a1'.repeat(32), 'b2'.repeat(32), 'c3'.repeat(32)] }]);
 	let dismissed = 0;
 	const r = await render(ToastProvider, { children: createElement(CapsuleRestoreCard, { api, offer: offer(), onRestored: () => {}, onDismiss: () => (dismissed += 1) }) });
 	try {
@@ -188,6 +188,13 @@ test('a checkpoint that holds asset channels: the refusal lists them, and the re
 		const left = by(r, 'capsule-omitted');
 		assert.match(left.textContent, /^2 asset channels were left out of the restore, as asked\. This wallet has no record\s+of them and cannot bring the assets in them back by itself\. The peer of each\s+can still close its channel\./);
 		assert.equal(by(r, 'capsule-omitted-list').querySelectorAll('li').length, 2);
+		// And how many payments that leaves with no end this wallet can learn of.
+		const unresolved = by(r, 'capsule-unresolved');
+		assert.equal(unresolved.getAttribute('data-count'), '3');
+		assert.equal(
+			unresolved.textContent.replace(/\s+/g, ' ').trim(),
+			'3 payments that were under way on those channels are left unresolved. This wallet no longer holds the channels that would say how they ended, so each stays pending for good: it is not counted as paid or as failed, and it cannot be cancelled or tried again from here.'
+		);
 		await click(by(r, 'capsule-omitted-done'));
 		assert.equal(dismissed, 1);
 	} finally {
@@ -202,6 +209,7 @@ test('a restore that left nothing out says nothing of asset channels, and one re
 		await settle(20);
 		assert.match(plain.text(), /Checkpoint installed/);
 		assert.equal(by(plain, 'capsule-omitted'), null);
+		assert.equal(by(plain, 'capsule-unresolved'), null);
 		assert.equal(by(plain, 'capsule-omitted-done'), null);
 	} finally {
 		await plain.unmount();

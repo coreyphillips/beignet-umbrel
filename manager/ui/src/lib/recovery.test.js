@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, autoApplyState, RESTORE_STEPS, isNodeUri, isBolt8Entry, guardianEntryLabel } from './recovery.js';
+import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, autoApplyState, RESTORE_STEPS, isNodeUri, isBolt8Entry, guardianEntryLabel, unresolvedPayments } from './recovery.js';
 
 const node = (extra = {}) => ({
 	gate: 'confirmed',
@@ -354,4 +354,10 @@ test('the asset channels a capsule restore was refused over are read from the re
 	assert.deepEqual(restoreAssetChannels(undefined), []);
 	assert.match(assetRestoreRefusal({ code: 'ASSET_PROVIDER_REQUIRED' }), /the assets part of this wallet is not running to take it, so nothing was restored and nothing was written/);
 	assert.equal(OMIT_ASSET_CHANNELS_PHRASE, 'leave them out');
+});
+
+test('the payments a restore left unresolved are counted from its answer, whatever shape the count comes in', () => {
+	assert.equal(unresolvedPayments({ unresolvedPayments: ['a1'.repeat(32), 'b2'.repeat(32)] }), 2);
+	assert.equal(unresolvedPayments({ unresolvedPayments: 4 }), 4);
+	for (const answer of [null, undefined, {}, { unresolvedPayments: [] }, { unresolvedPayments: 'three' }, { unresolvedPayments: -1 }]) assert.equal(unresolvedPayments(answer), 0);
 });

@@ -117,3 +117,13 @@ test('a restore the engine refused over an asset channel is logged in the manage
 	assert.equal(daemonFailureLine('POST', '/channels/open', 409, { code: 'ASSET_PROVIDER_REQUIRED', message: 'no provider' }), 'POST /channels/open failed [ASSET_PROVIDER_REQUIRED] no provider');
 	assert.equal(daemonFailureLine('POST', '/send', 500, {}), 'POST /send failed [500]');
 });
+
+test('a cancel the daemon refuses because the payment has no end it can learn of is said in a sentence', () => {
+	const line = daemonFailureLine('POST', '/payment/cancel', 409, { code: 'PAYMENT_UNRESOLVED', message: 'payment is unresolved: CHANNEL_OMITTED_AT_RESTORE' });
+	assert.equal(
+		line,
+		'POST /payment/cancel failed [PAYMENT_UNRESOLVED] This payment went through an asset channel that was left out of a restore, so this wallet cannot learn how it ended. It stays pending, and cannot be cancelled.'
+	);
+	// Only there: the same code on another route is the daemon's own message.
+	assert.equal(daemonFailureLine('POST', '/payment/send', 409, { code: 'PAYMENT_UNRESOLVED', message: 'unresolved' }), 'POST /payment/send failed [PAYMENT_UNRESOLVED] unresolved');
+});

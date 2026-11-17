@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Card, Field } from './ui.jsx';
 import { shortId } from '../lib/format.js';
-import { assetRestoreRefusal, refusedAssetChannels, restoreAssetChannels, OMIT_ASSET_CHANNELS_PHRASE } from '../lib/recovery.js';
+import { assetRestoreRefusal, refusedAssetChannels, restoreAssetChannels, unresolvedPayments, OMIT_ASSET_CHANNELS_PHRASE } from '../lib/recovery.js';
 
 /**
  * A channel checkpoint a storage peer returned (beignet 0.9.3+, peer-storage
@@ -103,6 +103,7 @@ export default function CapsuleRestoreCard({ api, offer, restored, onRestored, o
 	if (result && result.kind === 'capsule') {
 		const n = result.channelCount ?? offer.channelCount;
 		const left = restoreAssetChannels(result.omittedAssetChannels);
+		const unresolved = unresolvedPayments(result);
 		return (
 			<Card title={result.restartRequired === false ? 'Channels resuming' : 'Checkpoint installed'}>
 				<p className="restore-lead">
@@ -120,6 +121,16 @@ export default function CapsuleRestoreCard({ api, offer, restored, onRestored, o
 						of {left.length === 1 ? 'it' : 'them'} and cannot bring the assets in {left.length === 1 ? 'it' : 'them'} back by itself. The peer of each
 						can still close its channel.
 						<AssetChannelList channels={left} testId="capsule-omitted-list" />
+					</div>
+				)}
+				{unresolved > 0 && (
+					<div className="info-note" role="status" data-testid="capsule-unresolved" data-count={unresolved}>
+						{unresolved === 1
+							? 'One payment that was under way on those channels is'
+							: `${unresolved} payments that were under way on those channels are`}{' '}
+						left unresolved. This wallet no longer holds the channels that would say how {unresolved === 1 ? 'it' : 'they'} ended, so{' '}
+						{unresolved === 1 ? 'it' : 'each'} stays pending for good: it is not counted as paid or as failed, and it cannot be cancelled or
+						tried again from here.
 					</div>
 				)}
 				{left.length > 0 && onDismiss && (

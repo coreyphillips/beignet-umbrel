@@ -39,6 +39,19 @@ const ASSET_RESTORE_REFUSALS = {
 export const OMIT_ASSET_CHANNELS_PHRASE = 'leave them out';
 
 /** Asset channels as a restore names them, [{ channelId, peerPubkey, capacitySats }], with anything malformed left out. */
+/**
+ * How many payments a restore left unresolved: those that were under way on
+ * the asset channels it left out. The daemon lists their payment hashes in
+ * its answer (`unresolvedPayments`), and only when there are any. Each
+ * stays pending for good on the daemon's rows, marked as unresolved, and
+ * its cancel is refused (409 PAYMENT_UNRESOLVED).
+ */
+export function unresolvedPayments(answer) {
+	const said = answer ? answer.unresolvedPayments : null;
+	if (Array.isArray(said)) return said.length;
+	return Number.isInteger(said) && said > 0 ? said : 0;
+}
+
 export function restoreAssetChannels(list) {
 	return (Array.isArray(list) ? list : [])
 		.filter((c) => c && typeof c.channelId === 'string' && c.channelId && typeof c.peerPubkey === 'string' && c.peerPubkey)

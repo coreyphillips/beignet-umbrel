@@ -2425,6 +2425,11 @@ export function createAssetsMock(ctx) {
 	// The asset channels the checkpoint a peer returned for this wallet
 	// holds, as the engine names them when it refuses a capsule restore over
 	// them and when it leaves them out: null when it holds none.
+	/** The payments the demo's restore without its asset channels leaves unresolved, as the daemon's answer lists them. */
+	function capsuleUnresolved(id) {
+		return S(id).capsuleAssets ? [0, 1, 2].map((i) => derivedHex(`capsule-unresolved:${id}:${i}`, 64)) : [];
+	}
+
 	function capsuleAssetChannels(id) {
 		if (!S(id).capsuleAssets) return null;
 		return [0, 1].map((i) => ({
@@ -2520,6 +2525,7 @@ export function createAssetsMock(ctx) {
 		seed: putState,
 		/** For the demo daemon: the asset channels the wallet's checkpoint holds, or null. */
 		capsuleAssetChannels,
+		capsuleUnresolved,
 		/** For the demo daemon: read the switch in the address now, ahead of a route that depends on it. */
 		readSwitch,
 		/** For tests: this wallet's proof server stops answering, or answers again. */

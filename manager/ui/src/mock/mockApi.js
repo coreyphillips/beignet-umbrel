@@ -3184,7 +3184,8 @@ function walletRequest(id, path, method, body, headers) {
 					});
 				}
 				const restored = runDemoCapsuleRestore(w, st);
-				return assetChannels ? { ...restored, omittedAssetChannels: assetChannels } : restored;
+				// As the daemon: the payments that were under way on them, by payment hash.
+				return assetChannels ? { ...restored, omittedAssetChannels: assetChannels, unresolvedPayments: assetsMock.capsuleUnresolved(w.id) } : restored;
 			}
 		case '/backup/peer-retrieved':
 			if (!st.recovery.capsule) throw err('No peer-retrieved backup this session', 'NOT_FOUND');

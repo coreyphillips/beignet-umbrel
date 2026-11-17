@@ -65,3 +65,13 @@ test('a payment or invoice answer that is not a list is handed back as it came',
 	assert.equal(bitcoinPayments(null), null);
 	assert.equal(bitcoinInvoices(undefined), undefined);
 });
+
+test('a payment or an invoice a restore left unresolved is an asset row, so the bitcoin lists never show it', () => {
+	const unresolved = { code: 'CHANNEL_OMITTED_AT_RESTORE', channelIds: ['c'.repeat(64)] };
+	const stuck = { paymentHash: 'd'.repeat(64), direction: 'OUTGOING', status: 'PENDING', amountSats: 354, auxiliary: true, unresolved };
+	const asked = { paymentHash: 'f'.repeat(64), status: 'PENDING', amountSats: 500, auxiliary: true, unresolved };
+	const plain = { paymentHash: 'e'.repeat(64), direction: 'OUTGOING', status: 'PENDING', amountSats: 21_000 };
+	assert.equal(isAssetRow(stuck), true);
+	assert.deepEqual(bitcoinPayments([stuck, plain]), [plain]);
+	assert.deepEqual(bitcoinInvoices([asked]), []);
+});
