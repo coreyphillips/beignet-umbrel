@@ -50,8 +50,9 @@ Hover or tap the **?** beside a setting in the dashboard for what it does.
 - **Create** your own assets: a normal asset with a supply and decimals, or a collectible, with metadata and the choice of minting more later. The cost in sats is shown before you confirm.
 - **Receive** by picking an asset you hold, or looking one up by its ID, and sharing the address as text or a QR. The row follows the payment from the chain to a verified proof by itself.
 - **Send** by pasting an asset address: the asset, the amount, where the proof goes and the exact fee are shown first, and nothing is broadcast until you confirm. **Burn** an amount for good from the asset's page.
-- **On mainnet, testnet and regtest**, for Lightning and on-chain only wallets, interoperable with Lightning Labs' `tapd`. Assets in Lightning channels come in a later release.
-- **Know the limits first**: a recovery phrase alone does not restore assets (the box backup does), there is no fee bumping for asset transactions yet, and none of it has had an independent security review. See [docs/ASSETS.md](docs/ASSETS.md).
+- **On mainnet, testnet and regtest**, for Lightning and on-chain only wallets, interoperable with Lightning Labs' `tapd`.
+- **Over Lightning**, on an engine that can carry asset channels: open a channel that holds an asset with another wallet of this app, make an invoice for an amount of the asset, pay an invoice with it, and close together or alone. The released engine, Beignet 0.42.0, cannot carry them, so on it this stays hidden.
+- **Know the limits first**: a recovery phrase alone does not restore assets (the box backup does), there is no fee bumping for asset transactions yet, and none of it has had an independent security review. No backup brings an asset channel back, and a wallet with one has to come online regularly and keep some confirmed bitcoin on-chain for fees. See [docs/ASSETS.md](docs/ASSETS.md).
 
 ### Channels and peers
 

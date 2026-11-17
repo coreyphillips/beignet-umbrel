@@ -2,9 +2,9 @@
 
 A wallet can create, receive, send and burn [Taproot Assets](https://docs.lightning.engineering/the-lightning-network/taproot-assets): tokens and collectibles that live in ordinary bitcoin transactions. It works on mainnet, testnet (testnet3 and testnet4) and regtest, for Lightning wallets and on-chain only wallets alike, from the **Assets** tab.
 
-This release covers assets on-chain. Assets in Lightning channels are built in the dashboard and stay hidden until the engine can carry them (see [Not covered](#not-covered)).
+A Lightning wallet can also keep an asset in a Lightning channel: open a channel with it, make invoices for it and pay invoices with it. **That needs an engine that can carry asset channels, and the released engine, Beignet 0.42.0, cannot.** On that engine everything about asset channels stays hidden and nothing puts an asset in a channel. [Assets over Lightning](#assets-over-lightning) describes them as they are on an engine that can.
 
-**Read [Before you use this on mainnet](#before-you-use-this-on-mainnet) first.** The short version: the recovery phrase alone does not bring assets back, none of this code has had an independent security review, and a transfer normally reaches its recipient through a proof server, which has to accept its proof. The public testnet3 server did not when this was tested; such a transfer is finished by handing the proof over as a file (see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers)).
+**Read [Before you use this on mainnet](#before-you-use-this-on-mainnet) first.** The short version: the recovery phrase alone does not bring assets back, none of this code has had an independent security review, and a transfer normally reaches its recipient through a proof server, which has to accept its proof. The public testnet3 server did not when this was tested; such a transfer is finished by handing the proof over as a file (see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers)). An asset channel adds limits of its own, and the first is that no backup brings a channel back (see [Asset channels and backups](#asset-channels-and-backups)).
 
 ## What you can do
 
@@ -15,11 +15,20 @@ This release covers assets on-chain. Assets in Lightning channels are built in t
 - **Hand a proof over as a file.** When a proof server will not carry a transfer's proof, the sender saves it as a file and the recipient imports it. See [Handing a proof over as a file](#handing-a-proof-over-as-a-file).
 - **See it all.** Holdings with their bitcoin locked beside them, every mint, receive, send and burn with its progress, and the details of each asset: its ID, metadata, where it was issued, how much this wallet created.
 
+On an engine that can carry asset channels, a Lightning wallet can also:
+
+- **Open an asset channel** with a peer, from the Channels tab. The dialog shows what goes in and what it costs before you confirm.
+- **Make a Lightning invoice** for an amount of an asset, under Assets, Receive.
+- **Pay a Lightning invoice with an asset**, by pasting it under Assets, Send. What it takes of the asset is shown first, and nothing is paid until you confirm.
+- **Close a channel**, together with its peer or alone, and have the asset back on-chain.
+
 An asset address pasted into the ordinary Send tab is recognised and handed to the Assets tab.
 
 ### How long things take
 
 An asset is spendable after **6 confirmations** on mainnet and testnet (1 on regtest), about an hour. That is the depth at which the wallet builds and stores the proof, and the depth a received proof must have before it is imported. The progress line under each row counts the confirmations, and it keeps counting if you close the page or the wallet restarts.
+
+An asset channel carries payments once its funding transaction has confirmed. Until then its row reads **opening**.
 
 ## How it runs
 
@@ -46,6 +55,8 @@ browser ──> manager ──> /wallets/:id/api/x/assets/*  ──> the wallet'
 **Where the code comes from.** ts-tap is not published to npm. Two tarballs built from one ts-tap commit are committed under `vendor/`, with their checksums and the commit they came from (`vendor/ts-tap.lock.json`). They hold the compiled library, its type declarations and source maps that name each source file and line. They do not hold ts-tap's TypeScript sources. The image build checks the checksums and installs them beside the engine in one step, so the adapter and the daemon share a single copy of the engine.
 
 **When the tab appears.** Assets need an engine release that carries the host extension contract. Beignet 0.42.0 is the first, and it is the one this app bundles. The manager looks at the engine it is bundled with: on an older engine the Assets tab is simply absent and every wallet runs as before. `BEIGNET_ASSETS=off` in the app's environment switches assets off for the whole box.
+
+**When asset channels appear.** They need more than the tab does: an engine whose extension contract hands the assets host the node's channels, and a ts-tap build that ships its Lightning part. The manager looks for both in the engine it is bundled with and reports what it found (`assetChannelsAvailable` in `GET /api/config`). Beignet 0.42.0 cannot carry asset channels, so on it that reads false and nothing about them is shown. On an engine that can, a wallet has them when it is a Lightning wallet (not on-chain only), its assets are on, and its channel backup is not kept by guardians.
 
 ## Where the requests go
 
@@ -135,6 +146,115 @@ Creating, sending and burning also need ordinary bitcoin for the miner fee. A wa
 
 A **lightning-first** wallet moves its on-chain bitcoin into its channel by itself once it holds 25,000 sats or more ([LFBW.md](LFBW.md)). It can receive assets like any other wallet, and it can pay asset fees only from what it keeps on-chain below that amount. An ordinary Lightning wallet or an on-chain only wallet is the easier home for assets.
 
+## Assets over Lightning
+
+Everything in this section needs an engine that can carry asset channels. On Beignet 0.42.0 none of it is shown.
+
+An asset channel is a Lightning channel funded with an asset. What moves through it is the asset. Asset channels are listed under **Asset channels** on the Channels tab, apart from the wallet's bitcoin channels, and they are left out of the bitcoin figures there.
+
+The limits, first:
+
+- **Only a Lightning wallet has them.** An on-chain only wallet does not, and neither does a wallet whose channel backup is kept by guardians (see [Asset channels and backups](#asset-channels-and-backups)).
+- **The peer has to take asset channels.** Another wallet running this app, on an engine that can carry them, does. A peer that runs Lightning Labs' daemons is not verified yet (see [Not covered](#not-covered)).
+- **A wallet of this app sets no bitcoin price for an asset.** Between two wallets of this app an invoice is for the asset alone and only the channel's peer can pay it. See [Invoices, payments and prices](#invoices-payments-and-prices).
+- **This wallet never forwards a payment for anyone else**, and never sells an asset for bitcoin.
+- **An asset payment goes out in one part, over one channel.** What you can send or receive at once is what the best single channel carries, never the sum of several.
+- **No backup brings a channel back.** See [Asset channels and backups](#asset-channels-and-backups).
+
+### Opening a channel
+
+**Open asset channel**, on the Channels tab, asks for the asset, the amount, the peer (as `02abc…@host:9735`) and the fee rate of the funding transaction, which starts at the fast rate so the channel does not sit unconfirmed. Before you confirm it shows what the open costs:
+
+| Row | What it is |
+| --- | --- |
+| Goes into the channel | The amount of the asset, and 100,000 sats of bitcoin with it |
+| Starts on the peer's side | A small part of that bitcoin, about 1,700 sats, so the peer can pay you back. The dialog says the figure |
+| Miner fee | The fee of the funding transaction, at the rate you chose |
+| Total in bitcoin | The 100,000 sats and the miner fee |
+| On-chain available | What the wallet has to pay that with |
+
+The bitcoin in the channel stays yours and comes back when the channel is closed, all but the part that starts on the peer's side: that is the peer's. The miner fee is spent.
+
+- **The asset all starts on your side.** You can pay with it as soon as the channel is open, and receive only once some has gone out.
+- **The bitcoin has to be on native SegWit addresses.** A wallet that has too little there is refused, with what it has on those addresses, what the open needs and what sits on addresses of other types, which cannot be used for it. Nothing is spent.
+- **One asset per channel.** Of an asset that was created in several issuances a channel holds one, so the most a channel can take is the most the wallet holds of a single issuance on-chain. A collectible cannot go into a channel.
+- **The peer is asked before anything is funded.** The wallet connects to it and asks whether it takes asset channels. If it does not, the wallet says so, and nothing is opened and nothing is spent.
+- **The wallet needs a proof server.** The proofs of the asset are put there before the open, and that is where the peer's wallet checks what it is being handed.
+- **Keep bitcoin on-chain beside it.** The dialog says how much, and [Fee coins](#fee-coins) says why.
+
+**A channel a peer opens to you is accepted by itself.** Nobody is asked. It is taken when asset channels are on for the wallet and it has finished starting, when fewer than four channels that peers began are still opening, when the asset is one this wallet knows or one whose issuance its own proof server can show, and when it is not a collectible. Anything else is turned down, and the wallet's log says why.
+
+**While it opens.** The channel is listed as **opening**, with "Opening. It can carry payments once its funding transaction has confirmed." A funding transaction that will not confirm can be taken back: **Take the funding back** on the row sends a transaction that spends the same bitcoin back to this wallet at a higher fee, so the funding can never confirm and the asset stays in the wallet. The miner fee comes out of the bitcoin that returns. Most fundings confirm by themselves, and waiting costs nothing.
+
+**An open that was interrupted.** Asking twice never opens two channels: an open carries a key, and the same request answers the same channel, also across a restart. A wallet that stops in the middle of an open carries it on at its next start. An open that ended before any bitcoin or asset left the wallet stays listed for seven days as **not opened**, with the reason, for example "This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again." There is nothing to close on such a row, and it goes by itself.
+
+### Invoices, payments and prices
+
+**An invoice** is made under Assets, Receive, in the **Lightning invoice** card: pick the asset, type the amount, add a note for the payer if you like. The wallet asks your channel peer, and the invoice is shown as text and a QR code. It holds for as long as the peer keeps its answer for it, an hour at most. Its row says when it was paid and what arrived. What arrives can be one unit less than what was invoiced when a payer's price rounds down, and the balance counts what arrived.
+
+**A payment** is made under Assets, Send, by pasting a Lightning invoice. The wallet asks your channel peer first and shows what the payment takes of the asset and how long that is held for. Nothing is paid until you confirm, and a payment never takes more of the asset than you were shown. If what you were shown has run out or changed, the wallet says so, nothing is paid, and you are shown the new figure. An invoice this wallet has already paid is refused. A payment whose end is not known yet stays **pending** until the wallet's node says how it ended, also across a restart.
+
+**Prices.** In an asset channel the peer is the one that can exchange the asset for bitcoin, at a price it quotes each time. **A wallet of this app sets no price.** So between two wallets of this app:
+
+- **No worth in sats and no rate is shown**, on an invoice or on a payment.
+- **An invoice is for the asset alone, and only the channel's peer can pay it.** The sats written on such an invoice are not a price.
+- **Paying somebody else's bitcoin invoice with an asset needs a peer that sets a price**, and a wallet of this app is not one.
+
+With a peer that does set a price, an invoice shows what the payer is asked for in sats and the rate, and a payment shows what the invoice gets and the price. That path is built, and it is not verified against such a peer yet.
+
+- **At most eight unused answers from one peer at a time.** Every invoice you make, and every figure you ask for before paying, is one the peer keeps for you until it is used or runs out. A peer keeps eight for one wallet at once, so no more than eight unpaid asset invoices are open with one peer at a time. The next is refused with "The peer is already keeping as many unused prices for this wallet as it keeps at once, so it gave no new one. Try again in a few minutes."
+- **One part, one channel.** A payment larger than the best single channel can send is refused ("No asset channel of this wallet can send that much."), also when two channels together could. An invoice for more than one channel can receive is refused the same way.
+- **A peer that is away.** A channel whose peer is not connected carries nothing until it is back. Its row says **peer offline**, and an invoice or a payment that would need that channel says who is away, with nothing made and nothing paid.
+
+### Closing a channel
+
+**Together with the peer.** **Close** on the channel's row. Your side of the asset comes back to this wallet on-chain, along with the bitcoin the channel holds, once the closing transaction confirms. A channel is closed together only while its peer is connected. With the peer away the close is refused, and the dialog says so before you try.
+
+**Alone, a force close.** It does not ask the peer. It is for a peer that has stopped answering, and for nothing else. Your side of the asset and the channel's bitcoin come back only after the channel's safety delay, which can be days, and the transaction costs more in miner fees than an agreed close. The row reads **closing** while the delay runs and **force closed** once it is over. The wallet brings what is yours home by itself when the delay has passed, and it has to be running to do that. If the assets of a closed channel are not back yet, the Channels tab says "The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why." That is a wait, not a loss.
+
+What a row offers, by what it reads:
+
+| The row reads | What it means | What you can do |
+| --- | --- | --- |
+| opening | The funding transaction has not confirmed | Wait, or take the funding back |
+| open | It carries payments | Invoice, pay, close |
+| open, peer offline | The peer is not connected, so the channel carries nothing until it is back | Wait, or force close if the peer is gone for good |
+| failed | The wallet's node gave the channel up. It carries nothing | Force close. It can no longer be closed together with its peer |
+| closing | A close is under way | Wait |
+| closed, force closed | Over. The row stays for a while and then goes | Nothing |
+| not opened | An open that ended before anything left the wallet | Nothing. The open can be tried again |
+| not held here | On the wallet's record, and its node does not hold it: what a restore from a backup leaves | See [Asset channels and backups](#asset-channels-and-backups) |
+
+### The bitcoin in an asset channel
+
+Opening a channel takes 100,000 sats and the miner fee out of the wallet's on-chain balance. **While the channel is there, the bitcoin on your side of it is in neither the on-chain balance, nor the Lightning balance, nor the total**: it cannot be spent as bitcoin and it is not sent over Lightning. The dashboard shows it on a line of its own, the way it shows sats locked with assets:
+
+- **On the Overview**, under the Lightning figure: **in asset channels**, and while a channel is closing, **on their way back from a closing asset channel**.
+- **In the wallet list**, after the wallet's figures, in the same words.
+- **On each channel's row**, as **Bitcoin in the channel**: the whole of the channel's bitcoin, your side and the peer's.
+
+A channel that is closing stays on the second line until its close is over, which after a force close is the whole of the safety delay. Then the line is gone and the bitcoin has come back to the wallet with the asset.
+
+### Fee coins
+
+A payment that is in flight when a channel goes on chain is claimed with an on-chain transaction of its own, and that transaction pays its miner fee from the wallet's ordinary bitcoin: from a small confirmed coin the wallet sets aside for it, a **fee coin**. Preparing fee coins takes a confirmed coin of the wallet's own, and a block.
+
+**So a wallet with an asset channel should keep some confirmed bitcoin on-chain.** The open dialog says how much, beside what the open itself takes. What the Channels tab says when something is short:
+
+- **No confirmed coin large enough**, on a wallet with a channel: "Keep at least N sats of confirmed bitcoin on-chain in this wallet. A payment caught in an asset channel that has to be closed without the peer is claimed with an on-chain transaction, and its miner fee comes from the wallet's own bitcoin. The wallet has no confirmed coin large enough for that now, so such a claim could come too late."
+- **The budget is used up**: "The budget this app sets for the miner fees of asset channels is used up, so nothing was done. Nothing was lost: the channels and what is in them are as they were."
+- **The wallet's node did not take the fee settings**: no new asset channel is opened, the channels there already are keep working, and the wallet's log says what the node refused. This one is for whoever runs the box.
+
+The limits this app gives the wallet's node for those fees:
+
+| | mainnet | testnet | regtest |
+| --- | --- | --- | --- |
+| One claim, at most | 25,000 sats | 10,000 sats | 10,000 sats |
+| One preparation of fee coins (four at a time), at most | 10,000 sats, at 10 sat/vB | 10,000 sats, at 1 sat/vB | 10,000 sats, at 1 sat/vB |
+| All of them together | 2,500,000 sats | 1,000,000 sats | 100,000,000 sats |
+
+The first two never pass the wallet's ceiling for one asset transaction (`BEIGNET_ASSETS_MAX_FEE_SATS`, see [Fees](#fees)). The app has no setting of its own for the rest. The total is a budget that is charged a whole claim's limit at a time and not given back, about a hundred claims on mainnet.
+
 ## Backup and recovery
 
 **A recovery phrase alone does not restore assets.** The phrase recreates the keys. What makes an output an asset is its proof, which exists nowhere on chain, and the wallet finds its assets through records only it holds.
@@ -152,6 +272,33 @@ Channel backup, guardians and peer storage do not cover assets. A wallet moved t
 
 Deleting a wallet takes its assets out of the app, and erasing its data deletes their records. The dialog says so when the wallet holds any, and whether the last backup has them.
 
+### Asset channels and backups
+
+**No backup brings an asset channel back.** A channel is held by the wallet's node on this machine, and its state changes with every payment. What the box backup carries of asset channels is the record around them: which channels there were, where their payouts go, the proofs of what funded them, and each close the wallet saw. It does not carry the channels themselves, the answers a peer gave about a price, or the invoices made.
+
+So a wallet restored from the box backup:
+
+- **Keeps what it had on-chain**, as above.
+- **Lists each channel that was open as *not held here***, with the last balance it knew, and says: "An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known. This wallet cannot bring the assets in it back by itself."
+- **Cannot invoice, pay or close through that channel.** A close of it is refused in a sentence.
+- **The peer still holds the channel and can close it.** That brings the peer's side home. **For your own side the app can do nothing today**: it says so in the words above and offers nothing more. Count the asset and the bitcoin on your side of an open channel as covered by no backup.
+
+**A backup is never restored over a channel.** Importing an assets backup into a wallet that has an asset channel which is not over is refused: "This wallet has an asset channel, and a backup is never restored over one. Close its asset channels first." What the file says the wallet holds on-chain is from before the channel, and the two would not agree. A wallet that already has channel records of its own keeps them, and the file's are left out.
+
+**Restoring channel state from a peer's checkpoint.** The channel backup for bitcoin channels ([CHANNEL-BACKUP.md](CHANNEL-BACKUP.md)) restores channel state from a checkpoint a peer kept. It does not bring asset channels back:
+
+- **A checkpoint that holds an asset channel is refused**, with nothing restored and nothing written, and the card lists the asset channels it holds.
+- **The way round is confirmed by typing.** The restore can be run without them: type `leave them out`. The bitcoin channels then come back, held as that card explains, and payments and invoices are kept. The asset channels do not come back: the wallet then has no record of them and cannot bring the assets in them back by itself. The peer of each can still close its channel.
+- **Payments that can no longer be followed.** The result counts the payments that were under way on the channels left out. Each stays pending for good: it is not counted as paid or as failed, and it cannot be cancelled or tried again from there.
+- **The automatic apply says the same.** A wallet that applies a returned checkpoint by itself does not apply one that holds an asset channel. Nothing is changed, the checkpoint still waits, and the same card lists the channels and offers the restore without them.
+- **A backup that carried no state for an asset channel** skips it, and the result lists what was skipped in the same words: no record, nothing the wallet can bring back by itself, and a peer that can still close.
+
+**Guardians and asset channels do not go together.** A channel backup kept by guardians does not cover asset channels.
+
+- A wallet on a guardian backup has no asset channels, and nothing about them is shown.
+- A wallet with an asset channel that is not over cannot be moved to a guardian backup, made on-chain only, or have its assets turned off. The change is refused until the channel is closed on the Channels tab and its assets are back on-chain.
+- A wallet that has both all the same is not started, and nothing is sent to the guardians. The wallet list says why and what to do: take it off the guardian backup, start it, and close the channel.
+
 ## Before you use this on mainnet
 
 Mainnet is on by default, with no extra step. That is a choice for convenience, not a statement about maturity. Know these first:
@@ -164,9 +311,25 @@ Mainnet is on by default, with no extra step. That is a choice for convenience, 
 6. **A name is not an identity.** Anyone can create an asset called USDT. An asset is identified by its ID (or group key), which is what the coloured avatar is drawn from, and the Send and Receive forms show it. Check the ID with whoever issued the asset.
 7. **Privacy.** A universe server is public by design, and proofs carry an asset's history.
 
+With an asset channel, also:
+
+8. **No independent review of any of it.** Item 1 covers asset channels too: ts-tap's channel code, the engine's part and this app's. They have so far been run on regtest only (see [How this was verified](#how-this-was-verified)).
+9. **A wallet with a channel has to come online regularly**, as with any Lightning channel. What is yours in a channel that goes on chain is claimed by your own wallet, and only while it runs. There is no remote watchtower for asset channels.
+10. **Keep confirmed bitcoin on-chain for fees.** See [Fee coins](#fee-coins).
+11. **Back up the box after you open a channel, and know what a backup does not bring back.** It does not bring back the channel, and the app cannot bring back your side of one its node no longer holds. See [Asset channels and backups](#asset-channels-and-backups).
+12. **Do not downgrade the app with a channel open.** An engine release without asset channels refuses to start a wallet that holds one. Close every asset channel and wait for the assets to be back on-chain first.
+
 ## Not covered
 
-- **Lightning.** Asset channels, invoices and payments are the next milestone. They need engine changes that have not landed, so the dashboard's Lightning controls for assets stay hidden. Nothing in this release puts an asset in a channel.
+- **For assets over Lightning:**
+  - Forwarding a payment for anyone else.
+  - A payment in several parts, or over more than one channel.
+  - Several assets in one channel.
+  - Splicing an asset channel, or funding one from both sides.
+  - BOLT 12 offers for assets.
+  - Receiving an asset while the wallet is offline.
+  - A remote watchtower for asset channels.
+  - **Peers that run Lightning Labs' daemons.** Not verified yet. Asset channels have only been run between two wallets of this app.
 - **Fee bumping** (RBF or CPFP) for asset transactions.
 - **Version 2 addresses**, to receive or to pay.
 - **One address, several payments.** An address is for one payment of one amount. A second payment to it sits on chain uncredited, and this app has no way to claim it yet.
@@ -192,6 +355,8 @@ Nothing was spent on mainnet to test this. Mainnet runs the same code with a dif
 
 What is covered by unit tests only, because the regtest stack cannot produce it: a preview expiring by the clock, a transaction that waits an hour unconfirmed, and Tor mode.
 
+**Asset channels** have so far been run on regtest only, with engine and library builds that are not released yet. The results will be written here when the runs on released builds are done.
+
 ## For operators and developers
 
 | Setting (app environment) | Effect |
@@ -201,6 +366,47 @@ What is covered by unit tests only, because the regtest stack cannot produce it:
 | `ASSETS_REGTEST_UNIVERSE_COURIER`, `ASSETS_REGTEST_UNIVERSE_REST`, `ASSETS_REGTEST_UNIVERSE_CA` | The universe a regtest wallet uses: a local tapd's courier address, REST gateway and certificate |
 
 A wallet's record carries `assets: { enabled, universe }`, set with `PATCH /api/wallets/:id`, and reports `holdsAssets`, the host's `phase` and `error`, whether its backup file exists (`backupFile`) and why the last archive left its assets out (`notArchived`). `GET /api/config` reports `assetsAvailable`, `assetChannelsAvailable` and the `universeServers` the app knows.
+
+**Asset channels.** There is no app setting for them. The manager tells each wallet's daemon whether its assets host may use asset channels (`BEIGNET_ASSETS_LIGHTNING`, `full` or `off`), from what the engine can carry, whether the wallet has Lightning, and whether its channel backup is kept by guardians. The fee ceilings in the table above hold for a channel's funding too, and the limits for the fees of channels on chain are in [Fee coins](#fee-coins).
+
+The routes, under `/wallets/:id/api/x/assets`:
+
+| Route | What it does |
+| --- | --- |
+| `GET /channels` | The wallet's asset channels, `{ channels: [] }` on a wallet that cannot have one |
+| `POST /channels/quote` | What an open would cost: `channelSats`, `pushSats`, `feeSats`, `totalSats` |
+| `POST /channels/open` | Opens a channel |
+| `POST /channels/close` | Closes one, by `channelId`. `force: true` closes without the peer |
+| `POST /channels/reclaim` | Takes back the funding of an open that has not confirmed |
+| `POST /invoices/quote`, `POST /invoices`, `GET /invoices` | Asks the peer, makes an invoice, lists the invoices made |
+| `POST /pay/quote`, `POST /pay` | Asks the peer what an invoice takes, and pays it |
+
+An open, a reclaim and a payment carry an `X-Idempotency-Key`, and the same key never does the thing twice, also across a restart. On a wallet without asset channels every one of these but `GET /channels` refuses with `LIGHTNING_UNAVAILABLE`.
+
+`GET /status` carries `assetChannels`, the number of channels that are not over, and `lightning`:
+
+| Field | Meaning |
+| --- | --- |
+| `mode` | `full` or `off` |
+| `usableChannels` | How many channels can carry a payment now |
+| `feeCoins` | `null` when the node cannot say. Otherwise `possible`, `neededSats`, `largestConfirmedSats`, `ready`, `budgetRemainingSats`, and `reason` when not possible: `FEE_FUNDS_UNAVAILABLE` or `FEE_BUDGET_EXHAUSTED` |
+| `unavailable` | Only when the node does not offer asset channels to its peers: `{ code: 'NOT_ADVERTISED', message, reason }` |
+| `warnings` | `[{ code, text }]`, each a sentence to show: `CHANNEL_MISSING`, `CHANGE_NOT_BACK`, `RECOVERY_STUCK`, `FEE_COINS_UNAVAILABLE`, `FEE_BUDGET_EXHAUSTED`, `FEE_POLICY_REFUSED`. `warning` is the same sentences joined |
+
+A channel in the list has a `state`: `OPENING`, `NORMAL`, `CLOSING`, `FORCE_CLOSING`, `CLOSED`, `FORCE_CLOSED`, `FAILED` (an open that ended, with `failure: { code, message }`), `ERRORED` (the node gave it up) or `MISSING` (on record, not held by the node). A state the host has no word for is passed on in the node's own. `peerConnected` says whether the peer is there, and amounts of an asset are strings.
+
+Every refusal carries a `code` and a sentence that can be shown as it is. The codes a client of these routes meets:
+
+| When | Codes |
+| --- | --- |
+| The wallet cannot use asset channels now | `LIGHTNING_UNAVAILABLE`, `LIGHTNING_NOT_ADVERTISED`, `ASSETS_STARTING`, `ASSETS_STOPPING` |
+| Opening | `PEER_UNREACHABLE`, `PEER_NO_ASSET_CHANNELS`, `CHANNEL_MODE_UNAVAILABLE`, `FUNDING_INPUTS`, `INSUFFICIENT_BTC`, `CHANNEL_ASSETS`, `NO_PROOF_SERVER`, `FEE_TOO_HIGH`, `FEE_POLICY_REFUSED`, `IDEMPOTENCY_KEY_REQUIRED`, `CHANNEL_CANCELLED`, `CHANNEL_OPEN_INTERRUPTED`, `CHANNEL_OPEN_FAILED` |
+| Closing and taking a funding back | `CHANNEL_NOT_FOUND`, `CHANNEL_OPENING`, `CHANNEL_MISSING`, `CHANNEL_ERRORED`, `PEER_OFFLINE`, `CHANNEL_CLOSE_FAILED` |
+| Asking the peer | `PEER_GAVE_NO_PRICE`, `TOO_MANY_QUOTES`, `QUOTE_EXPIRED`, `QUOTE_CHANGED`, `RATE_TOO_COARSE`, `PEER_OFFLINE` |
+| Invoices and payments | `BAD_INVOICE`, `ALREADY_PAID`, `PAYMENT_IN_FLIGHT`, `INSUFFICIENT_OUTBOUND`, `INSUFFICIENT_INBOUND`, `PAYMENT_UNSUPPORTED`, `PAYMENT_NOT_SENT`, `OUTCOMES_UNDELIVERED`, `SPENDING_LIMIT`, `FEE_BUDGET_EXHAUSTED` |
+| Backups and wallet settings | `ASSET_CHANNELS_OPEN`, from the host for an import over a channel and from the manager for a change that would take asset channels away from a wallet that has one |
+
+The engine's `GET /balance` carries `assetChannelSats` and, while one is closing, `assetChannelClosingSats`: the bitcoin on this wallet's side of its asset channels, in neither `lightning` nor `total`. Both keys are absent on a wallet without asset channels and on Beignet 0.42.0.
 
 - **Updating ts-tap.** `scripts/vendor-ts-tap.sh <ts-tap checkout> [commit]` rebuilds both tarballs from one commit and rewrites `vendor/SHA256SUMS` and `vendor/ts-tap.lock.json`; `--verify` rebuilds and compares. It refuses a build whose source maps carry the text of the sources. The adapter names the engine releases it was built for, and the image build fails if the bundled engine is outside that range, so an engine bump past it needs a ts-tap build for the new engine first.
 - **A development engine.** `scripts/engine-prefix.sh <dir> [engine]` installs an engine and the vendored packages side by side, as the image does, and says whether assets are available on it.
