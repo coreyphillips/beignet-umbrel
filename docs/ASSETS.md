@@ -56,7 +56,7 @@ browser ──> manager ──> /wallets/:id/api/x/assets/*  ──> the wallet'
 
 **When the tab appears.** Assets need an engine release that carries the host extension contract. Beignet 0.42.0 is the first, and it is the one this app bundles. The manager looks at the engine it is bundled with: on an older engine the Assets tab is simply absent and every wallet runs as before. `BEIGNET_ASSETS=off` in the app's environment switches assets off for the whole box.
 
-**When asset channels appear.** They need more than the tab does: an engine whose extension contract hands the assets host the node's channels, and a ts-tap build that ships its Lightning part. The manager looks for both in the engine it is bundled with and reports what it found (`assetChannelsAvailable` in `GET /api/config`). Beignet 0.42.0 cannot carry asset channels, so on it that reads false and nothing about them is shown. On an engine that can, a wallet has them when it is a Lightning wallet (not on-chain only), its assets are on, and its channel backup is not kept by guardians.
+**When asset channels appear.** They need more than the tab does: an engine whose extension contract hands the assets host the node's channels, and a ts-tap build that ships its Lightning part. The build under `vendor/` ships it, so the engine is what decides. The manager looks for both in the engine it is bundled with and reports what it found (`assetChannelsAvailable` in `GET /api/config`). Beignet 0.42.0 cannot carry asset channels, so on it that reads false and nothing about them is shown. On an engine that can, a wallet has them when it is a Lightning wallet (not on-chain only), its assets are on, and its channel backup is not kept by guardians.
 
 ## Where the requests go
 
