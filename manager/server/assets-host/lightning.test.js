@@ -3108,6 +3108,45 @@ test('an open the library ended across a restart is a failed open that carries t
 	assert.deepEqual(await brief(later), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said }]]);
 });
 
+test('an open a restart interrupted that the library refuses when the wallet begins it again is a failed open with the reason: listed, said, and what its key answers', async () => {
+	const { h, asset } = await funded();
+	// Asked of the library, which had answered nothing when the daemon stopped.
+	h.ln.opts.openHangs = true;
+	h.cfg.openWaitMs = 10;
+	const first = await h.call('POST /channels/open', openBody(asset), 'open-key');
+	const id = first.pendingChannelId;
+	h.ln.opts.openHangs = false;
+	// The next start begins it again under the same id, and the library will not have it.
+	h.ln.opts.openFails = 'ERR_FUNDING_CONFLICT';
+	const again = h.restart();
+	made.push(again);
+	await again.boot();
+	for (let i = 0; i < 100 && !(await brief(again)).some((row) => row[1] === 'FAILED'); i += 1) await new Promise((r) => setTimeout(r, 5));
+	again.ln.opts.openFails = null;
+	const said = `${ENDED} The wallet's record of it says: The channel was turned down: the peer said no.`;
+	assert.equal(named(again, 'openChannel').length, 2);
+	assert.deepEqual(await brief(again), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: said }]]);
+	assert.deepEqual(keys(again, 'committed/funding:'), []);
+	assert.deepEqual(events(again, 'error'), [{ code: 'CHANNEL_OPEN_FAILED', message: said, channelId: id }]);
+	assert.deepEqual((await again.get('/balances')).assets[0].balance, ALL_ON_CHAIN);
+	assert.equal((await again.get('/status')).lightning.usableChannels, 0);
+	// The key that asked answers what became of it, and opens nothing.
+	const replay = await refused(again.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([replay.extensionCode, replay.status, replay.message], ['CHANNEL_OPEN_FAILED', 409, said]);
+	assert.equal(named(again, 'openChannel').length, 2);
+	// Said once, however often the loop looks, and a new key opens one channel beside the row.
+	await passes(again);
+	assert.equal(events(again, 'error').length, 1);
+	const next = await again.call('POST /channels/open', openBody(asset), 'another-key');
+	assert.notEqual(next.pendingChannelId, id);
+	assert.deepEqual((await brief(again)).filter((row) => row[1] !== 'FAILED').map((row) => row[0]), [next.pendingChannelId]);
+	// An open the user is waiting on that is refused is still undone, with its key free: the refusal is its answer.
+	const { h: other, asset: theirs } = await funded();
+	other.ln.opts.openFails = 'ERR_FUNDING_CONFLICT';
+	await refused(other.call('POST /channels/open', openBody(theirs), 'open-key'));
+	assert.deepEqual([await brief(other), keys(other, 'chan/'), keys(other, 'idem/channels/')], [[], [], []]);
+});
+
 test('an open the library ended without saying why is a failed open all the same, in the wallet\'s own sentence', async () => {
 	const { h, asset, id } = await cutShort({ before: (old, pending) => old.ln.set(pending, { phase: 'failed' }) });
 	assert.deepEqual(await brief(h), [[id, 'FAILED', { code: 'CHANNEL_OPEN_FAILED', message: ENDED }]]);

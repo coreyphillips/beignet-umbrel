@@ -924,12 +924,32 @@ async function giveUp(host, id) {
  * may be on the network: the open is kept and the loop carries it on.
  * Resolves to { error }, the refusal of an open that was undone or null for
  * one that is kept, or to { stopped } for one the user dropped.
+ *
+ * `again` says the open is one a restart interrupted, that this host began
+ * again by itself. Nobody is waiting for that answer, and the request that
+ * asked for the open never got one, so an open the library then refuses is
+ * not forgotten: it becomes a failed open with the library's reason, which
+ * is listed, said, and what its request key answers from then on.
  */
-async function undoOpen(host, id, err) {
+async function undoOpen(host, id, err, { again = false } = {}) {
 	// No answer in time is not a no: the flow is the library's to carry on.
 	if (codeOf(err) === 'ERR_BEIGNET_LN_TIMEOUT') return { error: null };
 	if ((await giveUp(host, id)) !== true) return { error: null };
 	const asked = host.mem.dropping.delete(id) || codeOf(err) === 'ERR_BEIGNET_LN_CANCELLED';
+	const note = again && !asked ? host.rows.get(`chan/${id}`) : null;
+	if (note && !note.closedAt && host.rows.get(`committed/funding:${id}`)) {
+		const why = reasonOf(plainMessage(err, ''));
+		const failed = failedOpen('CHANNEL_OPEN_FAILED', why);
+		await endOpen(
+			host,
+			id,
+			note,
+			failed,
+			why || null,
+			(channelId) => `assets: a channel open a restart interrupted (${channelId}) could not be begun again${why ? `: ${why}` : ''}. Nothing left the wallet, and it can be asked for again.`
+		);
+		return { error: refusal(failed.code, failed.message, 409) };
+	}
 	const failure = asked ? openCancelled() : openFailure(host, err);
 	await forgetOpen(host, id);
 	letGo(host, id);
@@ -1000,7 +1020,7 @@ function startOpen(host, id, { reconnect = false } = {}) {
 				return { error: refusal('ASSETS_STOPPING', 'The wallet is restarting. Try again in a moment.', 503) };
 			}
 			try {
-				return await undoOpen(host, id, err);
+				return await undoOpen(host, id, err, { again: reconnect });
 			} catch (undoError) {
 				if (isFenced(undoError)) host.shutdown();
 				return { error: null };
