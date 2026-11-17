@@ -3034,6 +3034,24 @@ function recoveryStatus(w, st) {
 		mode === 'peer-storage'
 			? { enabled: !!w.recovery?.autoApply, phase: 'idle', settleUntil: null, lastReason: null, ...(w.recovery?.autoApply ? r.autoApply || {} : {}) }
 			: undefined;
+	// As the engine: its own apply refused over the asset channels of a
+	// checkpoint that still waits, with the route's code and list, and the
+	// asset entries an apply of a backup-only checkpoint skipped.
+	if (autoApply) {
+		if (typeof assetsMock.readSwitch === 'function') assetsMock.readSwitch();
+		const over = r.capsule ? assetsMock.capsuleAutoRefused(w.id) : null;
+		if (over) {
+			Object.assign(autoApply, {
+				enabled: true,
+				phase: 'refused',
+				settleUntil: null,
+				lastReason: 'ASSET_RESTORE_REFUSED: The capsule holds asset channels this wallet cannot restore; nothing was installed',
+				refusal: { code: 'ASSET_RESTORE_REFUSED', assetChannels: over }
+			});
+		}
+		const passed = autoApply.enabled && autoApply.phase === 'applied' ? assetsMock.capsuleSkipped(w.id) : null;
+		if (passed) autoApply.skippedAssetChannels = passed;
+	}
 	const gate = isGuardianMode(mode) ? r.gate : 'disabled';
 	const channels = st.channels
 		.filter((c) => c.state !== 'CLOSED' && c.state !== 'FORCE_CLOSED')
@@ -3185,7 +3203,10 @@ function walletRequest(id, path, method, body, headers) {
 				}
 				const restored = runDemoCapsuleRestore(w, st);
 				// As the daemon: the payments that were under way on them, by payment hash.
-				return assetChannels ? { ...restored, omittedAssetChannels: assetChannels, unresolvedPayments: assetsMock.capsuleUnresolved(w.id) } : restored;
+				if (assetChannels) return { ...restored, omittedAssetChannels: assetChannels, unresolvedPayments: assetsMock.capsuleUnresolved(w.id) };
+				// As the engine at Tier 1: an asset entry of a backup-only checkpoint is skipped and said, and the rest recovered.
+				const passed = assetsMock.capsuleSkipped(w.id);
+				return passed ? { ...restored, tier: 1, skippedAssetChannels: passed } : restored;
 			}
 		case '/backup/peer-retrieved':
 			if (!st.recovery.capsule) throw err('No peer-retrieved backup this session', 'NOT_FOUND');

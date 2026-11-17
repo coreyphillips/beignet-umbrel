@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { render, settle, click } from '../../test/render.mjs';
 import { ToastProvider } from './Toast.jsx';
-import CapsuleRestoreCard from './CapsuleRestoreCard.jsx';
+import CapsuleRestoreCard, { AutoApplySkipped } from './CapsuleRestoreCard.jsx';
 
 const offer = (extra = {}) => ({
 	channelCount: 2,
@@ -265,6 +265,96 @@ test('a card mounted again after the wallet restarted shows what the restore lef
 		await click(by(r, 'capsule-omitted-done'));
 		assert.equal(dismissed, 1);
 		assert.deepEqual(api.calls, []);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a checkpoint the wallet would not apply by itself over asset channels: the card opens on the list and the typed way round', async () => {
+	const api = restoreApi([{ tier: 2, restartRequired: true, channelCount: 2, omittedAssetChannels: ASSET_CHANNELS }]);
+	const refused = { code: 'ASSET_RESTORE_REFUSED', channels: ASSET_CHANNELS };
+	const r = await render(ToastProvider, { children: createElement(CapsuleRestoreCard, { api, offer: offer({ refused }), onRestored: () => {}, onDismiss: () => {} }) });
+	try {
+		const note = by(r, 'capsule-asset-channels');
+		assert.equal(note.getAttribute('data-code'), 'ASSET_RESTORE_REFUSED');
+		assert.equal(note.getAttribute('data-auto'), 'yes');
+		assert.match(
+			note.textContent,
+			/^The wallet did not apply this checkpoint by itself, and nothing was restored and nothing was written: the checkpoint holds 2 asset channels, which this wallet cannot bring back from it\./
+		);
+		assert.equal(by(r, 'capsule-asset-channel-list').querySelectorAll('li').length, 2);
+		assert.equal(by(r, 'capsule-omit-confirm').disabled, true);
+		assert.deepEqual(api.calls, [], 'the list came with the status: no restore was sent to learn it');
+		await typeInto(by(r, 'capsule-omit-typed'), 'leave them out');
+		assert.equal(by(r, 'capsule-omit-confirm').disabled, false);
+		await click(by(r, 'capsule-omit-confirm'));
+		await settle(20);
+		assert.deepEqual(api.calls, [['POST', '/recovery/restore-capsule', { confirm: true, omitAssetChannels: true }]]);
+		assert.match(r.text(), /Checkpoint installed/);
+		assert.equal(by(r, 'capsule-omitted-list').querySelectorAll('li').length, 2);
+	} finally {
+		await r.unmount();
+	}
+	// Resume channels, pressed on such a card, still asks for nothing to be left out.
+	const again = restoreApi([refusedOver('ASSET_RESTORE_REFUSED')]);
+	const b = await render(ToastProvider, { children: createElement(CapsuleRestoreCard, { api: again, offer: offer({ refused }), onRestored: () => {} }) });
+	try {
+		await click(b.$$('button').find((x) => x.textContent.trim() === 'Resume channels'));
+		await settle(20);
+		assert.deepEqual(again.calls, [['POST', '/recovery/restore-capsule', { confirm: true }]]);
+		// The refusal of that call is then the one shown.
+		assert.equal(by(b, 'capsule-asset-channels').getAttribute('data-auto'), 'no');
+	} finally {
+		await b.unmount();
+	}
+});
+
+test('asset channels a backup-only checkpoint skipped are listed in the result in their own words, apart from any that were left out', async () => {
+	const api = restoreApi([{ tier: 1, restartRequired: true, channelCount: 2, skippedAssetChannels: ASSET_CHANNELS.slice(0, 1) }]);
+	let dismissed = 0;
+	const r = await render(ToastProvider, { children: createElement(CapsuleRestoreCard, { api, offer: offer(), onRestored: () => {}, onDismiss: () => (dismissed += 1) }) });
+	try {
+		await click(r.$$('button').find((x) => x.textContent.trim() === 'Resume channels'));
+		await settle(20);
+		const skipped = by(r, 'capsule-skipped');
+		assert.equal(skipped.getAttribute('data-count'), '1');
+		assert.match(
+			skipped.textContent.replace(/\s+/g, ' ').trim(),
+			/^One asset channel of the backup was skipped: the backup carried no state for it, so nothing of it could be restored\. This wallet has no record of it and cannot bring the assets in it back by itself\. The peer of each can still close its channel\./
+		);
+		assert.equal(by(r, 'capsule-skipped-list').querySelectorAll('li').length, 1);
+		assert.equal(by(r, 'capsule-omitted'), null, 'nothing was left out by choice');
+		await click(by(r, 'capsule-omitted-done'));
+		assert.equal(dismissed, 1);
+	} finally {
+		await r.unmount();
+	}
+	// Both, each in its own words.
+	const both = restoreApi([refusedOver('ASSET_RESTORE_REFUSED'), { tier: 2, restartRequired: true, channelCount: 2, omittedAssetChannels: ASSET_CHANNELS.slice(0, 1), skippedAssetChannels: ASSET_CHANNELS.slice(1) }]);
+	const b = await render(ToastProvider, { children: createElement(CapsuleRestoreCard, { api: both, offer: offer(), onRestored: () => {}, onDismiss: () => {} }) });
+	try {
+		await click(b.$$('button').find((x) => x.textContent.trim() === 'Resume channels'));
+		await settle(20);
+		await typeInto(by(b, 'capsule-omit-typed'), 'leave them out');
+		await click(by(b, 'capsule-omit-confirm'));
+		await settle(20);
+		assert.match(by(b, 'capsule-omitted').textContent, /^One asset channel was left out of the restore, as asked\./);
+		assert.match(by(b, 'capsule-skipped').textContent, /^One asset channel of the backup was skipped: the backup carried no state for it/);
+	} finally {
+		await b.unmount();
+	}
+});
+
+test('an automatic apply that skipped asset channels says which, until that has been read', async () => {
+	let dismissed = 0;
+	const r = await render(ToastProvider, { children: createElement(AutoApplySkipped, { channels: ASSET_CHANNELS, onDismiss: () => (dismissed += 1) }) });
+	try {
+		const note = by(r, 'capsule-auto-skipped');
+		assert.equal(note.getAttribute('data-count'), '2');
+		assert.match(note.textContent.replace(/\s+/g, ' ').trim(), /^2 asset channels of the backup were skipped: the backup carried no state for them, so nothing of them could be restored\./);
+		assert.equal(by(r, 'capsule-auto-skipped-list').querySelectorAll('li').length, 2);
+		await click(by(r, 'capsule-auto-skipped-done'));
+		assert.equal(dismissed, 1);
 	} finally {
 		await r.unmount();
 	}

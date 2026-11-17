@@ -38,7 +38,6 @@ const ASSET_RESTORE_REFUSALS = {
 /** What is typed to restore a checkpoint without the asset channels it holds. */
 export const OMIT_ASSET_CHANNELS_PHRASE = 'leave them out';
 
-/** Asset channels as a restore names them, [{ channelId, peerPubkey, capacitySats }], with anything malformed left out. */
 /**
  * How many payments a restore left unresolved: those that were under way on
  * the asset channels it left out. The daemon lists their payment hashes in
@@ -52,10 +51,39 @@ export function unresolvedPayments(answer) {
 	return Number.isInteger(said) && said > 0 ? said : 0;
 }
 
+/** Asset channels as a restore names them, [{ channelId, peerPubkey, capacitySats }], with anything malformed left out. */
 export function restoreAssetChannels(list) {
 	return (Array.isArray(list) ? list : [])
 		.filter((c) => c && typeof c.channelId === 'string' && c.channelId && typeof c.peerPubkey === 'string' && c.peerPubkey)
 		.map((c) => ({ channelId: c.channelId, peerPubkey: c.peerPubkey, capacitySats: Number.isFinite(Number(c.capacitySats)) && c.capacitySats !== null ? Number(c.capacitySats) : null }));
+}
+
+/**
+ * The asset channels a checkpoint that was a backup only (the engine's Tier
+ * 1, which has no channel state to install) had entries for and skipped,
+ * recovering the rest. Read from the answer of a restore, and from
+ * `autoApply` on the status when the daemon applied it by itself: both
+ * name them `skippedAssetChannels`. Nobody chose this, where a channel
+ * that was left out (`omittedAssetChannels`) was left out by choice.
+ */
+export function skippedAssetChannels(said) {
+	return restoreAssetChannels(said && said.skippedAssetChannels);
+}
+
+/**
+ * The asset channels the daemon's own apply of a checkpoint was refused
+ * over, { code, channels }, or null. `said` is `autoApply` of the status
+ * route or the data of a `capsule:auto-refused` restore-progress event:
+ * both carry `refusal: { code, assetChannels }`, the list the restore
+ * route refuses with. A refusal that is not about asset channels has no
+ * such field, and the daemon drops it once a restore is installed.
+ */
+export function autoApplyRefusal(said) {
+	const refusal = said && said.refusal;
+	if (!refusal || typeof refusal !== 'object') return null;
+	const channels = restoreAssetChannels(refusal.assetChannels);
+	if (channels.length === 0) return null;
+	return { code: typeof refusal.code === 'string' && refusal.code ? refusal.code : 'ASSET_RESTORE_REFUSED', channels };
 }
 
 /**
@@ -300,6 +328,11 @@ const AUTO_APPLY_TIERS = {
  * daemon reports that on the status route as `autoApply`. Returns null when
  * the wallet did not opt in (or the engine predates it), else the phase,
  * a sentence for it, and the daemon's reason when it refused.
+ *
+ * A refusal over asset channels is said in words with `refusal` beside it
+ * ({ code, channels }, see autoApplyRefusal): the checkpoint still waits,
+ * and the card that offers the restore has the way round. An apply that
+ * skipped asset channels lists them under `skipped`.
  */
 export function autoApplyState(status) {
 	const a = status?.autoApply;
@@ -310,6 +343,14 @@ export function autoApplyState(status) {
 		last && last.type === 'capsule:uncovered' && last.detail
 			? ` Channels the checkpoint did not carry close safely and their funds return on-chain: ${last.detail}`
 			: '';
+	const over = phase === 'refused' ? autoApplyRefusal(a) : null;
+	const skipped = phase === 'applied' ? skippedAssetChannels(a) : [];
+	const passed =
+		skipped.length > 0
+			? ` ${skipped.length === 1 ? 'One asset channel of the backup was' : `${skipped.length} asset channels of the backup were`} skipped: the backup carried no state for ${
+					skipped.length === 1 ? 'it' : 'them'
+			  }, so this wallet has no record of ${skipped.length === 1 ? 'it' : 'them'}.`
+			: '';
 	const detail =
 		phase === 'settling'
 			? 'A peer returned a checkpoint. Waiting a moment for the other peers to answer, then the newest one is applied.'
@@ -317,11 +358,18 @@ export function autoApplyState(status) {
 			? 'Applying the newest checkpoint. The wallet comes back on the restored state by itself.'
 			: phase === 'applied'
 			? 'The newest checkpoint was applied and the channels came back from it, held: they take no new payments in until each peer confirms them, and closing one means accepting that a peer may hold a newer state.' +
-			  uncovered
+			  uncovered +
+			  passed
+			: over
+			? `The checkpoint a peer returned was not applied by itself: it holds ${
+					over.channels.length === 1 ? 'an asset channel' : `${over.channels.length} asset channels`
+			  }, which this wallet cannot bring back from it. Nothing was changed, and the checkpoint still waits. It can be restored without ${
+					over.channels.length === 1 ? 'it' : 'them'
+			  } from the card on this page.`
 			: phase === 'refused'
 			? `The checkpoint a peer returned was not applied${a.lastReason ? `: ${a.lastReason}` : ''}. Nothing was changed; the wallet runs on its own state.`
 			: 'Encrypted channel checkpoints ride with the peers that offer storage. When this wallet is empty and a peer returns one, the newest is applied by itself. Nothing fences the old device in this mode.';
-	return { phase, detail, lastReason: a.lastReason || null, settleUntil: a.settleUntil || null };
+	return { phase, detail, lastReason: a.lastReason || null, settleUntil: a.settleUntil || null, refusal: over, skipped };
 }
 
 /**
@@ -433,14 +481,21 @@ export function restoreProgress(status) {
  * for a wallet that has nothing yet: one that already runs channels is not
  * a restore target (the daemon refuses a dirty database anyway). Returns
  * the capsule's summary, or null.
+ *
+ * `refused` on the summary is the asset channels the daemon's own apply
+ * was refused over ({ code, channels }), or null. It is read from the
+ * status, and from `heard`, the data of a `capsule:auto-refused` event,
+ * which can arrive before the status has been read again.
  */
-export function capsuleOffer(status, info) {
+export function capsuleOffer(status, info, heard) {
 	if (!status || status.mode !== 'peer-storage' || status.state !== 'running') return null;
 	// A wallet that applies checkpoints by itself needs no offer; the Backup
 	// row says where that stands. One whose daemon refused to apply it by
 	// itself (a checkpoint naming guardians, say) is offered the manual
 	// ways out, with the reason on the row.
-	if (status.autoApply?.enabled && status.autoApply.phase !== 'refused') return null;
+	const said = status.autoApply?.phase === 'applied' ? null : autoApplyRefusal(heard);
+	if (status.autoApply?.enabled && status.autoApply.phase !== 'refused' && !said) return null;
+	const refused = (status.autoApply?.enabled && status.autoApply.phase === 'refused' ? autoApplyRefusal(status.autoApply) : null) || (status.autoApply?.enabled ? said : null);
 	const best = status.capsules?.best;
 	if (!best) return null;
 	const open = info ? info.openChannelCount ?? info.channelCount ?? 0 : 0;
@@ -452,6 +507,7 @@ export function capsuleOffer(status, info) {
 		inline: !!best.inline,
 		fromPeer: best.fromPeer,
 		guardians: best.guardians || [],
-		candidates: status.capsules.candidates
+		candidates: status.capsules.candidates,
+		refused: refused || null
 	};
 }

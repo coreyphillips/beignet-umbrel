@@ -950,6 +950,20 @@ export function createAssetsMock(ctx) {
 			S(id).capsuleAssets = true;
 			return true;
 		},
+		// The same checkpoint on a wallet that applies checkpoints by itself:
+		// its daemon refused to, over the two asset channels, and says so on
+		// the status route with the list. The checkpoint still waits.
+		'capsule-auto-refused'(id) {
+			Object.assign(S(id), { capsuleAssets: true, capsuleAuto: true });
+			return true;
+		},
+		// A checkpoint that is a backup of the channel list only: the entry of
+		// its one asset channel is skipped and the rest recovered, by a restore
+		// from the card and by the wallet's own.
+		'capsule-skipped'(id) {
+			S(id).capsuleSkipped = true;
+			return true;
+		},
 		// A payment the node has no record of any more: it may have been paid.
 		'pay-unaccounted'(id) {
 			return plantNotice(id, 'PAYMENT_UNACCOUNTED');
@@ -1072,10 +1086,12 @@ export function createAssetsMock(ctx) {
 				s.noFeeCoins = false;
 				s.feePolicyRefused = false;
 				s.capsuleAssets = false;
+				s.capsuleAuto = false;
+				s.capsuleSkipped = false;
 				if (s.seeded) {
 					delete s.seeded['not-advertised'];
 					delete s.seeded['fee-budget'];
-					for (const name of ['funding-inputs', 'draining', 'no-fee-coins', 'fee-policy', 'capsule-assets']) delete s.seeded[name];
+					for (const name of ['funding-inputs', 'draining', 'no-fee-coins', 'fee-policy', 'capsule-assets', 'capsule-auto-refused', 'capsule-skipped']) delete s.seeded[name];
 				}
 			} else if (want === 'proof-server-down') {
 				s.host = null;
@@ -2439,6 +2455,17 @@ export function createAssetsMock(ctx) {
 		}));
 	}
 
+	/** The asset channels the demo daemon's own apply of the checkpoint was refused over, or null. */
+	function capsuleAutoRefused(id) {
+		return S(id).capsuleAuto ? capsuleAssetChannels(id) : null;
+	}
+
+	/** The asset channel entries a backup-only checkpoint of the demo skips, or null. */
+	function capsuleSkipped(id) {
+		if (!S(id).capsuleSkipped) return null;
+		return [{ channelId: derivedHex(`capsule-skipped-channel:${id}`, 64), peerPubkey: `02${derivedHex('capsule-skipped-peer', 64)}`, capacitySats: 100000 }];
+	}
+
 	function daemonChannels(id) {
 		if (!state.wallets[id]) return [];
 		return state.wallets[id].channels
@@ -2526,6 +2553,8 @@ export function createAssetsMock(ctx) {
 		/** For the demo daemon: the asset channels the wallet's checkpoint holds, or null. */
 		capsuleAssetChannels,
 		capsuleUnresolved,
+		capsuleAutoRefused,
+		capsuleSkipped,
 		/** For the demo daemon: read the switch in the address now, ahead of a route that depends on it. */
 		readSwitch,
 		/** For tests: this wallet's proof server stops answering, or answers again. */

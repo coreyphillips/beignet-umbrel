@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Card, Field } from './ui.jsx';
 import { shortId } from '../lib/format.js';
-import { assetRestoreRefusal, refusedAssetChannels, restoreAssetChannels, unresolvedPayments, OMIT_ASSET_CHANNELS_PHRASE } from '../lib/recovery.js';
+import { assetRestoreRefusal, refusedAssetChannels, restoreAssetChannels, skippedAssetChannels, unresolvedPayments, OMIT_ASSET_CHANNELS_PHRASE } from '../lib/recovery.js';
 
 /**
  * A channel checkpoint a storage peer returned (beignet 0.9.3+, peer-storage
@@ -49,6 +49,47 @@ function AssetChannelList({ channels, testId }) {
 	);
 }
 
+/**
+ * Asset channels a backup-only checkpoint had entries for and skipped. Said
+ * apart from channels that were left out: nobody chose this, the backup
+ * had no state for them.
+ */
+function SkippedAssetChannels({ channels, testId }) {
+	const one = channels.length === 1;
+	return (
+		<div className="info-note" role="status" data-testid={testId} data-count={channels.length}>
+			{one ? 'One asset channel of the backup was' : `${channels.length} asset channels of the backup were`} skipped: the backup carried no state for{' '}
+			{one ? 'it' : 'them'}, so nothing of {one ? 'it' : 'them'} could be restored. This wallet has no record of {one ? 'it' : 'them'} and cannot bring
+			the assets in {one ? 'it' : 'them'} back by itself. The peer of each can still close its channel.
+			<AssetChannelList channels={channels} testId={`${testId}-list`} />
+		</div>
+	);
+}
+
+/**
+ * What the wallet's own apply of a checkpoint skipped, from `autoApply` on
+ * the status route. Nobody pressed anything for that restore, so there is
+ * no result panel of a card to say it in: this is that panel.
+ */
+export function AutoApplySkipped({ channels, onDismiss }) {
+	return (
+		<Card title="Checkpoint applied">
+			<p className="restore-lead">
+				The wallet applied the checkpoint its peers returned by itself. It was a backup of the channel list only, so the channels close safely
+				as their peers are reached and the funds return on-chain.
+			</p>
+			<SkippedAssetChannels channels={channels} testId="capsule-auto-skipped" />
+			{onDismiss && (
+				<div className="center-actions">
+					<Button data-testid="capsule-auto-skipped-done" onClick={onDismiss}>
+						Done
+					</Button>
+				</div>
+			)}
+		</Card>
+	);
+}
+
 export default function CapsuleRestoreCard({ api, offer, restored, onRestored, onDismiss }) {
 	const [busy, setBusy] = useState(null);
 	// `restored` is the answer of a restore this card already ran, kept by the
@@ -59,6 +100,10 @@ export default function CapsuleRestoreCard({ api, offer, restored, onRestored, o
 	// The asset channels the daemon refused the restore over, once it has named them.
 	const [held, setHeld] = useState(null);
 	const [typed, setTyped] = useState('');
+	// The same list, where the wallet's own apply of the checkpoint was
+	// refused over it: the status (or its event) named the channels, so the
+	// way round is on the card before any restore is sent from it.
+	const named = held || (offer && offer.refused ? { code: offer.refused.code, channels: offer.refused.channels, auto: true } : null);
 
 	const recover = async () => {
 		setBusy('scb');
@@ -79,7 +124,7 @@ export default function CapsuleRestoreCard({ api, offer, restored, onRestored, o
 	// list of asset channels the daemon refused over, once its phrase is
 	// typed: nothing else sends the option that leaves them out.
 	const resume = async (without) => {
-		const omit = without === true && !!held;
+		const omit = without === true && !!named;
 		setBusy(omit ? 'omit' : 'capsule');
 		setRefusal(null);
 		try {
@@ -104,6 +149,7 @@ export default function CapsuleRestoreCard({ api, offer, restored, onRestored, o
 		const n = result.channelCount ?? offer.channelCount;
 		const left = restoreAssetChannels(result.omittedAssetChannels);
 		const unresolved = unresolvedPayments(result);
+		const passed = skippedAssetChannels(result);
 		return (
 			<Card title={result.restartRequired === false ? 'Channels resuming' : 'Checkpoint installed'}>
 				<p className="restore-lead">
@@ -133,7 +179,8 @@ export default function CapsuleRestoreCard({ api, offer, restored, onRestored, o
 						tried again from here.
 					</div>
 				)}
-				{left.length > 0 && onDismiss && (
+				{passed.length > 0 && <SkippedAssetChannels channels={passed} testId="capsule-skipped" />}
+				{(left.length > 0 || passed.length > 0) && onDismiss && (
 					<div className="center-actions">
 						<Button data-testid="capsule-omitted-done" onClick={onDismiss}>
 							Done
@@ -189,17 +236,18 @@ export default function CapsuleRestoreCard({ api, offer, restored, onRestored, o
 					</ul>
 				</div>
 			)}
-			{held && (
-				<div className="error-note" role="alert" data-testid="capsule-asset-channels" data-code={held.code}>
+			{named && (
+				<div className="error-note" role="alert" data-testid="capsule-asset-channels" data-code={named.code} data-auto={named.auto ? 'yes' : 'no'}>
 					<p className="restore-lead">
-						The restore was refused, and nothing was restored and nothing was written: the checkpoint holds{' '}
-						{held.channels.length === 1 ? 'an asset channel' : `${held.channels.length} asset channels`}, which this wallet cannot bring back from it.
+						{named.auto ? 'The wallet did not apply this checkpoint by itself' : 'The restore was refused'}, and nothing was restored and nothing was
+						written: the checkpoint holds{' '}
+						{named.channels.length === 1 ? 'an asset channel' : `${named.channels.length} asset channels`}, which this wallet cannot bring back from it.
 					</p>
-					<AssetChannelList channels={held.channels} testId="capsule-asset-channel-list" />
+					<AssetChannelList channels={named.channels} testId="capsule-asset-channel-list" />
 					<p className="restore-lead">
-						The restore can be run without {held.channels.length === 1 ? 'it' : 'them'}. The bitcoin channels then come back, held as said above, and
-						payments and invoices are kept. The asset {held.channels.length === 1 ? 'channel does' : 'channels do'} not come back: this wallet will have no
-						record of {held.channels.length === 1 ? 'it' : 'them'} and cannot bring the assets in {held.channels.length === 1 ? 'it' : 'them'} back by
+						The restore can be run without {named.channels.length === 1 ? 'it' : 'them'}. The bitcoin channels then come back, held as said above, and
+						payments and invoices are kept. The asset {named.channels.length === 1 ? 'channel does' : 'channels do'} not come back: this wallet will have no
+						record of {named.channels.length === 1 ? 'it' : 'them'} and cannot bring the assets in {named.channels.length === 1 ? 'it' : 'them'} back by
 						itself afterwards. The peer of each can still close its channel.
 					</p>
 					<Field label={`Type ${OMIT_ASSET_CHANNELS_PHRASE} to confirm`}>

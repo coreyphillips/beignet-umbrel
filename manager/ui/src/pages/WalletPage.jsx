@@ -18,7 +18,7 @@ import GuardianServeField from '../components/GuardianServeField.jsx';
 import NetworkModeField from '../components/NetworkModeField.jsx';
 import GuardianRotateFields from '../components/GuardianRotateFields.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
-import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
+import CapsuleRestoreCard, { AutoApplySkipped } from '../components/CapsuleRestoreCard.jsx';
 import FforReturnPanel from '../components/FforReturnPanel.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
 import RecoveryPhraseModal from '../components/RecoveryPhraseModal.jsx';
@@ -30,7 +30,7 @@ import { isOwnPayment } from '../lib/own-payments.js';
 
 import { bitcoinChannels, isAssetRow, isClosedChannel } from '../lib/channels.js';
 import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
-import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
+import { autoApplyState, capsuleOffer, describeRecovery, isGuardianMode, restoreProgress, skippedAssetChannels } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import LfbwOverviewTab from './tabs/lfbw/LfbwOverviewTab.jsx';
@@ -176,6 +176,11 @@ export default function WalletPage() {
 	const api = useMemo(() => walletApi(id), [id]);
 	// The checkpoint card, kept after a restore that left asset channels out, until that has been read.
 	const [capsuleKept, setCapsuleKept] = useState(null);
+	// The daemon's own apply of a checkpoint: what its event said of a
+	// refusal over asset channels, until the status says it too, and which
+	// wallet's list of skipped asset channels has been read.
+	const [autoHeard, setAutoHeard] = useState(null);
+	const [autoSkippedRead, setAutoSkippedRead] = useState(null);
 	const [tick, setTick] = useState(0);
 	const bump = useCallback(() => setTick((t) => t + 1), []);
 	const [advanced, setAdvanced] = useState(readAdvanced);
@@ -271,6 +276,10 @@ export default function WalletPage() {
 		// What the daemon says of an asset channel, or of a payment or an
 		// invoice one carried, is not announced as bitcoin: the assets host
 		// says the same thing in units of the asset, a few lines down.
+		// The wallet's own apply of a checkpoint, refused over asset channels:
+		// the event names them, and the card that offers the restore opens on
+		// the list without waiting for the status to be read again.
+		if (name === 'recovery:restore-progress' && data && data.type === 'capsule:auto-refused' && data.refusal) setAutoHeard({ wallet: rec?.id, said: data });
 		if (isAssetRow(data) && !name.startsWith('assets:')) return;
 		receiveEvent(name, data);
 		// A payment this page made has already been announced by the card that
@@ -505,18 +514,25 @@ export default function WalletPage() {
 							}}
 						/>
 					)}
-					{(capsuleOffer(recovery, info) || (capsuleKept && capsuleKept.wallet === rec?.id)) && (
+					{autoApplyState(recovery)?.skipped.length > 0 && autoSkippedRead !== rec?.id && (
+						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+							<AutoApplySkipped channels={autoApplyState(recovery).skipped} onDismiss={() => setAutoSkippedRead(rec?.id)} />
+						</div>
+					)}
+					{(capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null) || (capsuleKept && capsuleKept.wallet === rec?.id)) && (
 						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							<CapsuleRestoreCard
 								api={api}
-								offer={capsuleOffer(recovery, info) || capsuleKept.offer}
+								offer={capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null) || capsuleKept.offer}
 								restored={capsuleKept && capsuleKept.wallet === rec?.id ? capsuleKept.result : null}
 								onRestored={(r) => {
 									toast('Checkpoint restored', 'success');
 									// The offer goes with the restore. What the restore left out stays on the page until it has been read.
-									if (r && Array.isArray(r.omittedAssetChannels) && r.omittedAssetChannels.length > 0) {
-										setCapsuleKept({ wallet: rec?.id, offer: capsuleOffer(recovery, info), result: r });
+									// So does what a backup-only checkpoint skipped.
+									if (r && ((Array.isArray(r.omittedAssetChannels) && r.omittedAssetChannels.length > 0) || skippedAssetChannels(r).length > 0)) {
+										setCapsuleKept({ wallet: rec?.id, offer: capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null), result: r });
 									}
+									setAutoHeard(null);
 									refreshRec();
 									bump();
 								}}

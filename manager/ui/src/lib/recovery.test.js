@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, autoApplyState, RESTORE_STEPS, isNodeUri, isBolt8Entry, guardianEntryLabel, unresolvedPayments } from './recovery.js';
+import { describeRecovery, restoreProgress, channelOutcome, capsuleOffer, autoApplyState, RESTORE_STEPS, isNodeUri, isBolt8Entry, guardianEntryLabel, unresolvedPayments, autoApplyRefusal, skippedAssetChannels } from './recovery.js';
 
 const node = (extra = {}) => ({
 	gate: 'confirmed',
@@ -360,4 +360,64 @@ test('the payments a restore left unresolved are counted from its answer, whatev
 	assert.equal(unresolvedPayments({ unresolvedPayments: ['a1'.repeat(32), 'b2'.repeat(32)] }), 2);
 	assert.equal(unresolvedPayments({ unresolvedPayments: 4 }), 4);
 	for (const answer of [null, undefined, {}, { unresolvedPayments: [] }, { unresolvedPayments: 'three' }, { unresolvedPayments: -1 }]) assert.equal(unresolvedPayments(answer), 0);
+});
+
+const AUTO_CHANNELS = [
+	{ channelId: 'aa'.repeat(32), peerPubkey: '02' + 'b'.repeat(64), capacitySats: 100000 },
+	{ channelId: 'cc'.repeat(32), peerPubkey: '03' + 'd'.repeat(64), capacitySats: 250000 }
+];
+const waiting = (autoApply) => ({
+	mode: 'peer-storage',
+	state: 'running',
+	capsules: { candidates: 1, best: { channelCount: 2, latestSequence: '9', writerEpoch: '1', inline: true, fromPeer: '02' + 'a'.repeat(64) } },
+	autoApply
+});
+
+test('a checkpoint the daemon would not apply by itself over asset channels: the list is read from the status and from the event, and the offer carries it', () => {
+	const refusal = { code: 'ASSET_RESTORE_REFUSED', assetChannels: AUTO_CHANNELS };
+	const named = { code: 'ASSET_RESTORE_REFUSED', channels: AUTO_CHANNELS };
+	const status = waiting({ enabled: true, phase: 'refused', settleUntil: null, lastReason: 'ASSET_RESTORE_REFUSED: the capsule holds asset channels', refusal });
+	assert.deepEqual(autoApplyRefusal(status.autoApply), named);
+	assert.deepEqual(autoApplyRefusal({ type: 'capsule:auto-refused', detail: 'ASSET_RESTORE_REFUSED: the capsule holds asset channels', refusal }), named);
+	// A refusal that is not about asset channels has no such field, and one that names none is not one to act on.
+	for (const said of [null, undefined, {}, { refusal: null }, { refusal: 'ASSET_RESTORE_REFUSED' }, { refusal: { code: 'ASSET_RESTORE_REFUSED', assetChannels: [] } }, { lastReason: 'CAPSULE_RESTORE_GUARDIANS: it names guardians' }]) {
+		assert.equal(autoApplyRefusal(said), null);
+	}
+
+	// The offer of the manual ways out carries the list, so the card opens on it.
+	assert.deepEqual(capsuleOffer(status, { openChannelCount: 0 }).refused, named);
+	assert.equal(capsuleOffer(waiting({ enabled: true, phase: 'refused', lastReason: 'CAPSULE_RESTORE_GUARDIANS: it names guardians' }), { openChannelCount: 0 }).refused, null);
+	assert.equal(capsuleOffer(waiting({ enabled: false, phase: 'idle' }), { openChannelCount: 0 }).refused, null);
+	// From the event, before the status has been read again. Never once a restore is installed.
+	const heard = { type: 'capsule:auto-refused', detail: 'ASSET_RESTORE_REFUSED: the capsule holds asset channels', refusal };
+	const early = waiting({ enabled: true, phase: 'applying', lastReason: null });
+	assert.equal(capsuleOffer(early, { openChannelCount: 0 }), null);
+	assert.deepEqual(capsuleOffer(early, { openChannelCount: 0 }, heard).refused, named);
+	assert.equal(capsuleOffer(waiting({ enabled: true, phase: 'applied' }), { openChannelCount: 0 }, heard), null);
+	assert.equal(capsuleOffer(early, { openChannelCount: 0 }, { type: 'capsule:auto-refused', detail: 'CAPSULE_RESTORE_GUARDIANS: it names guardians' }), null);
+
+	// The Backup row says it in words, and not in the daemon's code words.
+	const row = autoApplyState(status);
+	assert.equal(
+		row.detail,
+		'The checkpoint a peer returned was not applied by itself: it holds 2 asset channels, which this wallet cannot bring back from it. Nothing was changed, and the checkpoint still waits. It can be restored without them from the card on this page.'
+	);
+	assert.deepEqual(row.refusal, named);
+	const one = autoApplyState(waiting({ enabled: true, phase: 'refused', refusal: { code: 'ASSET_RESTORE_REFUSED', assetChannels: AUTO_CHANNELS.slice(0, 1) } }));
+	assert.match(one.detail, /it holds an asset channel, which this wallet cannot bring back from it\. .* It can be restored without it from the card on this page\.$/);
+	// Any other refusal keeps the daemon's reason.
+	const other = autoApplyState(waiting({ enabled: true, phase: 'refused', lastReason: 'CAPSULE_RESTORE_GUARDIANS: it names guardians' }));
+	assert.match(other.detail, /was not applied: CAPSULE_RESTORE_GUARDIANS: it names guardians\./);
+	assert.equal(other.refusal, null);
+});
+
+test('asset channels a backup-only checkpoint skipped are read from the answer of a restore and from the status of an automatic one', () => {
+	assert.deepEqual(skippedAssetChannels({ tier: 1, skippedAssetChannels: AUTO_CHANNELS }), AUTO_CHANNELS);
+	for (const answer of [null, undefined, {}, { skippedAssetChannels: null }, { skippedAssetChannels: [{ channelId: 7 }] }]) assert.deepEqual(skippedAssetChannels(answer), []);
+	const applied = autoApplyState(waiting({ enabled: true, phase: 'applied', skippedAssetChannels: AUTO_CHANNELS }));
+	assert.deepEqual(applied.skipped, AUTO_CHANNELS);
+	assert.match(applied.detail, / 2 asset channels of the backup were skipped: the backup carried no state for them, so this wallet has no record of them\.$/);
+	const plain = autoApplyState(waiting({ enabled: true, phase: 'applied' }));
+	assert.deepEqual(plain.skipped, []);
+	assert.doesNotMatch(plain.detail, /skipped/);
 });
