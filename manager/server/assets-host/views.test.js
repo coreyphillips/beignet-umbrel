@@ -551,3 +551,15 @@ test('an open a peer began that the node does not hold is opening, and missing i
 	assert.equal(channelWord({ ...open, engine: 'missing', signed: false }), 'OPENING');
 	assert.equal(channelWord({ ...open, engine: 'missing', signed: true }), 'MISSING');
 });
+
+test('a channel that has not taken in the results of earlier payments says how many on its row, and one that has says nothing', () => {
+	const row = (extra) =>
+		views.channelView(
+			{ id: 'aa'.repeat(32), channelId: 'bb'.repeat(32), peerPubkey: `02${'c'.repeat(64)}`, word: 'NORMAL', local: 5n, remote: 0n, capacity: 5n, sendable: 5n, receivable: 0n, fundingSats: 100000, ...extra },
+			null
+		);
+	assert.equal(row({ undeliveredOutcomes: 2 }).undeliveredOutcomes, 2);
+	for (const none of [{}, { undeliveredOutcomes: 0 }, { undeliveredOutcomes: -1 }, { undeliveredOutcomes: 1.5 }, { undeliveredOutcomes: '3' }, { undeliveredOutcomes: null }]) {
+		assert.equal('undeliveredOutcomes' in row(none), false, JSON.stringify(none));
+	}
+});

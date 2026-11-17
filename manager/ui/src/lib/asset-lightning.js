@@ -449,3 +449,19 @@ export function assetChannelBitcoin(balance) {
 	if (closing > 0) lines.push({ kind: 'closing', sats: closing, words: 'on their way back from a closing asset channel' });
 	return lines.length > 0 ? lines : null;
 }
+
+/* ------------------------------------- results a channel has not taken in */
+
+/**
+ * What a channel's row says while the wallet has not taken in the results
+ * of earlier payments on it (`undeliveredOutcomes`, on the row only while
+ * above zero): the sentence a payment through it is refused with
+ * (OUTCOMES_UNDELIVERED), said of the channel. Null for a channel that has
+ * taken them all in.
+ */
+export function undeliveredNote(channel) {
+	const n = channel && channel.undeliveredOutcomes;
+	if (!Number.isInteger(n) || n <= 0) return null;
+	const what = n === 1 ? 'the result of an earlier payment' : `the results of ${n} earlier payments`;
+	return `This wallet has not yet taken in ${what} on this channel, so nothing is paid through it until it has. Nothing is wrong with the channel. Restart the wallet, and if this is said again afterwards, its log says why.`;
+}

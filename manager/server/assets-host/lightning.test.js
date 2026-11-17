@@ -3114,3 +3114,16 @@ test('an open the library ended without saying why is a failed open all the same
 	const replay = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
 	assert.deepEqual([replay.extensionCode, replay.status, replay.message], ['CHANNEL_OPEN_FAILED', 409, ENDED]);
 });
+
+test('a channel that has not taken in the results of earlier payments lists how many, and stops listing it once it has', async () => {
+	const { h, id } = await channelled({ remote: 200n });
+	const row = async () => (await h.get('/channels')).channels[0];
+	assert.equal('undeliveredOutcomes' in (await row()), false, 'a channel that has taken everything in has no such key');
+	// As the library counts them on the channel's view (adapter.js item 41).
+	h.ln.set(id, { undeliveredOutcomes: 2 });
+	assert.equal((await row()).undeliveredOutcomes, 2);
+	// It is still the wallet's open channel, and counted as one.
+	assert.equal((await row()).state, 'NORMAL');
+	h.ln.set(id, { undeliveredOutcomes: 0 });
+	assert.equal('undeliveredOutcomes' in (await row()), false);
+});

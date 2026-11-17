@@ -3,7 +3,7 @@ import AssetAvatar from '../../../../components/AssetAvatar.jsx';
 import { AssetAmount } from '../../../../components/AssetAmount.jsx';
 import { Badge, Button, CopyText, ExplorerLink, FeeField, Modal } from '../../../../components/ui.jsx';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
-import { canClose, canReclaim, channelState, closeWays, peerAway, peerName, reclaimSent, sharePct } from '../../../../lib/asset-lightning.js';
+import { canClose, canReclaim, channelState, closeWays, peerAway, peerName, reclaimSent, sharePct, undeliveredNote } from '../../../../lib/asset-lightning.js';
 import { txUrl } from '../../../../lib/explorer.js';
 import { FEE_CAP_MULTIPLE } from '../../../../lib/fees.js';
 import { fmtSats, shortId } from '../../../../lib/format.js';
@@ -138,6 +138,11 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 						{errored && (
 							<div className="error-note" role="note" data-testid="asset-channel-errored">
 								This channel has failed and carries no payments. Force close it to bring what is in it back on-chain.
+							</div>
+						)}
+						{undeliveredNote(c) && (
+							<div className="info-note" role="note" data-testid="asset-channel-undelivered" data-count={c.undeliveredOutcomes}>
+								{undeliveredNote(c)}
 							</div>
 						)}
 						{away && !errored && state.word !== 'opening' && (

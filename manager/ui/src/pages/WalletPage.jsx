@@ -30,7 +30,7 @@ import { isOwnPayment } from '../lib/own-payments.js';
 
 import { bitcoinChannels, isAssetRow, isClosedChannel } from '../lib/channels.js';
 import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
-import { autoApplyState, capsuleOffer, describeRecovery, isGuardianMode, restoreProgress, skippedAssetChannels } from '../lib/recovery.js';
+import { autoApplyState, capsuleOffer, describeRecovery, heardAutoRefusal, isGuardianMode, restoreProgress, skippedAssetChannels } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import LfbwOverviewTab from './tabs/lfbw/LfbwOverviewTab.jsx';
@@ -279,7 +279,8 @@ export default function WalletPage() {
 		// The wallet's own apply of a checkpoint, refused over asset channels:
 		// the event names them, and the card that offers the restore opens on
 		// the list without waiting for the status to be read again.
-		if (name === 'recovery:restore-progress' && data && data.type === 'capsule:auto-refused' && data.refusal) setAutoHeard({ wallet: rec?.id, said: data });
+		const refusedOver = heardAutoRefusal(name, data);
+		if (refusedOver) setAutoHeard({ wallet: rec?.id, said: refusedOver });
 		if (isAssetRow(data) && !name.startsWith('assets:')) return;
 		receiveEvent(name, data);
 		// A payment this page made has already been announced by the card that

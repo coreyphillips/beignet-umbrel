@@ -1409,6 +1409,11 @@ pre.asset-meta {
 	display: block;
 }
 
+/* A note that follows a channel's figures stands a little off them. */
+.asset-channel-facts + .info-note {
+	margin-top: 12px;
+}
+
 /* ---------- Lightning: an invoice to receive with ---------- */
 .invoice-facts {
 	display: grid;

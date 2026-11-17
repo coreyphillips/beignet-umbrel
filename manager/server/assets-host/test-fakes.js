@@ -777,6 +777,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			reserved: f.reserved,
 			...(name ? { fundingReservation: name, fundingInputs: [...inputs].map(([assetId, amount]) => ({ assetId: bytes(assetId), amount })) } : {}),
 			recovery: f.recovery,
+			// As the library: the count is on the view only while above zero.
+			...(Number.isInteger(f.undeliveredOutcomes) && f.undeliveredOutcomes > 0 ? { undeliveredOutcomes: f.undeliveredOutcomes } : {}),
 			...(f.error ? { error: f.error } : {})
 		};
 	};

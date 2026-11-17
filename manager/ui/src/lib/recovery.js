@@ -488,6 +488,7 @@ export function restoreProgress(status) {
  * which can arrive before the status has been read again.
  */
 export function capsuleOffer(status, info, heard) {
+	// `heard` is what heardAutoRefusal kept of the wallet's stream.
 	if (!status || status.mode !== 'peer-storage' || status.state !== 'running') return null;
 	// A wallet that applies checkpoints by itself needs no offer; the Backup
 	// row says where that stands. One whose daemon refused to apply it by
@@ -510,4 +511,15 @@ export function capsuleOffer(status, info, heard) {
 		candidates: status.capsules.candidates,
 		refused: refused || null
 	};
+}
+
+/**
+ * What a page keeps of an event on the wallet's stream, for capsuleOffer:
+ * the data of a `capsule:auto-refused` that names the asset channels the
+ * daemon's own apply of a checkpoint was refused over. Null for every other
+ * event, and for a refusal that names none: the status says those.
+ */
+export function heardAutoRefusal(name, data) {
+	if (name !== 'recovery:restore-progress' || !data || data.type !== 'capsule:auto-refused') return null;
+	return autoApplyRefusal(data) ? data : null;
 }

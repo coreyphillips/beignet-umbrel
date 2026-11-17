@@ -315,3 +315,17 @@ test('a balance without the keys says nothing of asset channels, and neither doe
 		{ kind: 'closing', sats: 7, words: 'on their way back from a closing asset channel' }
 	]);
 });
+
+/* ------------------------------------- results a channel has not taken in */
+
+test('a channel that has not taken in the results of earlier payments says so in the words the refusal uses', async () => {
+	const { undeliveredNote } = await import('./asset-lightning.js');
+	assert.equal(
+		undeliveredNote({ undeliveredOutcomes: 2 }),
+		'This wallet has not yet taken in the results of 2 earlier payments on this channel, so nothing is paid through it until it has. Nothing is wrong with the channel. Restart the wallet, and if this is said again afterwards, its log says why.'
+	);
+	assert.match(undeliveredNote({ undeliveredOutcomes: 1 }), /^This wallet has not yet taken in the result of an earlier payment on this channel, so nothing is paid through it until it has\./);
+	for (const none of [{}, { undeliveredOutcomes: 0 }, { undeliveredOutcomes: -2 }, { undeliveredOutcomes: '2' }, { undeliveredOutcomes: 1.5 }, null, undefined]) {
+		assert.equal(undeliveredNote(none), null, JSON.stringify(none));
+	}
+});

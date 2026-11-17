@@ -368,6 +368,10 @@ function channelList(host) {
 			reclaimTxid: note.reclaim ? note.reclaim.txid : null,
 			// On record, and not held by the node: see views.channelWord.
 			missing: word === 'MISSING',
+			// Results of earlier payments the wallet has not taken in yet, as
+			// the library counts them. While there are any it pays nothing
+			// through the channel (OUTCOMES_UNDELIVERED), and the row says so.
+			undeliveredOutcomes: Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? c.undeliveredOutcomes : 0,
 			signed: c.signed,
 			phase: c.phase,
 			engine: c.engine,

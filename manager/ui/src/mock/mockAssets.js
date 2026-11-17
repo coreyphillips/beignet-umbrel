@@ -310,7 +310,8 @@ export function createAssetsMock(ctx) {
 		channelSats: c.channelSats,
 		fundingTxid: c.fundingTxid || null,
 		reclaimable: c.state === 'OPENING' && !!c.fundingTxid,
-		reclaimTxid: c.reclaimTxid || null
+		reclaimTxid: c.reclaimTxid || null,
+		...(Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? { undeliveredOutcomes: c.undeliveredOutcomes } : {})
 	});
 
 	/**
@@ -720,7 +721,48 @@ export function createAssetsMock(ctx) {
 	// The host's sentence for an open a restart cut short (assets-host/lightning.js OPEN_FAILURES).
 	const OPEN_INTERRUPTED_TEXT =
 		'This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
+	// The host's sentence for an open the library ended with nothing signed
+	// (OPEN_FAILURES.CHANNEL_OPEN_FAILED), and the library's own reason after it.
+	const OPEN_FAILED_TEXT =
+		'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
+	const OPEN_FAILED_REASON = 'the peer did not answer the funding in time';
+	// The host's sentence for a payment a channel refuses while results of earlier ones are not taken in (errors.js).
+	const OUTCOMES_UNDELIVERED_TEXT =
+		'This wallet has not yet taken in the results of earlier payments on that channel, so nothing was paid. Nothing is wrong with this payment. Restart the wallet, and if this is said again afterwards, its log says why.';
 	const SEEDS = {
+		// An open the library ended with nothing signed, after the wallet had
+		// taken it on: a failed open like the one a restart cut short, with the
+		// reason the library gave written after the host's sentence.
+		'open-failed'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c.state === 'FAILED')) return false;
+			const rec = Object.values(s.assets).find((a) => a.type !== 'collectible');
+			if (!rec) return false;
+			s.channels.unshift({
+				channelId: derivedHex(`seed-failed-open:${id}`, 64),
+				peerPubkey: `03${derivedHex('seed-peer:stuck-open', 64)}`,
+				peerAlias: 'Meridian edge',
+				state: 'FAILED',
+				failure: { code: 'CHANNEL_OPEN_FAILED', message: `${OPEN_FAILED_TEXT} The wallet's record of it says: ${OPEN_FAILED_REASON}.` },
+				asset: brief(rec),
+				capacity: '50000',
+				localBalance: '0',
+				remoteBalance: '0',
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				_unpriced: true
+			});
+			return true;
+		},
+		// A channel that has not taken in the results of two earlier payments:
+		// its row says so, and a payment through it is refused until it has.
+		'outcomes-undelivered'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL');
+			if (!c) return false;
+			c.undeliveredOutcomes = 2;
+			return true;
+		},
 		// The peer of the wallet's asset channel is away. The channel is still
 		// open, and carries nothing until the peer is back.
 		'peer-offline'(id) {
@@ -1935,6 +1977,10 @@ export function createAssetsMock(ctx) {
 		if (s.lost && s.lost[String(body.bolt11)]) throw fail(PAY_NOTICES.PAYMENT_UNACCOUNTED.message, 'PAYMENT_UNACCOUNTED', { status: 409 });
 		const identity = identityFor(id, quote._key);
 		const ch = s.channels.find((c) => c.channelId === quote._channelId);
+		// As the host: nothing is recorded or sent while the channel has not taken in what earlier payments left.
+		if (ch && ch.undeliveredOutcomes > 0) {
+			throw fail(OUTCOMES_UNDELIVERED_TEXT, 'OUTCOMES_UNDELIVERED', { status: 409, details: { undeliveredOutcomes: ch.undeliveredOutcomes } });
+		}
 		delete s.quotes[quote.quoteId];
 		return new Promise((resolve) => {
 			setTimeout(() => {

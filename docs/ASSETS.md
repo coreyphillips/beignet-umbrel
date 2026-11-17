@@ -393,7 +393,7 @@ An open, a reclaim and a payment carry an `X-Idempotency-Key`, and the same key 
 | `unavailable` | Only when the node does not offer asset channels to its peers: `{ code: 'NOT_ADVERTISED', message, reason }` |
 | `warnings` | `[{ code, text }]`, each a sentence to show: `CHANNEL_MISSING`, `CHANGE_NOT_BACK`, `RECOVERY_STUCK`, `FEE_COINS_UNAVAILABLE`, `FEE_BUDGET_EXHAUSTED`, `FEE_POLICY_REFUSED`. `warning` is the same sentences joined |
 
-A channel in the list has a `state`: `OPENING`, `NORMAL`, `CLOSING`, `FORCE_CLOSING`, `CLOSED`, `FORCE_CLOSED`, `FAILED` (an open that ended, with `failure: { code, message }`), `ERRORED` (the node gave it up) or `MISSING` (on record, not held by the node). A state the host has no word for is passed on in the node's own. `peerConnected` says whether the peer is there, and amounts of an asset are strings.
+A channel in the list has a `state`: `OPENING`, `NORMAL`, `CLOSING`, `FORCE_CLOSING`, `CLOSED`, `FORCE_CLOSED`, `FAILED` (an open that ended, with `failure: { code, message }`), `ERRORED` (the node gave it up) or `MISSING` (on record, not held by the node). A state the host has no word for is passed on in the node's own. `peerConnected` says whether the peer is there, and amounts of an asset are strings. `undeliveredOutcomes` is on a channel only while above zero: how many results of earlier payments the wallet has not taken in yet. A payment through that channel is refused with `OUTCOMES_UNDELIVERED` until it has, and the row says so.
 
 Every refusal carries a `code` and a sentence that can be shown as it is. The codes a client of these routes meets:
 

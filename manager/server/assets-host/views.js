@@ -396,7 +396,11 @@ function channelView(c, reg) {
 		// transaction that was last sent to do so.
 		fundingTxid: c.fundingTxid || null,
 		reclaimable: !!c.reclaimable,
-		reclaimTxid: c.reclaimTxid || null
+		reclaimTxid: c.reclaimTxid || null,
+		// Only while above zero: how many results of earlier payments on this
+		// channel the wallet has not taken in. A payment through it is refused
+		// with OUTCOMES_UNDELIVERED until it has.
+		...(Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? { undeliveredOutcomes: c.undeliveredOutcomes } : {})
 	};
 }
 

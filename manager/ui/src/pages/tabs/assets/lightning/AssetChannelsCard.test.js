@@ -825,3 +825,49 @@ test('the demo counts the bitcoin of a channel that is there, and says that of o
 		await r.unmount();
 	}
 });
+
+test('a channel that has not taken in the results of earlier payments says so on its row, and only that channel carries the count', async () => {
+	const backend = assetsBackend();
+	const plain = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	assert.equal(plain.some((c) => 'undeliveredOutcomes' in c), false, 'a channel that has taken everything in has no such key, as on the host');
+	assert.equal(backend.mock.seed('demo-main', 'outcomes-undelivered'), true);
+	const listed = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	assert.deepEqual(listed.map((c) => [c.state, c.undeliveredOutcomes]), [['NORMAL', 2]]);
+	const r = await mount(backend, { status: await backend.api('demo-main').get('/x/assets/status') });
+	try {
+		const note = r.tests('asset-channel-undelivered')[0];
+		assert.ok(note, 'the row says so');
+		assert.equal(note.getAttribute('data-count'), '2');
+		assert.equal(
+			note.textContent.trim(),
+			'This wallet has not yet taken in the results of 2 earlier payments on this channel, so nothing is paid through it until it has. Nothing is wrong with the channel. Restart the wallet, and if this is said again afterwards, its log says why.'
+		);
+		assert.ok(note.classList.contains('info-note'), 'a wait, said in blue and not as a failure');
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a failed open the library gave a reason for says the reason after the wallet\'s own sentence', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'open-failed'), true);
+	const { channels } = await backend.api('demo-main').get('/x/assets/channels');
+	const failed = channels.find((c) => c.state === 'FAILED');
+	assert.equal(failed.failure.code, 'CHANNEL_OPEN_FAILED');
+	assert.equal(
+		failed.failure.message,
+		"This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again. The wallet's record of it says: the peer did not answer the funding in time."
+	);
+	assert.equal(backend.mock.daemonChannels('demo-main').some((c) => c.channelId === failed.channelId), false, 'it is no channel to the daemon');
+	const r = await mount(backend, { status: await backend.api('demo-main').get('/x/assets/status') });
+	try {
+		const row = r.tests('asset-channel').find((el) => el.getAttribute('data-state') === 'FAILED');
+		assert.match(row.textContent, /not opened/);
+		const note = row.querySelector('[data-testid="asset-channel-failure"]');
+		assert.equal(note.getAttribute('data-code'), 'CHANNEL_OPEN_FAILED');
+		assert.match(note.textContent, /It can be tried again\. The wallet's record of it says: the peer did not answer the funding in time\./);
+		assert.equal(row.querySelector('[data-testid="asset-channel-close"]'), null, 'nothing to close');
+	} finally {
+		await r.unmount();
+	}
+});

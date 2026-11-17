@@ -812,12 +812,31 @@ function runDemoAutoRestore(w, st) {
 	if (autoRestoreScripted) return;
 	autoRestoreScripted = true;
 	const r = st.recovery;
+	// As the engine: an apply of a checkpoint that holds asset channels is
+	// refused, the event names them as the status does, nothing is applied
+	// and the checkpoint goes on waiting (the switch `capsule-auto-refused`).
+	const refusedOver = () => {
+		if (typeof assetsMock.readSwitch === 'function') assetsMock.readSwitch();
+		return r.capsule ? assetsMock.capsuleAutoRefused(w.id) : null;
+	};
+	let refused = false;
 	setTimeout(() => {
-		r.autoApply = { phase: 'applying', settleUntil: null, lastReason: null };
 		emit(w.id, 'recovery:capsule-retrieved', { fromPeer: autoPeer, writerEpoch: '1', latestSequence: '96', inline: true, channelCount: 2, candidates: 1 });
+		const over = refusedOver();
+		if (over) {
+			refused = true;
+			emit(w.id, 'recovery:restore-progress', {
+				type: 'capsule:auto-refused',
+				detail: 'The capsule holds asset channels this wallet cannot restore; nothing was installed',
+				refusal: { code: 'ASSET_RESTORE_REFUSED', assetChannels: over }
+			});
+			return;
+		}
+		r.autoApply = { phase: 'applying', settleUntil: null, lastReason: null };
 		emit(w.id, 'recovery:restore-progress', { type: 'capsule:selecting', detail: 'selecting the newest of 1 checkpoint' });
 	}, 8000);
 	setTimeout(() => {
+		if (refused) return;
 		const chans = makeChannels([
 			[1500000, 58, 'NORMAL', false, 'ACINQ'],
 			[600000, 35, 'FORCE_CLOSED', false, 'Bitrefill']
