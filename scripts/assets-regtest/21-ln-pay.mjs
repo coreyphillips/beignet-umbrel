@@ -69,6 +69,9 @@ const outbound = await refusal(() => post(A.id, '/pay/quote', { bolt11: inv2.bol
 check('an invoice for more than this side holds is refused, with what can be sent', !!outbound && outbound.code === 'INSUFFICIENT_OUTBOUND' && outbound.details.sendable === (await channelOf(A.id, chanA.channelId)).sendable, outbound ? JSON.stringify([outbound.code, outbound.details]) : 'accepted');
 const notInvoice = await refusal(() => post(A.id, '/pay/quote', { bolt11: 'lnbcrt1notaninvoice', key }));
 check('what is not an invoice is refused as one', !!notInvoice && notInvoice.code === 'BAD_INVOICE', notInvoice ? notInvoice.code : 'accepted');
+// The 30,000 just paid are on neither side until the settled HTLC has left
+// both commitments, which the two refusals above do not wait for.
+await sides();
 await conserved('after the limits', [A.id, B.id], key, minted);
 
 // A price that is gone, and a bound that is too low: nothing is paid either time.
@@ -97,6 +100,7 @@ check('balances are as they were before the restart', afterRestart.a.localBalanc
 const again = await payAsset(A.id, B.id, key, '500');
 check('a payment after the restart completes', again.paid.status === 'COMPLETED');
 check('the replay of the first payment still answers the same, after the restart', (await post(A.id, '/pay', first.body, first.requestKey)).paymentHash === first.paid.paymentHash);
+await sides();
 await conserved('at the end', [A.id, B.id], key, minted);
 check('nothing is left in progress', Object.values((await status(A.id)).pending).every((n) => n === 0) && Object.values((await status(B.id)).pending).every((n) => n === 0), JSON.stringify([(await status(A.id)).pending, (await status(B.id)).pending]));
 
