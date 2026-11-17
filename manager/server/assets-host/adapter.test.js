@@ -203,7 +203,6 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 			return { txid: Buffer.from(`${'00'.repeat(31)}ab`, 'hex'), transaction: { txIn: [], txOut: [] }, feeSat: 321n };
 		},
 		advertisement: () => seen.advertisement,
-		fixedOutputFeeStatus: () => seen.feeStatus,
 		close: () => {
 			seen.closed += 1;
 			return Promise.reject(new Error('already closing'));
@@ -219,7 +218,10 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 			seen.made = given;
 			let bound = null;
 			let running = null;
-			return {
+			// The fee coin pool is read from this object, as the library has
+			// it, and never from the service that `start` returns.
+			seen.host = {
+				fixedOutputFeeStatus: () => seen.feeStatus,
 				attachment: {
 					auxiliaryChannels: { the: 'hooks' },
 					fixedOutputFees: given.fixedOutputFees,
@@ -242,6 +244,7 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 					seen.hostClosed += 1;
 				}
 			};
+			return seen.host;
 		},
 		assetLightningBackup: (store) => {
 			seen.backedUp.push(store);
@@ -657,8 +660,12 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 	seen.feeStatus = { available: false, error: { code: 'FEE_POLICY_REFUSED', remedy: 'operator', message: 'the fee coin value is below dust' } };
 	assert.deepEqual(ln.feeStatus(), { available: false, error: { code: 'FEE_POLICY_REFUSED', remedy: 'operator', message: 'the fee coin value is below dust' } });
 	// A library with no such call says nothing.
-	delete entry.service.fixedOutputFeeStatus;
+	delete seen.host.fixedOutputFeeStatus;
 	assert.equal(ln.feeStatus(), null);
+	// And one that has it on the service alone is not the library's shape: nothing is read from there.
+	entry.service.fixedOutputFeeStatus = () => ({ available: true });
+	assert.equal(ln.feeStatus(), null);
+	delete entry.service.fixedOutputFeeStatus;
 
 	// A peer is there once the node lists it with its greeting, which is the library's own rule.
 	NODE.peers = [{ pubkey: hexOf(PEER), remoteInit: null }];

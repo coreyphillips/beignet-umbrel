@@ -1042,10 +1042,6 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				// As the wire has it: the reverse of what a person is shown.
 				return { txid: Buffer.from(txid, 'hex').reverse(), transaction: { txIn: [], txOut: [] }, feeSat: BigInt(opts.reclaimFee) };
 			},
-			fixedOutputFeeStatus() {
-				reads('fixedOutputFeeStatus');
-				return opts.feeStatus || undefined;
-			},
 			advertisement() {
 				reads('advertisement');
 				return opts.advertisement ? { ...opts.advertisement } : undefined;
@@ -1293,6 +1289,11 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			const me = { node: null, service: null };
 			Object.assign(state, { host: me, made: given, store: given.store, started: false, bound: false, options: null, adapter: null, node: null });
 			return {
+				// As the library has it: a call of this object, answered from
+				// the node once it is bound, whether or not the service runs.
+				fixedOutputFeeStatus() {
+					return me.node ? opts.feeStatus || undefined : undefined;
+				},
 				attachment: {
 					auxiliaryChannels: { name: 'the fake provider' },
 					fixedOutputFees: given.fixedOutputFees,

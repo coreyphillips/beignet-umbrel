@@ -253,7 +253,15 @@ test('a real daemon loads the host, lists it and serves its routes', { skip: ski
 		assert.deepEqual([status.phase, status.ready, status.error, status.network, status.hrp], ['starting', false, null, 'regtest', 'taprt']);
 		assert.deepEqual([status.chain.name, status.chain.minConfirmations], ['regtest', 1]);
 		assert.equal(status.startup.waiting, "The wallet's Electrum server has not said which chain it is on");
-		assert.deepEqual(status.lightning, { mode: CHANNELS ? 'full' : 'off', usableChannels: 0, feeCoins: null });
+		// With asset channels the node has taken the fee settings this host
+		// gives it, and says so of its fee coin pool: the whole regtest budget
+		// is left, and a wallet nobody has paid has no coin to prepare one from.
+		const { feeCoins, ...lightning } = status.lightning;
+		assert.deepEqual(lightning, { mode: CHANNELS ? 'full' : 'off', usableChannels: 0 });
+		if (CHANNELS) {
+			assert.match(feeCoins.neededSats, /^[1-9][0-9]*$/);
+			assert.deepEqual({ ...feeCoins, neededSats: null }, { possible: false, neededSats: null, largestConfirmedSats: '0', ready: 0, budgetRemainingSats: '100000000', reason: 'FEE_FUNDS_UNAVAILABLE' });
+		} else assert.equal(feeCoins, null);
 		if (!CHANNELS) {
 			// An engine or an adapter without asset channels: no channels, said
 			// plainly to the manager that counts them, and nothing to open.

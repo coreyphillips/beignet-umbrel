@@ -1395,10 +1395,12 @@ function createLightning({ entry, storage, cfg, now = null }) {
 		},
 		// The engine's fee coin pool, which pays the miner fees of an asset
 		// channel's on-chain claims, in plain values. Null for a library or
-		// an engine that cannot say, and for a node with no fee policy.
+		// an engine that cannot say, and for a node with no fee policy. It
+		// is asked of the object createAssetLightningHost returned (37): the
+		// service it starts has no such call.
 		feeStatus() {
-			const service = live();
-			return plainFeeStatus(typeof service.fixedOutputFeeStatus === 'function' ? service.fixedOutputFeeStatus() : undefined);
+			live();
+			return plainFeeStatus(typeof made.fixedOutputFeeStatus === 'function' ? made.fixedOutputFeeStatus() : undefined);
 		},
 
 		// Over the store alone: neither needs the service, or a node.
