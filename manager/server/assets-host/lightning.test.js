@@ -3114,6 +3114,33 @@ test('a payment that never entered the channel says nothing left the wallet and 
 	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
 });
 
+test('a side of an asset channel with too little bitcoin left to carry a payment is said as that, with nothing paid and no invoice made', async () => {
+	// The library lists its refusal of the payer's side among the ones it makes before anything is sent.
+	const { h, asset } = await channelled({ remote: 200n }, { paymentRefusals: ['ERR_BEIGNET_LN_CARRIER_UNFUNDED'] });
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	const before = (await h.get('/channels')).channels[0].localBalance;
+	h.ln.opts.payFails = 'ERR_BEIGNET_LN_CARRIER_UNFUNDED';
+	const said = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: '50' }, 'carrier-key');
+	assert.equal(said.status, 'FAILED');
+	assert.match(said.failureDescription, /^Your side of the asset channel has too little bitcoin left to carry a payment, so nothing was paid\./);
+	const failure = (await h.get('/activity', 'kind=ln-send')).rows[0].failure;
+	assert.deepEqual([failure.code, failure.message], ['CHANNEL_BITCOIN_SHORT', said.failureDescription]);
+	// Nothing was recorded by the library and nothing left the channel.
+	assert.equal(h.ln.payments.size, 0);
+	assert.equal((await h.get('/channels')).channels[0].localBalance, before);
+	h.ln.opts.payFails = null;
+
+	// The peer's side, when this wallet asks to be paid: a refusal, and no invoice.
+	const price = await h.call('POST /invoices/quote', { key: asset.key, amount: '20' });
+	h.ln.opts.invoiceFails = () => 'ERR_BEIGNET_LN_PEER_CARRIER_UNFUNDED';
+	const short = await refused(h.call('POST /invoices', { key: asset.key, amount: '20', quoteId: price.quoteId }));
+	assert.deepEqual([short.extensionCode, short.status], ['PEER_CHANNEL_BITCOIN_SHORT', 409]);
+	assert.match(short.message, /^The peer's side of the asset channel has too little bitcoin left to carry a payment to you, so no invoice was made\./);
+	assert.equal((await h.get('/invoices')).invoices.length, 0);
+	h.ln.opts.invoiceFails = null;
+});
+
 const ENDED = 'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
 
 test('an open the library ended across a restart is a failed open in the wallet\'s own sentence, with what the library said kept apart as a detail and in the log', async () => {

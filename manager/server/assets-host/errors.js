@@ -150,6 +150,20 @@ const LIGHTNING_REFUSALS = {
 	],
 	ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND: ['INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409],
 	ERR_BEIGNET_LN_INSUFFICIENT_INBOUND: ['INSUFFICIENT_INBOUND', 'No asset channel of this wallet can receive that much.', 409],
+	// Every payment over an asset channel moves a little of the channel's
+	// bitcoin from the payer's side to the payee's. A side that has paid
+	// many times without being paid runs out of it while it still has units.
+	// The library refuses before anything is sent or made.
+	ERR_BEIGNET_LN_CARRIER_UNFUNDED: [
+		'CHANNEL_BITCOIN_SHORT',
+		"Your side of the asset channel has too little bitcoin left to carry a payment, so nothing was paid. Each payment moves a little of the channel's bitcoin to the one who is paid. Once you have been paid through the channel, you can pay through it again.",
+		409
+	],
+	ERR_BEIGNET_LN_PEER_CARRIER_UNFUNDED: [
+		'PEER_CHANNEL_BITCOIN_SHORT',
+		"The peer's side of the asset channel has too little bitcoin left to carry a payment to you, so no invoice was made. Each payment moves a little of the channel's bitcoin to the one who is paid. Once you have paid the peer through the channel, it can pay you again.",
+		409
+	],
 	ERR_BEIGNET_LN_BAD_INVOICE: ['BAD_INVOICE', 'That is not a Lightning invoice this wallet can read.', 400],
 	ERR_BEIGNET_LN_INVOICE_EXPIRED: ['BAD_INVOICE', 'That invoice has expired. Ask whoever made it for a new one.', 400],
 	ERR_BEIGNET_LN_AMOUNT_REQUIRED: ['AMOUNT_REQUIRED', 'This invoice names no amount, so one is needed.', 400],
