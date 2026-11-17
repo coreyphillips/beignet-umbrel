@@ -3246,3 +3246,20 @@ test('a channel this wallet funded whose funding has not confirmed is an open to
 	await h.call('POST /channels/close', { channelId: channel.channelId, force: true });
 	assert.deepEqual(named(h, 'closeChannel'), [['closeChannel', channel.channelId, true]]);
 });
+
+test('the count of asset channels the status gives is taken when it is asked, and is the count of rows that are not over', async () => {
+	const { h, asset } = await funded();
+	await h.host.pass({ block: true });
+	assert.equal((await h.get('/status')).assetChannels, 0);
+	// A peer begins an open, and nothing has made the wallet look again since.
+	const flow = h.ln.inbound({ assetId: asset.assetId, amount: 300n });
+	h.ln.set(flow.pendingChannelId, { state: 'ERRORED', confirmed: false, phase: 'funded', signed: false });
+	const rows = (await h.get('/channels')).channels.filter((c) => !['CLOSED', 'FORCE_CLOSED', 'FAILED'].includes(c.state));
+	assert.equal(rows.length, 1);
+	const status = await h.get('/status');
+	assert.equal(status.assetChannels, rows.length);
+	// And gone from both at once when the library ends the flow.
+	h.ln.set(flow.pendingChannelId, { state: null, phase: 'failed', error: 'never funded' });
+	assert.deepEqual([(await h.get('/channels')).channels.length, (await h.get('/status')).assetChannels], [0, 0]);
+	assert.equal(lightning.channelCount(h.host), lightning.liveChannels(h.host));
+});

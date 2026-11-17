@@ -890,12 +890,16 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		} catch (_) {
 			/* closed storage: the last state read stands */
 		}
+		// How many asset channels are not over is counted now, not taken from
+		// the last pass of the loop: the manager refuses by this number, and
+		// a channel can appear or end between two passes.
+		const liveChannels = lightning().liveChannels(host);
 		return views.statusView({
 			cfg,
 			phase: host.phase(),
 			error: mem.importError ? `The assets backup could not be restored: ${mem.importError}` : null,
 			tip: host.tip(),
-			summary: mem.summary,
+			summary: { ...mem.summary, liveChannels, holdsAssets: !!mem.summary.holdsAssets || (liveChannels || 0) > 0 },
 			startup: mem.firstPass ? null : { ...mem.startup, ...(mem.startError || mem.guardError ? { waiting: mem.startError || mem.guardError } : {}) },
 			proofServer: mem.proofServer,
 			backup: { exportedAt: mem.backupState.exportedAt, dirty: mem.backupState.dirty, importError: mem.importError },

@@ -29,9 +29,6 @@ const {
 	validateGuardianSet
 } = require('./recovery');
 
-// An asset channel in one of these states holds nothing any more: its assets
-// are back on-chain and the assets host has nothing left to enforce.
-const ASSET_CHANNEL_OVER = new Set(['CLOSED', 'FORCE_CLOSED', 'FAILED']);
 
 // What the engine itself refuses over stored asset channels, in the words a
 // wallet's owner is shown. This is the one place in the manager that knows
@@ -1838,15 +1835,18 @@ class WalletManager {
 	 */
 	async _liveAssetChannels(rec) {
 		try {
-			const res = await fetch(`http://127.0.0.1:${rec.port}/x/assets/channels`, {
+			// The host's own count, taken as it is asked (`assetChannels` of
+			// its status). The manager counts no rows itself: one function,
+			// the host's, says what an asset channel that is not over is, so
+			// what is refused here and what the status shows cannot disagree.
+			const res = await fetch(`http://127.0.0.1:${rec.port}/x/assets/status`, {
 				headers: { Authorization: `Bearer ${this.token(rec.id)}` },
 				signal: AbortSignal.timeout(3000)
 			});
 			if (!res.ok) return null;
 			const body = await res.json();
-			const list = body && body.result && body.result.channels;
-			if (!Array.isArray(list)) return null;
-			return list.filter((c) => !ASSET_CHANNEL_OVER.has(String(c && c.state).toUpperCase())).length;
+			const count = body && body.result && body.result.assetChannels;
+			return Number.isInteger(count) && count >= 0 ? count : null;
 		} catch (_) {
 			return null;
 		}

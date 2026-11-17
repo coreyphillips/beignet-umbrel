@@ -1201,6 +1201,7 @@ export function createAssetsMock(ctx) {
 				chain: { name: chainOf(id), height: s.host === 'failed' ? 0 : ctx.height(id), minConfirmations: required(id) },
 				pending: { mints: 0, sends: 0, receives: 0, burns: 0 },
 				holdsAssets: false,
+				assetChannels: null,
 				lockedSats: 0,
 				anchorCount: 0,
 				startup: s.host === 'starting' ? { ...STARTUP } : null,
@@ -1226,6 +1227,9 @@ export function createAssetsMock(ctx) {
 			chain: { name: chainOf(id), height: ctx.height(id), minConfirmations: required(id) },
 			pending: { mints: active('mint'), sends: active('send'), receives: active('receive'), burns: active('burn') },
 			holdsAssets: held(id).length > 0,
+			// As the host: counted as the status is asked, by the one function
+			// the manager's refusals go by too.
+			assetChannels: liveChannels(id),
 			lockedSats: anchors * ANCHOR_SATS,
 			anchorCount: anchors,
 			startup: null,
@@ -2560,6 +2564,15 @@ export function createAssetsMock(ctx) {
 		return [{ channelId: derivedHex(`capsule-skipped-channel:${id}`, 64), peerPubkey: `02${derivedHex('capsule-skipped-peer', 64)}`, capacitySats: 100000 }];
 	}
 
+	/**
+	 * How many asset channels are not over, as the host counts them
+	 * (lightning.js liveChannels): every row but a closed one and an open
+	 * that failed. The status gives this number and the manager refuses by it.
+	 */
+	function liveChannels(id) {
+		return S(id).channels.filter((c) => !['CLOSED', 'FORCE_CLOSED', 'FAILED'].includes(c.state)).length;
+	}
+
 	function daemonChannels(id) {
 		if (!state.wallets[id]) return [];
 		return state.wallets[id].channels
@@ -2650,6 +2663,7 @@ export function createAssetsMock(ctx) {
 	return {
 		request,
 		daemonChannels,
+		liveChannels,
 		channelBitcoin,
 		daemonPayments,
 		daemonInvoices,

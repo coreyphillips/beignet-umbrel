@@ -232,3 +232,38 @@ test('what the engine refuses over asset channels at boot is said in the manager
 	assert.equal(failed({ code: 'START_FAILED', message: 'Another beignet instance is already using this directory' }).message, 'Another beignet instance is already using this directory');
 	assert.equal(failed({ code: 'SOMETHING_ELSE', message: 'no' }), null);
 });
+
+test("how many asset channels a running wallet has is its host's own count, the one its status gives, and not a count of rows", async () => {
+	const http = require('node:http');
+	let said = { result: { assetChannels: 1 } };
+	let code = 200;
+	const asked = [];
+	const server = http.createServer((req, res) => {
+		asked.push([req.url, req.headers.authorization]);
+		res.statusCode = req.url === '/x/assets/status' ? code : 200;
+		res.setHeader('content-type', 'application/json');
+		// The list has no row at all, and one the manager's own words would have counted wrongly.
+		res.end(JSON.stringify(req.url === '/x/assets/status' ? said : { result: { channels: [] } }));
+	});
+	await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+	try {
+		const m = Object.create(WalletManager.prototype);
+		m.token = () => 'tok';
+		const rec = { id: 'w1', port: server.address().port };
+		assert.equal(await m._liveAssetChannels(rec), 1);
+		assert.deepEqual(asked, [['/x/assets/status', 'Bearer tok']]);
+		said = { result: { assetChannels: 0 } };
+		assert.equal(await m._liveAssetChannels(rec), 0);
+		// A host that cannot say, or does not answer, is not a host with none.
+		for (const cannot of [{ result: { assetChannels: null } }, { result: {} }, { result: { assetChannels: -1 } }, {}]) {
+			said = cannot;
+			assert.equal(await m._liveAssetChannels(rec), null);
+		}
+		said = { result: { assetChannels: 2 } };
+		code = 503;
+		assert.equal(await m._liveAssetChannels(rec), null);
+	} finally {
+		await new Promise((resolve) => server.close(resolve));
+	}
+	assert.equal(await Object.assign(Object.create(WalletManager.prototype), { token: () => 'tok' })._liveAssetChannels({ id: 'w1', port: 1 }), null);
+});

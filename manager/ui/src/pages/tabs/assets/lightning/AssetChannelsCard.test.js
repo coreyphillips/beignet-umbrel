@@ -891,6 +891,9 @@ test('an open a peer began whose opener went away reads as opening, offers no fo
 	}
 	assert.equal((await api.get('/x/assets/channels')).channels[0].state, 'OPENING');
 	const status = await api.get('/x/assets/status');
+	// One count, as the host: the status gives the number of rows that are not over, this open among them.
+	assert.equal(status.assetChannels, listed.filter((c) => !['CLOSED', 'FORCE_CLOSED', 'FAILED'].includes(c.state)).length);
+	assert.equal(status.assetChannels, 2);
 	const r = await mount(backend, { status });
 	try {
 		const row = r.tests('asset-channel')[0];

@@ -449,13 +449,14 @@ function channelList(host) {
 	return out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 
-/** How many channels are not over. A read that fails counts none, and says so nowhere: the status must not throw. */
+/**
+ * How many channels are not over, where "cannot be asked" may count as
+ * none: whether the wallet holds assets. The count is liveChannels', the
+ * one function that says what an asset channel that is not over is.
+ */
 function channelCount(host) {
-	try {
-		return channelList(host).filter((c) => !c.over).length;
-	} catch (_) {
-		return 0;
-	}
+	const live = liveChannels(host);
+	return live === null ? 0 : live;
 }
 
 /**
@@ -463,6 +464,11 @@ function channelCount(host) {
  * asked" for "none": null while there is a node to ask that is not there
  * yet, and when the list cannot be read. A wallet with no Lightning side
  * has none, and says 0.
+ *
+ * This is the one count of asset channels. The status gives it as
+ * `assetChannels`, taken when the status is asked, and the manager refuses
+ * by that same number: it asks the status and counts no rows itself. So a
+ * row the list shows and the number the status gives cannot disagree.
  */
 function liveChannels(host) {
 	if (!host.ln) return 0;
