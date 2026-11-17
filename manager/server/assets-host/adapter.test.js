@@ -335,7 +335,7 @@ test('the provider is built over its own rows before there is an adapter or a no
 	const storage = memoryStorage().storage;
 	const ln = createLightning({ entry, storage, cfg });
 	// The library's Lightning rows sit under l/ in the wallet's own storage.
-	assert.deepEqual(Object.keys(entry.seen.made).sort(), ['allowLegacyHtlcSignatures', 'fixedOutputFees', 'hrp', 'onError', 'store']);
+	assert.deepEqual(Object.keys(entry.seen.made).sort(), ['allowLegacyHtlcSignatures', 'assumeNegotiatedChannelConfig', 'fixedOutputFees', 'hrp', 'onError', 'store']);
 	assert.equal(entry.seen.made.store.backend, storage);
 	assert.equal(entry.seen.made.store.prefix, 'l/');
 	assert.equal(entry.seen.made.hrp, 'taprt');
@@ -372,6 +372,19 @@ test('a peer that runs lnd with tapd is allowed the HTLC signatures tapd makes, 
 		assert.equal(entry.seen.made.allowLegacyHtlcSignatures('03'.padEnd(66, 'b')), true, network);
 		// The CSV delay of such a channel is the engine's own: no bounds are given.
 		assert.equal('legacyCsvDelay' in entry.seen.made, false, network);
+	}
+});
+
+test('a peer that signals neither way of deriving the first commitment, as Lightning Terminal v0.17.11 does, is taken to derive it from the negotiated settings, on every network', () => {
+	for (const network of ['mainnet', 'testnet', 'regtest']) {
+		const entry = fakeEntry();
+		const at = parseConfig(network, { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules' });
+		createLightning({ entry, storage: memoryStorage().storage, cfg: at });
+		// A peer that derives it otherwise signs another first commitment,
+		// and the open fails at that signature before anything is funded.
+		assert.equal(typeof entry.seen.made.assumeNegotiatedChannelConfig, 'function', network);
+		assert.equal(entry.seen.made.assumeNegotiatedChannelConfig('02'.padEnd(66, 'a')), true, network);
+		assert.equal(entry.seen.made.assumeNegotiatedChannelConfig('03'.padEnd(66, 'b')), true, network);
 	}
 });
 

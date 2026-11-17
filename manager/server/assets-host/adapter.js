@@ -1150,11 +1150,19 @@ function createLightning({ entry, storage, cfg, now = null }) {
 	// library gives the channel one CSV delay for both sides, which tapd's
 	// signatures need. The answer is the same for every peer, on every
 	// network.
+	//
+	// A peer that signals neither of the asset features that say how the
+	// first commitment is derived (Lightning Terminal v0.17.11 signals
+	// neither) is taken to derive it from the channel's negotiated settings,
+	// as this wallet does. A peer that derives it otherwise signs a
+	// different first commitment, and the open fails at that signature,
+	// before anything is funded.
 	const made = entry.createAssetLightningHost({
 		store,
 		hrp: cfg.hrp,
 		fixedOutputFees: fixedOutputFees(cfg),
 		allowLegacyHtlcSignatures: () => true,
+		assumeNegotiatedChannelConfig: () => true,
 		...(seconds ? { now: seconds } : {}),
 		onError
 	});
