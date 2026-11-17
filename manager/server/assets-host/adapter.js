@@ -1143,7 +1143,21 @@ function createLightning({ entry, storage, cfg, now = null }) {
 			/* a host that cannot be told is stopping */
 		}
 	};
-	const made = entry.createAssetLightningHost({ store, hrp: cfg.hrp, fixedOutputFees: fixedOutputFees(cfg), ...(seconds ? { now: seconds } : {}), onError });
+	// A peer that runs lnd with tapd offers no fixed HTLC outputs, and signs
+	// a channel's HTLCs the way tapd does. The engine asks this only about
+	// such a peer: two wallets of this app, which both keep fee coins, open
+	// with fixed outputs whatever it answers. With a peer it allows, the
+	// library gives the channel one CSV delay for both sides, which tapd's
+	// signatures need. The answer is the same for every peer, on every
+	// network.
+	const made = entry.createAssetLightningHost({
+		store,
+		hrp: cfg.hrp,
+		fixedOutputFees: fixedOutputFees(cfg),
+		allowLegacyHtlcSignatures: () => true,
+		...(seconds ? { now: seconds } : {}),
+		onError
+	});
 	let node = null;
 	let service = null;
 	// What `start` was given, until the node is there to start over.

@@ -1283,7 +1283,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		},
 		createAssetLightningHost(given) {
 			if (!opts.supported) throw refuse('UNSUPPORTED', 'this Beignet (0.42.0) has no asset channels');
-			only('createAssetLightningHost', given, ['store', 'hrp', 'fixedOutputFees', 'invoiceRetentionSeconds', 'now', 'onError']);
+			only('createAssetLightningHost', given, ['store', 'hrp', 'fixedOutputFees', 'invoiceRetentionSeconds', 'allowLegacyHtlcSignatures', 'legacyCsvDelay', 'now', 'onError']);
+			if (given && given.allowLegacyHtlcSignatures !== undefined && typeof given.allowLegacyHtlcSignatures !== 'function') throw refuse('INVALID', 'allowLegacyHtlcSignatures must be a function');
 			if (!given || !given.store || typeof given.store.transaction !== 'function') throw refuse('INVALID', 'store must be the store lightningStore() returns');
 			own(given.store);
 			const me = { node: null, service: null };

@@ -335,7 +335,7 @@ test('the provider is built over its own rows before there is an adapter or a no
 	const storage = memoryStorage().storage;
 	const ln = createLightning({ entry, storage, cfg });
 	// The library's Lightning rows sit under l/ in the wallet's own storage.
-	assert.deepEqual(Object.keys(entry.seen.made).sort(), ['fixedOutputFees', 'hrp', 'onError', 'store']);
+	assert.deepEqual(Object.keys(entry.seen.made).sort(), ['allowLegacyHtlcSignatures', 'fixedOutputFees', 'hrp', 'onError', 'store']);
 	assert.equal(entry.seen.made.store.backend, storage);
 	assert.equal(entry.seen.made.store.prefix, 'l/');
 	assert.equal(entry.seen.made.hrp, 'taprt');
@@ -358,6 +358,21 @@ test('the provider is built over its own rows before there is an adapter or a no
 	assert.throws(() => ln.peerSupports(hexOf(PEER)), { code: 'ERR_BEIGNET_LN_NOT_READY' });
 	// What goes wrong in the library where nobody waits has nowhere to go yet, and throws at nobody.
 	entry.seen.made.onError(new Error('nobody is listening'));
+});
+
+test('a peer that runs lnd with tapd is allowed the HTLC signatures tapd makes, on every network, with nothing else bounded by it', () => {
+	for (const network of ['mainnet', 'testnet', 'regtest']) {
+		const entry = fakeEntry();
+		const at = parseConfig(network, { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules' });
+		createLightning({ entry, storage: memoryStorage().storage, cfg: at });
+		// The engine asks this only of a peer that offers no fixed HTLC
+		// outputs, so a wallet of this app keeps them whatever it answers.
+		assert.equal(typeof entry.seen.made.allowLegacyHtlcSignatures, 'function', network);
+		assert.equal(entry.seen.made.allowLegacyHtlcSignatures('02'.padEnd(66, 'a')), true, network);
+		assert.equal(entry.seen.made.allowLegacyHtlcSignatures('03'.padEnd(66, 'b')), true, network);
+		// The CSV delay of such a channel is the engine's own: no bounds are given.
+		assert.equal('legacyCsvDelay' in entry.seen.made, false, network);
+	}
 });
 
 test('no one transaction of a channel pays more than the wallet lets an asset transaction pay, and the budget for all of them is many transactions deep', () => {
@@ -886,6 +901,12 @@ test(
 			if (carries) {
 				assert.equal(typeof attachment.auxiliaryChannels.provider, 'object');
 				for (const hook of ['resolveIncoming', 'valueIncomingHtlc', 'onHtlcResolved']) assert.equal(typeof attachment.auxiliaryChannels[hook], 'function', hook);
+				// A peer that runs lnd with tapd: the engine is asked about it only
+				// when it offers no fixed HTLC outputs, is allowed it, and is given
+				// the policy that holds such a channel to one CSV delay.
+				assert.equal(typeof attachment.auxiliaryChannels.allowLegacyHtlcSignatures, 'function');
+				assert.equal(attachment.auxiliaryChannels.allowLegacyHtlcSignatures('02'.padEnd(66, 'a')), true);
+				assert.equal(typeof attachment.auxiliaryChannels.openingCsvPolicy, 'function');
 				assert.equal(typeof attachment.bind, 'function');
 				assert.deepEqual(attachment.fixedOutputFees, fixedOutputFees(wished));
 			}
