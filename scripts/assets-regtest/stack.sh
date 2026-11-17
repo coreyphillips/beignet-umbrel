@@ -4,9 +4,10 @@
 # (bitcoind, electrs, lnd and a tapd built from its pinned commit), started
 # under a project name and ports of its own so it runs beside anything else.
 #
-#   scripts/assets-regtest/stack.sh up      start it, fund lnd, write env.sh
-#   scripts/assets-regtest/stack.sh down    stop it and keep its volumes
-#   scripts/assets-regtest/stack.sh wipe    stop it and delete its volumes
+#   scripts/assets-regtest/stack.sh up        start it, fund lnd, write env.sh
+#   scripts/assets-regtest/stack.sh upstream  start the upstream peer beside it
+#   scripts/assets-regtest/stack.sh down      stop it and keep its volumes
+#   scripts/assets-regtest/stack.sh wipe      stop it and delete its volumes
 #
 # TS_TAP_DIR names the ts-tap checkout whose docker/compose.yml is used
 # (default: ../ts-tap beside this repository). Only this project's
@@ -24,7 +25,9 @@ export TAP_ELECTRUM_PORT="${TAP_ELECTRUM_PORT:-60501}"
 export TAPD_REST_PORT="${TAPD_REST_PORT:-18189}"
 export TAPD_RPC_PORT="${TAPD_RPC_PORT:-10129}"
 STATE="${ASSETS_REGTEST_STATE:-$HERE/.state}"
-compose=(docker compose -p "$COMPOSE_PROJECT_NAME" -f "$TS_TAP_DIR/docker/compose.yml" -f "$HERE/compose.override.yml")
+# compose.upstream.yml adds the upstream peer, which only `upstream` starts;
+# naming it here lets `down` and `wipe` reach it too.
+compose=(docker compose -p "$COMPOSE_PROJECT_NAME" -f "$TS_TAP_DIR/docker/compose.yml" -f "$HERE/compose.override.yml" -f "$HERE/compose.upstream.yml")
 
 btc() {
 	"${compose[@]}" exec -T bitcoind bitcoin-cli -regtest -rpcport=18443 -rpcuser=taptest -rpcpassword=taptest "$@"
@@ -79,6 +82,17 @@ ENV
 	echo "stack up: electrs 127.0.0.1:$TAP_ELECTRUM_PORT, tapd REST https://localhost:$TAPD_REST_PORT"
 	echo "source $STATE/env.sh"
 	;;
+upstream)
+	# The peer of 25-ln-upstream.mjs: lnd and tapd of the upstream
+	# implementation in one process, on this stack's chain. `up` first.
+	image="${ASSETS_UPSTREAM_IMAGE:-ts-tap-native-interop:upstream}"
+	if ! docker image inspect "$image" >/dev/null 2>&1; then
+		echo "no image $image: ts-tap's npm run regtest:lightning:upstream builds it (docker/native-interop)" >&2
+		exit 1
+	fi
+	"${compose[@]}" up -d --no-build --wait integrated
+	echo "upstream peer up: 127.0.0.1:${ASSETS_UPSTREAM_P2P_PORT:-19835}, image $image"
+	;;
 down)
 	"${compose[@]}" stop
 	;;
@@ -87,7 +101,7 @@ wipe)
 	rm -rf "$STATE"
 	;;
 *)
-	sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
 	exit 2
 	;;
 esac

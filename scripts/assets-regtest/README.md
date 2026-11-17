@@ -132,6 +132,7 @@ node 21-ln-pay.mjs            # an invoice and its payment both ways, replay, th
 node 22-ln-close.mjs          # closed together: each side's share back on-chain
 node 23-ln-force-close.mjs    # closed alone with the peer stopped: the delay, the sweeps, the peer coming back
 node 24-ln-crash-restore.mjs  # daemons killed before an open has answered, as it answers and with a payment in flight, then the opener restored from an archive
+node 25-ln-upstream.mjs       # the same with a peer that runs Lightning Labs' daemons, and payments it prices to and from a node with no asset
 ```
 
 Each one makes two wallets, mints 100,000 units of an asset of its own on the
@@ -168,6 +169,25 @@ minutes, covered by the host's unit tests with a clock), fee bumping (the
 library has none yet), and Tor (the stack has no Tor; the outbound rules are
 covered by `manager/server/outbound.test.js` and the host's tests).
 
+`25-ln-upstream.mjs` needs a peer that runs Lightning Labs' daemons: lnd
+and tapd in one process (`tapd-integrated`), built by ts-tap's
+`docker/native-interop` from taproot-assets at the commit it pins, with no
+patch. ts-tap's `npm run regtest:lightning:upstream` builds the image
+(`ts-tap-native-interop:upstream`); `stack.sh upstream` starts it beside the
+stack, on the stack's bitcoind, listening on `127.0.0.1:19835`
+(`ASSETS_UPSTREAM_P2P_PORT`), with tapd's mock price oracle at 1.01 units a
+sat (`ASSETS_UPSTREAM_UNITS_PER_BTC`). The scenario funds the peer, has its
+universe learn the wallet's asset from the stack's tapd, and drives it
+through the RPC client its image carries (`native-interop-client`): the
+wallet opens to it, an invoice is paid each way, both restart, the stack's
+lnd pays the wallet in bitcoin through the peer and the wallet pays an
+invoice of the stack's lnd with the asset, then a cooperative close, a force
+close by the peer and a force close by the wallet with the peer stopped,
+every share sent to the stack's tapd. The amounts the peer pays the wallet
+stay under what its bitcoin in the channel can carry: tapd lets an HTLC with
+units out only while its spendable bitcoin covers the payment's whole value.
+
 The Lightning scripts do not yet cover a force close with a payment in
-flight, a held invoice, a revoked commitment being punished, or a peer that
-runs Lightning Labs' daemons.
+flight, a held invoice, or a revoked commitment being punished (ts-tap's
+own regtest example does), nor a channel that a peer running Lightning
+Labs' daemons opens to the wallet.
