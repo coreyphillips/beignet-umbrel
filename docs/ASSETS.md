@@ -155,8 +155,8 @@ An asset channel is a Lightning channel funded with an asset. What moves through
 The limits, first:
 
 - **Only a Lightning wallet has them.** An on-chain only wallet does not, and neither does a wallet whose channel backup is kept by guardians (see [Asset channels and backups](#asset-channels-and-backups)).
-- **The peer has to take asset channels.** Another wallet running this app, on an engine that can carry them, does. A peer that runs Lightning Labs' daemons is not verified yet (see [Not covered](#not-covered)).
-- **A wallet of this app sets no bitcoin price for an asset.** Between two wallets of this app an invoice is for the asset alone and only the channel's peer can pay it. See [Invoices, payments and prices](#invoices-payments-and-prices).
+- **The peer has to take asset channels.** Another wallet running this app, on an engine that can carry them, does. So does a peer that runs Lightning Labs' daemons, lnd with tapd, with the limits under [Peers that run Lightning Labs' daemons](#peers-that-run-lightning-labs-daemons).
+- **A wallet of this app sets no bitcoin price for an asset.** Between two wallets of this app an invoice is for the asset alone and only the channel's peer can pay it. A peer that sets a price, such as lnd with tapd, lets anyone pay an invoice of yours in bitcoin and lets you pay bitcoin invoices with the asset. See [Invoices, payments and prices](#invoices-payments-and-prices).
 - **This wallet never forwards a payment for anyone else**, and never sells an asset for bitcoin.
 - **An asset payment goes out in one part, over one channel.** What you can send or receive at once is what the best single channel carries, never the sum of several.
 - **No backup brings a channel back.** See [Asset channels and backups](#asset-channels-and-backups).
@@ -200,7 +200,7 @@ The bitcoin in the channel stays yours and comes back when the channel is closed
 - **An invoice is for the asset alone, and only the channel's peer can pay it.** The sats written on such an invoice are not a price.
 - **Paying somebody else's bitcoin invoice with an asset needs a peer that sets a price**, and a wallet of this app is not one.
 
-With a peer that does set a price, an invoice shows what the payer is asked for in sats and the rate, and a payment shows what the invoice gets and the price. That path is built, and it is not verified against such a peer yet.
+With a peer that does set a price, an invoice shows what the payer is asked for in sats and the rate, and a payment shows what the invoice gets and the price. That path ran on regtest against a peer that runs lnd with tapd: a node with no asset paid an invoice of this wallet in bitcoin and this wallet received the asset, and this wallet paid a bitcoin invoice of that node with the asset, both through the peer. The peer's price decides how much of the asset that is.
 
 - **At most eight unused answers from one peer at a time.** Every invoice you make, and every figure you ask for before paying, is one the peer keeps for you until it is used or runs out. A peer keeps eight for one wallet at once, so no more than eight unpaid asset invoices are open with one peer at a time. The next is refused with "The peer is already keeping as many unused prices for this wallet as it keeps at once, so it gave no new one. Try again in a few minutes."
 - **One part, one channel.** A payment larger than the best single channel can send is refused ("No asset channel of this wallet can send that much."), also when two channels together could. An invoice for more than one channel can receive is refused the same way.
@@ -257,6 +257,17 @@ The limits this app gives the wallet's node for those fees:
 | All of them together | 2,500,000 sats | 1,000,000 sats | 100,000,000 sats |
 
 The first two never pass the wallet's ceiling for one asset transaction (`BEIGNET_ASSETS_MAX_FEE_SATS`, see [Fees](#fees)). The app has no setting of its own for the rest. The total is a budget for the wallet's whole life. What claims and preparations of fee coins have spent is never given back, and a claim that is under way holds back up to its limit of the budget until it is over.
+
+### Peers that run Lightning Labs' daemons
+
+A peer that runs lnd with tapd, Lightning Labs' daemons, takes an asset channel from this wallet. It ran on regtest through this app against `tapd-integrated` built from taproot-assets `0ab6c01c`, with no patch: the open, a payment each way, both sides restarted, the payments through the peer to and from a node with no asset, a close together, a close by force from each side, and every share that came home checked by `tapd`. What differs from a channel between two wallets of this app:
+
+- **The channel is one tapd can sign.** Such a peer offers none of this engine's fixed HTLC outputs, so the channel's payments are signed the way tapd signs them, and both sides wait the same delay after a close by force: 144 blocks with the peer as tested.
+- **The peer sets the price.** It quotes the price of an invoice and of a payment, and the dashboard shows it. It also judges the price this wallet gives: tapd refuses one further from its own than its tolerance, 5% unless its operator set another. This wallet prices one unit of an asset at one sat, so a peer whose price is further from that cannot make an invoice for this wallet to pay. An invoice of yours, and your payment of a bitcoin invoice, are not affected.
+- **It brings you the asset only up to its bitcoin in the channel.** tapd sends a payment that carries units only while the bitcoin it can spend on its side of the channel covers the payment's whole worth in sats, and it sends that bitcoin along with the units. After an open from this wallet its side holds about 1,700 sats, of which 1,000 must stay, so it can pay you, or pass on a payment to you, worth well under 1,100 sats until it holds more. What you pay it is not limited this way.
+- **It invoices over a new channel after six blocks.** It can make an invoice over the channel only once this wallet's terms for the channel reach it, which this wallet sends once the funding is six blocks deep.
+
+Not run with such a peer: a channel it opens to this wallet, a payment in flight that goes to the chain, testnet and mainnet, and Lightning Terminal (`litd`), which packages the same daemons.
 
 ## Backup and recovery
 
@@ -334,7 +345,7 @@ With an asset channel, also:
   - BOLT 12 offers for assets.
   - Receiving an asset while the wallet is offline.
   - A remote watchtower for asset channels.
-  - **Peers that run Lightning Labs' daemons.** Not verified yet. Asset channels have only been run between two wallets of this app.
+  - **A channel that a peer running Lightning Labs' daemons opens to this wallet**, and such a peer on testnet or mainnet. See [Peers that run Lightning Labs' daemons](#peers-that-run-lightning-labs-daemons).
 - **Fee bumping** (RBF or CPFP) for asset transactions.
 - **Version 2 addresses**, to receive or to pay.
 - **One address, several payments.** An address is for one payment of one amount. A second payment to it sits on chain uncredited, and this app has no way to claim it yet.
@@ -362,7 +373,9 @@ What is covered by unit tests only, because the regtest stack cannot produce it:
 
 **Asset channels** were run on regtest on the builds this app ships: Beignet 0.43.0 as published and the library under `vendor/`, installed by `scripts/engine-prefix.sh` with no installed file changed, through a real manager and real daemons, between two wallets of this app. The five scenarios `20-ln-open` to `24-ln-crash-restore` passed, 121 checks. They cover: what an open costs and the refusals before anything is funded; one open however often it is asked for; an invoice and its payment in both directions, repeated with its key, at the limits each way, at a price that is gone, and across a restart of both daemons; a close agreed by both sides; a close by force with the peer stopped, the wait before a share can be swept, both sweeps, and the swept units sent on; daemons killed before an open has answered, as it answers and during a payment; and the opener restored from an archive, where the channel reads as one its node no longer holds and the peer closes it by force. At each stage the two wallets held between them exactly what was minted, and after each close the units that came back were handed to `tapd`, which verified their proofs and credited them. Two more runs, by scripts that are not among the scenarios here, passed on the same builds: a side with too little bitcoin left to carry a payment was refused in words and could pay again once it had been paid (7 checks), and a channel was closed by force with a payment in flight, the payer took the payment back on chain after its expiry, and `tapd` credited everything both sides held (15 checks). The nine on-chain scenarios passed beside them, 171 checks.
 
-Not run through this app: an asset channel with a peer that is not this app (Lightning Labs' `litd`), an asset channel on testnet or mainnet, a payment in flight that its payee claims on chain, and a commitment that was revoked and is punished. ts-tap's own regtest example, which drives two nodes of this engine without the app, passed on Beignet 0.43.0 and does cover the last two.
+**Against a peer that runs Lightning Labs' daemons** (lnd with tapd in one process, `tapd-integrated` built from taproot-assets `0ab6c01c` with no patch, on the stack's chain), `25-ln-upstream` passed through a real manager and a wallet daemon of this app, 32 checks: the open, in the form of HTLC signatures tapd signs with one delay of 144 blocks on both sides; an invoice of the peer paid, an invoice of the wallet paid by the peer; both restarted and a payment again; a price quoted by the peer and shown as one; a node with no asset paying an invoice of the wallet in bitcoin, the wallet receiving the asset through the peer; the wallet paying a bitcoin invoice of that node with the asset, that node's invoice settled; a close together; a close by force from the peer and one from the wallet with the peer stopped. At each stage the wallet and the peer held between them exactly what was minted, and every share that came home to the wallet was handed to the stack's `tapd`, which verified it. ts-tap's own example ran the same peer without the app and passed.
+
+Not run through this app: an asset channel on testnet or mainnet, a payment in flight that its payee claims on chain, and a commitment that was revoked and is punished. ts-tap's own regtest example, which drives two nodes of this engine without the app, passed on Beignet 0.43.0 and does cover the last two.
 
 ## For operators and developers
 
