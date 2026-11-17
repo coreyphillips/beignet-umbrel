@@ -117,7 +117,11 @@ export async function bothSides(a, b, chanA, chanB, { timeoutMs = 20000 } = {}) 
  * How a payment that was cut ended, from the payer: the answer its replay
  * gets (same body, same key) and the payer's own row for the invoice.
  * `POST /pay` answers { status: COMPLETED | FAILED | PENDING, ... } or
- * refuses; PENDING and PAYMENT_IN_FLIGHT are not an end, so it waits.
+ * refuses; PENDING and PAYMENT_IN_FLIGHT are not an end, so it waits. A
+ * daemon that has not stopped since repeats the first answer it gave to a
+ * key (the engine keeps the answers of an idempotent route in memory), so
+ * a request that was answered PENDING is answered PENDING again after the
+ * payment has ended: then the row is what says how it ended.
  */
 export function paymentEnded(payer, body, requestKey, paymentHash, what, { timeoutMs = 180000 } = {}) {
 	return waitFor(what, async () => {
@@ -125,10 +129,11 @@ export function paymentEnded(payer, body, requestKey, paymentHash, what, { timeo
 		const row = ((await x(payer, '/activity?kind=ln-send&limit=50')).rows || []).find((r) => r.paymentHash === paymentHash) || null;
 		const code = answer.refused ? answer.refused.code : null;
 		if (code === 'PAYMENT_IN_FLIGHT' || code === 'EXTENSION_STARTING' || code === 'EXTENSION_UNAVAILABLE') return null;
-		if (!answer.refused && answer.status === 'PENDING') return null;
-		if (row && row.state !== 'complete' && row.state !== 'failed' && !row.failed) return null;
+		const rowEnded = !!row && (row.state === 'complete' || row.state === 'failed' || !!row.failed);
+		if (!answer.refused && answer.status === 'PENDING' && !rowEnded) return null;
+		if (row && !rowEnded) return null;
 		const paid = (!answer.refused && answer.status === 'COMPLETED') || (!!row && row.state === 'complete') || code === 'ALREADY_PAID';
-		return { answer, row, paid, said: code || answer.status };
+		return { answer, row, paid, said: code || (answer.status === 'PENDING' ? `PENDING again, and the row ${row.state}` : answer.status) };
 	}, { timeoutMs, everyMs: 2500 });
 }
 
