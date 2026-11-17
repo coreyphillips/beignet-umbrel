@@ -184,7 +184,7 @@ The bitcoin in the channel stays yours and comes back when the channel is closed
 
 **A channel a peer opens to you is accepted by itself.** Nobody is asked. It is taken when asset channels are on for the wallet and it has finished starting, when fewer than four channels that peers began are still opening, when the asset is one this wallet knows or one whose issuance its own proof server can show, and when it is not a collectible. Anything else is turned down, and the wallet's log says why.
 
-**While it opens.** The channel is listed as **opening**, with "Opening. It can carry payments once its funding transaction has confirmed." A funding transaction that will not confirm can be taken back: **Take the funding back** on the row sends a transaction that spends the same bitcoin back to this wallet at a higher fee, so the funding can never confirm and the asset stays in the wallet. The miner fee comes out of the bitcoin that returns. Most fundings confirm by themselves, and waiting costs nothing.
+**While it opens.** The channel is listed as **opening**, with "Opening. It can carry payments once its funding transaction has confirmed." That takes three confirmations. A funding transaction that will not confirm can be taken back: **Take the funding back** on the row sends a transaction that spends the same bitcoin back to this wallet at a higher fee, so the funding can never confirm and the asset stays in the wallet. The miner fee comes out of the bitcoin that returns. Most fundings confirm by themselves, and waiting costs nothing.
 
 **An open that was interrupted.** Asking twice never opens two channels: an open carries a key, and the same request answers the same channel, also across a restart. A wallet that stops in the middle of an open carries it on at its next start. An open that ended before any bitcoin or asset left the wallet stays listed for seven days as **not opened**, with the reason, for example "This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again." There is nothing to close on such a row, and it goes by itself.
 
@@ -204,13 +204,14 @@ With a peer that does set a price, an invoice shows what the payer is asked for 
 
 - **At most eight unused answers from one peer at a time.** Every invoice you make, and every figure you ask for before paying, is one the peer keeps for you until it is used or runs out. A peer keeps eight for one wallet at once, so no more than eight unpaid asset invoices are open with one peer at a time. The next is refused with "The peer is already keeping as many unused prices for this wallet as it keeps at once, so it gave no new one. Try again in a few minutes."
 - **One part, one channel.** A payment larger than the best single channel can send is refused ("No asset channel of this wallet can send that much."), also when two channels together could. An invoice for more than one channel can receive is refused the same way.
+- **At most eight payments in flight each way in one channel.** A ninth is refused before anything is sent, until one of them has ended.
 - **A peer that is away.** A channel whose peer is not connected carries nothing until it is back. Its row says **peer offline**, and an invoice or a payment that would need that channel says who is away, with nothing made and nothing paid.
 
 ### Closing a channel
 
-**Together with the peer.** **Close** on the channel's row. Your side of the asset comes back to this wallet on-chain, along with the bitcoin the channel holds, once the closing transaction confirms. A channel is closed together only while its peer is connected. With the peer away the close is refused, and the dialog says so before you try.
+**Together with the peer.** **Close** on the channel's row. Your side of the asset comes back to this wallet on-chain once the closing transaction confirms. The bitcoin on your side goes straight back to the on-chain balance, all but the 1,000 sats that stay locked with the asset, as with any asset the wallet holds. A channel is closed together only while its peer is connected. With the peer away the close is refused, and the dialog says so before you try.
 
-**Alone, a force close.** It does not ask the peer. It is for a peer that has stopped answering, and for nothing else. Your side of the asset and the channel's bitcoin come back only after the channel's safety delay, which can be days, and the transaction costs more in miner fees than an agreed close. The row reads **closing** while the delay runs and **force closed** once it is over. The wallet brings what is yours home by itself when the delay has passed, and it has to be running to do that. If the assets of a closed channel are not back yet, the Channels tab says "The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why." That is a wait, not a loss.
+**Alone, a force close.** It does not ask the peer. It is for a peer that has stopped answering, and for nothing else. Your side of the asset comes back only after the channel's safety delay, 144 blocks or about a day between two wallets of this app, and the transaction costs more in miner fees than an agreed close. **The bitcoin on your side comes back with the asset, on the same output, and stays locked with it**: it does not return to the on-chain balance by itself. The next time that asset is sent or burned, the transaction that does it returns the bitcoin to the on-chain balance as change, all but the usual 1,000 sats. The row reads **closing** while the delay runs and **force closed** once it is over. The wallet brings what is yours home by itself when the delay has passed, and it has to be running to do that. If the assets of a closed channel are not back yet, the Channels tab says "The assets of a closed channel have not come back on-chain yet. The wallet keeps trying, and its log says why." That is a wait, not a loss.
 
 What a row offers, by what it reads:
 
@@ -233,7 +234,9 @@ Opening a channel takes 100,000 sats and the miner fee out of the wallet's on-ch
 - **In the wallet list**, after the wallet's figures, in the same words.
 - **On each channel's row**, as **Bitcoin in the channel**: the whole of the channel's bitcoin, your side and the peer's.
 
-A channel that is closing stays on the second line until its close is over, which after a force close is the whole of the safety delay. Then the line is gone and the bitcoin has come back to the wallet with the asset.
+A channel that is closing stays on the second line until its close is over, which after a force close is the whole of the safety delay. Then the line is gone. After a close together with the peer the bitcoin is back in the on-chain balance. After a force close it sits on the output the asset came back on and is counted under [Bitcoin locked with assets](#bitcoin-locked-with-assets) until that asset is next sent or burned. The wallet's figure for it is the real one; the figure on one asset's own page counts 1,000 sats for each output and so reads low until then.
+
+**Each payment moves a little of the channel's bitcoin with it.** A payment over an asset channel carries 354 sats of the channel's bitcoin from the payer's side to the payee's, and they stay there. A side that has paid many times without being paid can run out of bitcoin to carry the next payment while it still has units of the asset. The side that did not open the channel starts with about 1,700 sats, enough for a few payments. The wallet refuses a payment its side cannot carry, and an invoice the peer's side cannot carry, before anything is sent, and one payment the other way makes it possible again.
 
 ### Fee coins
 
@@ -253,7 +256,7 @@ The limits this app gives the wallet's node for those fees:
 | One preparation of fee coins (four at a time), at most | 10,000 sats, at 10 sat/vB | 10,000 sats, at 1 sat/vB | 10,000 sats, at 1 sat/vB |
 | All of them together | 2,500,000 sats | 1,000,000 sats | 100,000,000 sats |
 
-The first two never pass the wallet's ceiling for one asset transaction (`BEIGNET_ASSETS_MAX_FEE_SATS`, see [Fees](#fees)). The app has no setting of its own for the rest. The total is a budget that is charged a whole claim's limit at a time and not given back, about a hundred claims on mainnet.
+The first two never pass the wallet's ceiling for one asset transaction (`BEIGNET_ASSETS_MAX_FEE_SATS`, see [Fees](#fees)). The app has no setting of its own for the rest. The total is a budget for the wallet's whole life. What claims and preparations of fee coins have spent is never given back, and a claim that is under way holds back up to its limit of the budget until it is over.
 
 ## Backup and recovery
 
@@ -292,6 +295,8 @@ So a wallet restored from the box backup:
 - **Payments that can no longer be followed.** The result counts the payments that were under way on the channels left out. Each stays pending for good: it is not counted as paid or as failed, and it cannot be cancelled or tried again from there.
 - **The automatic apply says the same.** A wallet that applies a returned checkpoint by itself does not apply one that holds an asset channel. Nothing is changed, the checkpoint still waits, and the same card lists the channels and offers the restore without them.
 - **A backup that carried no state for an asset channel** skips it, and the result lists what was skipped in the same words: no record, nothing the wallet can bring back by itself, and a peer that can still close.
+
+**An older version of the app's engine does not run asset channels.** A wallet's node from before asset channels, started over a wallet that has one, skips that channel, starts, runs its bitcoin channels, and leaves the asset channel stored as it was. Until a version that knows asset channels is back, nothing answers the channel's peer, claims a payment before its deadline, or punishes a cheating close. So a box is never taken back to an older release while a wallet on it has an asset channel that is not over.
 
 **Guardians and asset channels do not go together.** A channel backup kept by guardians does not cover asset channels.
 
