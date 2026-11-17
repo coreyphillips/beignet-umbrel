@@ -20,7 +20,7 @@ const path = require('path');
 const { loadLightning, createLightning, fixedOutputFees, CHANNEL_SATS, CARRIER_SATS, NOMINAL_RATE } = require('./adapter');
 const { parseConfig } = require('./config');
 const { memoryStorage } = require('./store');
-const { mapError } = require('./errors');
+const { mapError, LIGHTNING_REFUSALS } = require('./errors');
 
 const cfg = parseConfig('regtest', { BEIGNET_ASSETS_MODULES: '/opt/engine/node_modules' });
 const buf = (byte, length = 32) => Buffer.alloc(length, byte);
@@ -810,6 +810,12 @@ test(
 		// It is the entry this app was written to.
 		for (const name of ['assetLightningSupport', 'lightningStore', 'createAssetLightningHost', 'assetLightningBackup', 'restoreAssetLightningBackup']) assert.equal(typeof entry[name], 'function', name);
 		assert.equal(Array.isArray(entry.ASSET_PAYMENT_REFUSALS) && entry.ASSET_PAYMENT_REFUSALS.length > 0, true);
+		// The codes the host words by name are codes this library has, and the
+		// two refusals of a payment that record nothing are in its list of them.
+		const codes = Object.values(entry.BeignetLightningErrorCode || {});
+		for (const code of Object.keys(LIGHTNING_REFUSALS)) assert.equal(codes.includes(code), true, code);
+		for (const code of ['ERR_BEIGNET_LN_PEER_OFFLINE', 'ERR_BEIGNET_LN_MODE_UNAVAILABLE', 'ERR_BEIGNET_LN_FEE_POLICY_REFUSED']) assert.equal(codes.includes(code), true, code);
+		for (const code of ['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED']) assert.equal(entry.ASSET_PAYMENT_REFUSALS.includes(code), true, code);
 		const support = entry.assetLightningSupport();
 		assert.equal(support.supported, false, 'this engine carries asset channels: run this against Beignet 0.42.0');
 		assert.equal(Array.isArray(support.missing) && support.missing.length > 0, true);
