@@ -101,20 +101,14 @@ const ELECTRUM_PRESETS = [
 // public authority signed for its name, so a pick turns verification on
 // (`tlsVerify`) where the engine supports it. The dashboard probes them only
 // while it shows them, for the wallet's chain alone.
+// On mainnet the two whose software answers a transaction lookup in its
+// verbose form (ElectrumX: BlueWallet, ACINQ) come first. Bitkit's and
+// Blockstream's run electrs-esplora, which answers a transaction only in raw
+// form ("verbose transactions are currently unsupported"). The wallet reads
+// the verbose form to see a received coin confirm, so on those two it shows
+// a received payment unconfirmed until it is 100 blocks deep; they come last.
+// Blockstream's testnet server runs the same software.
 const PUBLIC_ELECTRUM_SERVERS = [
-	{
-		id: 'public-bitkit',
-		label: 'Bitkit',
-		// What bitkit-android uses for mainnet (Env.kt). It does not offer
-		// server.features and hangs up when asked; electrum-probe.js reads the
-		// chain from block 0 instead.
-		host: 'bitkit.to',
-		port: 9999,
-		tls: true,
-		tlsVerify: true,
-		networks: ['mainnet'],
-		note: "Synonym's server, the one the Bitkit wallet uses"
-	},
 	{
 		id: 'public-bluewallet',
 		label: 'BlueWallet',
@@ -129,16 +123,6 @@ const PUBLIC_ELECTRUM_SERVERS = [
 		note: "BlueWallet's server"
 	},
 	{
-		id: 'public-blockstream',
-		label: 'Blockstream',
-		host: 'electrum.blockstream.info',
-		port: 50002,
-		tls: true,
-		tlsVerify: true,
-		networks: ['mainnet'],
-		note: "Blockstream's server"
-	},
-	{
 		id: 'public-acinq',
 		label: 'ACINQ',
 		host: 'electrum.acinq.co',
@@ -147,6 +131,29 @@ const PUBLIC_ELECTRUM_SERVERS = [
 		tlsVerify: true,
 		networks: ['mainnet'],
 		note: "ACINQ's server, one of BlueWallet's defaults"
+	},
+	{
+		id: 'public-bitkit',
+		label: 'Bitkit',
+		// What bitkit-android uses for mainnet (Env.kt). It does not offer
+		// server.features and hangs up when asked; electrum-probe.js reads the
+		// chain from block 0 instead.
+		host: 'bitkit.to',
+		port: 9999,
+		tls: true,
+		tlsVerify: true,
+		networks: ['mainnet'],
+		note: "Synonym's server, the one the Bitkit wallet uses"
+	},
+	{
+		id: 'public-blockstream',
+		label: 'Blockstream',
+		host: 'electrum.blockstream.info',
+		port: 50002,
+		tls: true,
+		tlsVerify: true,
+		networks: ['mainnet'],
+		note: "Blockstream's server"
 	},
 	{
 		id: 'public-blockstream-testnet',

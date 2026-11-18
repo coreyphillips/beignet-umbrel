@@ -34,7 +34,7 @@ test('a chain is offered only its own public servers', () => {
 	}
 	assert.deepEqual(
 		publicElectrumServers('mainnet').map((s) => s.id),
-		['public-bitkit', 'public-bluewallet', 'public-blockstream', 'public-acinq']
+		['public-bluewallet', 'public-acinq', 'public-bitkit', 'public-blockstream']
 	);
 });
 
