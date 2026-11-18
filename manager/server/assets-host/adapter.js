@@ -354,6 +354,7 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *         fundingSatoshis, reserveSatoshis?, assets: [{ assetId, amount,
  *         local?, remote? }], groupKey?, decimalDisplay,
  *         localAssetBalance, remoteAssetBalance, reserved,
+ *         sendablePayments?, receivablePayments?,
  *         fundingReservation?, fundingInputs?, recovery, error? }
  *     `phase` is the funding phase (receiving, awaiting-ack, accepted,
  *     negotiated, funding-created, committed, broadcasting, broadcast,
@@ -963,6 +964,12 @@ function plainChannel(c) {
 			// How many results of earlier payments the wallet has not taken in,
 		// where the library says there are any.
 		...(Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? { undeliveredOutcomes: c.undeliveredOutcomes } : {}),
+		// How many more payments this side's bitcoin in the channel carries,
+		// and the peer's side's to this wallet, where the library says. At 0
+		// that side pays nothing, whatever units it holds, until a payment
+		// comes its way.
+		...(Number.isInteger(c.sendablePayments) && c.sendablePayments >= 0 ? { sendablePayments: c.sendablePayments } : {}),
+		...(Number.isInteger(c.receivablePayments) && c.receivablePayments >= 0 ? { receivablePayments: c.receivablePayments } : {}),
 		// An open this wallet gave up, however far it had got: listed as
 		// `cancelled`, or as turned down or failed with that for a reason.
 		cancelled: phase === 'cancelled' || ((phase === 'rejected' || phase === 'failed') && c.error === 'cancelled'),

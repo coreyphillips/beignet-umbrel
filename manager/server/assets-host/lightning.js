@@ -139,7 +139,7 @@
 const crypto = require('crypto');
 const { sha256Hex } = require('./store');
 const { CHANNEL_SATS, CARRIER_SATS, unhex } = require('./adapter');
-const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS, modeUnavailable, FEE_POLICY_REFUSED } = require('./errors');
+const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS, LIGHTNING_REFUSALS, modeUnavailable, FEE_POLICY_REFUSED } = require('./errors');
 const views = require('./views');
 const ops = require('./ops');
 
@@ -364,6 +364,12 @@ function channelList(host) {
 		const steady = word === 'NORMAL' && c.engine === 'held' && c.recovery === 'none';
 		const usable = steady && c.state === 'NORMAL' && peerConnected;
 		const spare = c.local > c.reserved ? c.local - c.reserved : 0n;
+		// A side whose bitcoin in the channel carries no further payment
+		// sends nothing, whatever units it holds, until a payment comes its
+		// way: the library refuses before anything is sent. Where the
+		// library does not say, the units are what counts.
+		const paysOut = c.sendablePayments !== 0;
+		const paysIn = c.receivablePayments !== 0;
 		const assetId = c.assetId || note.assetId || null;
 		const groupKey = c.groupKey || note.groupKey || null;
 		out.push({
@@ -381,8 +387,15 @@ function channelList(host) {
 			// Kept from carrying a payment by nothing but its peer being away,
 			// and what it could send and receive were the peer there.
 			away: steady && !usable,
-			couldSend: steady ? spare : 0n,
-			couldReceive: steady ? c.remote : 0n,
+			couldSend: steady && paysOut ? spare : 0n,
+			couldReceive: steady && paysIn ? c.remote : 0n,
+			// Units a channel with its peer there holds and cannot move for
+			// want of bitcoin on the side that pays: this wallet's going out,
+			// the peer's coming in.
+			heldOut: usable && !paysOut ? spare : 0n,
+			heldIn: usable && !paysIn ? c.remote : 0n,
+			sendablePayments: Number.isInteger(c.sendablePayments) ? c.sendablePayments : null,
+			receivablePayments: Number.isInteger(c.receivablePayments) ? c.receivablePayments : null,
 			over: isOver(word),
 			// Its funding transaction is not on chain, as the library says it:
 			// an open under way or one that ended, with nothing on chain to close.
@@ -417,8 +430,8 @@ function channelList(host) {
 			assets: c.assets,
 			local: c.local,
 			remote: c.remote,
-			sendable: usable ? spare : 0n,
-			receivable: usable ? c.remote : 0n,
+			sendable: usable && paysOut ? spare : 0n,
+			receivable: usable && paysIn ? c.remote : 0n,
 			fundingSats: c.fundingSats || note.fundingSats || 0,
 			createdAt: note.createdAt || null,
 			closedAt: note.closedAt || null
@@ -449,6 +462,10 @@ function channelList(host) {
 			away: false,
 			couldSend: 0n,
 			couldReceive: 0n,
+			heldOut: 0n,
+			heldIn: 0n,
+			sendablePayments: null,
+			receivablePayments: null,
 			over: !coming,
 			opening: coming,
 			counted: false,
@@ -1418,6 +1435,19 @@ function awayChannel(host, key, side, units) {
 }
 
 /**
+ * The refusal for `units` of `key` that a channel with its peer there holds
+ * and cannot move for want of bitcoin on the side that pays: this wallet's
+ * for a payment ('send'), the peer's for an invoice ('receive'). The same
+ * sentence the library's own refusal gets. Null when that is not why.
+ */
+function bitcoinShort(host, key, way, units) {
+	const side = way === 'send' ? 'heldOut' : 'heldIn';
+	if (!channelList(host).some((c) => c.key === key && c[side] >= units && c[side] > 0n)) return null;
+	const [code, message, status] = LIGHTNING_REFUSALS[way === 'send' ? 'ERR_BEIGNET_LN_CARRIER_UNFUNDED' : 'ERR_BEIGNET_LN_PEER_CARRIER_UNFUNDED'];
+	return refusal(code, message, status);
+}
+
+/**
  * A price refused because the peer of the channel it would go through is
  * not connected, with the peer named. `c` is that channel, or null where
  * only the library knows which. `way` is what was asked: a price to pay
@@ -1455,7 +1485,7 @@ async function invoiceQuote(host, body) {
 	if (amount > maxReceivable) {
 		// A channel that could take it with its peer there: not the amount's fault.
 		const idle = awayChannel(host, key, 'couldReceive', amount);
-		throw idle ? peerOffline(idle, 'receive') : short();
+		throw idle ? peerOffline(idle, 'receive') : bitcoinShort(host, key, 'receive', amount) || short();
 	}
 	let quoted;
 	try {
@@ -1694,7 +1724,7 @@ async function makePayQuote(host, body) {
 	const short = () => refusal('INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409, { sendable: most.toString() });
 	// Nothing can be sent now, and a channel could send were its peer there.
 	const idle = (units) => awayChannel(host, key, 'couldSend', units);
-	if (most === 0n) throw idle(1n) ? peerOffline(idle(1n), 'pay') : short();
+	if (most === 0n) throw idle(1n) ? peerOffline(idle(1n), 'pay') : bitcoinShort(host, key, 'send', 1n) || short();
 	let quoted;
 	try {
 		quoted = await host.ln.quotePayment({ bolt11, assetId: reg.assetId, groupKey: reg.groupKey || null, amountMsat });

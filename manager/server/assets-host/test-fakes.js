@@ -779,6 +779,9 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			recovery: f.recovery,
 			// As the library: the count is on the view only while above zero.
 			...(Number.isInteger(f.undeliveredOutcomes) && f.undeliveredOutcomes > 0 ? { undeliveredOutcomes: f.undeliveredOutcomes } : {}),
+			// As the library: set while the engine holds the channel open and says.
+			...(Number.isInteger(f.sendablePayments) ? { sendablePayments: f.sendablePayments } : {}),
+			...(Number.isInteger(f.receivablePayments) ? { receivablePayments: f.receivablePayments } : {}),
 			...(f.error ? { error: f.error } : {}),
 			...(f.reasonCode ? { reasonCode: f.reasonCode } : {})
 		};

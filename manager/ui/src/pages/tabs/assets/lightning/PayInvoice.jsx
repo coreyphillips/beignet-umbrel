@@ -7,7 +7,7 @@ import { Button, CopyText, Countdown, Field } from '../../../../components/ui.js
 import { useAssetsApi } from '../../../../hooks/useAssets.js';
 import { usePoll } from '../../../../hooks/usePoll.js';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
-import { lightningRefusal, payFailure, payLabel, payableAssets, peerAway, peerName, quoteChange, quoteExpired, quotePriced } from '../../../../lib/asset-lightning.js';
+import { CHANNEL_BITCOIN_SHORT_TEXT, carriesNothing, lightningRefusal, payFailure, payLabel, payableAssets, peerAway, peerName, quoteChange, quoteExpired, quotePriced } from '../../../../lib/asset-lightning.js';
 import { noticeOf } from '../../../../lib/asset-progress.js';
 import { submitOnce } from '../../../../lib/assets.js';
 import { idempotencyKey } from '../../../../lib/assets-api.js';
@@ -61,6 +61,9 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 	const nothing = holdings !== null && holdings !== undefined && payable.length === 0;
 	const { data: listed } = usePoll(() => (nothing ? assets.channels().catch(() => null) : Promise.resolve(null)), nothing ? 8000 : 0, [assets, nothing]);
 	const gone = nothing && listed ? (listed.channels || []).find((c) => String(c.state).toUpperCase() === 'NORMAL' && peerAway(c)) || null : null;
+	// Or a channel with its peer there holds units this side's bitcoin in it
+	// can no longer carry: said as the host refuses such a payment.
+	const short = nothing && listed && !gone ? (listed.channels || []).find((c) => String(c.state).toUpperCase() === 'NORMAL' && !peerAway(c) && carriesNothing(c)) || null : null;
 	const saved = state?.pay && state.pay.bolt11 === invoice ? state.pay : NO_PAY;
 	const setPay = (changes) => patch({ pay: { ...saved, bolt11: invoice, ...changes } });
 
@@ -258,6 +261,10 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 							message: `The peer of the asset channel this would be paid through, ${peerName(gone)}, is not connected, so nothing was priced and nothing was paid. Try again once it is back.`
 						}).text
 					}
+				</div>
+			) : short ? (
+				<div className="error-note" role="alert" data-testid="asset-pay-refusal" data-code="CHANNEL_BITCOIN_SHORT">
+					{lightningRefusal({ code: 'CHANNEL_BITCOIN_SHORT', message: CHANNEL_BITCOIN_SHORT_TEXT }).text}
 				</div>
 			) : payable.length === 0 ? (
 				<div className="info-note note-with-action" role="status" data-testid="asset-pay-none">

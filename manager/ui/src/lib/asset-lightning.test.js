@@ -319,6 +319,42 @@ test('a balance without the keys says nothing of asset channels, and neither doe
 	]);
 });
 
+/* ------------------------------------------- payments a channel carries */
+
+test('how many more payments a way of a channel carries reads as a few words, and nothing where the node does not say', async () => {
+	const { paymentsLeft } = await import('./asset-lightning.js');
+	assert.deepEqual([paymentsLeft(0), paymentsLeft(1), paymentsLeft(2), paymentsLeft(1276)], ['no payment left', '1 more payment', '2 more payments', '1,276 more payments']);
+	for (const none of [undefined, null, -1, 1.5, '3']) assert.equal(paymentsLeft(none), null, String(none));
+});
+
+test('a channel carries nothing out only when its node says no payment is left and it holds units', async () => {
+	const { carriesNothing, CHANNEL_BITCOIN_SHORT_TEXT } = await import('./asset-lightning.js');
+	assert.equal(carriesNothing({ sendablePayments: 0, localBalance: '400' }), true);
+	for (const not of [{ sendablePayments: 0, localBalance: '0' }, { sendablePayments: 1, localBalance: '400' }, { localBalance: '400' }, { sendablePayments: 0, localBalance: 'x' }, null]) {
+		assert.equal(carriesNothing(not), false, JSON.stringify(not));
+	}
+	assert.match(CHANNEL_BITCOIN_SHORT_TEXT, /^Your side of the asset channel has too little bitcoin left to carry a payment, so nothing was paid\./);
+});
+
+test('a channel whose bitcoin carries no further payment one way says so, and why, only while it holds units that way', async () => {
+	const { bitcoinShortNote } = await import('./asset-lightning.js');
+	const mine = bitcoinShortNote({ sendablePayments: 0, receivablePayments: 4, localBalance: '400', remoteBalance: '200' });
+	assert.match(mine, /^Your side of this channel has too little bitcoin left to carry a payment\. Each payment moves a little of the channel's bitcoin to the one who is paid\. Once you have been paid through it, you can pay through it again\.$/);
+	const theirs = bitcoinShortNote({ sendablePayments: 4, receivablePayments: 0, localBalance: '400', remoteBalance: '200' });
+	assert.match(theirs, /^The peer's side of this channel has too little bitcoin left to carry a payment to you\./);
+	assert.match(bitcoinShortNote({ sendablePayments: 0, receivablePayments: 0, localBalance: '1', remoteBalance: '1' }), /^Neither side of this channel/);
+	// Nothing to move that way, or the node does not say: no note.
+	for (const none of [
+		{ sendablePayments: 0, receivablePayments: 3, localBalance: '0', remoteBalance: '600' },
+		{ sendablePayments: 2, receivablePayments: 0, localBalance: '600', remoteBalance: '0' },
+		{ localBalance: '400', remoteBalance: '200' },
+		{ sendablePayments: 0, localBalance: 'x' },
+		null
+	]) {
+		assert.equal(bitcoinShortNote(none), null, JSON.stringify(none));
+	}
+});
+
 /* ------------------------------------- results a channel has not taken in */
 
 test('a channel that has not taken in the results of earlier payments says so in the words the refusal uses', async () => {

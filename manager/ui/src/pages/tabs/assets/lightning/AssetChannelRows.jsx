@@ -3,7 +3,7 @@ import AssetAvatar from '../../../../components/AssetAvatar.jsx';
 import { AssetAmount } from '../../../../components/AssetAmount.jsx';
 import { Badge, Button, CopyText, ExplorerLink, FeeField, Modal } from '../../../../components/ui.jsx';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
-import { canClose, canReclaim, channelState, closeWays, peerAway, peerName, reclaimSent, sharePct, undeliveredNote } from '../../../../lib/asset-lightning.js';
+import { bitcoinShortNote, canClose, canReclaim, channelState, closeWays, paymentsLeft, peerAway, peerName, reclaimSent, sharePct, undeliveredNote } from '../../../../lib/asset-lightning.js';
 import { txUrl } from '../../../../lib/explorer.js';
 import { FEE_CAP_MULTIPLE } from '../../../../lib/fees.js';
 import { fmtSats, shortId } from '../../../../lib/format.js';
@@ -120,12 +120,22 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 								<dt>Can send</dt>
 								<dd>
 									<AssetAmount value={c.sendable} asset={c.asset} />
+									{paymentsLeft(c.sendablePayments) && (
+										<small className="asset-channel-carries" data-testid="asset-channel-sendable-payments">
+											{paymentsLeft(c.sendablePayments)}
+										</small>
+									)}
 								</dd>
 							</div>
 							<div>
 								<dt>Can receive</dt>
 								<dd>
 									<AssetAmount value={c.receivable} asset={c.asset} />
+									{paymentsLeft(c.receivablePayments) && (
+										<small className="asset-channel-carries" data-testid="asset-channel-receivable-payments">
+											{paymentsLeft(c.receivablePayments)}
+										</small>
+									)}
 								</dd>
 							</div>
 							<div>
@@ -144,6 +154,11 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 						{errored && (
 							<div className="error-note" role="note" data-testid="asset-channel-errored">
 								This channel has failed and carries no payments. Force close it to bring what is in it back on-chain.
+							</div>
+						)}
+						{!failed && !errored && bitcoinShortNote(c) && (
+							<div className="info-note" role="note" data-testid="asset-channel-bitcoin-short">
+								{bitcoinShortNote(c)}
 							</div>
 						)}
 						{undeliveredNote(c) && (

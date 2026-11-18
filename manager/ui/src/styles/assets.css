@@ -1396,6 +1396,15 @@ pre.asset-meta {
 	font-variant-numeric: tabular-nums;
 }
 
+/* How many more payments that way carries, on its own line under the figure. */
+.asset-channel-carries {
+	display: block;
+	margin-top: 2px;
+	font-size: 12px;
+	font-weight: 450;
+	color: var(--muted);
+}
+
 .asset-channel > .field-hint {
 	display: block;
 	margin-top: 12px;

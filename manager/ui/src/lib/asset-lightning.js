@@ -462,6 +462,54 @@ export function assetChannelBitcoin(balance) {
  * (OUTCOMES_UNDELIVERED), said of the channel. Null for a channel that has
  * taken them all in.
  */
+/**
+ * How many more payments one way of a channel carries, as a few words to
+ * set under what it can send or receive. Null where the wallet's node does
+ * not say.
+ */
+export function paymentsLeft(n) {
+	if (!Number.isInteger(n) || n < 0) return null;
+	if (n === 0) return 'no payment left';
+	return n === 1 ? '1 more payment' : `${n.toLocaleString('en-US')} more payments`;
+}
+
+/** The host's sentence for a payment this side's bitcoin in the channel cannot carry (CHANNEL_BITCOIN_SHORT). */
+export const CHANNEL_BITCOIN_SHORT_TEXT =
+	"Your side of the asset channel has too little bitcoin left to carry a payment, so nothing was paid. Each payment moves a little of the channel's bitcoin to the one who is paid. Once you have been paid through the channel, you can pay through it again.";
+
+/** Whether a channel holds units this side's bitcoin in it can no longer carry out. */
+export function carriesNothing(channel) {
+	if (!channel || channel.sendablePayments !== 0) return false;
+	try {
+		return BigInt(channel.localBalance || 0) > 0n;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The note of a channel that holds units one way cannot move, for want of
+ * bitcoin on the side that pays, in the words the refusal uses. Null when
+ * both ways carry, or the node does not say.
+ */
+export function bitcoinShortNote(channel) {
+	if (!channel) return null;
+	const held = (v) => {
+		try {
+			return BigInt(v || 0) > 0n;
+		} catch {
+			return false;
+		}
+	};
+	const out = channel.sendablePayments === 0 && held(channel.localBalance);
+	const back = channel.receivablePayments === 0 && held(channel.remoteBalance);
+	const why = "Each payment moves a little of the channel's bitcoin to the one who is paid.";
+	if (out && back) return `Neither side of this channel has enough bitcoin left to carry a payment, so it carries none. ${why}`;
+	if (out) return `Your side of this channel has too little bitcoin left to carry a payment. ${why} Once you have been paid through it, you can pay through it again.`;
+	if (back) return `The peer's side of this channel has too little bitcoin left to carry a payment to you. ${why} Once you have paid the peer through it, it can pay you again.`;
+	return null;
+}
+
 export function undeliveredNote(channel) {
 	const n = channel && channel.undeliveredOutcomes;
 	if (!Number.isInteger(n) || n <= 0) return null;

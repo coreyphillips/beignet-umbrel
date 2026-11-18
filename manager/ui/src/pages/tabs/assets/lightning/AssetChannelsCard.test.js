@@ -848,6 +848,39 @@ test('a channel that has not taken in the results of earlier payments says so on
 	}
 });
 
+test('a channel whose side has too little bitcoin to carry a payment reads as sending nothing, counts what the other way carries, says why, and a payment is refused in those words', async () => {
+	const backend = assetsBackend();
+	const plain = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	assert.equal(plain.some((c) => 'sendablePayments' in c), false, 'where the node does not say, there is no count, as on the host');
+	assert.equal(backend.mock.seed('demo-main', 'bitcoin-short'), true);
+	const listed = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	const short = listed.find((c) => c.sendablePayments === 0);
+	assert.deepEqual([short.state, short.sendable, short.receivablePayments], ['NORMAL', '0', 12]);
+	assert.notEqual(short.localBalance, '0', 'the units are still held');
+	const r = await mount(backend, { status: await backend.api('demo-main').get('/x/assets/status') });
+	try {
+		assert.equal(r.tests('asset-channel-sendable-payments')[0].textContent.trim(), 'no payment left');
+		assert.equal(r.tests('asset-channel-receivable-payments')[0].textContent.trim(), '12 more payments');
+		const note = r.tests('asset-channel-bitcoin-short')[0];
+		assert.ok(note, 'the row says why');
+		assert.match(note.textContent.trim(), /^Your side of this channel has too little bitcoin left to carry a payment\. Each payment moves a little of the channel's bitcoin to the one who is paid\. Once you have been paid through it, you can pay through it again\.$/);
+		assert.ok(note.classList.contains('info-note'), 'a wait, said in blue and not as a failure');
+	} finally {
+		await r.unmount();
+	}
+	const refused = await backend
+		.api('demo-main')
+		.post('/x/assets/pay/quote', { bolt11: 'lnbcrt5u1pexample', key: short.asset.key })
+		.then(
+			() => null,
+			(err) => err
+		);
+	assert.equal(refused && refused.code, 'CHANNEL_BITCOIN_SHORT');
+	assert.equal(backend.mock.seed('demo-main', 'bitcoin-back'), true);
+	const back = (await backend.api('demo-main').get('/x/assets/channels')).channels.find((c) => c.channelId === short.channelId);
+	assert.deepEqual([back.sendable, 'sendablePayments' in back], [short.localBalance, false]);
+});
+
 test('a failed open says the wallet\'s own sentence, and what the wallet\'s node said small beneath it', async () => {
 	const backend = assetsBackend();
 	assert.equal(backend.mock.seed('demo-main', 'open-failed'), true);

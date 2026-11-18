@@ -395,6 +395,11 @@ function channelView(c, reg) {
 		remoteBalance: c.remote.toString(),
 		sendable: c.sendable.toString(),
 		receivable: c.receivable.toString(),
+		// Where the wallet's node says: how many more payments this side's
+		// bitcoin in the channel carries, and the peer's to this wallet. At 0
+		// that way carries nothing, and `sendable` or `receivable` reads 0.
+		...(Number.isInteger(c.sendablePayments) ? { sendablePayments: c.sendablePayments } : {}),
+		...(Number.isInteger(c.receivablePayments) ? { receivablePayments: c.receivablePayments } : {}),
 		channelSats: c.fundingSats,
 		// The funding transaction, once there is one. While it has not
 		// confirmed, `reclaimable` says its bitcoin can be taken back, which

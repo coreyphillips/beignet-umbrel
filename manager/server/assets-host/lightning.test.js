@@ -3142,6 +3142,44 @@ test('a side of an asset channel with too little bitcoin left to carry a payment
 	h.ln.opts.invoiceFails = null;
 });
 
+test('a channel whose bitcoin carries no further payment one way reads as moving nothing that way, says how many payments each way carries, and is refused in the carrier\'s own words before the peer is asked', async () => {
+	const { h, asset, id } = await channelled({ remote: 200n });
+	const one = async () => (await h.get('/channels')).channels[0];
+	const lightningOf = async () => (await h.get('/balances')).assets[0].balance;
+	// Where the library does not say, the units are what counts, and no count is shown.
+	let c = await one();
+	assert.deepEqual([c.sendable, c.receivable, 'sendablePayments' in c, 'receivablePayments' in c], ['400', '200', false, false]);
+	h.ln.set(id, { sendablePayments: 3, receivablePayments: 2 });
+	c = await one();
+	assert.deepEqual([c.sendable, c.sendablePayments, c.receivable, c.receivablePayments], ['400', 3, '200', 2]);
+
+	// This side's bitcoin carries no payment: nothing to send, the units still held.
+	h.ln.set(id, { sendablePayments: 0, receivablePayments: 2 });
+	c = await one();
+	assert.deepEqual([c.sendable, c.sendablePayments, c.localBalance, c.receivable], ['0', 0, '400', '200']);
+	assert.deepEqual([(await lightningOf()).lightningSendable, (await lightningOf()).lightningReceivable], ['0', '200']);
+	h.ln.calls.length = 0;
+	const short = await refused(h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 50000 }), key: asset.key }));
+	assert.deepEqual([short.extensionCode, short.status], ['CHANNEL_BITCOIN_SHORT', 409]);
+	assert.match(short.message, /^Your side of the asset channel has too little bitcoin left to carry a payment, so nothing was paid\./);
+	assert.equal(named(h, 'quotePayment').length, 0, 'the peer is not asked for a price');
+	// An invoice still can be made: the peer's side carries.
+	await h.call('POST /invoices/quote', { key: asset.key, amount: '20' });
+
+	// The peer's side carries none: nothing can come in, in the carrier's words.
+	h.ln.set(id, { sendablePayments: 4, receivablePayments: 0 });
+	c = await one();
+	assert.deepEqual([c.sendable, c.receivable, c.receivablePayments, c.remoteBalance], ['400', '0', 0, '200']);
+	h.ln.calls.length = 0;
+	const none = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '20' }));
+	assert.deepEqual([none.extensionCode, none.status], ['PEER_CHANNEL_BITCOIN_SHORT', 409]);
+	assert.equal(named(h, 'quoteInvoice').length, 0, 'the peer is not asked for a price');
+	// More than the peer's side holds is still too much, whatever its bitcoin.
+	const tooMuch = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '201' }));
+	assert.equal(tooMuch.extensionCode, 'INSUFFICIENT_INBOUND');
+	await h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 50000 }), key: asset.key });
+});
+
 const ENDED = 'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
 
 test('an open the library ended across a restart is a failed open in the wallet\'s own sentence, with what the library said kept apart as a detail and in the log', async () => {

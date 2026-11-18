@@ -20,6 +20,7 @@
 
 import { bech32Encode, convertBits } from '../lib/payment-uri.js';
 import { MAX_UNITS, addUnits, cmpUnits, isZero, subUnits, toUnits } from '../lib/asset-amount.js';
+import { CHANNEL_BITCOIN_SHORT_TEXT } from '../lib/asset-lightning.js';
 
 const STORE_KEY = 'beignet-demo-assets-v1';
 const HEX = '0123456789abcdef';
@@ -311,7 +312,9 @@ export function createAssetsMock(ctx) {
 		fundingTxid: c.fundingTxid || null,
 		reclaimable: c.state === 'OPENING' && !!c.fundingTxid,
 		reclaimTxid: c.reclaimTxid || null,
-		...(Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? { undeliveredOutcomes: c.undeliveredOutcomes } : {})
+		...(Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? { undeliveredOutcomes: c.undeliveredOutcomes } : {}),
+		...(Number.isInteger(c.sendablePayments) ? { sendablePayments: c.sendablePayments } : {}),
+		...(Number.isInteger(c.receivablePayments) ? { receivablePayments: c.receivablePayments } : {})
 	});
 
 	/**
@@ -763,6 +766,24 @@ export function createAssetsMock(ctx) {
 			const c = S(id).channels.find((x) => x.state === 'NORMAL');
 			if (!c) return false;
 			c.undeliveredOutcomes = 2;
+			return true;
+		},
+		// This wallet's side of a channel has paid until its bitcoin in the
+		// channel carries no further payment: it sends nothing, whatever units
+		// it holds, and a payment is refused, until a payment comes in.
+		'bitcoin-short'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL' && x.peerConnected !== false && !x._short);
+			if (!c) return false;
+			c._short = { sendable: c.sendable, sendablePayments: c.sendablePayments, receivablePayments: c.receivablePayments };
+			Object.assign(c, { sendable: '0', sendablePayments: 0, receivablePayments: 12 });
+			return true;
+		},
+		// That side has been paid, and carries payments again.
+		'bitcoin-back'(id) {
+			const c = S(id).channels.find((x) => x._short);
+			if (!c) return false;
+			Object.assign(c, { sendable: c._short.sendable, sendablePayments: c._short.sendablePayments, receivablePayments: c._short.receivablePayments });
+			delete c._short;
 			return true;
 		},
 		// The peer of the wallet's asset channel is away. The channel is still
@@ -1992,6 +2013,11 @@ export function createAssetsMock(ctx) {
 		if (!ch) {
 			const idle = awayChannel(id, identity.key, 'out', assetAmount);
 			if (idle) throw peerOffline(idle, 'pay');
+			// As the host: units a channel holds and cannot move for want of
+			// bitcoin on this side are refused in the carrier's own words.
+			if (sendable === '0' && S(id).channels.some((c) => c.asset.key === identity.key && c.state === 'NORMAL' && c.peerConnected !== false && c.sendablePayments === 0 && cmpUnits(c.localBalance, '0') > 0)) {
+				throw fail(CHANNEL_BITCOIN_SHORT_TEXT, 'CHANNEL_BITCOIN_SHORT', { status: 409 });
+			}
 			throw fail('No asset channel can send that much', 'INSUFFICIENT_OUTBOUND', { details: { sendable } });
 		}
 		const plain = unpriced(ch);
