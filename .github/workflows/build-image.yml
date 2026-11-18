@@ -819,7 +819,17 @@ env:
   # the wallet's own provider implements. The storage schema (20), the
   # environment settings and the runtime dependencies are unchanged, and
   # the capability probes in server/engine.js answer as for 0.43.0.
-  BEIGNET_VERSION: "0.43.1"
+  # 0.43.2 reads an Electrum server that answers transactions only in raw
+  # form (coreyphillips/beignet#2102): electrs-esplora, which Blockstream's
+  # and Bitkit's public servers run, refuses verbose lookups, and the
+  # wallet now decodes the raw answer instead, so a received coin is seen
+  # at its first confirmation there and the history lists the wallet's
+  # transactions. A server that answers verbose lookups is asked as before.
+  # The one change to an exported type is an optional member,
+  # ITxHash.scriptHash. The storage schema (20), the environment settings
+  # and the runtime dependencies are unchanged, and the capability probes in
+  # server/engine.js answer as for 0.43.1.
+  BEIGNET_VERSION: "0.43.2"
 
 jobs:
   build:
