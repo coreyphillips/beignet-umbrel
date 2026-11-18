@@ -1763,10 +1763,10 @@ const ELECTRUM_PRESETS = [
 	{ id: 'umbrel-rbitcoin', label: 'Umbrel rbitcoin', host: 'rbitcoin-node_node_1', port: 50001, tls: false, networks: ['mainnet'], note: 'Use if the rbitcoin app (rbitcoin store) is installed' }
 ];
 const PUBLIC_ELECTRUM_SERVERS = [
-	{ id: 'public-bitkit', label: 'Bitkit', host: 'bitkit.to', port: 9999, tls: true, tlsVerify: true, networks: ['mainnet'], note: "Synonym's server, the one the Bitkit wallet uses" },
 	{ id: 'public-bluewallet', label: 'BlueWallet', host: 'electrum2.bluewallet.io', port: 443, tls: true, tlsVerify: true, networks: ['mainnet'], note: "BlueWallet's server" },
-	{ id: 'public-blockstream', label: 'Blockstream', host: 'electrum.blockstream.info', port: 50002, tls: true, tlsVerify: true, networks: ['mainnet'], note: "Blockstream's server" },
 	{ id: 'public-acinq', label: 'ACINQ', host: 'electrum.acinq.co', port: 50002, tls: true, tlsVerify: true, networks: ['mainnet'], note: "ACINQ's server, one of BlueWallet's defaults" },
+	{ id: 'public-bitkit', label: 'Bitkit', host: 'bitkit.to', port: 9999, tls: true, tlsVerify: true, networks: ['mainnet'], note: "Synonym's server, the one the Bitkit wallet uses" },
+	{ id: 'public-blockstream', label: 'Blockstream', host: 'electrum.blockstream.info', port: 50002, tls: true, tlsVerify: true, networks: ['mainnet'], note: "Blockstream's server" },
 	{ id: 'public-blockstream-testnet', label: 'Blockstream testnet', host: 'electrum.blockstream.info', port: 60002, tls: true, tlsVerify: true, networks: ['testnet'], note: "Blockstream's testnet server, the one Bitkit uses for testnet" },
 	{ id: 'public-bitkit-regtest', label: 'Bitkit regtest', host: 'electrs.bitkit.stag0.blocktank.to', port: 9999, tls: true, tlsVerify: true, networks: ['regtest'], note: "Synonym's staging regtest server, the one Bitkit's regtest builds use" }
 ];
