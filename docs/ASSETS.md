@@ -90,14 +90,14 @@ A transfer is complete for its recipient once their wallet holds its proof. A un
 | --- | --- | --- |
 | testnet4, `testnet4.universe.lightning.finance` | accepted | accepted, and delivered to the second wallet |
 | testnet3, `testnet.universe.lightning.finance` | accepted | **refused**, with `invalid split commitment proof` |
-| mainnet, `universe.lightning.finance` | not tested | not tested |
+| mainnet, `universe.lightning.finance` | accepted | accepted, and delivered to the second wallet |
 | a local `tapd` on regtest, with the proof rules of mainnet in force | accepted | accepted |
 
 What is known about the testnet3 refusal:
 
 - It is every transfer, not one: an asset with and without a group, a transaction with ordinary bitcoin change and one whose every output is taproot. Creating an asset there works, and so does a second wallet learning the asset from that server.
 - The same proofs pass `tapd`'s own verification, run the way a universe runs it and with the rules of that block height in force, at every release from v0.8.5 to v0.8.8 and on its main branch. A local `tapd` accepts and credits them, and the testnet4 server accepts transfers of the same shape. Field by field they match transfers made by `tapd` that the testnet3 server holds. Nothing in the published code explains the refusal, so the cause is not known.
-- The mainnet server was not tried, because nothing was spent on mainnet. It is set up like the testnet3 server and unlike the testnet4 one, so **expect the same there until it is shown otherwise**.
+- The mainnet server took the one transfer tried there, on 18 November 2026, and delivered it to the second wallet: an asset with no group, in a transaction with ordinary bitcoin change. A grouped asset, and a transaction whose every output is taproot, were not tried there.
 
 What a refusal means for you:
 
@@ -325,14 +325,14 @@ Mainnet is on by default, with no extra step. That is a choice for convenience, 
 1. **No independent security review.** Neither ts-tap nor the path the engine loads it through has been audited. `tapd` itself is described by its authors as alpha software. A bug can lose assets, and the bitcoin anchoring them.
 2. **The phrase is not enough.** See above. Without the app backup, lost data means lost assets.
 3. **No fee bumping.** See [Fees](#fees).
-4. **You depend on a universe server, and it has to accept the proof.** A recipient needs the proof to credit a transfer. If the server is down, a send's proof delivery waits and is retried, and a receive waits. If the server refuses the proof, the recipient's wallet does not get it from there, and the public testnet3 server refused every transfer proof from this app when it was tested. The mainnet server has not been tried. The way through is to [hand the proof over as a file](#handing-a-proof-over-as-a-file), which needs the recipient to be someone you can send a file to, using a wallet that can import one. Read [Transfers and the public universe servers](#transfers-and-the-public-universe-servers) and send a small amount first.
+4. **You depend on a universe server, and it has to accept the proof.** A recipient needs the proof to credit a transfer. If the server is down, a send's proof delivery waits and is retried, and a receive waits. If the server refuses the proof, the recipient's wallet does not get it from there, and the public testnet3 server refused every transfer proof from this app when it was tested. The mainnet server took the one transfer proof it was given. The way through is to [hand the proof over as a file](#handing-a-proof-over-as-a-file), which needs the recipient to be someone you can send a file to, using a wallet that can import one. Read [Transfers and the public universe servers](#transfers-and-the-public-universe-servers) and send a small amount first.
 5. **Your Electrum server is trusted more than usual.** It tells the wallet which block is at which height and whether an anchor is unspent. The wallet checks each proof's merkle path and header, not proof of work. A dishonest server working with a dishonest sender could make the wallet accept a proof that is not on the real chain. Use an Electrum server you run.
 6. **A name is not an identity.** Anyone can create an asset called USDT. An asset is identified by its ID (or group key), which is what the coloured avatar is drawn from, and the Send and Receive forms show it. Check the ID with whoever issued the asset.
 7. **Privacy.** A universe server is public by design, and proofs carry an asset's history.
 
 With an asset channel, also:
 
-8. **No independent review of any of it.** Item 1 covers asset channels too: ts-tap's channel code, the engine's part and this app's. They have so far been run on regtest only (see [How this was verified](#how-this-was-verified)).
+8. **No independent review of any of it.** Item 1 covers asset channels too: ts-tap's channel code, the engine's part and this app's. They have been run on regtest, on testnet4, and once, small, on mainnet (see [How this was verified](#how-this-was-verified)).
 9. **A wallet with a channel has to come online regularly**, as with any Lightning channel. What is yours in a channel that goes on chain is claimed by your own wallet, and only while it runs. There is no remote watchtower for asset channels.
 10. **Keep confirmed bitcoin on-chain for fees.** See [Fee coins](#fee-coins).
 11. **Back up the box after you open a channel, and know what a backup does not bring back.** It does not bring back the channel, and the app cannot bring back your side of one its node no longer holds. See [Asset channels and backups](#asset-channels-and-backups).
@@ -365,12 +365,13 @@ Three layers, each of which can be run again.
 - **Regtest, end to end.** `scripts/assets-regtest/` drives a real manager and real wallet daemons against a regtest chain and `tapd`, Lightning Labs' daemon. `tapd` verifies every proof it is given, so an issuance it stores and a transfer it credits are its word that what this app produced is valid, and the app in turn receives what `tapd` mints and sends. The scenarios cover: every kind of mint, with refusals; both directions with `tapd`; wallet to wallet with change, and burn; previews that are cancelled, replaced or abandoned; restarts and outright kills of the daemon in the middle of a mint, a preview, a send and a receive; a request repeated with its key; a reorganisation that takes the mint's block out of the chain; archive, wipe and restore; changing the proof server; switching assets off and on for one wallet; and a proof server that refuses transfer proofs, where the proof goes by file instead, `tapd` verifies each exported file with its own `tapcli proofs verify`, forged files with every checksum right (ten times the amount, a larger issuance, a history cut short) are refused by verification, and what arrived by file is sent on by file and then to `tapd`, which credits it.
 - **Testnet4,** against `testnet4.universe.lightning.finance`. Two mints (a normal asset with two decimals and a collectible in one transaction, a grouped asset in another), six confirmations, all three issuances found on the public universe, a second wallet that learned the asset from that universe alone, and a transfer to it that completed on both sides with its proof delivered through the public server. Then the second wallet sent part of it back, the first burned some, both wallets were archived, erased and restored from the archive, held what they held before, and the restored wallets sent and received again. Every proof went through the public server.
 - **Testnet3,** against `testnet.universe.lightning.finance`. The same mints, six confirmations, the issuances found on the public universe and learned from it by a second wallet, and a transfer that confirmed. Its proof was refused by the server, so the transfer did not complete through it: see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers). Both refused transfers (an asset with a group and one without) were then completed by saving their proof files from the sending wallet and importing them into the receiving one, which verified each against the chain and credited it. The receiving wallet then sent part of it back, the server refused that proof too, and the first wallet took it by file the same way.
+- **Mainnet,** against `universe.lightning.finance`, on 18 November 2026, with Beignet 0.43.1 and the library this app bundles, between two wallets of this app. One mint (a normal asset with two decimals), six confirmations, its issuance proof accepted by the public universe, and a transfer to the second wallet that completed on both sides with its proof delivered through the public server. Then the asset channel run described below. A burn, and an archive restored, were not run on mainnet.
 
 The regtest stack runs its `tapd` with today's proof rules in force from the first block (`--proofactivationheight=1`), so the scenarios exercise what mainnet, testnet3 and testnet4 require of a proof and not the older rules a stock regtest `tapd` keeps.
 
 The unit tests and the regtest scenarios were first run on an engine built from the pull request that added the host extension contract, run again on the published Beignet 0.42.0, run again on the published Beignet 0.43.0, run again on the published Beignet 0.43.1, and run again on the published Beignet 0.43.2, the engine this app bundles.
 
-Nothing was spent on mainnet to test this. Mainnet runs the same code with a different address prefix, activation height and universe server, and its universe server is the one unknown above.
+Mainnet was run once, and small, on Beignet 0.43.1. The engine this app bundles, 0.43.2, differs from it only in how it reads an Electrum server that answers transactions only in raw form.
 
 What is covered by unit tests only, because the regtest stack cannot produce it: a preview expiring by the clock, a transaction that waits an hour unconfirmed, and Tor mode.
 
@@ -378,7 +379,22 @@ What is covered by unit tests only, because the regtest stack cannot produce it:
 
 **Against a peer that runs Lightning Labs' daemons** (lnd with tapd in one process, on the stack's chain), `25-ln-upstream` passed through a real manager and a wallet daemon of this app, 32 checks, against each of two builds with no patch: Lightning Terminal v0.17.11 as published (with `ASSETS_UPSTREAM_PEER=litd`), and `tapd-integrated` built from taproot-assets `0ab6c01c`. The checks: the open, in the form of HTLC signatures tapd signs with one delay of 144 blocks on both sides; an invoice of the peer paid, an invoice of the wallet paid by the peer; both restarted and a payment again; a price quoted by the peer and shown as one; a node with no asset paying an invoice of the wallet in bitcoin, the wallet receiving the asset through the peer; the wallet paying a bitcoin invoice of that node with the asset, that node's invoice settled; a close together; a close by force from the peer and one from the wallet with the peer stopped. At each stage the wallet and the peer held between them exactly what was minted, and every share that came home to the wallet was handed to the stack's `tapd`, which verified it. ts-tap's own example ran the same peer without the app and passed.
 
-Not run through this app: an asset channel on testnet or mainnet, a payment in flight that its payee claims on chain, and a commitment that was revoked and is punished. ts-tap's own regtest example, which drives two nodes of this engine without the app, passed on Beignet 0.43.0 and again on 0.43.1, and does cover the last two.
+**Asset channels on testnet4** were run through this app between its two testnet4 wallets, on 17 and 18 November 2026, with Beignet 0.43.0 and the library at `452dc24`, against the public universe. The run covered:
+- an open each way;
+- three payments, each repeated with its key and paid once;
+- a close agreed by both sides;
+- a close by force with the peer stopped, then the 144 blocks before a share can be swept, both sweeps, and the swept units sent on through the public universe;
+- both wallets archived, and the archive restored into a separate manager, where each held exactly the assets and the bitcoin it held when archived.
+
+The two wallets held all their units between them at every stage but one. After a reorganisation took the block of the first close out of the chain, the second wallet's books lacked 20,000 units, though they were safe on chain. The three faults in the library behind that were fixed before the run went on. The library this app bundles is that build with one later change.
+
+**Asset channels on mainnet** were run once, and small, through this app between two of its wallets, on 18 November 2026, with Beignet 0.43.1 and the library this app bundles. The run covered an open of 40,000 units with 100,000 sat, then a payment each way, each repeated with its key and paid once, then a close agreed by both sides. The two wallets held all 100,000 units between them at every check.
+
+Not run through this app: a payment in flight that its payee claims on chain, and a commitment that was revoked and is punished. ts-tap's own regtest example, which drives two nodes of this engine without the app, passed on Beignet 0.43.0 and again on 0.43.1, and does cover both. Not run on mainnet:
+- a close by force;
+- a payment in flight that goes to the chain;
+- a peer that runs Lightning Labs' daemons;
+- a payment to or from a node beyond the channel's peer.
 
 ## For operators and developers
 
