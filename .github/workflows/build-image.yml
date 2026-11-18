@@ -810,7 +810,16 @@ env:
   # ASSET_RESTORE_REFUSED, ASSET_GUARDIAN_START_REFUSED and
   # PAYMENT_UNRESOLVED. The storage schema (20), the environment settings
   # and the runtime dependencies are unchanged.
-  BEIGNET_VERSION: "0.43.0"
+  # 0.43.1 changes the fee coin pool of asset channels only
+  # (coreyphillips/beignet#2100): it follows each fee coin through
+  # replacements and reorganisations, builds replacements the network
+  # takes, and hands the pool's free coins back to the wallet once no
+  # asset channel is left. The one change to an exported type is an
+  # optional member, IFundingProvider.releaseFixedOutputFeeCoins, which
+  # the wallet's own provider implements. The storage schema (20), the
+  # environment settings and the runtime dependencies are unchanged, and
+  # the capability probes in server/engine.js answer as for 0.43.0.
+  BEIGNET_VERSION: "0.43.1"
 
 jobs:
   build:
