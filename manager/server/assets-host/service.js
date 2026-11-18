@@ -154,6 +154,9 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		lastExportAt: 0,
 		lockedKey: null,
 		lockedSats: 0,
+		// The sats of each anchor the records hold, by outpoint, as the library
+		// reads them from the proofs; null until read, or when it cannot be.
+		anchorValues: null,
 		ticks: 0,
 		// Asset channels (lightning.js). Why the service did not start, when it
 		// did not; whether the opens a restart interrupted have been settled;
@@ -418,7 +421,8 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 			groups,
 			rows: host.listRows(),
 			channels: lightning().channelList(host),
-			limits: lightning().paymentLimits(host)
+			limits: lightning().paymentLimits(host),
+			anchorValues: mem.anchorValues
 		});
 	};
 
@@ -832,13 +836,23 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		const lockedKey = anchors.join(',');
 		if (lockedKey !== mem.lockedKey) {
 			let locked = anchors.length * ANCHOR_SATS;
+			// What each anchor holds, from its proof: a swept output of a
+			// channel closed by force carries that side's whole channel
+			// bitcoin, far above the 1,000 sat of an ordinary anchor.
+			let values = null;
 			try {
-				locked = Number(await host.tap.tapLockedSats());
+				if (typeof host.tap.tapAnchorValues === 'function') {
+					values = new Map();
+					for (const [outPoint, sats] of await host.tap.tapAnchorValues()) values.set(String(outPoint), Number(sats));
+					locked = [...values.values()].reduce((a, b) => a + b, 0);
+				} else locked = Number(await host.tap.tapLockedSats());
 			} catch (err) {
 				if (isFenced(err)) throw err;
+				values = null;
 			}
 			mem.lockedKey = lockedKey;
 			mem.lockedSats = locked;
+			mem.anchorValues = values;
 		}
 		// An asset that arrived without the host hearing its name (a receive,
 		// a restore) is read from the wallet's own proof of it, once.

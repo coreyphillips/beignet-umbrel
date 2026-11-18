@@ -179,6 +179,24 @@ test('units held: all of them, and the part no unconfirmed send is using', () =>
 	assert.equal(held.size, 2);
 });
 
+test('assets: the bitcoin locked with an asset is what its anchors hold, as their proofs say, and 1,000 sat where that is not read yet', () => {
+	const registry = new Map([[A1, { assetId: A1, name: 'coin', type: 'normal', decimalDisplay: 2, issued: '1000', mintedHere: true }]]);
+	const records = [
+		{ assetId: A1, amount: '300', anchorOutPoint: 'x:0' },
+		// The swept output of a channel closed by force: the side's whole channel bitcoin.
+		{ assetId: A1, amount: '600', anchorOutPoint: 'sweep:1' },
+		{ assetId: A1, amount: '100', anchorOutPoint: 'new:0' }
+	];
+	const read = new Map([
+		['x:0', 1000],
+		['sweep:1', 98292]
+	]);
+	const [coin] = views.assetViews({ records, registry, anchorValues: read });
+	assert.deepEqual([coin.anchors, coin.lockedSats], [3, 1000 + 98292 + 1000]);
+	// Not read at all: 1,000 sat an anchor, as before.
+	assert.equal(views.assetViews({ records, registry }).find((a) => a.key === A1).lockedSats, 3000);
+});
+
 test('assets: a group is one entry with the balance of all its issuances', () => {
 	const registry = new Map([
 		[A1, { assetId: A1, groupKey: G, name: 'coin', type: 'normal', decimalDisplay: 2, issued: '1000', mintedHere: true }],

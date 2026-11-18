@@ -113,6 +113,7 @@ test('each refusal of the Lightning service becomes the code the dashboard words
 		['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'PAYMENT_UNSUPPORTED', 409],
 		['ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', 'OUTCOMES_UNDELIVERED', 409],
 		['ERR_BEIGNET_LN_SPENDING_LIMIT', 'SPENDING_LIMIT', 409],
+		['ERR_BEIGNET_LN_HTLC_LIMIT', 'CHANNEL_PAYMENTS_FULL', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_OUTBOUND', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_INBOUND', 'INSUFFICIENT_INBOUND', 409],
 		['ERR_BEIGNET_LN_CARRIER_UNFUNDED', 'CHANNEL_BITCOIN_SHORT', 409],
@@ -134,6 +135,14 @@ test('each refusal of the Lightning service becomes the code the dashboard words
 		assert.equal(mapped.message.includes(String.fromCharCode(0x2014)), false, code);
 		assert.equal('details' in mapped, false, code);
 	}
+	// A channel full of payments that have not ended: the number, where the library gives it.
+	const full = mapLightning(Object.assign(coded('ERR_BEIGNET_LN_HTLC_LIMIT', 'asset HTLC limit reached'), { details: { maxHtlcs: 8, pendingHtlcs: 8 } }));
+	assert.deepEqual([full.extensionCode, full.status, full.details], ['CHANNEL_PAYMENTS_FULL', 409, { maxHtlcs: 8, pendingHtlcs: 8 }]);
+	assert.equal(full.message, 'The asset channel this would be paid through already carries 8 payments that have not ended, the most it holds at once, so nothing was paid. Pay again once one of them has ended.');
+	assert.match(mapLightning(Object.assign(coded('ERR_BEIGNET_LN_HTLC_LIMIT'), { details: { maxHtlcs: 1 } })).message, /already carries 1 payment that has not ended, the most it holds at once/);
+	// Without the number, the general sentence and no details.
+	const plain = mapLightning(coded('ERR_BEIGNET_LN_HTLC_LIMIT'));
+	assert.deepEqual([plain.extensionCode, plain.message, 'details' in plain], ['CHANNEL_PAYMENTS_FULL', LIGHTNING_REFUSALS.ERR_BEIGNET_LN_HTLC_LIMIT[1], false]);
 	// What only the caller knows travels with the refusal.
 	const short = mapError(coded('ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND'), { details: { sendable: '40' } });
 	assert.deepEqual(short.details, { sendable: '40' });

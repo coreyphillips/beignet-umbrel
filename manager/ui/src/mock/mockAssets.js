@@ -314,7 +314,8 @@ export function createAssetsMock(ctx) {
 		reclaimTxid: c.reclaimTxid || null,
 		...(Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? { undeliveredOutcomes: c.undeliveredOutcomes } : {}),
 		...(Number.isInteger(c.sendablePayments) ? { sendablePayments: c.sendablePayments } : {}),
-		...(Number.isInteger(c.receivablePayments) ? { receivablePayments: c.receivablePayments } : {})
+		...(Number.isInteger(c.receivablePayments) ? { receivablePayments: c.receivablePayments } : {}),
+		...(Number.isInteger(c.recoveryWaitsUntil) ? { recoveryWaitsUntil: c.recoveryWaitsUntil } : {})
 	});
 
 	/**
@@ -808,7 +809,8 @@ export function createAssetsMock(ctx) {
 		'channel-closing'(id) {
 			const c = S(id).channels.find((x) => x.state === 'NORMAL');
 			if (!c) return false;
-			Object.assign(c, { state: 'FORCE_CLOSING', sendable: '0', receivable: '0' });
+			// Closed without its peer: the wallet's side waits out the delay of 144 blocks.
+			Object.assign(c, { state: 'FORCE_CLOSING', sendable: '0', receivable: '0', recoveryWaitsUntil: ctx.height(id) + 144 });
 			return true;
 		},
 		// A channel the wallet's node gave up: it carries nothing, and is closed

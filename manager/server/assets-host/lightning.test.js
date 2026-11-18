@@ -3142,6 +3142,38 @@ test('a side of an asset channel with too little bitcoin left to carry a payment
 	h.ln.opts.invoiceFails = null;
 });
 
+test('a channel whose close waits out a time lock says until which block, and only while its recovery is under way', async () => {
+	const { h, id } = await channelled({ remote: 200n });
+	const one = async () => (await h.get('/channels')).channels[0];
+	assert.equal('recoveryWaitsUntil' in (await one()), false, 'an open channel has none');
+	// The library says it while recovery is pending: the sweep of this side waits out the delay.
+	h.ln.set(id, { state: 'FORCE_CLOSING', recovery: 'pending', recoveryWaitsUntil: 162105 });
+	await h.host.pass({ block: true });
+	const closing = await one();
+	assert.deepEqual([closing.state, closing.recoveryWaitsUntil], ['FORCE_CLOSING', 162105]);
+	// Once recovery is done nothing waits, whatever the entry still carries.
+	h.ln.set(id, { state: 'FORCE_CLOSED', recovery: 'complete', recoveryWaitsUntil: 162105 });
+	await h.host.pass({ block: true });
+	assert.equal('recoveryWaitsUntil' in (await one()), false);
+});
+
+test('a payment over a channel that already carries as many payments that have not ended as it can hold is refused in the host\'s words, with nothing paid', async () => {
+	// The library lists the engine's HTLC limit among the refusals it makes before anything is sent.
+	const { h, asset } = await channelled({ remote: 200n }, { paymentRefusals: ['ERR_BEIGNET_LN_HTLC_LIMIT'] });
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	const before = (await h.get('/channels')).channels[0].localBalance;
+	h.ln.opts.payFails = 'ERR_BEIGNET_LN_HTLC_LIMIT';
+	const said = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: '50' }, 'limit-key');
+	assert.equal(said.status, 'FAILED');
+	assert.match(said.failureDescription, /^The asset channel this would be paid through already carries as many payments that have not ended as it can hold at once, so nothing was paid\./);
+	const failure = (await h.get('/activity', 'kind=ln-send')).rows[0].failure;
+	assert.deepEqual([failure.code, failure.message], ['CHANNEL_PAYMENTS_FULL', said.failureDescription]);
+	assert.equal(h.ln.payments.size, 0, 'nothing was recorded by the library');
+	assert.equal((await h.get('/channels')).channels[0].localBalance, before, 'nothing left the channel');
+	h.ln.opts.payFails = null;
+});
+
 test('a channel whose bitcoin carries no further payment one way reads as moving nothing that way, says how many payments each way carries, and is refused in the carrier\'s own words before the peer is asked', async () => {
 	const { h, asset, id } = await channelled({ remote: 200n });
 	const one = async () => (await h.get('/channels')).channels[0];
@@ -3211,14 +3243,19 @@ test('an open the library ended across a restart is a failed open in the wallet\
 test('an open the library ended with a reason code it names gets the sentence of that reason, and one it does not name the general sentence', async () => {
 	const { failedOpen, OPEN_ENDED_BECAUSE } = lightning;
 	const tail = 'so nothing was opened and nothing was spent. It can be tried again.';
-	// The closed set the library is to name. The names here stand in until its own arrive.
+	// The closed set the library names (ASSET_OPEN_ENDED_REASONS), each with a sentence of the host's own.
 	const table = [
 		['INTERRUPTED_BEFORE_SIGNED', `This channel open was interrupted before the peer had signed for it, and before any bitcoin or asset left the wallet, ${tail}`],
 		['PEER_REFUSED', `The peer refused this channel open before any bitcoin or asset left the wallet, ${tail}`],
 		['PEER_ENDED', `The peer's side of this channel open ended before any bitcoin or asset left the wallet, ${tail}`],
 		['TERMS_EXPIRED', `The terms of this channel open ran out before any bitcoin or asset left the wallet, ${tail}`],
 		['ENGINE_DROPPED', `The wallet's node dropped this channel open before any bitcoin or asset left the wallet, ${tail}`],
-		['NEVER_FUNDED', `This channel open was never funded, and no bitcoin or asset left the wallet, ${tail}`]
+		['NEVER_FUNDED', `This channel open was never funded, and no bitcoin or asset left the wallet, ${tail}`],
+		['CANCELLED', `This wallet gave up this channel open before any bitcoin or asset left it, ${tail}`],
+		['POLICY_REFUSED', `This wallet's own rules turned this channel down before any bitcoin or asset left the wallet, ${tail}`],
+		['FUNDING_INVALID', `A funding message of the peer did not pass this wallet's checks, so the open ended before any bitcoin or asset left the wallet, ${tail}`],
+		['FUNDING_FAILED', `This wallet could not fund its side of this channel open, so it ended before any bitcoin or asset left the wallet, ${tail}`],
+		['FUNDING_CONFLICT', 'The funding of this channel open can never confirm, because another transaction spent one of its inputs, so the open was given up and nothing went into a channel. It can be tried again.']
 	];
 	assert.deepEqual(Object.keys(OPEN_ENDED_BECAUSE), table.map(([code]) => code));
 	for (const [because, sentence] of table) {

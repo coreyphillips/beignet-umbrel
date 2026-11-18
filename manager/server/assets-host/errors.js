@@ -148,6 +148,15 @@ const LIGHTNING_REFUSALS = {
 		'This wallet has not yet taken in the results of earlier payments on that channel, so nothing was paid. Nothing is wrong with this payment. Restart the wallet, and if this is said again afterwards, its log says why.',
 		409
 	],
+	// An asset channel carries at most a few payments at once that have not
+	// ended (8 unless set otherwise), so that every one of them can still be
+	// claimed on chain in time. The library refuses the next before anything
+	// is sent or recorded.
+	ERR_BEIGNET_LN_HTLC_LIMIT: [
+		'CHANNEL_PAYMENTS_FULL',
+		'The asset channel this would be paid through already carries as many payments that have not ended as it can hold at once, so nothing was paid. Pay again once one of them has ended.',
+		409
+	],
 	ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND: ['INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409],
 	ERR_BEIGNET_LN_INSUFFICIENT_INBOUND: ['INSUFFICIENT_INBOUND', 'No asset channel of this wallet can receive that much.', 409],
 	// Every payment over an asset channel moves a little of the channel's
@@ -354,6 +363,17 @@ function mapLightning(err, context = {}) {
 	}
 	const engine = engineCodeOf(err);
 	if (codeOf(err) === 'ERR_BEIGNET_LN_MODE_UNAVAILABLE') return modeUnavailable(detailOf(err, 'reason'));
+	if (codeOf(err) === 'ERR_BEIGNET_LN_HTLC_LIMIT') {
+		const [code, , status] = LIGHTNING_REFUSALS.ERR_BEIGNET_LN_HTLC_LIMIT;
+		const max = Number(detailOf(err, 'maxHtlcs'));
+		const pending = Number(detailOf(err, 'pendingHtlcs'));
+		const named = Number.isInteger(max) && max > 0;
+		const message = named
+			? `The asset channel this would be paid through already carries ${max} ${max === 1 ? 'payment that has' : 'payments that have'} not ended, the most it holds at once, so nothing was paid. Pay again once one of them has ended.`
+			: LIGHTNING_REFUSALS.ERR_BEIGNET_LN_HTLC_LIMIT[1];
+		const details = { ...(named ? { maxHtlcs: max } : {}), ...(Number.isInteger(pending) && pending >= 0 ? { pendingHtlcs: pending } : {}) };
+		return refusal(code, message, status, Object.keys(details).length ? details : undefined);
+	}
 	if (codeOf(err) === 'ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED') {
 		const [code, message, status] = LIGHTNING_REFUSALS.ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED;
 		const count = Number(detailOf(err, 'undeliveredOutcomes'));

@@ -782,6 +782,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			// As the library: set while the engine holds the channel open and says.
 			...(Number.isInteger(f.sendablePayments) ? { sendablePayments: f.sendablePayments } : {}),
 			...(Number.isInteger(f.receivablePayments) ? { receivablePayments: f.receivablePayments } : {}),
+			...(Number.isInteger(f.recoveryWaitsUntil) ? { recoveryWaitsUntil: f.recoveryWaitsUntil } : {}),
 			...(f.error ? { error: f.error } : {}),
 			...(f.reasonCode ? { reasonCode: f.reasonCode } : {})
 		};

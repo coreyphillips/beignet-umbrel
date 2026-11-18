@@ -188,10 +188,10 @@ const OPEN_FAILURES = Object.freeze({
 	// Ended by the library with nothing signed, after this host had answered for it.
 	CHANNEL_OPEN_FAILED: 'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.'
 });
-// Why the library ended an open, by the reason code it names on the flow:
-// a closed set, each with a sentence of the host's own. The names here
-// stand in until the library's own arrive (adapter.js reads the code from
-// the entry, and this is the one table that knows the names). A code not
+// Why the library ended an open, by the reason code it names on the flow
+// (`reasonCode`): the closed set it exports as ASSET_OPEN_ENDED_REASONS,
+// each with a sentence of the host's own. adapter.js reads the code from
+// the entry, and this is the one table that knows the names. A code not
 // listed here gets the general sentence of OPEN_FAILURES.
 const OPEN_ENDED_TAIL = 'so nothing was opened and nothing was spent. It can be tried again.';
 const OPEN_ENDED_BECAUSE = Object.freeze({
@@ -200,7 +200,14 @@ const OPEN_ENDED_BECAUSE = Object.freeze({
 	PEER_ENDED: `The peer's side of this channel open ended before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
 	TERMS_EXPIRED: `The terms of this channel open ran out before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
 	ENGINE_DROPPED: `The wallet's node dropped this channel open before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
-	NEVER_FUNDED: `This channel open was never funded, and no bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`
+	NEVER_FUNDED: `This channel open was never funded, and no bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	CANCELLED: `This wallet gave up this channel open before any bitcoin or asset left it, ${OPEN_ENDED_TAIL}`,
+	POLICY_REFUSED: `This wallet's own rules turned this channel down before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	FUNDING_INVALID: `A funding message of the peer did not pass this wallet's checks, so the open ended before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	FUNDING_FAILED: `This wallet could not fund its side of this channel open, so it ended before any bitcoin or asset left the wallet, ${OPEN_ENDED_TAIL}`,
+	// The one reason past the point of no return: the funding was signed and
+	// can never confirm.
+	FUNDING_CONFLICT: 'The funding of this channel open can never confirm, because another transaction spent one of its inputs, so the open was given up and nothing went into a channel. It can be tried again.'
 });
 // The library's own words for an open it ended, on one line. They are its
 // internals ("Funding wallet terms changed"): for the log, and for the
@@ -396,6 +403,8 @@ function channelList(host) {
 			heldIn: usable && !paysIn ? c.remote : 0n,
 			sendablePayments: Number.isInteger(c.sendablePayments) ? c.sendablePayments : null,
 			receivablePayments: Number.isInteger(c.receivablePayments) ? c.receivablePayments : null,
+			// What its close brings back waits out a time lock until this height.
+			waitsUntil: c.recovery === 'pending' && Number.isInteger(c.recoveryWaitsUntil) ? c.recoveryWaitsUntil : null,
 			over: isOver(word),
 			// Its funding transaction is not on chain, as the library says it:
 			// an open under way or one that ended, with nothing on chain to close.
@@ -466,6 +475,7 @@ function channelList(host) {
 			heldIn: 0n,
 			sendablePayments: null,
 			receivablePayments: null,
+			waitsUntil: null,
 			over: !coming,
 			opening: coming,
 			counted: false,
@@ -1417,7 +1427,7 @@ function lightningError(host, err, details) {
 	}
 	// Only those whose figures the dashboard words carry them: the two that
 	// are about a channel's balance, and bitcoin on the wrong address types.
-	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS', 'PEER_OFFLINE', 'CHANNEL_MODE_UNAVAILABLE', 'OUTCOMES_UNDELIVERED'].includes(mapped.extensionCode)) delete mapped.details;
+	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS', 'PEER_OFFLINE', 'CHANNEL_MODE_UNAVAILABLE', 'OUTCOMES_UNDELIVERED', 'CHANNEL_PAYMENTS_FULL'].includes(mapped.extensionCode)) delete mapped.details;
 	return mapped;
 }
 

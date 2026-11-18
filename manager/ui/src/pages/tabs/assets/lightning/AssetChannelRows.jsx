@@ -3,7 +3,7 @@ import AssetAvatar from '../../../../components/AssetAvatar.jsx';
 import { AssetAmount } from '../../../../components/AssetAmount.jsx';
 import { Badge, Button, CopyText, ExplorerLink, FeeField, Modal } from '../../../../components/ui.jsx';
 import { fmtAsset } from '../../../../lib/asset-amount.js';
-import { bitcoinShortNote, canClose, canReclaim, channelState, closeWays, paymentsLeft, peerAway, peerName, reclaimSent, sharePct, undeliveredNote } from '../../../../lib/asset-lightning.js';
+import { bitcoinShortNote, canClose, canReclaim, channelState, closeWays, paymentsLeft, peerAway, peerName, reclaimSent, sharePct, undeliveredNote, waitsNote } from '../../../../lib/asset-lightning.js';
 import { txUrl } from '../../../../lib/explorer.js';
 import { FEE_CAP_MULTIPLE } from '../../../../lib/fees.js';
 import { fmtSats, shortId } from '../../../../lib/format.js';
@@ -159,6 +159,11 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 						{!failed && !errored && bitcoinShortNote(c) && (
 							<div className="info-note" role="note" data-testid="asset-channel-bitcoin-short">
 								{bitcoinShortNote(c)}
+							</div>
+						)}
+						{waitsNote(c) && (
+							<div className="field-hint" data-testid="asset-channel-waits" data-height={c.recoveryWaitsUntil}>
+								{waitsNote(c)}
 							</div>
 						)}
 						{undeliveredNote(c) && (

@@ -865,6 +865,12 @@ test(
 		for (const code of Object.keys(LIGHTNING_REFUSALS)) assert.equal(codes.includes(code), true, code);
 		for (const code of ['ERR_BEIGNET_LN_PEER_OFFLINE', 'ERR_BEIGNET_LN_MODE_UNAVAILABLE', 'ERR_BEIGNET_LN_FEE_POLICY_REFUSED']) assert.equal(codes.includes(code), true, code);
 		for (const code of ['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED']) assert.equal(entry.ASSET_PAYMENT_REFUSALS.includes(code), true, code);
+		// Every reason the library names for an ended open has a sentence of the host's own.
+		if (Array.isArray(entry.ASSET_OPEN_ENDED_REASONS)) {
+			const { OPEN_ENDED_BECAUSE } = require('./lightning');
+			for (const reason of entry.ASSET_OPEN_ENDED_REASONS) assert.equal(typeof OPEN_ENDED_BECAUSE[reason], 'string', reason);
+			assert.equal(entry.ASSET_PAYMENT_REFUSALS.includes('ERR_BEIGNET_LN_HTLC_LIMIT'), true);
+		}
 
 		// The engine the entry itself loads, and what its version promises.
 		const engine = require(require.resolve('beignet/package.json', { paths: [path.dirname(REAL_ENTRY)] })).version;

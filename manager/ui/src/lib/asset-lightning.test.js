@@ -355,6 +355,12 @@ test('a channel whose bitcoin carries no further payment one way says so, and wh
 	}
 });
 
+test('a channel closed by force says after which block what is in it comes back, only where the wallet says', async () => {
+	const { waitsNote } = await import('./asset-lightning.js');
+	assert.equal(waitsNote({ recoveryWaitsUntil: 162105 }), 'What is in this channel comes back on-chain after block 162,105, once the delay of a close without the peer has run out.');
+	for (const none of [{}, { recoveryWaitsUntil: 0 }, { recoveryWaitsUntil: '162105' }, { recoveryWaitsUntil: 1.5 }, null]) assert.equal(waitsNote(none), null, JSON.stringify(none));
+});
+
 /* ------------------------------------- results a channel has not taken in */
 
 test('a channel that has not taken in the results of earlier payments says so in the words the refusal uses', async () => {

@@ -167,7 +167,7 @@ const sumRows = (rows, key, kinds, states) =>
  * `registry` maps asset ID to what the host has learnt of it, `groups` maps
  * group key to whether this wallet can issue more, `rows` are stored rows.
  */
-function assetViews({ records, registry, groups = new Map(), rows = [], channels = [], limits = null }) {
+function assetViews({ records, registry, groups = new Map(), rows = [], channels = [], limits = null, anchorValues = null }) {
 	const byKey = new Map();
 	// What each asset has in channels: `channels` are the host's own entries
 	// (lightning.js channelList), the ones whose assets have left the chain.
@@ -257,7 +257,9 @@ function assetViews({ records, registry, groups = new Map(), rows = [], channels
 				lightningSendable: ln.sendable.toString(),
 				lightningReceivable: ln.receivable.toString()
 			},
-			lockedSats: entry.anchors.size * ANCHOR_SATS,
+			// The bitcoin on the outputs that hold it, as their proofs say, and
+			// the 1,000 sat of an ordinary anchor where that is not read yet.
+			lockedSats: [...entry.anchors].reduce((sum, outPoint) => sum + (anchorValues && Number.isFinite(anchorValues.get(outPoint)) ? anchorValues.get(outPoint) : ANCHOR_SATS), 0),
 			anchors: entry.anchors.size,
 			canReissue: !!(entry.groupKey && groups.get(entry.groupKey)),
 			mintedHere,
@@ -400,6 +402,9 @@ function channelView(c, reg) {
 		// that way carries nothing, and `sendable` or `receivable` reads 0.
 		...(Number.isInteger(c.sendablePayments) ? { sendablePayments: c.sendablePayments } : {}),
 		...(Number.isInteger(c.receivablePayments) ? { receivablePayments: c.receivablePayments } : {}),
+		// While a close waits out the delay of a force close: the block
+		// height after which what is in the channel comes back on-chain.
+		...(Number.isInteger(c.waitsUntil) ? { recoveryWaitsUntil: c.waitsUntil } : {}),
 		channelSats: c.fundingSats,
 		// The funding transaction, once there is one. While it has not
 		// confirmed, `reclaimable` says its bitcoin can be taken back, which

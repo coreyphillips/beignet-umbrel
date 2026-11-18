@@ -510,6 +510,17 @@ export function bitcoinShortNote(channel) {
 	return null;
 }
 
+/**
+ * The line of a channel closed by force whose units and bitcoin wait out
+ * the delay of the close: after which block they come back. Null when the
+ * wallet does not say.
+ */
+export function waitsNote(channel) {
+	const height = channel && channel.recoveryWaitsUntil;
+	if (!Number.isInteger(height) || height <= 0) return null;
+	return `What is in this channel comes back on-chain after block ${height.toLocaleString('en-US')}, once the delay of a close without the peer has run out.`;
+}
+
 export function undeliveredNote(channel) {
 	const n = channel && channel.undeliveredOutcomes;
 	if (!Number.isInteger(n) || n <= 0) return null;
