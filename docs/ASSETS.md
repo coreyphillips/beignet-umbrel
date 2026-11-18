@@ -404,6 +404,8 @@ The routes, under `/wallets/:id/api/x/assets`:
 
 An open, a reclaim and a payment carry an `X-Idempotency-Key`, and the same key never does the thing twice, also across a restart. On a wallet without asset channels every one of these but `GET /channels` refuses with `LIGHTNING_UNAVAILABLE`.
 
+`POST /pay` answers within 30 seconds with a `status`: `COMPLETED`, `FAILED`, or `PENDING` for a payment that is still going. The wallet's node keeps that first answer for the key in memory for a day, so the same request asked again answers `PENDING` again until the wallet restarts, even after the payment has ended. After `PENDING`, read how it ended from its row, `ln-send-<paymentHash>`, in `GET /activity?kind=ln-send`: its `state` ends `complete` or `failed`. The dashboard reads the row.
+
 `GET /status` carries `assetChannels`, the number of channels that are not over, and `lightning`:
 
 | Field | Meaning |
