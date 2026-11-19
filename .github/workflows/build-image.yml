@@ -847,7 +847,14 @@ env:
   # does, and the assets host supplies neither. The storage schema (20),
   # the routes, the environment settings and the runtime dependencies are
   # unchanged.
-  BEIGNET_VERSION: "0.43.4"
+  # 0.43.5 refuses an asset HTLC whose bitcoin carrier is under the
+  # channel's dust limit without closing the channel
+  # (coreyphillips/beignet#2112): it warns the peer, closes the connection
+  # and dials the peer again, where 0.43.4 failed the channel and closed it
+  # by force. The two additions to the exported API are optional, and the
+  # app uses neither. The storage schema (20), the routes, the environment
+  # settings and the runtime dependencies are unchanged.
+  BEIGNET_VERSION: "0.43.5"
 
 jobs:
   build:
