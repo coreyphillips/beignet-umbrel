@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.42.2"
+version: "0.42.3"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,7 +30,18 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Asset channels with a peer that runs Lightning Labs' daemons. An invoice
+  Bundles beignet 0.43.5. An asset payment that a peer sends with too
+  little bitcoin to keep an output of its own, under the channel's dust
+  limit, no longer closes the channel: the wallet refuses it, drops the
+  connection and dials the peer again, and the channel is back once the
+  peer stops trying. Beignet 0.43.4 closed such a channel by force. A peer
+  that runs Lightning Labs' daemons sends one only when whoever pays
+  through it hands it the units for the first hop. Going back to app
+  0.42.2 keeps your wallets and channels, asset channels included.
+
+
+  From app 0.42.2: Asset channels with a peer that runs Lightning Labs'
+  daemons. An invoice
   of yours now names that peer with its own fee and CLTV delta for the
   channel, as tapd's own invoices do; before, a payer reaching you through
   such a peer could be refused there once and have to try again. A channel
