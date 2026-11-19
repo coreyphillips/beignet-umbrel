@@ -82,8 +82,10 @@ export async function refusal(fn) {
 
 /* ------------------------------------------------------------- the chain */
 
+// A stack's tapd that many runs have handed assets to lists far more than
+// the default megabyte of output (spawnSync docker ENOBUFS).
 const compose = (args, opts = {}) =>
-	execFileSync('docker', ['compose', '-p', PROJECT, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim();
+	execFileSync('docker', ['compose', '-p', PROJECT, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, ...opts }).trim();
 
 export const btc = (...args) =>
 	compose(['exec', '-T', 'bitcoind', 'bitcoin-cli', '-regtest', '-rpcport=18443', '-rpcuser=taptest', '-rpcpassword=taptest', ...args.map(String)]);
