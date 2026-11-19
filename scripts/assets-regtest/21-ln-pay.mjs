@@ -91,9 +91,12 @@ check('with a new price the same invoice is paid', paid3.status === 'COMPLETED' 
 // Both daemons restart, and the channel carries a payment again.
 await restart(A.id);
 await restart(B.id);
+// Usable again once the two have found each other: until then each host
+// refuses what needs the peer (PEER_OFFLINE), and the payment below asks
+// B for an invoice before A pays it.
 await waitFor('the channel is usable again on both sides', async () => {
 	const now = await sides();
-	return now.a && now.b && now.a.state === 'NORMAL' && now.b.state === 'NORMAL' && BigInt(now.a.sendable) > 0n;
+	return now.a && now.b && now.a.state === 'NORMAL' && now.b.state === 'NORMAL' && now.a.peerConnected === true && now.b.peerConnected === true && BigInt(now.a.sendable) > 0n && BigInt(now.b.receivable) > 0n;
 }, { timeoutMs: 120000, everyMs: 2000 });
 const afterRestart = await sides();
 check('balances are as they were before the restart', afterRestart.a.localBalance === '8000' && afterRestart.b.localBalance === '32000', JSON.stringify([afterRestart.a.localBalance, afterRestart.b.localBalance]));
