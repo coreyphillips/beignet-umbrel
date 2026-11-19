@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.42.0"
+version: "0.42.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,8 +30,17 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.43.3, and adds Taproot Assets: assets that live on
-  bitcoin, held and sent from the same wallets.
+  Bundles beignet 0.43.4. A sweep of a bitcoin channel's output, after a
+  channel was closed by force, now pays at least the fee rate it was built
+  at: the engine prices it from the size of the transaction it builds. A
+  wallet's own share used to pay a little under that rate, so at 1 sat/vB
+  some nodes turned it away until the wallet raised the rate six blocks
+  later. The sweeps of an asset channel are priced as before. Going back to
+  app 0.42.0 keeps your wallets and channels, asset channels included.
+
+
+  From app 0.42.0, if you are updating from 0.41.0: Taproot Assets, assets
+  that live on bitcoin, held and sent from the same wallets.
 
 
   Each wallet can now create an asset (a coin with decimals, or a
