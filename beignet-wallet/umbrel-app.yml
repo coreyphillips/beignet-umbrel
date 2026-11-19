@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.41.0"
+version: "0.42.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,51 +30,60 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.41.0, and says what Relay only does not cover.
+  Bundles beignet 0.43.3, and adds Taproot Assets: assets that live on
+  bitcoin, held and sent from the same wallets.
 
 
-  Reconnects are safer. After a dropped connection a wallet no longer sends
-  its peer updates the peer already has. An LND peer answered those with an
-  error, and the channel was force closed.
+  Each wallet can now create an asset (a coin with decimals, or a
+  collectible), receive one at an address of its own, send it, and burn it.
+  An asset sits on a bitcoin output of about 1,000 sats, which the wallet
+  keeps out of its spendable balance and shows as locked with assets. The
+  proofs that an asset is what it says travel through a proof server,
+  Lightning Labs' universe by default; a send whose proof the server will
+  not carry can be handed over as a file, and the recipient imports it.
+  Back up again after you create or receive an asset: Settings, Backups
+  marks a wallet whose assets changed since the last archive.
 
 
-  Invoices and offers follow Lightning's text rules. A description may not
-  hold a line break, a tab, an invisible character or an emoji made of
-  several joined together (a family, a profession). The dashboard cleans
-  what you type before it makes the invoice or offer: line breaks become
-  spaces, and a joined emoji shows as its parts side by side. A wallet whose
-  name holds such a character keeps working; its Lightning alias leaves
-  those characters out. An invoice from elsewhere that breaks these rules
-  is refused when you try to pay it, with a message that says why. An offer
-  with the amount left empty, or 0, is an offer for any amount.
+  Asset channels. A wallet with Lightning can open a channel funded with an
+  asset to a peer that takes asset channels, another wallet of this app or a
+  node running Lightning Labs' lnd with tapd (Lightning Terminal v0.17.11 was
+  tried, on regtest). Over it the wallet pays an invoice with the asset and
+  makes invoices that are paid in the asset. A channel holds one issuance of
+  one asset, at most eight payments in flight each way, and about 100,000
+  sats of bitcoin beside the asset: every payment moves 355 sats of it to
+  the one who is paid, so a side that has paid many times without being paid
+  can run out, and the channel says so. Closing together brings both sides'
+  assets and bitcoin back on-chain at once; a force close waits out a delay
+  of 144 blocks.
 
 
-  Relay only keeps the Iroh phone link on the relay, so the link itself
-  does not give away this Umbrel's IP address. The link also carries the
-  wallet's Lightning node id, and anything that ties that id to an address
-  undoes Relay only from outside the link. The card now warns under the
-  link when the wallet announces a public address, and when it is in
-  Clearnet or Hybrid mode, where the peers you connect it to see the
-  address. The dialog that turns Relay only on lists both, and adds that a
-  Lightning port which can be reached from the internet (a router forward,
-  or IPv6) lets the node be found without the link. Before handing a link
-  out, go through the list in docs/IROH.md. The relay's operator still sees
-  the address in every case.
+  Asset channels need confirmed bitcoin beside them on native SegWit
+  addresses, at least one coin of about 35,000 sats on mainnet. From it the
+  wallet makes fee coins when a payment caught in a channel closed without
+  its peer has to be claimed on chain. The fee coins the claims leave over
+  go back to the spendable balance about 100 blocks after the last claim.
 
 
-  Also from the engine: a wallet set to Relay only no longer dials out over
-  Iroh, because the relay of the peer it dialed would see this Umbrel's
-  address (the dashboard never made such a dial). Where the link cannot
-  come up because the app's container has no IPv6 loopback address, the
-  card names the cause and the setting that restores it. A permanent
-  channel failure is now reported with the code Lightning's spec gives it.
+  Not covered yet: forwarding a payment with an asset leg, a payment in
+  several parts, more than one asset in a channel, and a backup restore that
+  brings back the assets of a channel that was open. Guardian backups and
+  asset channels do not go together.
 
 
-  Going back to app 0.40.0 keeps your wallets and channels: it opens the
-  same storage and pays as before. It does not have the warnings above, and
-  it drops two things this version records: the preimage kept on a
-  fulfilled payment for crash recovery, and invoice payment metadata, which
-  this app does not use.
+  Also from the engine: a force close with no payment in flight bids the
+  network's current fee rate, where it bid at least 10 sat/vB, and a wallet
+  reads Electrum servers that answer transactions only in raw form. The
+  public Electrum servers that answer every lookup the wallet makes are now
+  offered first.
+
+
+  Going back to app 0.41.0 keeps your wallets and channels. It does not show
+  assets, and it lists a payment an asset channel carried as an ordinary
+  bitcoin payment. It starts a wallet that has an asset channel open but
+  leaves that channel out, so nothing answers its peer or watches the chain
+  for it until this version is back. Close every asset channel, and wait for
+  the assets to be back on-chain, before going back.
 dependencies: []
 path: ""
 defaultUsername: ""
