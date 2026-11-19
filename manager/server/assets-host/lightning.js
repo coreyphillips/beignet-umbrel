@@ -908,8 +908,33 @@ async function publishProvenance(host, plan) {
 	}
 }
 
+/**
+ * An open the library ended because this wallet's node dropped it before the
+ * peer's signature on the channel's first commitment was taken. A peer on
+ * Lightning Terminal older than v0.17.11 builds that commitment another way,
+ * so the node refuses its signature (the log says "Invalid taproot partial
+ * signature") and every open with it ends here. The library reports it as
+ * turned down; it was not the peer that said no.
+ */
+const OPEN_UNSIGNED =
+	"This channel open ended before the peer's signature for it was taken, and before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. A peer on Lightning Terminal older than v0.17.11 signs the channel's first commitment in a way this wallet does not take, so an open with one always ends this way. The wallet's log says what its node refused.";
+
+/** Why the library ended the open `id`, by the reason code it names, while its flow is still listed. */
+function openEndedBecause(host, id) {
+	try {
+		const flow = host.ln.channels().find((c) => c.pendingChannelId === id);
+		return flow ? flow.because : null;
+	} catch {
+		return null;
+	}
+}
+
 /** What a failed open says, in the dashboard's codes. What the library wrote of it goes to the log, and to nobody else. */
-function openFailure(host, err) {
+function openFailure(host, err, because = null) {
+	if (codeOf(err) === 'ERR_BEIGNET_LN_FUNDING_REJECTED' && because === 'INTERRUPTED_BEFORE_SIGNED') {
+		host.say('warn', `assets: a channel open ended before the peer's signature was taken: ${plainMessage(err)}`);
+		return refusal('CHANNEL_OPEN_UNSIGNED', OPEN_UNSIGNED, 409);
+	}
 	const mapped = mapLightning(err);
 	if (mapped) return mapped;
 	host.say('warn', `assets: a channel could not be opened: ${plainMessage(err)}`);
@@ -1016,7 +1041,7 @@ async function undoOpen(host, id, err, { again = false } = {}) {
 		);
 		return { error: refusal(failed.code, failed.message, 409) };
 	}
-	const failure = asked ? openCancelled() : openFailure(host, err);
+	const failure = asked ? openCancelled() : openFailure(host, err, openEndedBecause(host, id));
 	await forgetOpen(host, id);
 	letGo(host, id);
 	if (!asked) host.emitEvent('error', { code: failure.extensionCode, message: failure.message, channelId: id });
@@ -2647,7 +2672,10 @@ async function fetchGroupProof(host, groupKey) {
 async function acceptIncoming(host, proposal) {
 	const { mem } = host;
 	try {
-		if (mem.stopped || modeOf(host) !== 'full' || !host.ln.ready() || !mem.lnSettled) return false;
+		if (mem.stopped || modeOf(host) !== 'full' || !host.ln.ready() || !mem.lnSettled) {
+			host.say('info', "assets: a channel a peer offered was turned down: this wallet's asset channels are off or not ready yet");
+			return false;
+		}
 		const now = host.now();
 		for (const [id, at] of mem.accepted) if (now - at > ACCEPTED_KEPT_MS) mem.accepted.delete(id);
 		// Every channel a peer began that is not usable yet and not on its way
@@ -2659,8 +2687,14 @@ async function acceptIncoming(host, proposal) {
 		);
 		for (const id of mem.accepted.keys()) opening.add(id);
 		opening.delete(proposal.pendingChannelId);
-		if (opening.size >= MAX_INBOUND_PENDING) return false;
-		if (!Array.isArray(proposal.assets) || proposal.assets.length === 0) return false;
+		if (opening.size >= MAX_INBOUND_PENDING) {
+			host.say('info', `assets: a channel a peer offered was turned down: ${opening.size} channels that peers began are still opening, the most this wallet takes at once`);
+			return false;
+		}
+		if (!Array.isArray(proposal.assets) || proposal.assets.length === 0) {
+			host.say('info', 'assets: a channel a peer offered was turned down: it names no asset');
+			return false;
+		}
 		// Counted from here, so offers that arrive together are not all taken.
 		mem.accepted.set(proposal.pendingChannelId, now);
 		for (const a of proposal.assets) {

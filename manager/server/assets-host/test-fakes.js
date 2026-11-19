@@ -516,6 +516,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		// The wallet has signed the funding transaction and the peer has not
 		// signed its commitment: the open fails there, or gets no answer.
 		openFailsUnsigned: null,
+		// The reason code the library names on the flow of such an open.
+		openFailsUnsignedBecause: null,
 		openStopsUnsigned: false,
 		// The engine holds the funding transaction and cannot be made to drop the open.
 		engineHoldsFunding: false,
@@ -935,7 +937,12 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 					// still be given up and its inputs released.
 					Object.assign(flow, { fundingTxid: id('funding'), phase: 'funding-created', state: 'SENT_FUNDING' });
 					if (opts.openFailsUnsigned) {
-						Object.assign(flow, { phase: 'failed', error: 'the peer hung up before it signed', state: null });
+						Object.assign(flow, {
+							phase: 'failed',
+							error: 'the peer hung up before it signed',
+							state: null,
+							...(opts.openFailsUnsignedBecause ? { reasonCode: opts.openFailsUnsignedBecause } : {})
+						});
 						release(flow);
 						cancelled.add(pending);
 						throw tapError(opts.openFailsUnsigned, 'the open ended before the peer signed: the peer hung up');

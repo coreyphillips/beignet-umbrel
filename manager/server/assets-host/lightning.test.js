@@ -1606,12 +1606,17 @@ test('a channel a peer offers is taken only when asset channels are on, for an a
 	// Four at a time, and no more until one is open.
 	for (const n of ['05', '06', '07']) assert.equal(await offer(n.repeat(32)), true);
 	assert.equal(await offer('08'.repeat(32)), false);
+	// Each offer turned down says why in the log.
+	const turnedDown = h.logs.filter(([, text]) => /a channel a peer offered was turned down/.test(text)).map(([, text]) => text);
+	assert.equal(turnedDown.some((text) => /it names no asset$/.test(text)), true);
+	assert.equal(turnedDown.some((text) => /4 channels that peers began are still opening, the most this wallet takes at once$/.test(text)), true);
 	// The same offer asked again is still the same one.
 	assert.equal(await offer('01'.repeat(32)), true);
 
 	const off = world({ lightning: true, env: { BEIGNET_ASSETS_LIGHTNING: 'off' } });
 	await off.boot();
 	assert.equal(await off.ln.offer({ pendingChannelId: '09'.repeat(32), peerPubkey: PEER.pubkey, assets: [{ assetId: asset.assetId, amount: 10n }] }), false);
+	assert.equal(off.logs.some(([, text]) => /a channel a peer offered was turned down: this wallet's asset channels are off or not ready yet$/.test(text)), true);
 });
 
 test('a channel a peer opened shows what it holds, though the wallet has none of the asset on-chain', async () => {
@@ -1995,6 +2000,28 @@ test('an open that fails after this wallet signed its funding and before the pee
 	assert.equal(h.tap.records.some((r) => r.reservedBy), false);
 	// The key opens a channel again.
 	h.ln.opts.openFailsUnsigned = null;
+	assert.equal((await h.call('POST /channels/open', openBody(asset), 'open-key')).phase, 'funding');
+});
+
+test("an open this wallet's node ended before the peer's signature was taken says so, and not that the peer turned it down", async () => {
+	const { h, asset } = await funded();
+	// As the library ends an open the engine dropped before the peer signed:
+	// a peer on Lightning Terminal older than v0.17.11 signs a first
+	// commitment the wallet's node refuses.
+	h.ln.opts.openFailsUnsigned = 'ERR_BEIGNET_LN_FUNDING_REJECTED';
+	h.ln.opts.openFailsUnsignedBecause = 'INTERRUPTED_BEFORE_SIGNED';
+	const err = await refused(h.call('POST /channels/open', openBody(asset), 'open-key'));
+	assert.deepEqual([err.extensionCode, err.status], ['CHANNEL_OPEN_UNSIGNED', 409]);
+	assert.match(err.message, /^This channel open ended before the peer's signature for it was taken, and before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent\./);
+	assert.match(err.message, /A peer on Lightning Terminal older than v0\.17\.11 signs the channel's first commitment in a way this wallet does not take/);
+	assert.doesNotMatch(err.message, /turned the channel down|does not open asset channels/);
+	assert.deepEqual(events(h, 'error').map((e) => e.code), ['CHANNEL_OPEN_UNSIGNED']);
+	assert.equal(h.logs.some(([level, text]) => level === 'warn' && /a channel open ended before the peer's signature was taken/.test(text)), true);
+	// Nothing of the open is left, and the key opens a channel again.
+	assert.deepEqual(await h.get('/channels'), { channels: [] });
+	assert.deepEqual([keys(h, 'committed/funding:'), keys(h, 'chan/'), keys(h, 'idem/channels/')], [[], [], []]);
+	h.ln.opts.openFailsUnsigned = null;
+	h.ln.opts.openFailsUnsignedBecause = null;
 	assert.equal((await h.call('POST /channels/open', openBody(asset), 'open-key')).phase, 'funding');
 });
 

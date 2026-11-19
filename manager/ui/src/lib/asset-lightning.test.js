@@ -172,6 +172,16 @@ test('each Lightning refusal is said in plain words, with the figure that matter
 
 	assert.equal(lightningRefusal(refusal('QUOTE_EXPIRED')).text, 'That price has expired. Ask for a new one.');
 	assert.match(lightningRefusal(refusal('PEER_NO_ASSET_CHANNELS')).text, /does not open asset channels, so nothing was opened and nothing was spent/);
+	// An open the wallet's node ended before the peer's signature was taken is
+	// told in the server's words, which say what happened, not that the peer
+	// does not open asset channels.
+	const unsigned = refusal(
+		'CHANNEL_OPEN_UNSIGNED',
+		undefined,
+		"This channel open ended before the peer's signature for it was taken, and before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent."
+	);
+	assert.match(lightningRefusal(unsigned).text, /ended before the peer's signature for it was taken/);
+	assert.doesNotMatch(lightningRefusal(unsigned).text, /does not open asset channels/);
 	assert.equal(
 		lightningRefusal(refusal('INSUFFICIENT_BTC', { needed: 104320, spendable: 50000 })).text,
 		'Opening needs 104,320 sats on-chain and this wallet has 50,000 sats. Deposit bitcoin on the Receive tab first.'
