@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { fmtSats } from '../lib/format.js';
+import { bitcoinPayments, isAssetRow } from '../lib/channels.js';
 
 // The safety net's cadence. The SSE stream announces a receive the moment it
 // happens; this poll exists for the stream being dead without anyone knowing
@@ -89,6 +90,9 @@ export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 				return;
 			}
 			if (name !== 'payment:received' && name !== 'invoice:settled') return;
+			// An asset invoice being paid is not bitcoin arriving. The assets host
+			// says it, in units of the asset.
+			if (isAssetRow(data)) return;
 			// Both events fire for a settled invoice, and the poll will list the
 			// same payment shortly after either. The hash is what ties the three
 			// tellings together as one receive.
@@ -112,7 +116,7 @@ export function useReceiveWatch(api, enabled, onReceive, intervalMs = POLL_MS) {
 			let txs = null;
 			let received = null;
 			try {
-				payments = await api.get('/payments');
+				payments = bitcoinPayments(await api.get('/payments'));
 			} catch (_) {
 				/* the next sweep asks again */
 			}

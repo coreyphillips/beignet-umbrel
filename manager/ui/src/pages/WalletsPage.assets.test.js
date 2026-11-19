@@ -13,7 +13,7 @@ import { createElement } from 'react';
 import { click, render } from '../../test/render.mjs';
 import { manager } from '../api.js';
 import { ToastProvider } from '../components/Toast.jsx';
-import { AssetsBackupLine, DeleteModal } from './WalletsPage.jsx';
+import { AssetChannelBitcoinLine, AssetsBackupLine, DeleteModal } from './WalletsPage.jsx';
 
 const AT = new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString();
 
@@ -124,5 +124,41 @@ test('a wallet that holds no assets is deleted with the dialog it always had', a
 	} finally {
 		manager.deleteWallet = before;
 		await r.unmount();
+	}
+});
+
+/* ------------------------------------------- the bitcoin in asset channels */
+
+test('the list says the bitcoin a wallet has in asset channels, which its figure leaves out', async () => {
+	const r = await render(AssetChannelBitcoinLine, { wallet: wallet(), balance: { onchain: 1, lightning: 2, total: 3, assetChannelSats: 98292 } });
+	try {
+		const line = r.$('[data-testid="wallet-asset-channel-sats-w1"]');
+		assert.ok(line.classList.contains('wallet-meta'), 'one quiet line');
+		assert.equal(line.textContent, '+ 98,292 sats in asset channels');
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('it says a closing channel\'s bitcoin as on its way back, beside what is still in channels', async () => {
+	const r = await render(AssetChannelBitcoinLine, { wallet: wallet(), balance: { assetChannelSats: 98292, assetChannelClosingSats: 40000 } });
+	try {
+		assert.equal(
+			r.$('[data-testid="wallet-asset-channel-sats-w1"]').textContent,
+			'+ 98,292 sats in asset channels · + 40,000 sats on their way back from a closing asset channel'
+		);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a wallet without asset channels adds no such line to the list', async () => {
+	for (const balance of [null, undefined, { onchain: 1, lightning: 2, total: 3 }]) {
+		const r = await render(AssetChannelBitcoinLine, { wallet: wallet(), balance });
+		try {
+			assert.equal(r.$('[data-testid="wallet-asset-channel-sats-w1"]'), null);
+		} finally {
+			await r.unmount();
+		}
 	}
 });

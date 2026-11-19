@@ -463,6 +463,22 @@ test('a daemon gets no assets environment unless the install can run assets', ()
 	]);
 });
 
+test('asset Lightning is on for a wallet only when the install carries asset channels and the wallet can have them', () => {
+	const G = ['a', 'b', 'c'];
+	const mode = (m, r) => m._daemonEnv(r, ASSET_PATHS, 's', 't').BEIGNET_ASSETS_LIGHTNING;
+	// An engine or a library without asset channels, as every release so far is.
+	assert.equal(mode(assetsManager(), rec()), 'off');
+	const m = assetsManager();
+	m.assetChannelsSupported = true;
+	assert.equal(mode(m, rec()), 'full');
+	assert.equal(mode(m, rec({ recovery: { mode: 'off', guardians: [] } })), 'full');
+	assert.equal(mode(m, rec({ recovery: { mode: 'peer-storage', guardians: [] } })), 'full', 'a backup kept by peers goes with it');
+	assert.equal(mode(m, rec({ onchainOnly: true })), 'off', 'no Lightning, no asset channels');
+	// A backup kept by guardians does not cover an asset channel's proofs.
+	assert.equal(mode(m, rec({ recovery: { mode: 'async-remote', guardians: G } })), 'off');
+	assert.equal(mode(m, rec({ recovery: { mode: 'quorum', guardians: G } })), 'off');
+});
+
 test('the assets host follows the wallet: its network mode, its own universe, and an on-chain only wallet keeps it', () => {
 	const m = assetsManager();
 	const own = { courier: 'universerpc://u.example.com:10029', rest: 'https://u.example.com' };

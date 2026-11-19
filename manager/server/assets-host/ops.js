@@ -68,6 +68,8 @@ function replay(host, route, key, body) {
 		if (!row) throw refusal('IDEMPOTENCY_KEY_REUSED', 'That request was already made, and what it did is no longer on record.', 409);
 		return { row: host.view(row) };
 	}
+	// What the request came to, where that was learnt after it was answered.
+	if (entry.refusal) throw refusal(entry.refusal.code, entry.refusal.message, entry.refusal.status);
 	return entry.answer;
 }
 
@@ -1021,6 +1023,9 @@ async function importBackup(host, body) {
 	const source = body && body.backup && typeof body.backup === 'object' ? body.backup : null;
 	if (!source && !host.cfg.importFile) throw refusal('BAD_BACKUP', 'There is no assets backup waiting to be restored.', 404);
 	const res = await host.lock.run(async () => {
+		// Only reads, and the node's word on its channels: nothing of the
+		// Lightning service that could call back is asked under the lock.
+		require('./lightning').refuseImportWhileLive(host);
 		const out = await host.importNow(source || backup.readBackupFile(host.cfg.importFile));
 		host.mem.importError = null;
 		return out;
@@ -1034,7 +1039,9 @@ async function importBackup(host, body) {
 module.exports = {
 	parseUnits,
 	replay,
+	journal,
 	journalKey,
+	lookupAndLearn,
 	balances,
 	assetDetail,
 	activity,

@@ -5,7 +5,9 @@ import AssetPicker, { NO_ASSET, pickedAsset } from '../../../components/AssetPic
 import { useToast } from '../../../components/Toast.jsx';
 import { Badge, Button, Card, Empty, QR, QRZoom } from '../../../components/ui.jsx';
 import { useAssetsApi } from '../../../hooks/useAssets.js';
+import { usePoll } from '../../../hooks/usePoll.js';
 import { decimalsOf, fmtAsset, isZero, smallestAmount } from '../../../lib/asset-amount.js';
+import { invoiceShortfall } from '../../../lib/asset-lightning.js';
 import { proofServerWait, sentence } from '../../../lib/assets.js';
 import { railOf, unwatched } from '../../../lib/asset-progress.js';
 import { copy, fmtDate } from '../../../lib/format.js';
@@ -76,7 +78,7 @@ function TapAddress({ address, what, host }) {
  * The form lives with the tab (`state`, `patch`), so going to look at
  * Holdings and coming back finds the address still there.
  */
-export default function ReceiveView({ api, state, patch, holdings, rows, network, host, proofServer, lightning, bump, onRetryProof, onCheckAddress }) {
+export default function ReceiveView({ api, state, patch, holdings, rows, network, host, proofServer, lightning, lightningHeld, bump, onRetryProof, onCheckAddress }) {
 	const assets = useAssetsApi(api);
 	const detail = useRowDetail();
 	const [busy, setBusy] = useState(false);
@@ -140,6 +142,14 @@ export default function ReceiveView({ api, state, patch, holdings, rows, network
 		: null;
 
 	const receives = (rows || []).filter((r) => r.kind === 'receive' || r.kind === 'ln-receive');
+	// What each paid invoice asked for: its row says what arrived, and the
+	// two can differ by a unit. Asked for again when another one is paid.
+	const paidInvoices = lightning ? receives.filter((r) => r.kind === 'ln-receive' && r.state === 'complete').length : 0;
+	const { data: invoiceList } = usePoll(() => (paidInvoices > 0 ? assets.invoices().catch(() => null) : Promise.resolve(null)), 0, [assets, paidInvoices]);
+	const shortOf = (r) =>
+		r && r.kind === 'ln-receive' && r.state === 'complete' && r.paymentHash
+			? invoiceShortfall((invoiceList?.invoices || []).find((i) => i.paymentHash === r.paymentHash) || null, r.assets?.[0])
+			: null;
 	const waits = proofServerWait(proofServer, 'receive');
 	const open = detail.open ? receives.find((r) => r.id === detail.open.id) : null;
 
@@ -267,7 +277,7 @@ export default function ReceiveView({ api, state, patch, holdings, rows, network
 				{/* The Lightning invoice, beside the on-chain address, for a wallet
 				    with asset channels (the `lightning` prop). It takes the same
 				    picked asset and amount. */}
-				{lightning && <InvoiceCard api={api} asset={asset} units={units} state={state} patch={patch} rows={rows} bump={bump} />}
+				{lightning && <InvoiceCard api={api} asset={asset} units={units} state={state} patch={patch} rows={rows} bump={bump} held={lightningHeld} />}
 
 				<Card title="Recent receives" className="grid-full">
 					{receives.length === 0 ? (
@@ -296,6 +306,11 @@ export default function ReceiveView({ api, state, patch, holdings, rows, network
 										>
 											<td>
 												<RowAssets row={r} />
+												{shortOf(r) && (
+													<div className="wallet-meta asset-receive-short" data-testid="asset-receive-short">
+														{shortOf(r).text}
+													</div>
+												)}
 											</td>
 											<td>
 												<Badge tone={railOf(r) === 'lightning' ? 'blue' : 'muted'}>{railOf(r)}</Badge>
@@ -325,6 +340,12 @@ export default function ReceiveView({ api, state, patch, holdings, rows, network
 
 			{open && (
 				<AssetTransferDetail row={open} network={network} host={open.courier || host} origin={detail.open.origin} onClose={detail.close}>
+					{shortOf(open) && (
+						<div className="info-note" role="status" data-testid="asset-invoice-short">
+							The invoice {shortOf(open).text}. A payer&apos;s price can come to a unit less than an invoice names, and
+							the invoice is paid all the same.
+						</div>
+					)}
 					<ProofLateNote row={open} host={open.courier || host} onRetry={() => retry(open)} busy={retrying} />
 					<WatchNote row={open} onCheck={check && (() => check(open))} busy={checking === open.id} />
 				</AssetTransferDetail>

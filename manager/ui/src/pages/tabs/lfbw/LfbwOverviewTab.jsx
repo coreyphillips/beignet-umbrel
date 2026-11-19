@@ -14,6 +14,7 @@ import {
 import { fmtSats, shortId } from '../../../lib/format.js';
 import { lfbwStatus } from '../../../lib/lfbw.js';
 import { manager } from '../../../api.js';
+import { bitcoinChannels } from '../../../lib/channels.js';
 
 const CLOSED = new Set(['CLOSED', 'FORCE_CLOSED']);
 
@@ -37,7 +38,7 @@ export default function LfbwOverviewTab({ id, api, info, rec, tick, bump }) {
 			const [balance, liquidity, channels, utxos, peers] = await Promise.all([
 				api.get('/balance').catch(() => null),
 				api.get('/liquidity').catch(() => null),
-				api.get('/channels').catch(() => []),
+				api.get('/channels').then(bitcoinChannels).catch(() => []),
 				api.get('/utxos').catch(() => null),
 				api.get('/peers').catch(() => [])
 			]);

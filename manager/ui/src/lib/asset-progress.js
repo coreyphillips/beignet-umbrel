@@ -39,10 +39,35 @@ export function handedOver(row) {
 	return !!row && row.kind === 'send' && row.state === 'proofs' && !isFailed(row) && !!row.handedOver;
 }
 
-/** Stopped without finishing, and kept on screen until the reader has seen why. */
+/**
+ * Stopped without finishing, and kept on screen until the reader has seen
+ * why. Not a payment that carries a notice: how that one ended is the very
+ * thing the wallet cannot vouch for, so it is worded by its notice and
+ * never as failed, whatever its state.
+ */
 export function isFailed(row) {
-	return !!row && (row.failed === true || row.state === 'failed');
+	return !!row && (row.failed === true || row.state === 'failed') && !noticeOf(row);
 }
+
+/**
+ * What the wallet says of a Lightning payment whose end it cannot vouch
+ * for: { code, message }, or null for every other row. PAYMENT_UNACCOUNTED
+ * is a payment the node no longer has a record of, which may have been
+ * paid; PAYMENT_UNCONFIRMED one the node took without confirming that it
+ * went out as an asset payment. The message is the wallet's own sentence.
+ */
+export function noticeOf(row) {
+	const n = row && row.notice;
+	if (!n || typeof n.message !== 'string' || !n.message.trim()) return null;
+	return { code: typeof n.code === 'string' && n.code ? n.code : 'NOTICE', message: n.message.trim() };
+}
+
+// A notice as a few words: after the amount in a headline, and on a badge.
+const NOTICE_WORDS = {
+	PAYMENT_UNACCOUNTED: ['how it ended is not known', 'not known'],
+	PAYMENT_UNCONFIRMED: ['not confirmed as an asset payment', 'unconfirmed']
+};
+const noticeWords = (notice) => NOTICE_WORDS[notice.code] || ['the wallet has a note on it', 'see note'];
 
 /**
  * A mint that finished, whose issuance proof the proof server has not taken
@@ -430,6 +455,8 @@ export function headline(row, { network } = {}) {
 			if (failed) return `Lightning invoice for ${what} expired`;
 			return s === 'complete' ? `Received ${what} over Lightning` : `Lightning invoice for ${what}: waiting to be paid`;
 		case 'ln-send':
+			// Neither "paid" nor "failed": the wallet cannot say which.
+			if (noticeOf(row)) return `Lightning payment of ${what}: ${noticeWords(noticeOf(row))[0]}`;
 			if (failed) return `Paying ${what} over Lightning failed`;
 			return s === 'complete' ? `Paid ${what} over Lightning` : `Paying ${what} over Lightning`;
 		default:
@@ -441,6 +468,7 @@ export function headline(row, { network } = {}) {
 export function statusOf(row, { network } = {}) {
 	if (!row) return { text: '-', tone: 'muted' };
 	if (row.state === 'cancelled') return { text: 'cancelled', tone: 'muted' };
+	if (noticeOf(row)) return { text: noticeWords(noticeOf(row))[1], tone: 'blue' };
 	if (isFailed(row)) return { text: 'failed', tone: 'red' };
 	if (row.state === 'complete') return { text: 'complete', tone: 'green' };
 	if (unwatched(row)) return { text: 'not checked', tone: 'muted' };

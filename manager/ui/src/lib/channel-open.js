@@ -1,4 +1,5 @@
 import { manager } from '../api.js';
+import { bitcoinChannels } from './channels.js';
 import { isGossipWarning, isPeerWarning, peerWarningText } from './node-errors.js';
 
 // Once the funding transaction is built and broadcast the channel moves into one
@@ -59,7 +60,7 @@ export async function watchChannelOpen({
 		const failure = await firstFailure({ id, tempChannelId, since, strict: true });
 		if (failure) return { status: 'failed', reason: failure };
 
-		const channels = await api.get('/channels').catch(() => null);
+		const channels = await api.get('/channels').then(bitcoinChannels).catch(() => null);
 		if (!channels) continue;
 
 		const opened = channels.find(

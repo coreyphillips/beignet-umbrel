@@ -74,7 +74,7 @@ test('an empty wallet: status, balances and activity answer', async () => {
 	assert.equal(status.phase, 'ready');
 	assert.equal(status.ready, true);
 	assert.equal(status.holdsAssets, false);
-	assert.deepEqual(status.lightning, { mode: 'off', usableChannels: 0 });
+	assert.deepEqual(status.lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
 	assert.equal(status.proofServer.reachable, true);
 	assert.deepEqual(await h.get('/balances'), { assets: [], btc: { anchorSats: 0, anchorCount: 0, spendableSats: 500000 } });
 	assert.deepEqual(await h.get('/activity'), { rows: [], nextBefore: null });

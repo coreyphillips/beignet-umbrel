@@ -29,8 +29,9 @@ import FforSettleField from '../components/FforSettleField.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
 import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 import { copy, fmtSats } from '../lib/format.js';
+import { assetChannelBitcoin } from '../lib/asset-lightning.js';
 
-import { isClosedChannel } from '../lib/channels.js';
+import { openBitcoinChannelCount } from '../lib/channels.js';
 import { usesOnion, usesPublic } from '../lib/node-uris.js';
 import { openBackup } from '../lib/backup.js';
 import { assetsNotArchived, deleteAssetsNote } from '../lib/wallet-assets.js';
@@ -87,13 +88,19 @@ export default function WalletsPage() {
 							// closed still reads "2 channels" forever. Count open ones from
 							// the list itself; on any hiccup fall back to the daemon figure
 							// rather than showing nothing.
+							// Bitcoin channels only: an asset channel, open or closing, is
+							// no channel of this count (lib/channels.js).
 							try {
-								const channels = await api.get('/channels');
-								info.openChannelCount = channels.filter(
-									(c) => !isClosedChannel(c)
-								).length;
+								const open = await api.get('/channels').then(openBitcoinChannelCount);
+								info.openChannelCount = open ?? info.channelCount;
 							} catch (_) {
 								info.openChannelCount = info.channelCount;
+							}
+							// The bitcoin on a wallet's side of its asset channels is in no
+							// figure of /info. It is asked for only where a wallet can have
+							// such a channel, so a box that cannot carry them asks nothing more.
+							if (config?.assetChannelsAvailable && !w.onchainOnly) {
+								info.assetChannelBalance = await api.get('/balance').catch(() => null);
 							}
 							infos[w.id] = info;
 						} catch (_) {
@@ -199,8 +206,12 @@ export default function WalletsPage() {
 									{w.status === 'restore-required' && (
 										<div className="wallet-meta">Channels waiting to be restored from guardians</div>
 									)}
-									{w.status === 'restarting' && w.lastStartError && (
-										<div className="wallet-meta">Last start failed: {w.lastStartError.message}</div>
+									{/* Kept while the wallet is stopped too: a start that was refused leaves it stopped, and this is why. */}
+									{w.lastStartError && (w.status === 'restarting' || w.status === 'stopped') && (
+										<div className="wallet-meta" data-testid="wallet-start-error" data-code={w.lastStartError.code || undefined}>
+											{w.status === 'stopped' && w.lastStartError.code ? 'Not started: ' : 'Last start failed: '}
+											{w.lastStartError.message}
+										</div>
 									)}
 									<AssetsBackupLine wallet={w} />
 									{info && (
@@ -216,6 +227,7 @@ export default function WalletsPage() {
 											)}
 										</div>
 									)}
+									<AssetChannelBitcoinLine wallet={w} balance={info?.assetChannelBalance} />
 								</div>
 								<div className="wallet-actions" onClick={(e) => e.stopPropagation()}>
 									<m.span layoutId={`wallet-status-${w.id}`}>
@@ -586,6 +598,22 @@ function SeedModal({ name, mnemonic, onClose }) {
  * list the way its other standing conditions are: one quiet line, with what
  * to do about it. Settings names the same wallets beside the backup buttons.
  */
+/**
+ * The bitcoin on a wallet's side of its asset channels. It is in neither
+ * balance the row totals, so it is said on a quiet line of its own and
+ * added to nothing. `balance` is the daemon's GET /balance, or nothing for
+ * a wallet that was not asked.
+ */
+export function AssetChannelBitcoinLine({ wallet, balance }) {
+	const lines = assetChannelBitcoin(balance);
+	if (!lines) return null;
+	return (
+		<div className="wallet-meta" data-testid={`wallet-asset-channel-sats-${wallet.id}`}>
+			{lines.map((line) => `+ ${fmtSats(line.sats)} ${line.words}`).join(' · ')}
+		</div>
+	);
+}
+
 export function AssetsBackupLine({ wallet }) {
 	const gap = assetsNotArchived(wallet);
 	if (!gap) return null;

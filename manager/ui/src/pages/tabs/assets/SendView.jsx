@@ -39,7 +39,7 @@ function decodeRefusal(error, network) {
  * A Lightning invoice in the box. A wallet with asset channels pays it with
  * an asset (`pay` is what that needs); any other is told where things stand.
  */
-function Invoice({ rec, lightning, pay }) {
+function Invoice({ rec, lightning, held, pay }) {
 	if (rec?.onchainOnly) {
 		return (
 			<div className="error-note" role="alert" data-testid="asset-send-refusal" data-code="ONCHAIN_ONLY">
@@ -48,11 +48,20 @@ function Invoice({ rec, lightning, pay }) {
 			</div>
 		);
 	}
+	// A node that does not offer asset channels pays nothing over them: the
+	// invoice is read, and held with the wallet's own reason.
+	if (PAYS_INVOICES && lightning && held) {
+		return (
+			<div className="error-note" role="alert" data-testid="asset-pay-held" data-code={held.code}>
+				That is a Lightning invoice, and this wallet cannot pay it with an asset now. {held.text}
+			</div>
+		);
+	}
 	if (PAYS_INVOICES && lightning) return <PayInvoice {...pay} />;
 	return (
 		<div className="info-note" role="status" data-testid="asset-send-invoice" data-lightning={lightning ? 'yes' : 'no'}>
-			That is a Lightning invoice. Paying one with an asset is not part of this version yet. To pay it in bitcoin, use
-			the Send tab.
+			That is a Lightning invoice. An asset pays one from an asset channel, and this wallet cannot open those. To pay
+			it in bitcoin, use the Send tab.
 		</div>
 	);
 }
@@ -69,7 +78,7 @@ function Invoice({ rec, lightning, pay }) {
  * (prepare), so the fee on screen is the fee that will be paid, and Send
  * broadcasts that same transaction (commit).
  */
-export default function SendView({ api, state, patch, holdings, rows, network, fees, rec, proofServer, lightning, bump, go }) {
+export default function SendView({ api, state, patch, holdings, rows, network, fees, rec, proofServer, lightning, lightningHeld, bump, go }) {
 	const toast = useToast();
 	const assets = useAssetsApi(api);
 	const { input, feeRate } = state;
@@ -228,6 +237,7 @@ export default function SendView({ api, state, patch, holdings, rows, network, f
 					<Invoice
 						rec={rec}
 						lightning={lightning}
+						held={lightningHeld}
 						pay={{ api, invoice: parsed.invoice, amountSats: parsed.amountSats, holdings, state, patch, bump, go }}
 					/>
 				)}

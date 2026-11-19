@@ -18,7 +18,7 @@ import GuardianServeField from '../components/GuardianServeField.jsx';
 import NetworkModeField from '../components/NetworkModeField.jsx';
 import GuardianRotateFields from '../components/GuardianRotateFields.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
-import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
+import CapsuleRestoreCard, { AutoApplySkipped } from '../components/CapsuleRestoreCard.jsx';
 import FforReturnPanel from '../components/FforReturnPanel.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
 import RecoveryPhraseModal from '../components/RecoveryPhraseModal.jsx';
@@ -28,9 +28,9 @@ import { describeAssetEvent, pendingCount } from '../lib/assets.js';
 import { assetsShown } from '../lib/wallet-assets.js';
 import { isOwnPayment } from '../lib/own-payments.js';
 
-import { isClosedChannel } from '../lib/channels.js';
+import { bitcoinChannels, isAssetRow, openBitcoinChannelCount } from '../lib/channels.js';
 import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
-import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
+import { autoApplyState, capsuleOffer, describeRecovery, heardAutoRefusal, isGuardianMode, restoreProgress, skippedAssetChannels } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import LfbwOverviewTab from './tabs/lfbw/LfbwOverviewTab.jsx';
@@ -174,6 +174,13 @@ export default function WalletPage() {
 	const location = useLocation();
 	const toast = useToast();
 	const api = useMemo(() => walletApi(id), [id]);
+	// The checkpoint card, kept after a restore that left asset channels out, until that has been read.
+	const [capsuleKept, setCapsuleKept] = useState(null);
+	// The daemon's own apply of a checkpoint: what its event said of a
+	// refusal over asset channels, until the status says it too, and which
+	// wallet's list of skipped asset channels has been read.
+	const [autoHeard, setAutoHeard] = useState(null);
+	const [autoSkippedRead, setAutoSkippedRead] = useState(null);
 	const [tick, setTick] = useState(0);
 	const bump = useCallback(() => setTick((t) => t + 1), []);
 	const [advanced, setAdvanced] = useState(readAdvanced);
@@ -266,6 +273,15 @@ export default function WalletPage() {
 	// bypasses the hold, and restore progress rides it.
 	useSSE(running || restoreHold ? api.eventsUrl() : null, (name, data) => {
 		bump();
+		// What the daemon says of an asset channel, or of a payment or an
+		// invoice one carried, is not announced as bitcoin: the assets host
+		// says the same thing in units of the asset, a few lines down.
+		// The wallet's own apply of a checkpoint, refused over asset channels:
+		// the event names them, and the card that offers the restore opens on
+		// the list without waiting for the status to be read again.
+		const refusedOver = heardAutoRefusal(name, data);
+		if (refusedOver) setAutoHeard({ wallet: rec?.id, said: refusedOver });
+		if (isAssetRow(data) && !name.startsWith('assets:')) return;
 		receiveEvent(name, data);
 		// A payment this page made has already been announced by the card that
 		// made it, from the daemon's answer; its event is announced only when it
@@ -302,7 +318,7 @@ export default function WalletPage() {
 	// The channel the epoch runs on: a force close leaves the epoch ACTIVE
 	// on the record, so the channel's state decides between the two badges.
 	const { data: fforChannels } = usePoll(
-		() => (liveEpoch ? api.get('/channels').catch(() => null) : Promise.resolve(null)),
+		() => (liveEpoch ? api.get('/channels').then(bitcoinChannels).catch(() => null) : Promise.resolve(null)),
 		10000,
 		[id, tick, !!liveEpoch]
 	);
@@ -425,9 +441,22 @@ export default function WalletPage() {
 				</div>
 			</m.div>
 
-			{rec?.status === 'restarting' && rec.lastStartError && (
-				<div className="error-note" style={{ marginBottom: 14 }}>
-					The wallet's last start failed and it is retrying: {rec.lastStartError.message}
+			{/* Why the wallet is not running, while it retries and once it has
+			    stopped. A refusal the manager words itself (it has a code) is a
+			    whole sentence; anything else is what the daemon printed. */}
+			{rec?.lastStartError && (rec.status === 'restarting' || rec.status === 'stopped') && (
+				<div
+					className="error-note"
+					role="alert"
+					data-testid="wallet-start-error"
+					data-code={rec.lastStartError.code || undefined}
+					style={{ marginBottom: 14 }}
+				>
+					{rec.status === 'restarting'
+						? `The wallet's last start failed and it is retrying: ${rec.lastStartError.message}`
+						: rec.lastStartError.code
+							? rec.lastStartError.message
+							: `The wallet's last start failed: ${rec.lastStartError.message}`}
 				</div>
 			)}
 
@@ -486,16 +515,29 @@ export default function WalletPage() {
 							}}
 						/>
 					)}
-					{capsuleOffer(recovery, info) && (
+					{autoApplyState(recovery)?.skipped.length > 0 && autoSkippedRead !== rec?.id && (
+						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+							<AutoApplySkipped channels={autoApplyState(recovery).skipped} onDismiss={() => setAutoSkippedRead(rec?.id)} />
+						</div>
+					)}
+					{(capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null) || (capsuleKept && capsuleKept.wallet === rec?.id)) && (
 						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							<CapsuleRestoreCard
 								api={api}
-								offer={capsuleOffer(recovery, info)}
-								onRestored={() => {
+								offer={capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null) || capsuleKept.offer}
+								restored={capsuleKept && capsuleKept.wallet === rec?.id ? capsuleKept.result : null}
+								onRestored={(r) => {
 									toast('Checkpoint restored', 'success');
+									// The offer goes with the restore. What the restore left out stays on the page until it has been read.
+									// So does what a backup-only checkpoint skipped.
+									if (r && ((Array.isArray(r.omittedAssetChannels) && r.omittedAssetChannels.length > 0) || skippedAssetChannels(r).length > 0)) {
+										setCapsuleKept({ wallet: rec?.id, offer: capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null), result: r });
+									}
+									setAutoHeard(null);
 									refreshRec();
 									bump();
 								}}
+								onDismiss={() => setCapsuleKept(null)}
 							/>
 						</div>
 					)}
@@ -753,7 +795,12 @@ export function EditWalletModal({
 		let alive = true;
 		walletApi(rec.id)
 			.get('/channels')
-			.then((chs) => alive && setOpenChannels(chs.filter((c) => !isClosedChannel(c)).length))
+			.then(openBitcoinChannelCount)
+			.then((open) => {
+				// Bitcoin channels: an asset channel is refused by the manager, in its own words.
+				if (open === null) throw new Error('no list');
+				if (alive) setOpenChannels(open);
+			})
 			.catch(() => alive && setChannelsUnknown(true));
 		return () => {
 			alive = false;

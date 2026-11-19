@@ -1,3 +1,4 @@
+import { bitcoinChannels } from './channels.js';
 import { INBOUND_HEADROOM_SATS, planInvoice } from './lfbw.js';
 import { protocolText } from './protocol-text.js';
 
@@ -46,7 +47,7 @@ export async function createReceiveInvoice({ api, rec, channels, primaryConnecte
 		}
 		const decided = planInvoice({
 			wantedSats: body.amountSats || 0,
-			channels: channels || (await api.get('/channels').catch(() => [])),
+			channels: channels || (await api.get('/channels').then(bitcoinChannels).catch(() => [])),
 			primaryPubkey: lf.primaryPubkey,
 			setup: lf.setup,
 			primaryRunning,

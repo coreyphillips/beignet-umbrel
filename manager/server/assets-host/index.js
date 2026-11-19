@@ -14,12 +14,19 @@
  * installed) still attaches: its status says why in plain words, every other
  * route refuses, and the bitcoin wallet runs as it always did.
  *
+ * A wallet whose engine and library can carry assets in Lightning channels
+ * hands the engine a channel provider with every attachment, also one that
+ * only refuses: a channel the wallet already has must stay enforceable
+ * whatever else is wrong, and the engine will not start a node that holds
+ * one without it.
+ *
  *   config.js   what the daemon's environment says
  *   chain.js    which chain the wallet is on: its network, or which testnet
  *   adapter.js  the Taproot Assets library, loaded from beside the engine
  *   store.js    rows in the node's database, and the host's one lock
  *   service.js  state, the start sequence and the loop
  *   ops.js      what each route does
+ *   lightning.js  asset channels: their routes, and their part of the loop
  *   views.js    the shapes the dashboard reads
  *   fetch.js    the way out to a proof server
  *   backup.js   the assets backup file
@@ -119,7 +126,60 @@ function pending(cfg, context, build, { ask, firstDelayMs = 5000, maxDelayMs = 6
 	};
 }
 
-async function attach(base, context, { ask } = {}) {
+/**
+ * The wallet's asset channels (adapter.js createLightning), or null for a
+ * wallet that cannot have any: packages that are not there, an adapter
+ * without a Lightning entry, an engine without auxiliary channels. What the
+ * manager asked for (cfg.lightning) is not looked at here: it decides what
+ * the wallet does with its channels, never whether they can be enforced.
+ */
+function lightningFor(base, context) {
+	if (!base.modulesDir || !base.hrp) return null;
+	try {
+		const { loadLightning, createLightning } = require('./adapter');
+		return createLightning({ entry: loadLightning(base.modulesDir), storage: context.storage, cfg: base });
+	} catch (err) {
+		warn(context, `assets: asset channels are not available: ${plainMessage(err)}`);
+		return null;
+	}
+}
+
+/**
+ * The attachment the engine is given: the host's, and beside it the channel
+ * provider when the wallet has one. The one place that knows where the
+ * engine looks for it. A host that only refuses has nothing of its own to
+ * stop, so the provider is closed here for every kind: its service, and the
+ * library's hold on the node.
+ */
+function withProvider(attachment, ln) {
+	if (!ln) return attachment;
+	return {
+		...attachment,
+		stop: async (reason) => {
+			try {
+				await attachment.stop(reason);
+			} finally {
+				try {
+					ln.close();
+				} catch (_) {
+					/* it is being left behind either way */
+				}
+			}
+		},
+		// The members of an attachment that reach the node, where the engine
+		// reads them: on the attachment itself (adapter.js, item 29).
+		auxiliaryChannels: ln.attachment.auxiliaryChannels,
+		fixedOutputFees: ln.attachment.fixedOutputFees,
+		bind: (node) => ln.attachment.bind(node)
+	};
+}
+
+async function attach(base, context, options = {}) {
+	const ln = (options.lightningFor || lightningFor)(base, context);
+	return withProvider(await attachHost(base, context, { ...options, ln }), ln);
+}
+
+async function attachHost(base, context, { ask, ln = null } = {}) {
 	if (base.problem) return failed(base, context, base.problem);
 	const { loadLibrary, createLib, buildAdapter } = require('./adapter');
 	const { createHost } = require('./service');
@@ -156,6 +216,7 @@ async function attach(base, context, { ask } = {}) {
 				net: createNet({ cfg, logger: context.logger }),
 				emit: context.emit,
 				logger: context.logger,
+				ln,
 				chainCheck: settled.verified
 					? null
 					: chains.laterCheck({ cfg, storage: context.storage, wallet: context.wallet, chain: settled.chain, ask: askChain })
@@ -170,7 +231,13 @@ async function attach(base, context, { ask } = {}) {
 				courierFor: host.courierFor,
 				proofPublisher: host.proofPublisher
 			});
+			// A backup the manager left for this wallet is restored first, while
+			// nothing of the wallet's is running: the Lightning service is never
+			// started over rows that are about to be replaced.
 			await host.attach();
+			// The provider was built before the adapter existed. Now it is
+			// told of it, and its hooks stop failing closed.
+			await host.startLightning();
 		} catch (err) {
 			const message = `Assets could not start: ${plainMessage(err, 'the wallet could not be read')}.`.replace(/\.\.$/, '.');
 			warn(context, `assets: ${message}`);
@@ -212,4 +279,4 @@ function beignetExtension({ network, env } = {}) {
 	};
 }
 
-module.exports = { beignetExtension, attach, pending, VERSION };
+module.exports = { beignetExtension, attach, pending, lightningFor, VERSION };

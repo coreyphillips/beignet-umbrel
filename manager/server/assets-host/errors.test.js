@@ -8,7 +8,24 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { refusal, isRefusal, isFenced, isNotYet, isCourierTrouble, isProofMissing, isProofInvalid, plainMessage, mapError, workingSats } = require('./errors');
+const {
+	refusal,
+	isRefusal,
+	isFenced,
+	isNotYet,
+	isCourierTrouble,
+	isProofMissing,
+	isProofInvalid,
+	plainMessage,
+	mapError,
+	mapLightning,
+	workingSats,
+	LIGHTNING_REFUSALS,
+	ENGINE_REFUSALS,
+	engineCodeOf,
+	PAYMENT_FAILURES,
+	paymentFailure
+} = require('./errors');
 
 const coded = (code, message = 'the detail of what went wrong', extra = {}) => Object.assign(new Error(`${code}: ${message}`), { code, ...extra });
 
@@ -69,6 +86,137 @@ test('each library error becomes the code the dashboard knows', () => {
 		assert.ok(mapped.message.length > 10, code);
 		assert.equal(mapped.message.includes(String.fromCharCode(0x2014)), false, code);
 		assert.match(mapped.message, /^[A-Z]/, code);
+	}
+});
+
+test('each refusal of the Lightning service becomes the code the dashboard words', () => {
+	const table = [
+		['ERR_BEIGNET_LN_UNSUPPORTED', 'LIGHTNING_UNAVAILABLE', 409],
+		['ERR_BEIGNET_LN_NOT_READY', 'ASSETS_STARTING', 503],
+		['ERR_BEIGNET_LN_INVALID', 'INVALID_PARAMS', 400],
+		['ERR_BEIGNET_LN_TIMEOUT', 'PEER_UNREACHABLE', 502],
+		['ERR_BEIGNET_LN_PEER_OFFLINE', 'PEER_UNREACHABLE', 502],
+		['ERR_BEIGNET_LN_PEER_UNSUPPORTED', 'PEER_NO_ASSET_CHANNELS', 409],
+		['ERR_BEIGNET_LN_FUNDING_REJECTED', 'PEER_NO_ASSET_CHANNELS', 409],
+		['ERR_BEIGNET_LN_CANCELLED', 'CHANNEL_CANCELLED', 409],
+		['ERR_BEIGNET_LN_FEE_BOUND', 'FEE_TOO_HIGH', 400],
+		['ERR_BEIGNET_LN_UNKNOWN_CHANNEL', 'CHANNEL_NOT_FOUND', 404],
+		['ERR_BEIGNET_LN_NO_QUOTE', 'PEER_GAVE_NO_PRICE', 502],
+		['ERR_BEIGNET_LN_QUOTE_EXPIRED', 'QUOTE_EXPIRED', 410],
+		['ERR_BEIGNET_LN_PRICE_BOUND', 'QUOTE_CHANGED', 409],
+		['ERR_BEIGNET_LN_RATE_TOO_COARSE', 'RATE_TOO_COARSE', 409],
+		['ERR_BEIGNET_LN_CHANNEL_ASSETS', 'CHANNEL_ASSETS', 400],
+		['ERR_BEIGNET_LN_GROUP_PROOF', 'GROUP_PROOF', 409],
+		['ERR_BEIGNET_LN_SERVICE_DRAINING', 'SERVICE_DRAINING', 409],
+		['ERR_BEIGNET_LN_MODE_UNAVAILABLE', 'CHANNEL_MODE_UNAVAILABLE', 409],
+		['ERR_BEIGNET_LN_FEE_POLICY_REFUSED', 'FEE_POLICY_REFUSED', 409],
+		['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'PAYMENT_UNSUPPORTED', 409],
+		['ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', 'OUTCOMES_UNDELIVERED', 409],
+		['ERR_BEIGNET_LN_SPENDING_LIMIT', 'SPENDING_LIMIT', 409],
+		['ERR_BEIGNET_LN_HTLC_LIMIT', 'CHANNEL_PAYMENTS_FULL', 409],
+		['ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_OUTBOUND', 409],
+		['ERR_BEIGNET_LN_INSUFFICIENT_INBOUND', 'INSUFFICIENT_INBOUND', 409],
+		['ERR_BEIGNET_LN_CARRIER_UNFUNDED', 'CHANNEL_BITCOIN_SHORT', 409],
+		['ERR_BEIGNET_LN_PEER_CARRIER_UNFUNDED', 'PEER_CHANNEL_BITCOIN_SHORT', 409],
+		['ERR_BEIGNET_LN_BAD_INVOICE', 'BAD_INVOICE', 400],
+		['ERR_BEIGNET_LN_INVOICE_EXPIRED', 'BAD_INVOICE', 400],
+		['ERR_BEIGNET_LN_AMOUNT_REQUIRED', 'AMOUNT_REQUIRED', 400],
+		['ERR_BEIGNET_LN_ALREADY_PAID', 'ALREADY_PAID', 409],
+		['ERR_BEIGNET_LN_PAYMENT', 'PAYMENT_NOT_SENT', 502]
+	];
+	assert.deepEqual(Object.keys(LIGHTNING_REFUSALS).sort(), table.map((row) => row[0]).sort());
+	for (const [code, as, status] of table) {
+		const mapped = mapError(coded(code));
+		assert.deepEqual([mapped.extensionCode, mapped.status], [as, status], code);
+		// A sentence of the host's own, never the library's text or its code.
+		assert.match(mapped.message, /^[A-Z].*\.$/, code);
+		assert.equal(mapped.message.includes('ERR_'), false, code);
+		assert.equal(mapped.message.includes('the detail of what went wrong'), false, code);
+		assert.equal(mapped.message.includes(String.fromCharCode(0x2014)), false, code);
+		assert.equal('details' in mapped, false, code);
+	}
+	// A channel full of payments that have not ended: the number, where the library gives it.
+	const full = mapLightning(Object.assign(coded('ERR_BEIGNET_LN_HTLC_LIMIT', 'asset HTLC limit reached'), { details: { maxHtlcs: 8, pendingHtlcs: 8 } }));
+	assert.deepEqual([full.extensionCode, full.status, full.details], ['CHANNEL_PAYMENTS_FULL', 409, { maxHtlcs: 8, pendingHtlcs: 8 }]);
+	assert.equal(full.message, 'The asset channel this would be paid through already carries 8 payments that have not ended, the most it holds at once, so nothing was paid. Pay again once one of them has ended.');
+	assert.match(mapLightning(Object.assign(coded('ERR_BEIGNET_LN_HTLC_LIMIT'), { details: { maxHtlcs: 1 } })).message, /already carries 1 payment that has not ended, the most it holds at once/);
+	// Without the number, the general sentence and no details.
+	const plain = mapLightning(coded('ERR_BEIGNET_LN_HTLC_LIMIT'));
+	assert.deepEqual([plain.extensionCode, plain.message, 'details' in plain], ['CHANNEL_PAYMENTS_FULL', LIGHTNING_REFUSALS.ERR_BEIGNET_LN_HTLC_LIMIT[1], false]);
+	// What only the caller knows travels with the refusal.
+	const short = mapError(coded('ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND'), { details: { sendable: '40' } });
+	assert.deepEqual(short.details, { sendable: '40' });
+	// The codes that carry the library's own account of what went wrong inside
+	// have no words here: the caller logs them and answers in a sentence of its own.
+	for (const code of ['ERR_BEIGNET_LN_CHANNEL', 'ERR_BEIGNET_LN_FUNDING', 'ERR_BEIGNET_LN_RECOVERY', 'ERR_BEIGNET_LN_SOMETHING_NEW']) {
+		assert.equal(mapLightning(coded(code, 'state 7 of flow 03aa is not one this can leave')), null, code);
+	}
+	// A send the engine took and did not confirm is no refusal: it has no words, and is followed.
+	assert.equal(mapLightning(coded('ERR_BEIGNET_LN_RECORDS_UNCONFIRMED', 'the engine did not confirm')), null);
+	assert.equal('ERR_BEIGNET_LN_RECORDS_UNCONFIRMED' in LIGHTNING_REFUSALS, false);
+});
+
+test('what the engine itself refuses is worded in one place, wherever in the error it is named', () => {
+	const within = (code, cause) => Object.assign(coded(code, 'the engine would not'), { cause });
+	// The fee pool of a channel's fixed outputs: as the error's own code, as
+	// its cause, as the cause of a cause, and named in its text alone.
+	const spent = [
+		coded('FEE_BUDGET_EXHAUSTED', 'budget spent'),
+		within('ERR_BEIGNET_LN_CHANNEL', coded('FEE_BUDGET_EXHAUSTED', 'budget spent')),
+		within('ERR_BEIGNET_LN_FUNDING', within('ERR_WHATEVER', coded('FEE_BUDGET_EXHAUSTED', 'budget spent'))),
+		coded('ERR_BEIGNET_LN_CHANNEL', 'the engine refused the fee action: FEE_BUDGET_EXHAUSTED (pool 0 of 40000)')
+	];
+	for (const err of spent) {
+		const mapped = mapLightning(err);
+		assert.deepEqual([mapped.extensionCode, mapped.status], ['FEE_BUDGET_EXHAUSTED', 409]);
+		assert.match(mapped.message, /budget this app sets for the miner fees of asset channels is used up/);
+		assert.match(mapped.message, /Nothing was lost/);
+		assert.equal(mapped.message.includes('pool 0'), false);
+		assert.equal(engineCodeOf(err), 'FEE_BUDGET_EXHAUSTED');
+	}
+	// A name that only contains the code is not it, and an error with no cause has none.
+	assert.equal(engineCodeOf(coded('ERR_BEIGNET_LN_CHANNEL', 'NOT_FEE_BUDGET_EXHAUSTED_AT_ALL')), '');
+	assert.equal(engineCodeOf(null), '');
+	// A chain of causes that never ends is read a few deep and no further.
+	const loop = coded('ERR_BEIGNET_LN_CHANNEL', 'round');
+	loop.cause = loop;
+	assert.equal(engineCodeOf(loop), '');
+
+	// The wallet's own spending limits: the library's code, with the engine's refusal as its cause.
+	const limited = mapLightning(within('ERR_BEIGNET_LN_SPENDING_LIMIT', coded('ASSET_PAYMENT_REFUSED', 'over the daily limit of 100000 sats')));
+	assert.deepEqual([limited.extensionCode, limited.status], ['SPENDING_LIMIT', 409]);
+	assert.equal(limited.message, "This wallet's own spending limit refused the payment, so nothing was paid.");
+	assert.equal('details' in limited, false);
+	// The limit is named when the refusal carries its name, and only a name is shown.
+	const named = mapLightning(within('ERR_BEIGNET_LN_SPENDING_LIMIT', Object.assign(coded('ASSET_PAYMENT_REFUSED', 'no'), { limit: 'daily' })));
+	assert.equal(named.message, "This wallet's own spending limit (daily) refused the payment, so nothing was paid.");
+	assert.deepEqual(named.details, { limit: 'daily' });
+	const odd = mapLightning(within('ERR_BEIGNET_LN_SPENDING_LIMIT', Object.assign(coded('ASSET_PAYMENT_REFUSED', 'no'), { limit: '<b>x</b> '.repeat(30) })));
+	assert.equal(odd.message, "This wallet's own spending limit refused the payment, so nothing was paid.");
+	// The engine's code alone says the same.
+	assert.equal(mapLightning(coded('ASSET_PAYMENT_REFUSED', 'no')).extensionCode, 'SPENDING_LIMIT');
+	// The refusal says why, in the library's details or on the engine's own error. A limit is the limit's sentence.
+	const over = mapLightning(Object.assign(within('ERR_BEIGNET_LN_SPENDING_LIMIT', coded('ASSET_PAYMENT_REFUSED', 'no')), { details: { reason: 'SPENDING_LIMIT_EXCEEDED' } }));
+	assert.deepEqual([over.extensionCode, over.message], ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid."]);
+	// A wallet on its way down is no limit, and is said on its own.
+	const draining = 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.';
+	for (const err of [
+		Object.assign(within('ERR_BEIGNET_LN_SPENDING_LIMIT', coded('ASSET_PAYMENT_REFUSED', 'no')), { details: { reason: 'SERVICE_DRAINING' } }),
+		within('ERR_BEIGNET_LN_SPENDING_LIMIT', Object.assign(coded('ASSET_PAYMENT_REFUSED', 'draining'), { reason: 'SERVICE_DRAINING' })),
+		Object.assign(coded('ASSET_PAYMENT_REFUSED', 'no'), { details: { reason: 'SERVICE_DRAINING', limit: 'daily' } })
+	]) {
+		const said = mapLightning(err);
+		assert.deepEqual([said.extensionCode, said.status, said.message], ['SERVICE_DRAINING', 409, draining]);
+		assert.equal('details' in said, false);
+	}
+	// A reason this host has no words for is the limit's, as before.
+	assert.equal(mapLightning(Object.assign(coded('ASSET_PAYMENT_REFUSED', 'no'), { reason: 'SOMETHING_NEW' })).extensionCode, 'SPENDING_LIMIT');
+	// Every sentence here is the host's own.
+	for (const [code, message, status] of Object.values(ENGINE_REFUSALS)) {
+		assert.match(code, /^[A-Z_]+$/);
+		assert.match(message, /^[A-Z].*\.$/);
+		assert.equal(message.includes(String.fromCharCode(0x2014)), false);
+		assert.equal(status, 409);
 	}
 });
 
@@ -166,4 +314,94 @@ test('a proof that does not verify is told apart from trouble reaching anything'
 	}
 	assert.equal(isProofInvalid(new Error('socket hang up')), false);
 	assert.equal(isProofInvalid(null), false);
+});
+
+test('every refusal of a payment that means nothing left the wallet has a sentence here, and the list of them is not kept here', () => {
+	// Which codes those are is the library's to say (its export
+	// ASSET_PAYMENT_REFUSALS, read by adapter.js). These are the ones it
+	// names at ts-tap 2df9663: a row that fails on one says why.
+	const named = ['NOT_READY', 'INVALID', 'UNKNOWN_CHANNEL', 'NO_QUOTE', 'QUOTE_EXPIRED', 'PRICE_BOUND', 'INSUFFICIENT_OUTBOUND', 'BAD_INVOICE', 'INVOICE_EXPIRED', 'AMOUNT_REQUIRED', 'ALREADY_PAID', 'PAYMENT'];
+	for (const name of named) {
+		const mapped = mapLightning(coded(`ERR_BEIGNET_LN_${name}`, 'the detail of what went wrong'));
+		assert.ok(mapped, name);
+		assert.equal(mapped.message.includes('the detail of what went wrong'), false, name);
+	}
+	// The host keeps no copy of the list, which could fall behind the library's.
+	assert.equal('PAY_NOTHING_SENT' in require('./errors'), false);
+});
+
+test('a failed payment is worded by the host, whatever the node wrote', () => {
+	for (const word of Object.keys(PAYMENT_FAILURES)) {
+		const why = paymentFailure(word);
+		assert.equal(why.known, true, word);
+		assert.match(why.message, /^[A-Z].*, so nothing was paid\.$/, word);
+	}
+	for (const text of ['htlc 7 failed at 03aa: temporary_channel_failure', 'toString', '', null, undefined, 7]) {
+		assert.deepEqual(paymentFailure(text), { known: false, message: 'The payment did not go through, so nothing was paid.' }, String(text));
+	}
+});
+
+test('bitcoin that is not on native SegWit addresses is said with what is there, what is needed and what sits elsewhere', () => {
+	const short = (details) => Object.assign(new Error('native witness coins do not hold the funding'), { code: 'ERR_BEIGNET_LN_FUNDING_INPUTS', ...(details ? { details } : {}) });
+	const open = mapLightning(short({ eligibleSatoshis: 40000n, neededSatoshis: 100420n, otherSatoshis: 250000n }));
+	assert.deepEqual([open.extensionCode, open.status], ['FUNDING_INPUTS', 409]);
+	assert.equal(
+		open.message,
+		'The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has 40000 sats on those, and this needs about 100420. Another 250000 sats are on addresses of other types, which cannot be used for it. Nothing was done and nothing was spent.'
+	);
+	assert.deepEqual(open.details, { eligibleSats: '40000', neededSats: '100420', otherSats: '250000' });
+	// Taking a funding back: nothing sits elsewhere, so nothing is said of it.
+	const reclaim = mapLightning(short({ eligibleSatoshis: 0n, neededSatoshis: 360n, otherSatoshis: 0n }));
+	assert.equal(reclaim.message, 'The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has 0 sats on those, and this needs about 360. Nothing was done and nothing was spent.');
+	// Wrapped by another error of the library, the figures are still read. With none, the rule alone is said.
+	const wrapped = mapLightning(Object.assign(new Error('outer'), { code: 'ERR_BEIGNET_LN_FUNDING_INPUTS', cause: short({ eligibleSatoshis: 5n, neededSatoshis: 9n, otherSatoshis: 0n }) }));
+	assert.deepEqual(wrapped.details, { eligibleSats: '5', neededSats: '9', otherSats: '0' });
+	const bare = mapLightning(short(null));
+	assert.deepEqual([bare.extensionCode, bare.status, 'details' in bare], ['FUNDING_INPUTS', 409, false]);
+	assert.match(bare.message, /has to come from native SegWit addresses of this wallet/);
+	// The library's own name for a wallet on its way down is the sentence the engine's reason has.
+	assert.equal(mapLightning(Object.assign(new Error('draining'), { code: 'ERR_BEIGNET_LN_SERVICE_DRAINING', details: { reason: 'SERVICE_DRAINING' } })).message, 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.');
+});
+
+test('the refusals the library added: this node\'s own no to an open, a refused fee policy, a payment in parts, and results not taken in', () => {
+	const said = (code, extra = {}) => mapLightning(Object.assign(new Error('the engine wrote: aux htlc mode 7 of 03aa'), { code, ...extra }));
+	// A refusal that is this node's own is never worded as the peer's, and carries the engine's reason.
+	const mode = said('ERR_BEIGNET_LN_MODE_UNAVAILABLE', { details: { reason: 'the peer and this node agree on no way\n to carry an asset payment' } });
+	assert.deepEqual([mode.extensionCode, mode.status, mode.details], ['CHANNEL_MODE_UNAVAILABLE', 409, { reason: 'the peer and this node agree on no way to carry an asset payment' }]);
+	assert.equal(mode.message, "This wallet's node cannot open an asset channel with that peer: the peer and this node agree on no way to carry an asset payment. Nothing was opened and nothing was spent.");
+	assert.equal(/does not open asset channels|turned the channel down/.test(mode.message), false);
+	const bare = said('ERR_BEIGNET_LN_MODE_UNAVAILABLE');
+	assert.deepEqual([bare.extensionCode, bare.status, bare.details], ['CHANNEL_MODE_UNAVAILABLE', 409, undefined]);
+	assert.equal(bare.message, "This wallet's node cannot open an asset channel with that peer. Nothing was opened and nothing was spent.");
+	// The engine refused its fee settings: the code and the sentence the status has for it.
+	const policy = said('ERR_BEIGNET_LN_FEE_POLICY_REFUSED');
+	assert.deepEqual([policy.extensionCode, policy.status], ['FEE_POLICY_REFUSED', 409]);
+	assert.match(policy.message, /did not take the settings this app gives it for the miner fees of asset channels/);
+	// Nothing was recorded or sent by either of these.
+	const parts = said('ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED');
+	assert.deepEqual([parts.extensionCode, parts.status], ['PAYMENT_UNSUPPORTED', 409]);
+	assert.equal(parts.message, 'This payment would have to go out in several parts, and an asset payment goes out in one, so nothing was paid.');
+	const undelivered = said('ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', { details: { undeliveredOutcomes: 3 } });
+	assert.deepEqual([undelivered.extensionCode, undelivered.status, undelivered.details], ['OUTCOMES_UNDELIVERED', 409, { undeliveredOutcomes: 3 }]);
+	assert.equal(
+		undelivered.message,
+		'This wallet has not yet taken in the results of earlier payments on that channel, so nothing was paid. Nothing is wrong with this payment. Restart the wallet, and if this is said again afterwards, its log says why.'
+	);
+	assert.equal(said('ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED').details, undefined);
+	// What the library wrote is in none of them.
+	for (const r of [mode, bare, policy, parts, undelivered]) assert.equal(/aux htlc mode|03aa/.test(r.message), false);
+	// A peer that is away, where the library says so: its own code only on a quote (lightning.js), the old one elsewhere.
+	assert.deepEqual([said('ERR_BEIGNET_LN_PEER_OFFLINE').extensionCode, said('ERR_BEIGNET_LN_PEER_OFFLINE').status], ['PEER_UNREACHABLE', 502]);
+	// A try that never entered the channel.
+	assert.equal(paymentFailure('anything at all', { neverSent: true }).message, 'This payment never left the wallet, so nothing was paid. The invoice can be paid again.');
+	assert.equal(paymentFailure('anything at all', { neverSent: true }).known, true);
+});
+
+test('a peer that keeps no more unused prices for this wallet: said as a wait of a few minutes, also when it is the cause of what the library threw', () => {
+	const sentence = 'The peer is already keeping as many unused prices for this wallet as it keeps at once, so it gave no new one. Try again in a few minutes.';
+	const own = Object.assign(new Error('too many live quotes for this peer'), { code: 'ERR_LIGHTNING_TOO_MANY_REQUESTS' });
+	const said = mapLightning(own);
+	assert.deepEqual([said.extensionCode, said.status, said.message], ['TOO_MANY_QUOTES', 429, sentence]);
+	const wrapped = Object.assign(new Error('the peer gave no quote'), { code: 'ERR_BEIGNET_LN_NO_QUOTE', cause: own });
+	assert.deepEqual([mapLightning(wrapped).extensionCode, mapLightning(wrapped).status], ['TOO_MANY_QUOTES', 429]);
 });

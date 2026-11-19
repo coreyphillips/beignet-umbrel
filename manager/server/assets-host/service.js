@@ -22,6 +22,11 @@
  *   one address, and a chain wait inside it is a single look, so a route
  *   never waits for a block.
  *
+ *   Asset channels (lightning.js) follow the first rule with a marker of
+ *   their own, and turn the last one around: the library's Lightning
+ *   service is called back by the node, so nothing of it is ever called
+ *   while the lock is held.
+ *
  * Storage is the node's database through the extension's view. When the node
  * is rebuilt that view is closed and every call throws: the loop takes it as
  * the signal to stop, quietly, and the next generation starts from the rows.
@@ -33,6 +38,10 @@ const { restFor, parseCourier } = require('./config');
 const { refusal, isFenced, isNotYet, isCourierTrouble, isProofMissing, isProofInvalid, plainMessage, codeOf } = require('./errors');
 const views = require('./views');
 const backup = require('./backup');
+
+// lightning.js needs ops.js, which needs this file: it is asked for when it
+// is used, by which time all three have loaded.
+const lightning = () => require('./lightning');
 
 const QUOTE_ID = 'host-quote';
 const JOURNAL_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
@@ -52,7 +61,7 @@ const STEP_WAIT_MS = 15_000;
 const STEP_WAIT_MAX_MS = { receive: 2 * 60 * 1000, refused: 60 * 60 * 1000, other: 5 * 60 * 1000 };
 const SERVER_TROUBLE = new Set(['PROOF_REFUSED', 'COURIER_UNREACHABLE', 'PROOF_UNAVAILABLE', 'UNKNOWN_COURIER']);
 
-const EVENT_OF = { mint: 'mint', send: 'transfer', burn: 'transfer', receive: 'receive' };
+const EVENT_OF = { mint: 'mint', send: 'transfer', burn: 'transfer', receive: 'receive', 'ln-send': 'payment', 'ln-receive': 'invoice' };
 const receiveRowId = (encoded) => `recv-${sha256Hex(encoded).slice(0, 32)}`;
 const handedKey = (l) => `handed/${sha256Hex(JSON.stringify([l.assetId, l.scriptKey, l.anchorOutPoint])).slice(0, 40)}`;
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -105,9 +114,12 @@ function stepFailure(err, kind) {
 /**
  * Build the host. `tap` (the adapter) is set by the caller once it exists:
  * it needs `host.courierFor`, `host.proofPublisher` and `host.lock.flowLock`.
+ * `ln` is the wallet's asset channels (adapter.js createLightning), or null
+ * for a wallet that cannot have any; the caller starts it with
+ * `host.startLightning()` once `tap` is set.
  * `timers: false` is for tests, which drive `startup()` and `pass()` by hand.
  */
-function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, chainCheck = null, now = () => Date.now(), timers = true }) {
+function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, ln = null, chainCheck = null, now = () => Date.now(), timers = true }) {
 	const rows = hostRows(storage);
 	const lock = createHostLock();
 	const mem = {
@@ -142,13 +154,45 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		lastExportAt: 0,
 		lockedKey: null,
 		lockedSats: 0,
-		ticks: 0
+		// The sats of each anchor the records hold, by outpoint, as the library
+		// reads them from the proofs; null until read, or when it cannot be.
+		anchorValues: null,
+		ticks: 0,
+		// Asset channels (lightning.js). Why the service did not start, when it
+		// did not; whether the opens a restart interrupted have been settled;
+		// the opens and payments this process is in the middle of; the inbound
+		// channels it said yes to; and each channel's state as last told.
+		lnError: null,
+		lnSettled: false,
+		opens: new Map(),
+		paying: new Set(),
+		accepted: new Map(),
+		dropping: new Set(),
+		// The closed channels whose assets could not be brought back at the
+		// last look, with since when.
+		recovery: new Map(),
+		// What the library said where nobody was waiting, and when: text -> time.
+		lnSaid: new Map(),
+		// The ended opens the library was asked to take off its list.
+		forgetAsked: new Set(),
+		// Whether what channel fundings left set aside has been settled:
+		// null before it was asked, then 'kept' or 'done'.
+		lnReservations: null,
+		// What the library last said became of a funding's inputs, by the
+		// open's id, where it kept them or the funding took them.
+		lnFundings: new Map(),
+		lnChangeLooked: false,
+		// The fee budget for channel fees: met used up since the last pass
+		// finished, and what the status says of it.
+		feeBudgetMet: false,
+		feeBudgetOut: false,
+		channelWords: null
 	};
 	const handles = { pass: null, tip: null, backstop: null, preview: null, export: null };
 	// chainCheck is set when the wallet's Electrum server has not yet said it
 	// is on cfg's chain (chain.js). Until it passes, nothing is checked
 	// against the chain and nothing spends.
-	const host = { cfg, storage, wallet, lib, net, rows, lock, mem, tap, chainCheck, now };
+	const host = { cfg, storage, wallet, lib, net, rows, lock, mem, tap, ln, chainCheck, now };
 
 	/**
 	 * A timer that owes nothing to the section it was started in. Started
@@ -159,6 +203,15 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		const handle = lock.outside(() => setTimeout(fn, delay));
 		handle.unref();
 		return handle;
+	};
+
+	/**
+	 * Run `fn` shortly, owing nothing to whoever asked. A host that is driven
+	 * by hand (tests) schedules nothing: its next pass does the same work.
+	 */
+	host.soon = (fn, delay) => {
+		if (!timers || mem.stopped) return;
+		later(fn, delay);
 	};
 
 	const say = (level, message) => {
@@ -260,7 +313,7 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 	host.markers = () => new Map(rows.list('committed/').map((r) => [r.key.slice('committed/'.length), r.value]));
 	host.findRow = (id) => {
 		const text = String(id || '');
-		const row = /^[a-z]+-[0-9a-f]{8,128}$/.test(text) ? host.getRow(text) : null;
+		const row = /^[a-z]+(-[a-z]+)?-[0-9a-f]{8,128}$/.test(text) ? host.getRow(text) : null;
 		if (!row) throw refusal('NOT_FOUND', 'Nothing with that id is known to this wallet.', 404);
 		return row;
 	};
@@ -362,7 +415,15 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		} catch (err) {
 			if (isFenced(err)) throw err;
 		}
-		return views.assetViews({ records, registry: host.registry(), groups, rows: host.listRows() });
+		return views.assetViews({
+			records,
+			registry: host.registry(),
+			groups,
+			rows: host.listRows(),
+			channels: lightning().channelList(host),
+			limits: lightning().paymentLimits(host),
+			anchorValues: mem.anchorValues
+		});
 	};
 
 	/* ------------------------------------------------------- proof servers */
@@ -735,6 +796,9 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 
 	/** Refresh one stored row from the record it follows. */
 	host.refreshRow = (row) => {
+		// A Lightning row follows no record of the library's on-chain side:
+		// lightning.js settles it from the node.
+		if (row.kind === 'ln-send' || row.kind === 'ln-receive') return row;
 		if (row.kind === 'mint') return host.refreshMint(row.ref);
 		if (row.kind === 'receive') return host.refreshReceive(row.ref);
 		return host.refreshTransfer(row.ref, row.kind);
@@ -751,6 +815,8 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		};
 		for (const [id, mark] of host.markers()) {
 			if (mem.stopped) return;
+			// A channel open has a marker and no activity row.
+			if (mark.kind === 'funding') continue;
 			const prev = host.getRow(`${mark.kind}-${id}`);
 			if (prev && views.isTerminal(prev.state) && !(mark.kind === 'mint' && prev.failure)) continue;
 			await quiet(() => (mark.kind === 'mint' ? host.refreshMint(id) : host.refreshTransfer(id, mark.kind)));
@@ -770,13 +836,23 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		const lockedKey = anchors.join(',');
 		if (lockedKey !== mem.lockedKey) {
 			let locked = anchors.length * ANCHOR_SATS;
+			// What each anchor holds, from its proof: a swept output of a
+			// channel closed by force carries that side's whole channel
+			// bitcoin, far above the 1,000 sat of an ordinary anchor.
+			let values = null;
 			try {
-				locked = Number(await host.tap.tapLockedSats());
+				if (typeof host.tap.tapAnchorValues === 'function') {
+					values = new Map();
+					for (const [outPoint, sats] of await host.tap.tapAnchorValues()) values.set(String(outPoint), Number(sats));
+					locked = [...values.values()].reduce((a, b) => a + b, 0);
+				} else locked = Number(await host.tap.tapLockedSats());
 			} catch (err) {
 				if (isFenced(err)) throw err;
+				values = null;
 			}
 			mem.lockedKey = lockedKey;
 			mem.lockedSats = locked;
+			mem.anchorValues = values;
 		}
 		// An asset that arrived without the host hearing its name (a receive,
 		// a restore) is read from the wallet's own proof of it, once.
@@ -798,8 +874,15 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		// still happening, though the proof server has not taken its proof.
 		const settled = (r) => r.kind === 'send' && r.state === 'proofs' && !!r.handedOver;
 		const active = (kind) => stored.filter((r) => r.kind === kind && !views.isTerminal(r.state) && r.state !== 'waiting' && !settled(r)).length;
+		// A channel that is not over holds assets too, though no record on
+		// the chain says so.
+		const channels = lightning().channelCount(host);
 		mem.summary = {
-			holdsAssets: live.length > 0,
+			holdsAssets: live.length > 0 || channels > 0,
+			channels,
+			// The same count for the manager, which keeps it across a stop:
+			// null when it cannot be read now, which is never taken for none.
+			liveChannels: lightning().liveChannels(host),
 			anchorCount: anchors.length,
 			lockedSats: mem.lockedSats,
 			pending: { mints: active('mint'), sends: active('send'), receives: active('receive'), burns: active('burn') },
@@ -821,22 +904,27 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		} catch (_) {
 			/* closed storage: the last state read stands */
 		}
+		// How many asset channels are not over is counted now, not taken from
+		// the last pass of the loop: the manager refuses by this number, and
+		// a channel can appear or end between two passes.
+		const liveChannels = lightning().liveChannels(host);
 		return views.statusView({
 			cfg,
 			phase: host.phase(),
 			error: mem.importError ? `The assets backup could not be restored: ${mem.importError}` : null,
 			tip: host.tip(),
-			summary: mem.summary,
+			summary: { ...mem.summary, liveChannels, holdsAssets: !!mem.summary.holdsAssets || (liveChannels || 0) > 0 },
 			startup: mem.firstPass ? null : { ...mem.startup, ...(mem.startError || mem.guardError ? { waiting: mem.startError || mem.guardError } : {}) },
 			proofServer: mem.proofServer,
-			backup: { exportedAt: mem.backupState.exportedAt, dirty: mem.backupState.dirty, importError: mem.importError }
+			backup: { exportedAt: mem.backupState.exportedAt, dirty: mem.backupState.dirty, importError: mem.importError },
+			lightning: lightning().statusOf(host)
 		});
 	};
 
 	/** Publish the status when the part the manager keeps has changed. */
 	host.emitStatus = () => {
 		const s = host.status();
-		const key = JSON.stringify([s.phase, s.ready, s.error, s.holdsAssets, s.backup]);
+		const key = JSON.stringify([s.phase, s.ready, s.error, s.holdsAssets, s.assetChannels, s.backup, s.lightning]);
 		if (key === mem.statusKey) return;
 		mem.statusKey = key;
 		host.emitEvent('status', s);
@@ -855,7 +943,7 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 	/** Write the backup file now. Cheap when nothing changed. */
 	host.exportNow = async () => {
 		const fingerprint = await host.fingerprint();
-		const res = backup.exportBackup({ storage, rows, cfg, fingerprint, now: now() });
+		const res = backup.exportBackup({ storage, rows, cfg, fingerprint, now: now(), lightning: host.ln });
 		mem.lastExportAt = now();
 		host.emitEvent('backup', { exportedAt: res.exportedAt, dirty: false, changed: res.changed });
 		host.emitStatus();
@@ -884,14 +972,47 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 	/** Restore a backup into the store. The caller holds the lock. */
 	host.importNow = async (source) => {
 		const fingerprint = await host.fingerprint();
-		const res = backup.importBackup({ storage, cfg, fingerprint, backup: source });
+		const res = backup.importBackup({ storage, cfg, fingerprint, backup: source, lightning: host.ln });
 		// What the wallet holds may have changed: protect and reconcile again
 		// before anything spends.
 		mem.guarded = false;
 		mem.lockedKey = null;
 		mem.unlearnable.clear();
+		// A backup carries no funding flows: what one had set aside in the
+		// on-chain records is settled again from the chain (lightning.js).
+		mem.lnReservations = null;
+		mem.lnChangeLooked = false;
+		// That an open was only asked for held for the store that wrote it.
+		// A backup is older than the wallet, and the open may have become a
+		// channel since: nothing is read from that word after a restore.
+		for (const { key, value } of rows.list('chan/')) if (value && value.stage === 'asked' && value.channelId) rows.put(key, { ...value, stage: 'restored' });
 		if (!res.same) host.markDirty();
 		return res;
+	};
+
+	/**
+	 * Hand the library's Lightning service the adapter, and what it asks the
+	 * host: a proof from the proof server, whether to take a channel a peer
+	 * offers, and where to say that something happened. A service that will
+	 * not start leaves the wallet with its assets and without Lightning.
+	 */
+	host.startLightning = async () => {
+		if (!host.ln) return;
+		// The service itself starts once the engine has bound its node, which
+		// may be now or later: either way a failure lands here, never on the
+		// engine that did the binding.
+		const failed = (err) => {
+			mem.lnError = plainMessage(err, 'The Lightning service could not be started');
+			say('warn', `assets: asset channels could not start: ${mem.lnError}`);
+			host.emitStatus();
+		};
+		mem.lnError = null;
+		try {
+			host.ln.start({ ...lightning().startOptions(host), onStartError: failed });
+		} catch (err) {
+			if (isFenced(err)) throw err;
+			failed(err);
+		}
 	};
 
 	/** Before the node serves: restore a backup the manager left for this wallet. */
@@ -903,6 +1024,10 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 			return;
 		}
 		try {
+			// There is no node yet to say whether a channel is open, and a
+			// backup is never restored over one. A wallet with Lightning rows
+			// restores from the dashboard, once its node can be asked.
+			lightning().refuseImportUnasked(host);
 			const res = await host.importNow(backup.readBackupFile(cfg.importFile));
 			fs.renameSync(cfg.importFile, `${cfg.importFile}.imported`);
 			say('info', `assets: restored the assets backup (${res.imported} rows written)`);
@@ -1089,6 +1214,9 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 			}
 		}
 		await refreshAll();
+		// Asset channels: opens and closes carried on, payments and invoices
+		// settled. None of it under the lock (lightning.js).
+		await lightning().pass(host, { block });
 		await updateSummary();
 		if (mem.guarded && !mem.firstPass) {
 			mem.firstPass = true;
@@ -1159,6 +1287,13 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 
 	function shutdown() {
 		mem.stopped = true;
+		// The Lightning service is closed and not waited for: the engine gives
+		// a stop five seconds, and a payment in flight is the node's to finish.
+		try {
+			if (host.ln) host.ln.stop();
+		} catch (_) {
+			/* it is being left behind either way */
+		}
 		for (const name of Object.keys(handles)) {
 			if (handles[name]) {
 				clearTimeout(handles[name]);
@@ -1174,6 +1309,7 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		try {
 			await lock.run(async () => {
 				pruneJournal();
+				lightning().prune(host);
 				try {
 					await host.tap.anchor.releaseFunding(QUOTE_ID);
 				} catch (err) {

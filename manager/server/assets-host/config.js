@@ -130,8 +130,10 @@ function parseConfig(network, env = {}) {
 		relaxed: regtest,
 		backupFile: String(env.BEIGNET_ASSETS_BACKUP_FILE || '').trim() || null,
 		importFile: String(env.BEIGNET_ASSETS_IMPORT_FILE || '').trim() || null,
-		// Asset channels arrive with a later engine. Until then, off.
-		lightning: 'off',
+		// Whether the manager asked for asset channels. 'full' only for that
+		// exact word. It is a wish: a wallet whose engine or library cannot
+		// carry them stays off whatever this says (lightning.js `modeOf`).
+		lightning: env.BEIGNET_ASSETS_LIGHTNING === 'full' ? 'full' : 'off',
 		limits: {
 			maxFeeRate: positiveInt(env.BEIGNET_ASSETS_MAX_FEE_RATE, DEFAULT_LIMITS.maxFeeRate),
 			maxFeeSats: positiveInt(env.BEIGNET_ASSETS_MAX_FEE_SATS, DEFAULT_LIMITS.maxFeeSats)
@@ -148,6 +150,10 @@ function parseConfig(network, env = {}) {
 		settleWaitMs: 8 * 1000,
 		receiveWindowMs: 7 * 24 * 60 * 60 * 1000,
 		receiveSetMax: 50,
+		// How long the route that opens a channel, and the one that pays an
+		// invoice, wait for the peer before they answer that it is under way.
+		openWaitMs: 20 * 1000,
+		payWaitMs: 30 * 1000,
 		problem: null
 	};
 	if (!chain) {
