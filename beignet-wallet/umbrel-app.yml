@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.42.1"
+version: "0.42.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,13 +30,26 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.43.4. A sweep of a bitcoin channel's output, after a
-  channel was closed by force, now pays at least the fee rate it was built
-  at: the engine prices it from the size of the transaction it builds. A
+  Asset channels with a peer that runs Lightning Labs' daemons. An invoice
+  of yours now names that peer with its own fee and CLTV delta for the
+  channel, as tapd's own invoices do; before, a payer reaching you through
+  such a peer could be refused there once and have to try again. A channel
+  such a peer opens to your wallet was tried on regtest and works: the peer
+  funds it from units your wallet sent it, and your side starts with only
+  the bitcoin the peer pushed, none by default, so you can pay through it
+  once about five payments have come in. An open to Lightning Terminal
+  older than v0.17.11, which always ends before anything is funded, now
+  says so, where it said the peer turned the channel down. Going back to
+  app 0.42.1 keeps your wallets and channels, asset channels included.
+
+
+  From app 0.42.1: bundles beignet 0.43.4. A sweep of a bitcoin channel's
+  output, after a channel was closed by force, now pays at least the fee
+  rate it was built at: the engine prices it from the size of the
+  transaction it builds. A
   wallet's own share used to pay a little under that rate, so at 1 sat/vB
   some nodes turned it away until the wallet raised the rate six blocks
-  later. The sweeps of an asset channel are priced as before. Going back to
-  app 0.42.0 keeps your wallets and channels, asset channels included.
+  later. The sweeps of an asset channel are priced as before.
 
 
   From app 0.42.0, if you are updating from 0.41.0: Taproot Assets, assets
