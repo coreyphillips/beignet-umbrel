@@ -251,7 +251,7 @@ compose(['restart', SERVICE]);
 await waitFor('the channel is back after both restarts', async () => {
 	const c = await channelOf(A.id, first.mine.channelId);
 	const theirs = peerChannel(walletNodeId);
-	return c && c.state === 'NORMAL' && c.peerOnline !== false && theirs && theirs.active ? c : null;
+	return c && c.state === 'NORMAL' && c.peerConnected === true && theirs && theirs.active ? c : null;
 }, { timeoutMs: 240000, everyMs: 3000 });
 const p3 = await walletPaysPeer(1_000, 'scenario 25: after the restarts');
 check('after both restarted the wallet pays the peer again', p3.paid.status === 'COMPLETED', p3.paid.status);
