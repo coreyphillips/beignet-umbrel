@@ -19,8 +19,9 @@ import AssetAvatar from '../../components/AssetAvatar.jsx';
 import { AssetAmount } from '../../components/AssetAmount.jsx';
 import { useAssetBalances } from '../../hooks/useAssets.js';
 import { assetsShown } from '../../lib/wallet-assets.js';
+import { assetChannelBitcoin } from '../../lib/asset-lightning.js';
 import { fmtSats, pct } from '../../lib/format.js';
-import { isClosedChannel } from '../../lib/channels.js';
+import { bitcoinChannels, isClosedChannel } from '../../lib/channels.js';
 import { describeRecovery } from '../../lib/recovery.js';
 
 import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
@@ -107,7 +108,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 				api.get('/liquidity').catch(() => null),
 				api.get('/fees').catch(() => null),
 				api.get('/fees/estimates').catch(() => null),
-				api.get('/channels').catch(() => null)
+				api.get('/channels').then(bitcoinChannels).catch(() => null)
 			]);
 
 			return { balance, liquidity, fees, feeEst, channels };
@@ -125,11 +126,43 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 	const fees = data?.fees;
 	const feeEst = data?.feeEst;
 	const splicing = bal?.splicingSats ?? info?.splicingBalanceSats ?? 0;
+	// The bitcoin on this wallet's side of its asset channels is in neither
+	// the Lightning figure nor the total (the daemon leaves it out of both),
+	// so without a line of its own an open would read as bitcoin gone. It is
+	// said the way sats locked with assets are: quietly, and added to nothing.
+	const channelBitcoin = assetChannelBitcoin(bal);
+	const lightningSub = channelBitcoin ? (
+		<>
+			{splicing > 0 && <span className="sub-line">+ {fmtSats(splicing)} splicing</span>}
+			{channelBitcoin.map((line, i) => (
+				<span
+					key={line.kind}
+					className="sub-line"
+					data-testid={line.kind === 'closing' ? 'overview-asset-channel-closing-sats' : 'overview-asset-channel-sats'}
+				>
+					+ {fmtSats(line.sats)} {line.words}
+					{i === channelBitcoin.length - 1 && (
+						<Help label="About bitcoin in asset channels">
+							An asset channel is funded with bitcoin as well as the asset. The sats on your side of it are yours,
+							and they stay out of every balance here while the channel is there: they cannot be spent as bitcoin
+							or sent over Lightning. They come back when the channel is closed. While a channel is closing, its
+							bitcoin is on its way back, and it is said here until the close is over.
+						</Help>
+					)}
+				</span>
+			))}
+		</>
+	) : splicing > 0 ? (
+		`+ ${fmtSats(splicing)} splicing`
+	) : undefined;
 	// Both /info's channelCount and the liquidity snapshot's channelCount are
 	// every channel the node has ever had, closed ones included forever. Every
 	// count this page shows is of channels that still OPERATE, so count open
-	// ones from the list itself; until the list answers, fall back to the
-	// daemon figure rather than showing nothing.
+	// ones from the list itself, with its asset channels left out. Until the
+	// list answers the tile shows no number: the daemon figure is every
+	// channel it has had, closed ones and asset channels included, so a wallet
+	// with an asset channel read one channel too many while the page loaded,
+	// and for good when the list could not be read.
 	const openCount = data?.channels
 		? data.channels.filter((c) => !isClosedChannel(c)).length
 		: null;
@@ -187,13 +220,13 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 								label="Lightning"
 								num={bal?.lightning ?? info?.lightningBalanceSats}
 								suffix=" sats"
-								sub={splicing > 0 ? `+ ${fmtSats(splicing)} splicing` : undefined}
+								sub={lightningSub}
 							/>,
 							<Stat key="total" label="Total" num={bal?.total} suffix=" sats" />,
 							<Stat
 								key="ch"
 								label="Channels"
-								num={openCount ?? info?.channelCount}
+								num={openCount}
 								sub={`${info?.peerCount ?? 0} peers`}
 							/>
 					  ]}

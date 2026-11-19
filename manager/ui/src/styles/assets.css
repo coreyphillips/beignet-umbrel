@@ -133,6 +133,29 @@
 	flex: none;
 }
 
+/* Two things to do about one note stay together, and wrap as a pair. */
+.note-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.note-actions:empty {
+	display: none;
+}
+
+/* With two or more, they take a line of their own under the text, so the
+   text keeps the note's full width. */
+.note-with-action .note-actions:has(> button:nth-of-type(2)) {
+	flex-basis: 100%;
+}
+
+.detail-hint {
+	margin-left: 10px;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
 /* A disclosure inside a card: the summary reads as a quiet link. */
 .asset-details > summary {
 	cursor: pointer;
@@ -1373,6 +1396,15 @@ pre.asset-meta {
 	font-variant-numeric: tabular-nums;
 }
 
+/* How many more payments that way carries, on its own line under the figure. */
+.asset-channel-carries {
+	display: block;
+	margin-top: 2px;
+	font-size: 12px;
+	font-weight: 450;
+	color: var(--muted);
+}
+
 .asset-channel > .field-hint {
 	display: block;
 	margin-top: 12px;
@@ -1384,6 +1416,19 @@ pre.asset-meta {
 
 .asset-channel-cost .field-hint {
 	display: block;
+}
+
+/* A note that follows a channel's figures stands a little off them. */
+/* What the wallet's node said of a failed open, beneath the wallet's own sentence. */
+.asset-channel-failure-detail {
+	margin-top: 6px;
+	font-size: 12px;
+	opacity: 0.8;
+	overflow-wrap: anywhere;
+}
+
+.asset-channel-facts + .info-note {
+	margin-top: 12px;
 }
 
 /* ---------- Lightning: an invoice to receive with ---------- */
@@ -1529,4 +1574,35 @@ pre.asset-meta {
 		width: 44px;
 		height: 44px;
 	}
+}
+
+/* The quiet line under Recent receives that takes a proof file by hand. */
+.asset-handover {
+	margin-top: 14px;
+}
+
+/* A receipt the wallet has a note on is not a success: how the payment
+   ended is not known. It takes the blue of something said, not the green
+   of something done. */
+.paid-receipt.noted {
+	border-color: rgba(110, 168, 255, 0.3);
+	background: rgba(110, 168, 255, 0.06);
+}
+
+.paid-receipt.noted .paid-check,
+.paid-receipt.noted .paid-title {
+	color: #bcd4ff;
+}
+
+.paid-receipt.noted .paid-check {
+	border-color: currentColor;
+}
+
+:root[data-theme='light'] .paid-receipt.noted .paid-check,
+:root[data-theme='light'] .paid-receipt.noted .paid-title {
+	color: #2b579a;
+}
+
+.paid-receipt.noted .info-note {
+	margin: 12px 0 4px;
 }

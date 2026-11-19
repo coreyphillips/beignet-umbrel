@@ -25,8 +25,11 @@
  *
  *   Asset  { key, assetId, groupKey, name, type: 'normal' | 'collectible',
  *            decimalDisplay,
- *            balance: { total, onchain, pendingIn, pendingOut, channelLocal,
- *                       lightningSendable, lightningReceivable },
+ *            balance: { total, onchain, channelable, pendingIn, pendingOut,
+ *                       channelLocal, lightningSendable, lightningReceivable },
+ *            `channelable` is the most that can go into one new channel: a
+ *            channel is funded with one issuance of an asset, so for an asset
+ *            held over several issuances it is less than `onchain`.
  *            lockedSats, anchors, canReissue, mintedHere,
  *            supply: { issued, burned, known },
  *            genesis: { outpoint, height, timestamp } }
@@ -105,6 +108,27 @@ export function assetsApi(api) {
 		/** Ask the proof server again for a receive whose proof is late. */
 		retryProof: (id) => post('/proofs/retry', { id }),
 
+		/* ------------------------------------------------------ proof files */
+		/**
+		 * The proof file of a send's payment, for the sender to hand to the
+		 * recipient: { id, fileName, file (base64), bytes, assetId, address, txid }.
+		 * PROOF_NOT_READY until the transaction is deep enough.
+		 */
+		exportProof: (id) => get('/proofs/export', { id }),
+		/**
+		 * Take a proof file (base64) for a payment to this wallet. { result, row }
+		 * where result is 'complete', 'already', or 'kept' with
+		 * { waitingFor: 'confirmations' | 'check', reason }. The wallet verifies
+		 * it as it would a proof from a server; PROOF_INVALID when it does not pass.
+		 */
+		importProof: (file) => post('/proofs/import', { file }),
+		/**
+		 * Say that a send's proof was given to the recipient as a file, or take
+		 * that back. It changes how the send reads; the wallet goes on offering
+		 * the proof to the proof server. { row }.
+		 */
+		markProofHandedOver: (id, handedOver = true) => post('/proofs/handed-over', { id, handedOver }),
+
 		/* ------------------------------------------------------------- send */
 		/** A Preview for paying a Taproot Assets address. Supersedes this wallet's open one. */
 		prepareSend: ({ address, feeRate }, key) => once('/send/prepare', { address, feeRate }, key),
@@ -128,7 +152,10 @@ export function assetsApi(api) {
 		testProofServer: (rest) => post('/proof-server/test', { rest }),
 
 		/* -------------------------------------------------------- lightning */
-		/** { channels: [{ channelId, peerPubkey, peerAlias, state, asset, capacity, localBalance, remoteBalance, sendable, receivable, channelSats }] } */
+		/**
+		 * { channels: [{ channelId, pendingChannelId, peerPubkey, peerAlias, state, asset, capacity, localBalance,
+		 *   remoteBalance, sendable, receivable, channelSats, fundingTxid, reclaimable, reclaimTxid }] }
+		 */
 		channels: () => get('/channels'),
 		/** { channelSats, feeSats, totalSats, spendableSats, sufficient } */
 		channelQuote: ({ key, amount, feeRate }) => post('/channels/quote', { key, amount, feeRate }),
@@ -136,10 +163,20 @@ export function assetsApi(api) {
 		openChannel: ({ peer, key: assetKey, amount, feeRate }, key) =>
 			once('/channels/open', { peer, key: assetKey, amount, feeRate }, key),
 		closeChannel: ({ channelId, force }) => post('/channels/close', { channelId, force: !!force }),
+		/**
+		 * Take the funding of an open that has not confirmed back, with a transaction at `feeRate`.
+		 * { channelId, pendingChannelId, txid, feeSats, feeRate }
+		 */
+		reclaimChannel: ({ channelId, feeRate }, key) => once('/channels/reclaim', { channelId, feeRate }, key),
 		/** A price for receiving: { quoteId, peerPubkey, peerAlias, assetAmount, amountSats, rateText, expiresAt, maxReceivable } */
 		invoiceQuote: ({ key, amount }) => post('/invoices/quote', { key, amount }),
 		/** { bolt11, paymentHash, assetAmount, amountSats, rateText, expiresAt, invoiceExpiresAt, row } */
 		createInvoice: ({ key, amount, description, quoteId }) => post('/invoices', { key, amount, description, quoteId }),
+		/**
+		 * { invoices: [{ bolt11, paymentHash, assetAmount, amountSats, rateText, priced, expiresAt, invoiceExpiresAt,
+		 *   description, asset, status: 'OPEN' | 'PAID' | 'EXPIRED', receivedAmount, createdAt }] }
+		 * `receivedAmount` is what a paid invoice brought in, and null until it is paid.
+		 */
 		invoices: () => get('/invoices'),
 		/** A price for paying: { quoteId, assetAmount, amountSats, rateText, peerAlias, expiresAt, sendable } */
 		payQuote: ({ bolt11, key, amountSats }) => post('/pay/quote', { bolt11, key, amountSats }),

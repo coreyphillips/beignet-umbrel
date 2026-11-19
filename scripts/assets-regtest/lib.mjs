@@ -135,6 +135,28 @@ export async function tapdMint({ name, amount, type = 'normal', decimals = 0, gr
 	return minted;
 }
 
+/**
+ * tapd's own verdict on a proof file, read from its command line: it checks
+ * every proof in the file's history against its chain. { valid, ... }.
+ */
+export function tapdVerifies(fileBytes) {
+	let out;
+	try {
+		out = compose(['exec', '-T', 'tapd', 'tapcli', '--network=regtest', 'proofs', 'verify', '--proof_file', '-'], {
+			input: Buffer.from(fileBytes),
+			stdio: ['pipe', 'pipe', 'pipe']
+		});
+	} catch (err) {
+		// A file it will not have ends the command with an error, not an answer.
+		return { valid: false, said: String(err.stderr || err.message).trim().slice(0, 300) };
+	}
+	try {
+		return JSON.parse(out);
+	} catch (_) {
+		return { valid: false, said: out };
+	}
+}
+
 /** Whether tapd's universe holds the issuance of an asset: it stores one only after verifying it. */
 export const tapdKnows = (assetId) => Object.values(tapcli('universe', 'roots').universe_roots || {}).some((r) => r.id && r.id.asset_id === assetId);
 
@@ -190,8 +212,10 @@ export async function daemonPid(id) {
  * manager to bring it back with its assets host ready. Nothing is flushed
  * and no stop handler runs.
  */
-export async function crash(id) {
-	const pid = await daemonPid(id);
+export async function crash(id, { pid: known } = {}) {
+	// A pid found beforehand makes the kill land at once: looking it up takes
+	// long enough for a daemon to finish what it was doing.
+	const pid = known || (await daemonPid(id));
 	if (!pid) throw new Error(`no daemon found for ${id}`);
 	process.kill(pid, 'SIGKILL');
 	await waitFor(`daemon of ${id.slice(0, 8)} is back`, async () => {

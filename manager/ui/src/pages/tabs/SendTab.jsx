@@ -26,6 +26,7 @@ import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 import { LnurlAuth, LnurlFrom, LnurlSuccess, LnurlWithdraw, lnurlInvoice } from '../../components/Lnurl.jsx';
 import { usePubkyLookup } from '../../hooks/usePubkyLookup.js';
 import { manager, walletApi } from '../../api.js';
+import { bitcoinChannels } from '../../lib/channels.js';
 
 // Headroom over the quoted routing fee when a payment is held to its estimate,
 // the same figure the shared wallet client uses.
@@ -63,7 +64,7 @@ export default function SendTab({ id, api, info, rec, tick, bump, lastReceive })
 	// invoice itself names none, and a fresh identity each time so the card knows
 	// to take the caret.
 	const [arrival, setArrival] = useState(null);
-	const { data: channels } = usePoll(() => api.get('/channels').catch(() => null), 15000, [id, tick]);
+	const { data: channels } = usePoll(() => api.get('/channels').then(bitcoinChannels).catch(() => null), 15000, [id, tick]);
 	// splicingOnly covers the rare parked splice (e.g. taproot), where "open a
 	// channel first" would still be the wrong message.
 	const splicingOnly = channels

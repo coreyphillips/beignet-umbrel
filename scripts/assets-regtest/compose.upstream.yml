@@ -1,0 +1,61 @@
+# Laid over ts-tap's docker/compose.yml and compose.override.yml by
+# `stack.sh upstream`: a peer that runs the upstream implementation, lnd and
+# tapd in one process (`tapd-integrated`), on this stack's bitcoind, for
+# 25-ln-upstream.mjs.
+#
+# The image is the one ts-tap's `npm run regtest:lightning:upstream` builds
+# from docker/native-interop at its pinned taproot-assets commit, with no
+# patch to either daemon (ASSETS_UPSTREAM_IMAGE names another). The flags
+# are that compose file's, with two changes: the peer listens on a port of
+# this stack's own, and its mock price oracle is set a little away from one
+# unit to the sat (1.01), so that a price it quotes is told apart from the
+# nominal rate a wallet of this app uses. tapd refuses a quote whose rate is
+# further from its own oracle than its tolerance (5% unless set), and a
+# wallet of this app quotes one unit to the sat: with a price further off,
+# the peer could not make an invoice that this wallet pays.
+services:
+  integrated:
+    image: ${ASSETS_UPSTREAM_IMAGE:-ts-tap-native-interop:upstream}
+    depends_on:
+      bitcoind: { condition: service_healthy }
+    ports: ['127.0.0.1:${ASSETS_UPSTREAM_P2P_PORT:-19835}:9735']
+    volumes: ['integrated:/data']
+    command:
+      - --lnd.lnddir=/data/lnd
+      - --lnd.noseedbackup
+      - --lnd.no-macaroons
+      - --lnd.norest
+      - --lnd.protocol.option-scid-alias
+      - --lnd.protocol.zero-conf
+      - --lnd.protocol.simple-taproot-chans
+      - --lnd.protocol.simple-taproot-overlay-chans
+      - --lnd.protocol.custom-message=17
+      - --lnd.debuglevel=debug
+      - --lnd.bitcoin.active
+      - --lnd.bitcoin.regtest
+      - --lnd.bitcoin.node=bitcoind
+      - --lnd.bitcoin.defaultremotedelay=${ASSETS_UPSTREAM_CSV_DELAY:-144}
+      - --lnd.bitcoind.rpchost=bitcoind:18443
+      - --lnd.bitcoind.rpcuser=taptest
+      - --lnd.bitcoind.rpcpass=taptest
+      - --lnd.bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      - --lnd.bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      - --lnd.rpclisten=127.0.0.1:10009
+      - --lnd.listen=0.0.0.0:9735
+      - --lnd.tlsextradomain=integrated
+      - --lnd.alias=upstream
+      - --taproot-assets.tapddir=/data/tapd
+      - --taproot-assets.network=regtest
+      - --taproot-assets.universe.no-default-federation
+      - --taproot-assets.universe.public-access=rw
+      - --taproot-assets.proofcourieraddr=universerpc://tapd:10029
+      - --taproot-assets.experimental.rfq.priceoracleaddress=use_mock_price_oracle_service_promise_to_not_use_on_mainnet
+      - --taproot-assets.experimental.rfq.mockoracleassetsperbtc=${ASSETS_UPSTREAM_UNITS_PER_BTC:-101000000}
+      - --ready-file=/data/ready
+    healthcheck:
+      test: ['CMD', 'test', '-f', '/data/ready']
+      interval: 2s
+      timeout: 5s
+      retries: 90
+volumes:
+  integrated: {}

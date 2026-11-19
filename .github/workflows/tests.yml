@@ -42,7 +42,9 @@ jobs:
       # them. The assets host's contract tests then load the real packages;
       # without the prefix they are skipped, and on a bundled engine from
       # before the host extension contract so are the ones that need the
-      # engine to load the host.
+      # engine to load the host. One of them loads the library's real
+      # Lightning entry from the prefix and holds what it says of the engine
+      # against that engine's version.
       - name: Vendored ts-tap tarballs match their checksums
         working-directory: vendor
         run: sha256sum -c SHA256SUMS
@@ -52,6 +54,7 @@ jobs:
       - run: npm test
         env:
           ASSETS_ENGINE_PREFIX: ${{ runner.temp }}/engine-prefix
+          ASSETS_LIGHTNING_ENTRY: ${{ runner.temp }}/engine-prefix/node_modules/@ts-tap/beignet/dist/lightning.js
 
   ui:
     name: dashboard tests and build

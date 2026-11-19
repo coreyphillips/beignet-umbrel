@@ -14,6 +14,7 @@ import {
 	burnSteps,
 	confirmationsNeeded,
 	etaText,
+	handedOver,
 	headline,
 	isFailed,
 	isPending,
@@ -156,6 +157,32 @@ test('a send is broadcast, confirmed, its proof delivered, then complete', () =>
 	assert.equal(stopped[0].detail, 'Nothing was sent: rejected by the mempool.');
 });
 
+test('a send whose proof was handed over as a file reads as done, and says the server is still offered it', () => {
+	const ctx = { network: 'mainnet', host: 'u.example:10029' };
+	const refused = { code: 'PROOF_REFUSED', message: 'x', retrying: true };
+	const settled = row('send', 'proofs', { txid: TXID, confirmations: 6, failure: refused, handedOver: 5000 });
+	assert.equal(handedOver(settled), true);
+	assert.equal(isPending(settled), false, 'nothing is left for the reader to wait for');
+	assert.equal(isFailed(settled), false);
+	assert.equal(headline(settled), 'Sent 100.00 BUSD: its proof was handed over as a file');
+	assert.deepEqual(statusOf(settled), { text: 'handed over', tone: 'green' });
+	const steps = sendSteps(settled, ctx);
+	assert.equal(states(steps), 'broadcast:done confirmed:done proof:done complete:current');
+	assert.deepEqual([steps[2].label, steps[2].detail, steps[2].at], ['Proof handed over', 'Given to the recipient as a file.', 5000]);
+	assert.equal(
+		steps[3].detail,
+		'The recipient has the asset once they import the file. This wallet still offers the proof to u.example:10029 from time to time.'
+	);
+	// It is the sender's word about one state: it means nothing before the proof exists or once the server has it.
+	assert.equal(handedOver(row('send', 'confirming', { handedOver: 5000 })), false);
+	assert.equal(handedOver(row('send', 'complete', { handedOver: 5000 })), false);
+	assert.equal(handedOver(row('receive', 'proofs', { handedOver: 5000 })), false);
+	const done = sendSteps(row('send', 'complete', { txid: TXID, handedOver: 5000, at: { created: 1000, proof: 6000, completed: 7000 } }), ctx);
+	assert.deepEqual([done[2].label, done[2].detail], ['Proof delivered', 'Delivered through u.example:10029.']);
+	// With no answer from the server on record (after a restart, say), the mark still stands.
+	assert.equal(headline(row('send', 'proofs', { handedOver: 5000 })), 'Sent 100.00 BUSD: its proof was handed over as a file');
+});
+
 test('a burn ends by saying the units no longer exist', () => {
 	const done = burnSteps(row('burn', 'complete', { txid: TXID, confirmations: 1 }), { network: 'mainnet' });
 	assert.deepEqual(done.map((s) => s.label), ['Broadcast', 'Confirmed', 'Burned']);
@@ -209,4 +236,29 @@ test('a transaction left in the mempool is explained, with nothing to press', ()
 	assert.match(note, /cannot be fee-bumped yet/);
 	assert.equal(stuckNote({ ...old, confirmations: 1 }, { fast: 18 }, now), null, 'a confirmed one is not stuck');
 	assert.equal(stuckNote({ ...fresh, stuck: true }, { fast: 18 }, now) !== null, true, 'the wallet saying so is enough');
+});
+
+test('a payment the wallet has a note on is worded by the note, never as paid or failed', async () => {
+	const { headline, statusOf, isFailed, isPending, noticeOf } = await import('./asset-progress.js');
+	const busd = { name: 'BUSD', type: 'normal', decimalDisplay: 2, amount: '357' };
+	const row = (state, code, extra = {}) => ({ kind: 'ln-send', state, failed: state === 'failed', assets: [busd], at: { created: 1 }, notice: { code, message: 'The wallet says so.' }, ...extra });
+	for (const state of ['pending', 'complete', 'failed']) {
+		const lost = row(state, 'PAYMENT_UNACCOUNTED');
+		assert.equal(headline(lost), 'Lightning payment of 3.57 BUSD: how it ended is not known');
+		assert.deepEqual(statusOf(lost), { text: 'not known', tone: 'blue' });
+		assert.equal(isFailed(lost), false);
+		const loose = row(state, 'PAYMENT_UNCONFIRMED');
+		assert.equal(headline(loose), 'Lightning payment of 3.57 BUSD: not confirmed as an asset payment');
+		assert.deepEqual(statusOf(loose), { text: 'unconfirmed', tone: 'blue' });
+	}
+	assert.equal(isPending(row('pending', 'PAYMENT_UNACCOUNTED')), true);
+	// A note this page has no words for is still a note, and still not a failure.
+	assert.equal(headline(row('failed', 'SOMETHING_NEW')), 'Lightning payment of 3.57 BUSD: the wallet has a note on it');
+	assert.deepEqual(noticeOf(row('pending', 'SOMETHING_NEW')), { code: 'SOMETHING_NEW', message: 'The wallet says so.' });
+	// No note, or an empty one, and the row is worded as ever.
+	for (const notice of [undefined, null, {}, { code: 'X', message: ' ' }]) {
+		assert.equal(noticeOf({ notice }), null);
+		assert.equal(headline({ kind: 'ln-send', state: 'complete', assets: [busd], notice }), 'Paid 3.57 BUSD over Lightning');
+		assert.equal(isFailed({ kind: 'ln-send', state: 'failed', failed: true, assets: [busd], notice }), true);
+	}
 });

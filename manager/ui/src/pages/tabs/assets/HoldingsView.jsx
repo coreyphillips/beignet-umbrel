@@ -4,10 +4,10 @@ import AssetAvatar from '../../../components/AssetAvatar.jsx';
 import { AnimatedAssetAmount } from '../../../components/AssetAmount.jsx';
 import { Button, Card, Empty, Stat, StatRow, staggerContainer, staggerItem } from '../../../components/ui.jsx';
 import { describeSplit, fullName, isFailed, isPending } from '../../../lib/assets.js';
-import { headline, kindWord, proofUnpublished, statusOf } from '../../../lib/asset-progress.js';
+import { headline, kindWord, noticeOf, proofUnpublished, statusOf } from '../../../lib/asset-progress.js';
 import { timeAgo } from '../../../lib/backup.js';
 import { shortId } from '../../../lib/format.js';
-import { AssetTransferDetail, LimitsList, ProofLateNote, RowTimeline, plainClick, useRowDetail } from './shared.jsx';
+import { AssetTransferDetail, LimitsList, ProofLateNote, RowNotice, RowTimeline, plainClick, useRowDetail } from './shared.jsx';
 
 // Three faces for the empty state, so the first thing a new wallet shows of
 // assets is what one looks like. They are nobody's: the seeds are made up.
@@ -25,6 +25,9 @@ const FAILURE_SHOWN_MS = 24 * 60 * 60 * 1000;
 export function inProgress(rows, now = Date.now()) {
 	return (rows || []).filter((row) => {
 		if (isFailed(row)) return now - (row.at?.created || 0) < FAILURE_SHOWN_MS;
+		// A payment the wallet has a note on stays in sight while it is not
+		// over, and for a day after it is: the note is the news.
+		if (noticeOf(row)) return isPending(row) || now - (row.at?.created || 0) < FAILURE_SHOWN_MS;
 		// A mint whose proof the proof server has not taken is done, and
 		// stays in sight until it has.
 		if (proofUnpublished(row)) return true;
@@ -89,6 +92,7 @@ function ProgressItem({ row, network, host, onDetails, onRetry, retrying }) {
 			) : (
 				<RowTimeline row={row} network={network} host={host} compact />
 			)}
+			<RowNotice row={row} />
 			<ProofLateNote row={row} host={host} onRetry={() => onRetry(row)} busy={retrying === row.id} />
 		</li>
 	);

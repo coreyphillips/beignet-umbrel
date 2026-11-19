@@ -657,7 +657,7 @@ test('a wallet without asset channels sees the tab exactly as it was, and its as
 		await plain.unmount();
 
 		const cases = [
-			['an engine that cannot carry them, as every released one is', { config: { assetsAvailable: true, assetChannelsAvailable: false }, assets: HOST_ON }],
+			['an engine that cannot carry them, as every release before Beignet 0.43.0 is', { config: { assetsAvailable: true, assetChannelsAvailable: false }, assets: HOST_ON }],
 			['an app with no assets host', { config: { assetsAvailable: false, assetChannelsAvailable: true }, assets: HOST_ON }],
 			['an on-chain only wallet', { config: ASSETS_ON, rec: { onchainOnly: true }, assets: HOST_ON }],
 			['a wallet with assets switched off', { config: ASSETS_ON, rec: { assets: { enabled: false } }, assets: HOST_ON }],
@@ -752,5 +752,28 @@ test('a wallet with asset channels has them in a card of their own, under the bi
 	} finally {
 		await view.unmount();
 		restore();
+	}
+});
+
+test('an asset channel the daemon lists is not shown among the bitcoin channels', async () => {
+	const restoreFetch = stubManagerFetch();
+	const ASSET_PEER = '03' + 'e'.repeat(64);
+	const r = await render(
+		wrapped,
+		tabProps({
+			channels: [
+				{ channelId: 'a'.repeat(64), peerPubkey: '02' + 'a'.repeat(64), capacitySats: 1_000_000, localBalanceSats: 500_000, remoteBalanceSats: 500_000, state: 'NORMAL' },
+				{ channelId: 'e'.repeat(64), peerPubkey: ASSET_PEER, capacitySats: 100_000, localBalanceSats: 98_292, remoteBalanceSats: 1_708, state: 'NORMAL', auxiliary: true }
+			]
+		})
+	);
+	try {
+		await settle(50);
+		assert.equal(r.$$('tr.row-clickable').length, 1);
+		assert.doesNotMatch(r.text(), /98,292/);
+		assert.doesNotMatch(r.text(), /03eeee/);
+	} finally {
+		await r.unmount();
+		restoreFetch();
 	}
 });

@@ -24,6 +24,7 @@ test('regtest: one confirmation, the regtest prefix and the default fee ceilings
 	assert.deepEqual(cfg.limits, { ...DEFAULT_LIMITS });
 	assert.equal(cfg.mode, 'clearnet');
 	assert.equal(cfg.lightning, 'off');
+	assert.deepEqual([cfg.openWaitMs, cfg.payWaitMs], [20000, 30000]);
 	assert.equal(cfg.previewTtlMs, 3 * 60 * 1000);
 	assert.equal(cfg.stuckAfterBlocks, 3);
 	assert.equal(cfg.receiveSetMax, 50);
@@ -101,6 +102,15 @@ test('fee ceilings come from the environment, and nonsense falls back to the def
 		const cfg = parseConfig('mainnet', base({ BEIGNET_ASSETS_MAX_FEE_RATE: bad, BEIGNET_ASSETS_MAX_FEE_SATS: bad }));
 		assert.deepEqual(cfg.limits, { maxFeeRate: 500, maxFeeSats: 250000 }, `value ${JSON.stringify(bad)}`);
 	}
+});
+
+test('asset channels are asked for by one exact word, and anything else is off', () => {
+	assert.equal(parseConfig('regtest', base({ BEIGNET_ASSETS_LIGHTNING: 'full' })).lightning, 'full');
+	for (const word of ['off', 'FULL', 'Full', ' full', 'true', '1', 'on', '', undefined]) {
+		assert.equal(parseConfig('regtest', base({ BEIGNET_ASSETS_LIGHTNING: word })).lightning, 'off', String(word));
+	}
+	// A wish only: a network without assets is asked the same way and still cannot run.
+	assert.equal(parseConfig('signet', base({ BEIGNET_ASSETS_LIGHTNING: 'full' })).lightning, 'full');
 });
 
 test('the way out: tor, clearnet or hybrid, clearnet when unreadable', () => {

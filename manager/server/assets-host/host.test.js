@@ -23,7 +23,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { harness, refused, encodeFake } = require('./test-fakes');
+const { harness, refused, encodeFake, fakeProof } = require('./test-fakes');
 const { STATES } = require('./adapter');
 const { stepFailure, STEP_WAIT_MS, STEP_WAIT_MAX_MS } = require('./service');
 
@@ -74,7 +74,7 @@ test('an empty wallet: status, balances and activity answer', async () => {
 	assert.equal(status.phase, 'ready');
 	assert.equal(status.ready, true);
 	assert.equal(status.holdsAssets, false);
-	assert.deepEqual(status.lightning, { mode: 'off', usableChannels: 0 });
+	assert.deepEqual(status.lightning, { mode: 'off', usableChannels: 0, feeCoins: null });
 	assert.equal(status.proofServer.reachable, true);
 	assert.deepEqual(await h.get('/balances'), { assets: [], btc: { anchorSats: 0, anchorCount: 0, spendableSats: 500000 } });
 	assert.deepEqual(await h.get('/activity'), { rows: [], nextBefore: null });
@@ -1074,4 +1074,211 @@ test('the backup: a restore asked for by hand is checked the same way', async ()
 	assert.equal(res.same, false);
 	assert.equal(res.imported, body.rows.length);
 	assert.deepEqual(await fresh.call('POST /backup/import', { backup: body }), { imported: 0, same: true });
+});
+
+/* ------------------------------------------------ proofs handed over by file */
+
+const asFile = (bytes) => Buffer.from(bytes).toString('base64');
+
+/** An address of this wallet, paid in a block, whose proof the server does not have. */
+async function paidUnserved(amount = '40') {
+	const ctx = await funded();
+	const made = await ctx.h.call('POST /addresses', { key: ctx.asset.key, amount });
+	const txid = 'dd'.repeat(32);
+	ctx.h.tap.opts.proofMissing = true;
+	ctx.h.tap.chain.pay(made.address.encoded, txid);
+	await ctx.h.confirm(txid);
+	const scriptKey = ctx.h.host.lib.decodeAddress(made.address.encoded).scriptKey;
+	const proof = (extra = {}) => asFile(fakeProof({ assetId: ctx.asset.assetId, scriptKey, anchorOutPoint: `${txid}:0`, amount, ...extra }));
+	return { ...ctx, made, txid, proof };
+}
+
+test('the sender can take the proof file of a send out, once the transaction is deep enough', async () => {
+	const { h, preview, address, mint } = await previewed();
+	const { row } = await h.call('POST /send/commit', { previewId: preview.previewId }, 'commit-key');
+	const early = await refused(h.get('/proofs/export', `id=${row.id}`));
+	assert.deepEqual([early.extensionCode, early.status, early.message], ['PROOF_NOT_READY', 409, 'The proof file exists once the transaction is 1 block deep.']);
+
+	// The proof server says no: the file is what there is to give.
+	h.tap.opts.courierRefuses = 'invalid split commitment proof';
+	await h.confirm(row.txid);
+	assert.equal((await rowOf(h, row.id)).failure.code, 'PROOF_REFUSED');
+	const out = await h.get('/proofs/export', `id=${row.id}`);
+	assert.deepEqual(Object.keys(out).sort(), ['address', 'assetId', 'bytes', 'file', 'fileName', 'id', 'txid']);
+	assert.match(out.fileName, /^proof-[0-9a-f]{8}-[0-9a-f]{8}\.assetproof$/);
+	assert.deepEqual([out.id, out.address, out.txid], [row.id, address, row.txid]);
+	const bytes = Buffer.from(out.file, 'base64');
+	assert.equal(out.bytes, bytes.length);
+	// It is the proof of what the recipient was paid, not of this wallet's change.
+	const facts = h.host.lib.proofFacts(bytes);
+	assert.deepEqual([facts.anchorOutPoint, facts.scriptKey], [`${row.txid}:0`, h.host.lib.decodeAddress(address).scriptKey]);
+
+	// Still there once the server has taken it.
+	h.tap.opts.courierRefuses = null;
+	assert.equal((await h.call('POST /proofs/retry', { id: row.id })).row.state, 'complete');
+	assert.equal((await h.get('/proofs/export', `id=${row.id}`)).file, out.file);
+
+	// A mint has no recipient to hand anything to.
+	const none = await refused(h.get('/proofs/export', `id=${mint.row.id}`));
+	assert.deepEqual([none.extensionCode, none.status], ['NO_PROOF_FILE', 400]);
+	const unknown = await refused(h.get('/proofs/export', 'id=send-00000000'));
+	assert.deepEqual([unknown.extensionCode, unknown.status], ['NOT_FOUND', 404]);
+});
+
+test('a proof file from the sender completes a receive the proof server never served', async () => {
+	const { h, made, proof } = await paidUnserved();
+	assert.equal((await rowOf(h, made.row.id)).failure.code, 'PROOF_UNAVAILABLE');
+	h.tap.calls.length = 0;
+
+	const took = await h.call('POST /proofs/import', { file: proof() });
+	assert.deepEqual(Object.keys(took).sort(), ['result', 'row']);
+	assert.deepEqual([took.result, took.row.id, took.row.state, took.row.failure], ['complete', made.row.id, 'complete', null]);
+	assert.equal((await h.get('/balances')).assets[0].balance.onchain, '1040');
+	// The library did the checking, and no server was asked for anything.
+	assert.equal(named(h, 'freighter.receive').length, 1);
+	assert.deepEqual(h.world.fetched, []);
+	// The file is not kept once the asset is.
+	assert.deepEqual(keys(h, 'handed/'), []);
+	assert.equal(h.events.some(([name, data]) => name === 'receive' && data.row.state === 'complete'), true);
+
+	const again = await h.call('POST /proofs/import', { file: proof() });
+	assert.deepEqual([again.result, again.row.state], ['already', 'complete']);
+	assert.equal((await h.get('/balances')).assets[0].balance.onchain, '1040');
+});
+
+test('a proof file is refused in words when it is not a proof, not for this wallet, or not for this payment', async () => {
+	const { h, asset, made, proof } = await paidUnserved();
+	const bad = async (body) => {
+		const err = await refused(h.call('POST /proofs/import', body));
+		return [err.extensionCode, err.status, err.message];
+	};
+	assert.deepEqual(await bad({}), ['BAD_PROOF_FILE', 400, 'A proof file is needed.']);
+	assert.deepEqual(await bad({ file: 'not base64 at all!' }), ['BAD_PROOF_FILE', 400, 'That file is not a Taproot Assets proof file this wallet can read.']);
+	assert.deepEqual(await bad({ file: asFile('{"a":1}') }), ['BAD_PROOF_FILE', 400, 'That file is not a Taproot Assets proof file this wallet can read.']);
+	assert.deepEqual(await bad({ file: 'A'.repeat(6 * 1024 * 1024) }), ['BAD_PROOF_FILE', 413, 'That file is larger than a proof file this wallet takes (4 MB).']);
+	assert.deepEqual(await bad({ file: proof({ scriptKey: `02${'77'.repeat(32)}` }) }), [
+		'PROOF_NOT_OURS',
+		404,
+		'This proof is not for an address this wallet made. It has to be the file of a payment to this wallet.'
+	]);
+	assert.deepEqual(await bad({ file: proof({ anchorOutPoint: `${'ee'.repeat(32)}:0` }) }), [
+		'PROOF_OTHER_PAYMENT',
+		409,
+		'This proof is for a different payment than the one this wallet found for that address.'
+	]);
+
+	// An address nobody has paid: there is nothing on the chain to hold the proof against.
+	const unpaid = await h.call('POST /addresses', { key: asset.key, amount: '7' });
+	const forUnpaid = asFile(fakeProof({ assetId: asset.assetId, scriptKey: h.host.lib.decodeAddress(unpaid.address.encoded).scriptKey, anchorOutPoint: `${'ee'.repeat(32)}:0` }));
+	assert.deepEqual(await bad({ file: forUnpaid }), [
+		'PAYMENT_NOT_SEEN',
+		409,
+		'The payment this proof is for is not in a block yet. Import the file once its transaction has confirmed.'
+	]);
+
+	// None of that took anything or left anything behind.
+	assert.equal((await h.get('/balances')).assets[0].balance.onchain, '1000');
+	assert.deepEqual(keys(h, 'handed/'), []);
+	assert.equal((await rowOf(h, made.row.id)).state === 'complete', false);
+});
+
+test('a proof file that does not verify is dropped, and the proof server is still asked for the real one', async () => {
+	const { h, made, proof } = await paidUnserved();
+	const err = await refused(h.call('POST /proofs/import', { file: proof({ valid: false }) }));
+	assert.deepEqual(
+		[err.extensionCode, err.status, err.message],
+		['PROOF_INVALID', 422, 'This proof file did not pass verification, so nothing was taken from it: Proof does not match receive address.']
+	);
+	assert.deepEqual(keys(h, 'handed/'), []);
+	assert.equal((await h.get('/balances')).assets[0].balance.onchain, '1000');
+
+	// The server has it after all: the receive completes from there.
+	h.tap.opts.proofMissing = false;
+	const checked = await h.call('POST /addresses/check', { id: made.row.id });
+	assert.equal(checked.row.state, 'complete');
+	assert.equal(h.world.fetched.length, 1);
+	assert.equal((await h.get('/balances')).assets[0].balance.onchain, '1040');
+});
+
+test('a proof file for a payment that is not deep enough is kept, across a restart, and used without a server', async () => {
+	const { h, made, proof } = await paidUnserved();
+	h.tap.opts.notBuried = true;
+	const took = await h.call('POST /proofs/import', { file: proof() });
+	assert.deepEqual([took.result, took.waitingFor, took.reason], ['kept', 'confirmations', null]);
+	assert.notEqual(took.row.state, 'complete');
+	// What the server said before is not the row's news any more.
+	assert.equal(took.row.failure, null);
+	assert.equal(keys(h, 'handed/').length, 1);
+	assert.equal((await h.get('/balances')).assets[0].balance.onchain, '1000');
+
+	// Blocks pass and it is still not deep enough: nothing is lost by trying.
+	await h.host.pass({ block: true });
+	assert.equal(keys(h, 'handed/').length, 1);
+
+	const h2 = h.restart();
+	await h2.boot();
+	assert.equal(keys(h2, 'handed/').length, 1);
+	h2.tap.opts.notBuried = false;
+	await h2.host.pass({ block: true });
+	const done = await rowOf(h2, made.row.id);
+	assert.equal(done.state, 'complete');
+	assert.equal((await h2.get('/balances')).assets[0].balance.onchain, '1040');
+	// The server still does not have it, and was never needed.
+	assert.equal(h2.tap.opts.proofMissing, true);
+	assert.deepEqual(h2.world.fetched, []);
+	assert.deepEqual(keys(h2, 'handed/'), []);
+});
+
+test('a kept proof file that later fails verification is dropped by the loop', async () => {
+	const { h, made, proof } = await paidUnserved();
+	h.tap.opts.notBuried = true;
+	// Readable, for the right payment, and not valid: only verification can tell.
+	await h.host.lock.run(async () => {
+		const record = await h.tap.stores.receives.getReceive(made.address.encoded);
+		h.host.keepHanded(record.locator, Buffer.from(proof({ valid: false }), 'base64').toString('hex'), made.address.encoded);
+	});
+	assert.equal(keys(h, 'handed/').length, 1);
+	await h.call('POST /addresses/check', { id: made.row.id });
+	assert.deepEqual(keys(h, 'handed/'), []);
+	assert.notEqual((await rowOf(h, made.row.id)).state, 'complete');
+});
+
+test('a send marked as handed over stops counting as in progress, is still offered to the server, and the mark can be taken back', async () => {
+	const { h, preview, mint } = await previewed();
+	const { row } = await h.call('POST /send/commit', { previewId: preview.previewId }, 'commit-key');
+	const early = await refused(h.call('POST /proofs/handed-over', { id: row.id }));
+	assert.deepEqual([early.extensionCode, early.status], ['PROOF_NOT_READY', 409]);
+
+	h.tap.opts.courierRefuses = 'invalid split commitment proof';
+	await h.confirm(row.txid);
+	await h.host.pass();
+	assert.equal((await rowOf(h, row.id)).handedOver, null);
+	assert.equal((await h.get('/status')).pending.sends, 1);
+
+	const marked = await h.call('POST /proofs/handed-over', { id: row.id });
+	assert.equal(marked.row.state, 'proofs', 'the wallet did not deliver anything: only how it reads changed');
+	assert.equal(typeof marked.row.handedOver, 'number');
+	assert.equal((await h.call('POST /proofs/handed-over', { id: row.id })).row.handedOver, marked.row.handedOver, 'said twice, kept once');
+	await h.host.pass();
+	assert.equal((await h.get('/status')).pending.sends, 0);
+	// The refusal is still the server's answer, and the wallet still asks.
+	const still = await h.call('POST /proofs/retry', { id: row.id });
+	assert.deepEqual([still.row.state, still.row.failure.code, still.row.handedOver], ['proofs', 'PROOF_REFUSED', marked.row.handedOver]);
+
+	// Taken back, it is in progress again.
+	const undone = await h.call('POST /proofs/handed-over', { id: row.id, handedOver: false });
+	assert.equal(undone.row.handedOver, null);
+	await h.host.pass();
+	assert.equal((await h.get('/status')).pending.sends, 1);
+
+	// Marked again, and then the server takes the proof: complete, and the mark is kept as what happened.
+	await h.call('POST /proofs/handed-over', { id: row.id });
+	h.tap.opts.courierRefuses = null;
+	const done = await h.call('POST /proofs/retry', { id: row.id });
+	assert.equal(done.row.state, 'complete');
+	assert.equal(typeof done.row.handedOver, 'number');
+	assert.equal((await h.call('POST /proofs/handed-over', { id: row.id, handedOver: false })).row.handedOver, done.row.handedOver, 'nothing to take back once it is complete');
+
+	const none = await refused(h.call('POST /proofs/handed-over', { id: mint.row.id }));
+	assert.deepEqual([none.extensionCode, none.status], ['NO_PROOF_FILE', 400]);
 });

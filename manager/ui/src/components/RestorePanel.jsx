@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePoll } from '../hooks/usePoll.js';
 import { Badge, Button, Card } from './ui.jsx';
 import { shortId } from '../lib/format.js';
-import { describeRecovery, restoreProgress } from '../lib/recovery.js';
+import { assetRestoreRefusal, describeRecovery, restoreProgress } from '../lib/recovery.js';
 
 /**
  * The guardian restore, from the hold to the channels landing.
@@ -80,6 +80,9 @@ export default function RestorePanel({ id, api, rec, tick = 0, onStarted, onDone
 			const code = e && e.code;
 			if (code === 'RESTORE_IN_PROGRESS' || code === 'RESTORE_NOT_PENDING') {
 				// Already running (a reload, a double click) or already done.
+			} else if (assetRestoreRefusal(e)) {
+				// Refused whole over an asset channel: nothing was restored.
+				setRefusal(assetRestoreRefusal(e));
 			} else if (REFUSALS.has(code)) {
 				setRefusal(e.message);
 			} else {

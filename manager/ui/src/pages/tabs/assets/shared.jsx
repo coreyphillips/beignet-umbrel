@@ -1,10 +1,10 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useRef, useState } from 'react';
 import AssetAvatar from '../../../components/AssetAvatar.jsx';
 import { AssetAmount } from '../../../components/AssetAmount.jsx';
 import { Badge, ConfirmationMeter, CopyText, DetailRow, ExplorerLink, Modal, Timeline } from '../../../components/ui.jsx';
 import { usePoll } from '../../../hooks/usePoll.js';
 import { LIMITS } from '../../../lib/assets.js';
-import { headline, kindWord, namesOf, proofUnpublished, railOf, statusOf, stepsOf, timelineLabel, unwatched } from '../../../lib/asset-progress.js';
+import { handedOver, headline, kindWord, namesOf, noticeOf, proofUnpublished, railOf, statusOf, stepsOf, timelineLabel, unwatched } from '../../../lib/asset-progress.js';
 import { txUrl } from '../../../lib/explorer.js';
 import { fmtDate, fmtSats, shortId } from '../../../lib/format.js';
 
@@ -113,6 +113,21 @@ export function RowTimeline({ row, network, host, compact = false, testId }) {
 	return <Timeline label={timelineLabel(row)} steps={steps} compact={compact} live={compact ? undefined : headline(row, { network })} testId={testId} />;
 }
 
+/**
+ * What the wallet says of a payment whose end it cannot vouch for
+ * (noticeOf): its own sentence, as something said and not something
+ * blocked, with its code for a test to find.
+ */
+export function RowNotice({ row, testId = 'asset-row-notice' }) {
+	const notice = noticeOf(row);
+	if (!notice) return null;
+	return (
+		<div className="info-note" role="status" data-testid={testId} data-code={notice.code}>
+			{notice.message}
+		</div>
+	);
+}
+
 /** A row's state as a badge. */
 export function RowStatus({ row, network }) {
 	const s = statusOf(row, { network });
@@ -150,6 +165,7 @@ export function AssetTransferDetail({ row, network, host, origin, onClose, child
 					<RowAssets row={row} />
 					<RowStatus row={row} network={network} />
 				</div>
+				<RowNotice row={row} />
 				{children}
 				{stepsOf(row, { network, host }).length > 0 && (
 					<div className="asset-transfer-steps">
@@ -187,6 +203,7 @@ export function AssetTransferDetail({ row, network, host, origin, onClose, child
 							<code>{row.courier}</code>
 						</DetailRow>
 					)}
+					<ProofFileRow row={row} />
 					{row.paymentHash && (
 						<DetailRow label="Payment hash">
 							<CopyText value={row.paymentHash} label={shortId(row.paymentHash, 10)} />
@@ -197,6 +214,79 @@ export function AssetTransferDetail({ row, network, host, origin, onClose, child
 				</div>
 			</div>
 		</Modal>
+	);
+}
+
+/*
+ * Proof files. A transfer is complete for the person receiving once they
+ * hold its proof. A proof server is how it usually reaches them; the sender
+ * can also save the file and hand it over, and the recipient import it. The
+ * tab provides { save(row), take(file), mark(row, on), busy } here, so a note
+ * anywhere in it can offer them without each view passing them down.
+ */
+export const ProofFiles = createContext(null);
+
+/** The sender's word that the recipient was given the file: the send then reads as done. */
+function MarkHandedOver({ row }) {
+	const files = useContext(ProofFiles);
+	if (!files || !row || row.kind !== 'send' || row.state !== 'proofs') return null;
+	const busy = files.busy === `mark:${row.id}`;
+	return (
+		<button type="button" className="btn sm" disabled={busy} data-testid="asset-proof-handed" onClick={() => files.mark(row, true)}>
+			{busy ? 'Marking…' : 'Mark as handed over'}
+		</button>
+	);
+}
+
+/** Save the proof file of a send, for the sender to give to the recipient. */
+export function SaveProofFile({ row, label = 'Save the proof file', className = 'btn sm' }) {
+	const files = useContext(ProofFiles);
+	if (!files || !row || row.kind !== 'send' || !['proofs', 'complete'].includes(row.state)) return null;
+	const busy = files.busy === `save:${row.id}`;
+	return (
+		<button type="button" className={className} disabled={busy} data-testid="asset-proof-save" onClick={() => files.save(row)}>
+			{busy ? 'Saving…' : label}
+		</button>
+	);
+}
+
+/** Take a proof file the sender handed over. The wallet verifies it before anything is taken from it. */
+export function ImportProofFile({ label = 'Import a proof file', className = 'btn sm', testId = 'asset-proof-import' }) {
+	const files = useContext(ProofFiles);
+	const input = useRef(null);
+	if (!files) return null;
+	const busy = files.busy === 'take';
+	return (
+		<>
+			<input
+				ref={input}
+				type="file"
+				accept=".assetproof,application/octet-stream"
+				hidden
+				data-testid={`${testId}-file`}
+				onChange={(e) => {
+					const file = e.target.files && e.target.files[0];
+					// The same file can be chosen again after a refusal.
+					e.target.value = '';
+					if (file) files.take(file);
+				}}
+			/>
+			<button type="button" className={className} disabled={busy} data-testid={testId} onClick={() => input.current && input.current.click()}>
+				{busy ? 'Checking the proof…' : label}
+			</button>
+		</>
+	);
+}
+
+/** A send's proof file in its detail dialog: there to save whether or not a server took it. */
+function ProofFileRow({ row }) {
+	const files = useContext(ProofFiles);
+	if (!files || row.kind !== 'send' || !['proofs', 'complete'].includes(row.state)) return null;
+	return (
+		<DetailRow label="Proof file">
+			<SaveProofFile row={row} label="Save" />
+			<span className="detail-hint">for the recipient to import</span>
+		</DetailRow>
 	);
 }
 
@@ -217,22 +307,32 @@ export function useRowDetail() {
  */
 export function ProofLateNote({ row, host, onRetry, busy }) {
 	if (proofUnpublished(row)) return <ProofUnpublishedNote row={row} host={host} onRetry={onRetry} busy={busy} />;
+	if (handedOver(row)) return <ProofHandedOverNote row={row} host={host} />;
 	if (row && row.failure && row.kind === 'send' && row.state === 'proofs' && !row.failed) {
 		return <ProofUndeliveredNote row={row} host={host} onRetry={onRetry} busy={busy} />;
 	}
 	if (!row || !row.failure || row.kind !== 'receive' || row.state !== 'proofs') return null;
+	return <ProofAwaitedNote row={row} host={host} onRetry={onRetry} busy={busy} />;
+}
+
+function ProofAwaitedNote({ row, host, onRetry, busy }) {
+	const files = useContext(ProofFiles);
 	const where = host || row.courier || 'the proof server';
 	return (
 		<div className="error-note note-with-action" role="alert" data-testid="asset-proof-late">
 			<span>
 				The transaction confirmed, but its proof has not arrived from <code>{where}</code> yet. The asset is not lost:
 				the wallet keeps asking, and the sender can deliver the proof again.
+				{files && ' Or ask the sender for the proof file and import it here: no proof server is needed for that.'}
 			</span>
-			{onRetry && (
-				<button type="button" className="btn sm" disabled={busy} data-testid="asset-proof-retry" onClick={onRetry}>
-					{busy ? 'Asking…' : 'Try again now'}
-				</button>
-			)}
+			<div className="note-actions">
+				{onRetry && (
+					<button type="button" className="btn sm" disabled={busy} data-testid="asset-proof-retry" onClick={onRetry}>
+						{busy ? 'Asking…' : 'Try again now'}
+					</button>
+				)}
+				<ImportProofFile label="Import the proof file" testId="asset-proof-late-import" />
+			</div>
 		</div>
 	);
 }
@@ -244,6 +344,7 @@ export function ProofLateNote({ row, host, onRetry, busy }) {
  * there is to do. A server that is only out of reach is said calmly.
  */
 function ProofUndeliveredNote({ row, host, onRetry, busy }) {
+	const files = useContext(ProofFiles);
 	// A send's proof goes to the server its address names, not this wallet's own.
 	const where = row.courier || host || 'the proof server';
 	const refused = row.failure.code === 'PROOF_REFUSED';
@@ -259,19 +360,48 @@ function ProofUndeliveredNote({ row, host, onRetry, busy }) {
 					<>
 						<code>{where}</code> answered and did not take this transfer's proof, so the recipient does not have the asset
 						yet. Nothing is lost: this wallet keeps the proof and offers it again, less and less often.
+						{files && ' You can also save the proof file and give it to the recipient, who imports it on their Receive page.'}
 					</>
 				) : (
 					<>
 						The transaction confirmed, and its proof has not reached <code>{where}</code> yet. The recipient has the asset
 						once it has, and the wallet keeps trying.
+						{files && ' If it does not get through, save the proof file and give it to the recipient to import.'}
 					</>
 				)}
 			</span>
-			{onRetry && (
-				<button type="button" className="btn sm" disabled={busy} data-testid="asset-proof-retry" onClick={onRetry}>
-					{busy ? 'Offering…' : 'Offer it again now'}
-				</button>
-			)}
+			<div className="note-actions">
+				{onRetry && (
+					<button type="button" className="btn sm" disabled={busy} data-testid="asset-proof-retry" onClick={onRetry}>
+						{busy ? 'Offering…' : 'Offer it again now'}
+					</button>
+				)}
+				<SaveProofFile row={row} />
+				<MarkHandedOver row={row} />
+			</div>
+		</div>
+	);
+}
+
+/** A send the sender settled by hand: said calmly, with the way back. */
+function ProofHandedOverNote({ row, host }) {
+	const files = useContext(ProofFiles);
+	const where = row.courier || host || 'the proof server';
+	const busy = !!files && files.busy === `mark:${row.id}`;
+	return (
+		<div className="info-note note-with-action" role="status" data-testid="asset-proof-handed-over">
+			<span>
+				You marked this transfer's proof as handed over. The recipient has the asset once they import the file. This
+				wallet still offers the proof to <code>{where}</code> from time to time.
+			</span>
+			<div className="note-actions">
+				<SaveProofFile row={row} label="Save the file again" />
+				{files && (
+					<button type="button" className="btn sm" disabled={busy} data-testid="asset-proof-handed-undo" onClick={() => files.mark(row, false)}>
+						Undo
+					</button>
+				)}
+			</div>
 		</div>
 	);
 }

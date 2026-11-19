@@ -2,7 +2,7 @@
 // asset that is then minted again. Each issuance is published to the stack's
 // tapd, which verifies a proof before it stores it, so a root there is tapd's
 // own word that the mint is valid.
-import { newWallet, status, post, x, idem, mine, inMempool, rowReaches, holding, balances, tapdKnows, waitFor, refusal, check, log, done } from './lib.mjs';
+import { newWallet, api, status, post, x, idem, mine, inMempool, rowReaches, holding, balances, tapdKnows, waitFor, refusal, check, log, done } from './lib.mjs';
 
 const A = await newWallet('Mint');
 const s = await status(A.id);
@@ -10,7 +10,10 @@ check('status is ready on regtest', s.ready && s.network === 'regtest' && s.hrp 
 check('one confirmation on regtest', s.chain.minConfirmations === 1, JSON.stringify(s.chain));
 check("the host read the chain off the Electrum server's block 0", s.chain.name === 'regtest', JSON.stringify(s.chain));
 check('the proof server is the stack tapd and is reachable', s.proofServer.reachable === true && /tapd:10029/.test(s.proofServer.courier), JSON.stringify(s.proofServer));
-check('lightning is off in this milestone', s.lightning.mode === 'off');
+// Asset Lightning is on exactly where the install carries asset channels
+// (assetChannelsAvailable): a new wallet here has Lightning and no guardians.
+const { assetChannelsAvailable } = await api('/config');
+check(`asset Lightning is ${assetChannelsAvailable ? 'on' : 'off'}, as the install says`, s.lightning.mode === (assetChannelsAvailable ? 'full' : 'off'), JSON.stringify(s.lightning));
 check('nothing held yet', s.holdsAssets === false && (await balances(A.id)).assets.length === 0);
 
 const quote = await post(A.id, '/mint/quote', { count: 1, feeRate: 2 });

@@ -140,6 +140,73 @@ test('the file names the chain, and the wallet\'s own note of it stays behind', 
 	assert.equal(target.storage.get('h/chain'), null);
 });
 
+test('the record of asset channels is the library\'s part of the file: made by it, checked, and restored by it into a store that has none', () => {
+	const mem = filled();
+	// The library's Lightning store: what a backup may carry, and what only this machine can honour.
+	mem.storage.set('l/tap/channel/v1/last/bb', 'last seen');
+	mem.storage.set('l/tap/quotes/01', 'a price');
+	mem.storage.set('l/tap/funding/v1/flow/cc', 'a funding under way');
+	const part = { version: 1, rows: [{ key: 'tap/channel/v1/last/bb', value: 'last seen' }] };
+	const restored = [];
+	const lightning = (storage) => ({
+		backup: () => part,
+		restore: (given) => {
+			restored.push(given);
+			for (const row of given.rows) storage.set(`l/${row.key}`, row.value);
+			return given.rows.length;
+		}
+	});
+	const dir = tmp();
+	const file = path.join(dir, 'backup.json');
+	const cfg = config(file);
+	backup.exportBackup({ storage: mem.storage, rows: hostRows(mem.storage), cfg, fingerprint: WALLET, now: 1_700_000_000_000, lightning: lightning(mem.storage) });
+	const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+	// No row of the library's Lightning store is copied as it is: the host does not choose among them.
+	assert.equal(written.rows.some(([key]) => key.startsWith('l/')), false);
+	assert.equal(written.rowsHash, backup.hashRows(written.rows));
+	assert.deepEqual(written.lightning, part);
+	assert.equal(written.lightningHash, backup.hashRows(part.rows.map((r) => [r.key, r.value])));
+	// Any row of that store is a record of this wallet's own.
+	assert.equal(backup.holdsRecords(mem.storage), true);
+	const only = memoryStorage();
+	only.storage.set('l/tap/quotes/01', 'a price');
+	assert.equal(backup.holdsRecords(only.storage), true);
+
+	// An empty wallet: the library is handed its part and writes it itself.
+	const target = memoryStorage();
+	const taken = backup.importBackup({ storage: target.storage, cfg, fingerprint: WALLET, backup: written, lightning: lightning(target.storage) });
+	assert.equal(taken.same, false);
+	assert.deepEqual(restored, [part]);
+	assert.deepEqual(target.storage.list('l/'), [{ key: 'l/tap/channel/v1/last/bb', value: 'last seen' }]);
+	assert.deepEqual(backup.collectRows(target.storage), written.rows);
+	// The same file again: the wallet has Lightning rows now, and they stand.
+	backup.importBackup({ storage: target.storage, cfg, fingerprint: WALLET, backup: written, lightning: lightning(target.storage) });
+	assert.equal(restored.length, 1);
+	// A wallet that cannot have asset channels takes the rest and leaves that part alone.
+	const plain = memoryStorage();
+	assert.equal(backup.importBackup({ storage: plain.storage, cfg, fingerprint: WALLET, backup: written }).imported > 0, true);
+	assert.deepEqual(plain.storage.list('l/'), []);
+
+	// Changed after it was written, or refused by the library: nothing at all is restored.
+	const fresh = memoryStorage();
+	const changed = refusedBy(() => backup.importBackup({ storage: fresh.storage, cfg, fingerprint: WALLET, backup: { ...written, lightning: { version: 1, rows: [] } }, lightning: lightning(fresh.storage) }));
+	assert.deepEqual([changed.extensionCode, changed.message], ['BAD_BACKUP', 'That assets backup is damaged: its record of asset channels does not match its checksum.']);
+	// So is one whose record is gone and whose checksum of it is still there.
+	const { lightning: gone, ...cut } = written;
+	assert.equal(refusedBy(() => backup.importBackup({ storage: fresh.storage, cfg, fingerprint: WALLET, backup: cut, lightning: lightning(fresh.storage) })).extensionCode, 'BAD_BACKUP');
+	assert.deepEqual(gone, part);
+	const refusing = {
+		backup: () => part,
+		restore: () => {
+			throw Object.assign(new Error('ERR_BEIGNET_LN_INVALID: row 0 is not one a backup carries'), { code: 'ERR_BEIGNET_LN_INVALID' });
+		}
+	};
+	const unread = refusedBy(() => backup.importBackup({ storage: fresh.storage, cfg, fingerprint: WALLET, backup: written, lightning: refusing }));
+	assert.deepEqual([unread.extensionCode, unread.message], ['BAD_BACKUP', 'That assets backup holds a record of asset channels that this app cannot read, so nothing was restored.']);
+	assert.deepEqual(backup.collectRows(fresh.storage), []);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('holding records: assets, addresses and work in progress count, a key counter and local notes do not', () => {
 	const mem = memoryStorage();
 	assert.equal(backup.holdsRecords(mem.storage), false);

@@ -29,6 +29,7 @@ const holding = (name, total, extra = {}) => ({
 
 function setup({
 	holdings = [],
+	balance = { onchain: 10_000, lightning: 0, total: 10_000 },
 	status,
 	config = { assetsAvailable: true },
 	rec = { onchainOnly: true, assets: { enabled: true, holdsAssets: true } }
@@ -40,7 +41,7 @@ function setup({
 		api: {
 			get: async (path) => {
 				asked.push(path);
-				if (path === '/balance') return { onchain: 10_000, lightning: 0, total: 10_000 };
+				if (path === '/balance') return balance;
 				if (path === '/x/assets/balances') {
 					return { assets: holdings, btc: { anchorSats: 0, anchorCount: 0, spendableSats: 10_000 } };
 				}
@@ -180,5 +181,64 @@ test('nothing about assets shows where the app has no assets host, or the wallet
 		} finally {
 			await r.unmount();
 		}
+	}
+});
+
+/* ------------------------------------------- the bitcoin in asset channels */
+
+const tile = (r, label) => r.$$('.stat').find((s) => s.querySelector('.stat-label')?.textContent === label);
+const lightningWallet = { assets: { enabled: true, holdsAssets: true } };
+
+test('the bitcoin in asset channels is said under the Lightning balance, and is in no figure', async () => {
+	const { props } = setup({
+		status: { lockedSats: 0, holdsAssets: true },
+		rec: lightningWallet,
+		balance: { onchain: 10_000, lightning: 2_000, total: 12_000, assetChannelSats: 98_292 }
+	});
+	const r = await render(wrapped, props);
+	try {
+		const line = r.$('[data-testid="overview-asset-channel-sats"]');
+		assert.ok(line, 'a line says where the bitcoin went');
+		assert.ok(tile(r, 'Lightning').contains(line), 'under the Lightning figure');
+		assert.match(line.textContent, /^\+ 98,292 sats in asset channels/);
+		assert.equal(r.$('[data-testid="overview-asset-channel-closing-sats"]'), null);
+		const sub = tile(r, 'Lightning').querySelector('.stat-sub');
+		assert.equal(sub.querySelector('.help-btn').getAttribute('aria-label'), 'About bitcoin in asset channels');
+		assert.match(sub.textContent, /They come back when the channel is closed\./);
+		// A quiet line: the figures themselves are the engine's, untouched.
+		assert.match(tile(r, 'Lightning').querySelector('.stat-value').textContent, /^2,000/);
+		assert.match(tile(r, 'Total').querySelector('.stat-value').textContent, /^12,000/);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('the bitcoin of a channel that is closing is said as on its way back', async () => {
+	const { props } = setup({
+		status: { lockedSats: 0, holdsAssets: true },
+		rec: lightningWallet,
+		balance: { onchain: 10_000, lightning: 0, total: 10_000, assetChannelSats: 98_292, assetChannelClosingSats: 40_000 }
+	});
+	const r = await render(wrapped, props);
+	try {
+		assert.match(r.$('[data-testid="overview-asset-channel-sats"]').textContent, /^\+ 98,292 sats in asset channels/);
+		assert.match(
+			r.$('[data-testid="overview-asset-channel-closing-sats"]').textContent,
+			/^\+ 40,000 sats on their way back from a closing asset channel/
+		);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('a wallet without asset channels, or on an engine that does not say, has no such line', async () => {
+	const { props } = setup({ status: { lockedSats: 0, holdsAssets: true }, rec: lightningWallet });
+	const r = await render(wrapped, props);
+	try {
+		assert.equal(r.$('[data-testid="overview-asset-channel-sats"]'), null);
+		assert.equal(r.$('[data-testid="overview-asset-channel-closing-sats"]'), null);
+		assert.equal(tile(r, 'Lightning').querySelector('.stat-sub'), null, 'the Lightning tile is as it was');
+	} finally {
+		await r.unmount();
 	}
 });

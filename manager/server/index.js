@@ -2,17 +2,12 @@
 
 const path = require('path');
 const express = require('express');
-const { createProxyMiddleware } = require('http-proxy-middleware');
 const { config, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, PUBLIC_ELECTRUM_SERVERS, PUBLIC_UNIVERSE_SERVERS, publicUniverseServers } = require('./config');
 const { WalletManager } = require('./wallet-manager');
+const { createDaemonProxy } = require('./daemon-proxy');
 const { RESTORE_BODY_LIMIT_BYTES } = require('./backup');
 const { createAccessGuard } = require('./access-control');
-const { releaseUpstreamOnClose } = require('./proxy-release');
 const { createTransactionsRoute } = require('./dropped-transactions');
-
-// Cap on how much of a failed daemon response is buffered before logging it.
-// Error bodies are small; this only stops a large one from being held in memory.
-const MAX_LOGGED_BODY = 8192;
 
 function asyncHandler(fn) {
 	return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -42,69 +37,7 @@ async function main() {
 
 	// --- Reverse proxy to the per-wallet beignet daemons. Mounted BEFORE the
 	// JSON body parser so request bodies (e.g. POST /send) stream through intact.
-	const proxy = createProxyMiddleware({
-		target: 'http://127.0.0.1:1',
-		changeOrigin: true,
-		ws: false,
-		logLevel: 'warn',
-		router: (req) => manager.target(req.params.id),
-		// Strip the /wallets/:id/api mount prefix so the daemon sees its own
-		// routes (e.g. /info, /balance, /events). Anchored at the start, so
-		// query strings and already-stripped paths are left intact.
-		pathRewrite: { '^/wallets/[^/]+/api': '' },
-		onProxyReq: (proxyReq, req, res) => {
-			try {
-				proxyReq.setHeader('Authorization', `Bearer ${manager.token(req.params.id)}`);
-			} catch (_) {
-				/* token missing; daemon will reject */
-			}
-			// Without this a closed wallet page leaves its /events stream open at
-			// the daemon, which caps them (see proxy-release.js).
-			releaseUpstreamOnClose(proxyReq, req, res);
-		},
-		// Record failed daemon calls in the wallet's log. The daemon answers a
-		// rejected action (a peer that will not complete the handshake, a channel
-		// it will not open) to the browser that asked and nowhere else, so the
-		// failure never reached the Logs tab and the tab looked empty at exactly
-		// the moment someone went looking. Only errors are recorded, so a working
-		// wallet does not fill its log with successful calls.
-		onProxyRes: (proxyRes, req) => {
-			const failed = proxyRes.statusCode >= 400;
-			// Non-GETs are the actions worth reporting; they can also fail with a
-			// 200 carrying {ok:false}, so their bodies are inspected either way.
-			if (!failed && req.method === 'GET') return;
-			if (!String(proxyRes.headers['content-type'] || '').includes('json')) return;
-			let body = '';
-			proxyRes.on('data', (chunk) => {
-				if (body.length < MAX_LOGGED_BODY) body += chunk.toString('utf8');
-			});
-			proxyRes.on('end', () => {
-				let parsed;
-				try {
-					parsed = JSON.parse(body);
-				} catch (_) {
-					return; // truncated or not JSON after all
-				}
-				if (!parsed || parsed.ok !== false) return;
-				const err = parsed.error || {};
-				const route = String(req.originalUrl || '').replace(/^\/wallets\/[^/]+\/api/, '');
-				manager.recordLog(
-					req.params.id,
-					`${req.method} ${route} failed [${err.code || proxyRes.statusCode}] ${
-						err.message || ''
-					}`.trim()
-				);
-			});
-		},
-		onError: (err, req, res) => {
-			if (!res.headersSent) {
-				res.status(502).json({
-					ok: false,
-					error: { code: 'PROXY_ERROR', message: err.message }
-				});
-			}
-		}
-	});
+	const proxy = createDaemonProxy(manager);
 
 	// A pending on-chain transaction the network dropped is marked as such
 	// instead of showing as pending for good (#285). Anything this cannot do

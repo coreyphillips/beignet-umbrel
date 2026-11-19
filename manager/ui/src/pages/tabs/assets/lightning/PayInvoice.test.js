@@ -18,6 +18,7 @@ import { click, settle, type } from '../../../../../test/render.mjs';
 import { cmpUnits, fmtAsset } from '../../../../lib/asset-amount.js';
 import { bech32Encode } from '../../../../lib/payment-uri.js';
 import { CHANGE_HOLD_MS } from './PayInvoice.jsx';
+import { lightningRefusal } from '../../../../lib/asset-lightning.js';
 
 test.beforeEach(() => sessionStorage.clear());
 
@@ -317,4 +318,183 @@ test('a refusal the page has no words for is said in the wallet words, never as 
 	} finally {
 		await r.unmount();
 	}
+});
+
+test('an invoice a channel peer made for the asset alone is paid at its face, with no price shown', async () => {
+	const backend = assetsBackend({ priced: false });
+	const busd = await busdOf(backend);
+	const r = await pasted(backend, 'demo-main', FIVE_THOUSAND);
+	try {
+		const panel = r.test('asset-pay-quote');
+		assert.equal(panel.getAttribute('data-state'), 'priced');
+		assert.equal(panel.getAttribute('data-priced'), 'no');
+		// A unit to the sat: 5,000 sats on the invoice is 5,000 units, 50.00 BUSD.
+		const amount = fmtAsset('5000', busd);
+		assert.equal(amount, '50.00 BUSD');
+		const rows = [...panel.querySelectorAll('tr')].map((tr) => tr.children[0].textContent);
+		assert.deepEqual(rows, ['Paid to', 'You can send', 'Held for']);
+		assert.match(panel.textContent, /Paid to\s*Your channel peerLightning Labs edge/);
+		assert.doesNotMatch(panel.textContent, /The invoice gets|Price/);
+		assert.match(
+			r.test('asset-pay-unpriced').textContent,
+			/Your channel peer made this invoice for the asset alone\. The sats written on it are not a price\./
+		);
+
+		const submit = r.test('asset-pay-submit');
+		assert.equal(submit.textContent, `Pay ${amount}`);
+		await click(submit);
+		await settle(ANSWERED_MS);
+		const sent = backend.posted('/pay');
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].body.maxAssetAmount, '5000');
+		const receipt = r.test('asset-pay-receipt');
+		assert.ok(receipt.textContent.includes(`${amount} paid over Lightning.`));
+		assert.doesNotMatch(receipt.textContent, /for an invoice of/);
+	} finally {
+		await r.unmount();
+	}
+});
+
+const UNACCOUNTED = 'The node no longer has a record of this payment, so how it ended cannot be known. It may have been paid. This wallet will not pay the invoice again.';
+const UNCONFIRMED = 'The node took this payment without confirming that it went out as an asset payment. It ends as the node reports, and its units are not known to have left the channel.';
+
+test('a payment the node has no record of any more is shown with the wallet\'s note, never as paid or failed, and is not paid again', async () => {
+	const backend = assetsBackend();
+	const api = backend.api('demo-main');
+	assert.equal(backend.mock.seed('demo-main', 'pay-unaccounted'), true);
+	const before = (await busdOf(backend)).balance.lightningSendable;
+	// The row a payment made earlier left: pending, with the note, in the wallet's shape.
+	const planted = (await api.get('/x/assets/activity?kind=ln-send')).rows[0];
+	assert.deepEqual([planted.state, planted.failed, planted.notice], ['pending', false, { code: 'PAYMENT_UNACCOUNTED', message: UNACCOUNTED }]);
+	// A price for the same invoice, held from before it was paid.
+	const early = await api.post('/x/assets/pay/quote', { bolt11: FIVE_THOUSAND, key: (await busdOf(backend)).key });
+	const r = await pasted(backend, 'demo-main', FIVE_THOUSAND);
+	try {
+		await click(r.test('asset-pay-submit'));
+		await settle(ANSWERED_MS);
+		const receipt = r.test('asset-pay-receipt');
+		assert.equal(receipt.getAttribute('data-settled'), 'no');
+		assert.equal(receipt.getAttribute('data-notice'), 'PAYMENT_UNACCOUNTED');
+		assert.equal(receipt.querySelector('.paid-title').textContent, 'Not known');
+		assert.equal(/\bpaid\b|failed/i.test(receipt.querySelector('.wallet-meta').textContent), false, 'neither paid nor failed');
+		const note = r.test('asset-pay-notice');
+		assert.equal(note.getAttribute('data-code'), 'PAYMENT_UNACCOUNTED');
+		assert.equal(note.getAttribute('role'), 'status');
+		assert.equal(note.className.includes('info-note'), true, 'said, not blocked');
+		assert.equal(note.textContent, UNACCOUNTED);
+		assert.equal(r.toasts().some((t) => /Paid/.test(t)), false, 'and nothing announces it as paid');
+		// Nothing is known to have left the channel.
+		assert.equal((await busdOf(backend)).balance.lightningSendable, before);
+
+		// Pasted again, the wallet will not price it, in its own sentence.
+		await click(r.test('asset-pay-another'));
+		await type(r.test('asset-send-input'), FIVE_THOUSAND);
+		await settle(PRICED_MS);
+		const refusal = r.test('asset-pay-refusal');
+		assert.equal(refusal.getAttribute('data-code'), 'ALREADY_PAID');
+		assert.equal(refusal.textContent, 'This wallet has already paid that invoice, or is paying it now.');
+	} finally {
+		await r.unmount();
+	}
+	// Asked to pay it all the same, the wallet answers 409 with the note's own words.
+	await assert.rejects(
+		api.post('/x/assets/pay', { bolt11: FIVE_THOUSAND, key: (await busdOf(backend)).key, quoteId: early.quoteId, maxAssetAmount: early.assetAmount }, { headers: { 'X-Idempotency-Key': 'again' } }),
+		(e) => e.code === 'PAYMENT_UNACCOUNTED' && e.status === 409 && e.message === UNACCOUNTED
+	);
+	// And with a price that has run out, it is not priced again either.
+	await assert.rejects(api.post('/x/assets/pay', { bolt11: FIVE_THOUSAND, key: (await busdOf(backend)).key, quoteId: 'none' }, { headers: { 'X-Idempotency-Key': 'stale' } }), (e) => e.code === 'ALREADY_PAID' && e.status === 409);
+	// Another invoice is paid as ever: the state was for one payment.
+	const other = invoiceFor('lnbc70u');
+	const quote = await api.post('/x/assets/pay/quote', { bolt11: other, key: (await busdOf(backend)).key });
+	const answer = await api.post('/x/assets/pay', { bolt11: other, key: (await busdOf(backend)).key, quoteId: quote.quoteId, maxAssetAmount: quote.assetAmount }, { headers: { 'X-Idempotency-Key': 'other' } });
+	assert.deepEqual([answer.status, 'notice' in answer], ['COMPLETED', false]);
+});
+
+test('a payment the node did not confirm as an asset payment keeps the wallet\'s note on its receipt, in the list and in its dialog', async () => {
+	const backend = assetsBackend();
+	backend.mock.seed('demo-main', 'pay-unconfirmed');
+	const r = await pasted(backend, 'demo-main', FIVE_THOUSAND);
+	try {
+		await click(r.test('asset-pay-submit'));
+		await settle(ANSWERED_MS);
+		const receipt = r.test('asset-pay-receipt');
+		assert.equal(receipt.getAttribute('data-notice'), 'PAYMENT_UNCONFIRMED');
+		assert.equal(receipt.getAttribute('data-settled'), 'no', 'the node says complete, and the page does not call it paid');
+		assert.equal(receipt.querySelector('.paid-title').textContent, 'Not confirmed');
+		assert.equal(r.test('asset-pay-notice').textContent, UNCONFIRMED);
+		assert.equal(r.toasts().some((t) => /Paid/.test(t)), false);
+		// The answer is the wallet's shape: its status, and the note beside it.
+		const rows = (await backend.api('demo-main').get('/x/assets/activity?kind=ln-send')).rows.filter((x) => x.notice);
+		assert.deepEqual(rows.map((x) => [x.state, x.notice.code]), [['complete', 'PAYMENT_UNCONFIRMED'], ['pending', 'PAYMENT_UNCONFIRMED']]);
+	} finally {
+		await r.unmount();
+	}
+	// Under Holdings both stay in sight, each with the note, worded as neither paid nor failed.
+	const h = await mountAssets(backend, 'demo-main', {});
+	try {
+		const items = h.tests('asset-progress-item').filter((li) => li.getAttribute('data-kind') === 'ln-send');
+		assert.equal(items.length, 2);
+		for (const li of items) {
+			assert.match(li.querySelector('.progress-title').textContent, /^Lightning payment of [\d.,]+ BUSD: not confirmed as an asset payment$/);
+			const note = li.querySelector('[data-testid="asset-row-notice"]');
+			assert.equal(note.getAttribute('data-code'), 'PAYMENT_UNCONFIRMED');
+			assert.equal(note.textContent, UNCONFIRMED);
+			assert.equal(li.className.includes('failed'), false);
+			assert.equal(li.querySelector('.error-note'), null);
+		}
+		await click(items[0].querySelector('button'));
+		await settle(60);
+		const dialog = h.test('asset-transfer-detail');
+		assert.equal(dialog.querySelector('[data-testid="asset-row-notice"]').textContent, UNCONFIRMED);
+		assert.match(dialog.querySelector('.badge').textContent, /unconfirmed/);
+	} finally {
+		await h.unmount();
+	}
+});
+
+test('with nothing to send because the peer of a channel is away, the pay view says that, with the peer named', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'peer-offline'), true);
+	const r = await pasted(backend, 'demo-main', FIVE_THOUSAND);
+	try {
+		await settle(PRICED_MS);
+		const refusal = r.test('asset-pay-refusal');
+		assert.equal(refusal.getAttribute('data-code'), 'PEER_OFFLINE');
+		assert.equal(refusal.textContent, 'The peer of the asset channel this would be paid through, Lightning Labs edge, is not connected, so nothing was priced and nothing was paid. Try again once it is back.');
+		assert.equal(r.test('asset-pay-none'), null, 'not "no asset can be sent": one can, once the peer is back');
+		assert.equal(r.test('asset-pay-submit'), null);
+	} finally {
+		await r.unmount();
+	}
+	// The demo answers a price as the wallet does: refused for the peer, and for the amount only when that is why.
+	const busd = await busdOf(backend);
+	await assert.rejects(
+		backend.api('demo-main').post('/x/assets/pay/quote', { bolt11: FIVE_THOUSAND, key: busd.key }),
+		(e) => e.code === 'PEER_OFFLINE' && e.status === 409 && e.details.peerAlias === 'Lightning Labs edge' && /is not connected, so nothing was priced and nothing was paid\. Try again once it is back\.$/.test(e.message)
+	);
+	await assert.rejects(backend.api('demo-main').post('/x/assets/pay/quote', { bolt11: TEN_MILLION, key: busd.key }), (e) => e.code === 'INSUFFICIENT_OUTBOUND');
+});
+
+test('paying on a price taken before the peer went away: the demo refuses as the wallet does, with the peer named, and keeps the price for when it is back', async () => {
+	const backend = assetsBackend();
+	const api = backend.api('demo-main');
+	const busd = (await api.get('/x/assets/balances')).assets.find((a) => a.name === 'BUSD');
+	const bolt11 = 'lnbc50u1x';
+	const quote = await api.post('/x/assets/pay/quote', { bolt11, key: busd.key });
+	const body = { bolt11, key: busd.key, quoteId: quote.quoteId, maxAssetAmount: quote.assetAmount };
+	assert.equal(backend.mock.seed('demo-main', 'peer-offline'), true);
+	const before = (await api.get('/x/assets/activity')).rows.length;
+	await assert.rejects(api.post('/x/assets/pay', body), (err) => {
+		assert.deepEqual([err.code, err.status], ['PEER_OFFLINE', 409]);
+		assert.match(err.message, /^The peer of the asset channel this would be paid through, .+, is not connected, so nothing was paid\. Try again once it is back\.$/);
+		assert.deepEqual(Object.keys(err.details), ['peerPubkey', 'peerAlias']);
+		// Worded for the page as the wallet said it.
+		assert.deepEqual(lightningRefusal(err, { asset: busd }), { code: 'PEER_OFFLINE', text: err.message });
+		return true;
+	});
+	// No payment is on record, and the price is still the one given.
+	assert.equal((await api.get('/x/assets/activity')).rows.length, before);
+	assert.equal(backend.mock.seed('demo-main', 'peer-back'), true);
+	const answer = await api.post('/x/assets/pay', body);
+	assert.equal(answer.assetAmount, quote.assetAmount);
 });

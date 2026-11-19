@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
 	LIMITS,
 	assetWarnings,
+	channelWarnings,
 	describeAssetEvent,
 	describeProofServerTest,
 	describeSplit,
@@ -30,7 +31,10 @@ import {
 	submitOnce,
 	tapPrefix,
 	universeToForm,
-	onHandShortage
+	onHandShortage,
+	proofFileBytes,
+	proofTaken,
+	MAX_PROOF_FILE_BYTES
 } from './assets.js';
 
 const NOW = 1_800_000_000_000;
@@ -170,6 +174,19 @@ test("the wallet's own refusal of a send is put in the reader's terms", () => {
 	const other = sendRefusal({ decoded, holdings: [BUSD], error: { code: 'SOMETHING', message: 'the wallet is busy' } });
 	assert.deepEqual(other, { code: 'SOMETHING', text: 'the wallet is busy.' });
 	assert.equal(sentence('Already ends.'), 'Already ends.');
+});
+
+test('a channel open turned down after its dialog closed is announced with the wallet\'s own reason', () => {
+	const refused = { code: 'PEER_NO_ASSET_CHANNELS', message: 'That peer does not take asset channels.', channelId: 'ab'.repeat(32) };
+	assert.deepEqual(describeAssetEvent('assets:error', refused), {
+		text: 'The asset channel was not opened. That peer does not take asset channels.',
+		tone: 'error',
+		duration: 12000
+	});
+	// Only an error about a channel, and only one that says something.
+	assert.equal(describeAssetEvent('assets:error', { code: 'X', message: 'something else' }), null);
+	assert.equal(describeAssetEvent('assets:error', { code: 'X', message: '  ', channelId: 'ab'.repeat(32) }), null);
+	assert.equal(describeAssetEvent('assets:error', null), null);
 });
 
 test('an event is announced when something finishes or fails, with what it was', () => {
@@ -473,4 +490,49 @@ test('a refusal the page has no words of its own for is said in the wallet\'s wo
 		assert.ok(!said.text.includes(code), 'the code is not what is read');
 	}
 	assert.equal(hostState({ error: { code: 'ASSETS_STARTING' }, status: null }).kind, 'starting');
+});
+
+test('a proof file taken by hand is answered in a sentence that says what became of it', () => {
+	const received = { id: 'r1', kind: 'receive', state: 'complete', failed: false, failure: null, assets: [{ ...BUSD, amount: '25000' }], at: {} };
+	assert.deepEqual(proofTaken({ result: 'complete', row: received }), { text: 'The proof checks out, and the asset is in your holdings.', tone: 'success' });
+	assert.deepEqual(proofTaken({ result: 'already', row: received }), { text: 'This wallet already has that payment. Nothing changed.', tone: 'info' });
+	// Kept is not taken: it says what the wallet is waiting for, and that no server is.
+	assert.deepEqual(proofTaken({ result: 'kept', waitingFor: 'confirmations', row: { ...received, state: 'confirming', confirmationsRequired: 6 } }), {
+		text: 'The proof file is kept. The asset arrives once its transaction is 6 blocks deep, with no proof server needed.',
+		tone: 'info'
+	});
+	assert.deepEqual(proofTaken({ result: 'kept', waitingFor: 'check', reason: 'The chain could not be read.' }), {
+		text: 'The proof file is kept, and could not be checked just now (The chain could not be read). The wallet tries again by itself.',
+		tone: 'info'
+	});
+	assert.equal(proofTaken({ result: 'kept', waitingFor: 'check' }).text, 'The proof file is kept, and could not be checked just now. The wallet tries again by itself.');
+});
+
+test('a proof file is saved as the bytes the wallet gave, and the size it takes is the host\'s', () => {
+	const bytes = Uint8Array.from([0x54, 0x41, 0x50, 0x46, 0x00, 0xff, 0x80]);
+	assert.deepEqual(proofFileBytes(btoa(String.fromCharCode(...bytes))), bytes);
+	assert.deepEqual(proofFileBytes(''), new Uint8Array(0));
+	assert.equal(MAX_PROOF_FILE_BYTES, 4 * 1024 * 1024);
+});
+
+test("what the host says is wrong with a channel is said in its own words, a wait in blue and anything else in red", () => {
+	const missing = { code: 'CHANNEL_MISSING', text: 'An asset channel is on record that the wallet\'s node does not hold.' };
+	const stuck = { code: 'RECOVERY_STUCK', text: 'The assets of a closed channel have not come back on-chain yet.' };
+	const status = { ...STATUS, lightning: { mode: 'full', usableChannels: 0, warning: `${missing.text} ${stuck.text}`, warnings: [missing, stuck] } };
+	assert.deepEqual(channelWarnings(status), [
+		{ code: 'CHANNEL_MISSING', tone: 'error', text: missing.text },
+		{ code: 'RECOVERY_STUCK', tone: 'info', text: stuck.text }
+	]);
+	// A host that names no codes is believed all the same.
+	assert.deepEqual(channelWarnings({ lightning: { mode: 'full', warning: ' Something is wrong. ' } }), [{ code: 'CHANNEL_WARNING', tone: 'error', text: 'Something is wrong.' }]);
+	// Nothing wrong, or no status yet, says nothing.
+	assert.deepEqual(channelWarnings({ lightning: { mode: 'full', usableChannels: 1 } }), []);
+	assert.deepEqual(channelWarnings({ lightning: { mode: 'full', warnings: [{ code: 'X', text: '  ' }, null] } }), []);
+	assert.deepEqual(channelWarnings(null), []);
+	// The Assets tab says them too: the assets in a channel are part of what it counts.
+	const notes = assetWarnings({ status, btc: { spendableSats: 50000 }, holdings: [BUSD], now: NOW });
+	assert.deepEqual(notes.map((n) => [n.code, n.tone, n.parts.join('')]), [
+		['CHANNEL_MISSING', 'error', missing.text],
+		['RECOVERY_STUCK', 'info', stuck.text]
+	]);
 });

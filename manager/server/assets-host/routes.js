@@ -5,15 +5,23 @@
  *
  * The daemon serves each at /x/assets<path>, behind its own authentication.
  * Reads are open to a read-only key; everything else is admin only (no
- * scopes). The five writes that mint or move an asset honour
- * X-Idempotency-Key. Lightning routes arrive with asset channels: none are
- * declared here, and the status says lightning is off.
+ * scopes). The writes that mint or move an asset, open a channel or pay an
+ * invoice honour X-Idempotency-Key.
+ *
+ * The nine Lightning routes are declared for every wallet. One whose engine
+ * or library cannot carry assets in channels, or that was not asked to,
+ * says so in its status (`lightning.mode` is 'off') and answers them with
+ * LIGHTNING_UNAVAILABLE, but for the list of channels, which is then empty
+ * or holds the channels still to be closed (lightning.js).
  */
 const ops = require('./ops');
+const lightning = require('./lightning');
 const { refusal, mapError, isFenced } = require('./errors');
 
 const READ = ['readonly'];
 const MAX_IMPORT_BYTES = 32 * 1024 * 1024;
+// A proof file as base64 in a JSON body, with room for the wrapping.
+const MAX_PROOF_BODY_BYTES = Math.ceil(ops.MAX_PROOF_FILE_BYTES / 3) * 4 + 4096;
 
 const ROUTES = Object.freeze([
 	{ method: 'GET', path: '/status', scopes: READ, summary: 'Whether assets are up, what is in progress, the proof server and the backup' },
@@ -27,6 +35,9 @@ const ROUTES = Object.freeze([
 	{ method: 'POST', path: '/addresses/decode', summary: 'Read a Taproot Assets address' },
 	{ method: 'POST', path: '/addresses/check', summary: 'Look for the payment of an address now' },
 	{ method: 'POST', path: '/proofs/retry', summary: 'Ask the proof server again for a late proof' },
+	{ method: 'GET', path: '/proofs/export', scopes: READ, summary: "The proof file of a send's payment, to hand to the recipient" },
+	{ method: 'POST', path: '/proofs/import', maxBodyBytes: MAX_PROOF_BODY_BYTES, summary: 'Take the proof file of a payment to this wallet from the sender' },
+	{ method: 'POST', path: '/proofs/handed-over', summary: "Mark a send's proof as given to the recipient as a file, or take that back" },
 	{ method: 'POST', path: '/send/prepare', idempotent: true, summary: 'Fund and price a send without sending it' },
 	{ method: 'POST', path: '/send/commit', idempotent: true, summary: 'Send what was previewed' },
 	{ method: 'POST', path: '/send/cancel', summary: 'Drop a send preview' },
@@ -36,7 +47,17 @@ const ROUTES = Object.freeze([
 	{ method: 'POST', path: '/transfers/rebroadcast', summary: 'Send the transaction of a mint, send or burn to the network again' },
 	{ method: 'POST', path: '/proof-server/test', summary: 'Whether a proof server answers at a web address' },
 	{ method: 'POST', path: '/backup/export', summary: 'Write the assets backup file now' },
-	{ method: 'POST', path: '/backup/import', maxBodyBytes: MAX_IMPORT_BYTES, summary: 'Restore an assets backup into this wallet' }
+	{ method: 'POST', path: '/backup/import', maxBodyBytes: MAX_IMPORT_BYTES, summary: 'Restore an assets backup into this wallet' },
+	{ method: 'GET', path: '/channels', scopes: READ, summary: 'The Lightning channels that hold an asset, and what each can send and receive' },
+	{ method: 'POST', path: '/channels/quote', summary: 'What opening an asset channel would cost at a fee rate' },
+	{ method: 'POST', path: '/channels/open', idempotent: true, summary: 'Open a Lightning channel funded with an asset' },
+	{ method: 'POST', path: '/channels/close', summary: 'Close an asset channel, with the peer or without it' },
+	{ method: 'POST', path: '/channels/reclaim', idempotent: true, summary: 'Take back the bitcoin of a channel funding that will not confirm, which ends the open' },
+	{ method: 'POST', path: '/invoices/quote', summary: "The channel peer's price for receiving an amount of an asset" },
+	{ method: 'POST', path: '/invoices', summary: 'Make a Lightning invoice for an amount of an asset at a quoted price' },
+	{ method: 'GET', path: '/invoices', scopes: READ, summary: 'The asset invoices this wallet has made, newest first' },
+	{ method: 'POST', path: '/pay/quote', summary: 'How much of an asset paying a Lightning invoice would take' },
+	{ method: 'POST', path: '/pay', idempotent: true, summary: 'Pay a Lightning invoice with an asset at a quoted price' }
 ]);
 
 // Every event the host may publish. The last three belong to asset channels.
@@ -58,6 +79,9 @@ function bind(host) {
 		'POST /addresses/decode': (body) => ops.decodeAddress(host, body),
 		'POST /addresses/check': (body) => ops.checkAddress(host, body),
 		'POST /proofs/retry': (body) => ops.retryProof(host, body),
+		'GET /proofs/export': (body, query) => ops.exportProof(host, query),
+		'POST /proofs/import': (body) => ops.importProof(host, body),
+		'POST /proofs/handed-over': (body) => ops.markProofHandedOver(host, body),
 		'POST /send/prepare': (body, query, key) => ops.prepareSend(host, body, key),
 		'POST /send/commit': (body, query, key) => ops.commit(host, 'send', body, key),
 		'POST /send/cancel': (body) => ops.cancelPreview(host, 'send', body),
@@ -67,7 +91,17 @@ function bind(host) {
 		'POST /transfers/rebroadcast': (body) => ops.rebroadcast(host, body),
 		'POST /proof-server/test': (body) => ops.testProofServer(host, body),
 		'POST /backup/export': () => ops.exportBackup(host),
-		'POST /backup/import': (body) => ops.importBackup(host, body)
+		'POST /backup/import': (body) => ops.importBackup(host, body),
+		'GET /channels': () => lightning.listChannels(host),
+		'POST /channels/quote': (body) => lightning.channelQuote(host, body),
+		'POST /channels/open': (body, query, key) => lightning.openChannel(host, body, key),
+		'POST /channels/close': (body) => lightning.closeChannel(host, body),
+		'POST /channels/reclaim': (body, query, key) => lightning.reclaimFunding(host, body, key),
+		'POST /invoices/quote': (body) => lightning.invoiceQuote(host, body),
+		'POST /invoices': (body) => lightning.createInvoice(host, body),
+		'GET /invoices': () => lightning.listInvoices(host),
+		'POST /pay/quote': (body) => lightning.payQuote(host, body),
+		'POST /pay': (body, query, key) => lightning.pay(host, body, key)
 	};
 	const handlers = {};
 	for (const route of ROUTES) {

@@ -33,7 +33,7 @@ async function asking(backend, wallet, name, amount, options) {
 
 test('a wallet without asset channels has no invoice card, and its peer is never asked for a price', async () => {
 	const backend = assetsBackend();
-	// An engine that cannot carry asset channels, as every released one is.
+	// An engine that cannot carry asset channels, as every release before Beignet 0.43.0 is.
 	const off = await asking(backend, 'demo-main', 'BUSD', '250', { config: { assetsAvailable: true, assetChannelsAvailable: false } });
 	try {
 		assert.equal(off.test('asset-invoice-card'), null);
@@ -121,6 +121,7 @@ test('an invoice is priced, made, shown with the time it has, and gives way to a
 		assert.ok(facts.includes(`The payer is asked for ${sats}`));
 		assert.ok(facts.includes(`${expected.rateText} · price from Lightning Labs edge`));
 		assert.match(facts, /Time left to pay/);
+		assert.match(r.test('asset-invoice-who').textContent, /^Any Lightning wallet can pay this\. You receive BUSD: your channel peer makes the exchange at this price/);
 		assert.ok(r.test('countdown'), 'counting down');
 		assert.equal(r.test('asset-invoice-create'), null, 'the form steps aside for the invoice');
 
@@ -267,4 +268,150 @@ test('a price that expired before the invoice was made is said in plain words, a
 	} finally {
 		await r.unmount();
 	}
+});
+
+test('a peer that sets no bitcoin price: the invoice is for the asset alone, and says who can pay it', async () => {
+	// Two wallets of this app with a channel between them. Neither prices the
+	// asset, so the sats on the invoice are its face and the page shows none.
+	const backend = assetsBackend({ priced: false });
+	const r = await asking(backend, 'demo-main', 'BUSD', '250');
+	try {
+		const quote = r.test('asset-invoice-quote');
+		assert.equal(quote.getAttribute('data-state'), 'priced');
+		assert.equal(quote.getAttribute('data-priced'), 'no');
+		const rows = [...quote.querySelectorAll('tr')].map((tr) => [...tr.children].map((td) => td.textContent).join(' | '));
+		assert.deepEqual(rows, ['Who can pay it | Your channel peerLightning Labs edge', 'Can receive now | up to 3,100.00 BUSD']);
+		assert.doesNotMatch(quote.textContent, /sats|Worth now|Price/, 'no worth and no rate');
+		assert.match(
+			r.test('asset-invoice-card').textContent,
+			/This peer sets no bitcoin price, so the invoice is for the asset alone and only this peer can pay it\./
+		);
+
+		await click(r.test('asset-invoice-create'));
+		await settle(ANSWERED_MS);
+		assert.equal(backend.posted('/invoices').length, 1);
+		const facts = r.test('asset-invoice-facts').textContent;
+		assert.match(facts, /For 250\.00 BUSD/);
+		assert.match(
+			r.test('asset-invoice-unpriced').textContent,
+			/Only your channel peer, Lightning Labs edge, can pay this invoice\. It is for the asset alone, with no bitcoin price\./
+		);
+		assert.doesNotMatch(facts, /The payer is asked for|price from/);
+		assert.match(facts, /Time left to pay/);
+		assert.equal(
+			r.test('asset-invoice-who').textContent,
+			'You receive BUSD straight from your channel peer, who agreed to this invoice for a set time, which is why it cannot be paid once the time runs out.',
+			'and it is not said that any wallet can pay it'
+		);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('an invoice that brought in a unit less than it asked for says both, in its row, its dialog and its receipt', async () => {
+	const { invoiceShortfall } = await import('../../../../lib/asset-lightning.js');
+	const busd = { name: 'BUSD', type: 'normal', decimalDisplay: 2 };
+	assert.deepEqual(invoiceShortfall({ assetAmount: '25000', receivedAmount: '24900', asset: busd }), { asked: '25000', received: '24900', text: 'asked for 250.00 BUSD, received 249.00 BUSD' });
+	// Where they agree, or nothing has arrived yet, there is nothing to say.
+	for (const receivedAmount of ['25000', null, undefined, '', 'x']) assert.equal(invoiceShortfall({ assetAmount: '25000', receivedAmount, asset: busd }), null);
+	assert.equal(invoiceShortfall(null), null);
+
+	const backend = assetsBackend();
+	const api = backend.api('demo-main');
+	assert.equal(backend.mock.seed('demo-main', 'invoice-short'), true);
+	// The wallet's own keys, in its order: what was asked, and what arrived.
+	const listed = (await api.get('/x/assets/invoices')).invoices;
+	assert.deepEqual(Object.keys(listed[0]), ['bolt11', 'paymentHash', 'assetAmount', 'amountSats', 'rateText', 'priced', 'expiresAt', 'invoiceExpiresAt', 'description', 'asset', 'status', 'receivedAmount', 'createdAt']);
+	assert.deepEqual([listed[0].status, listed[0].assetAmount, listed[0].receivedAmount], ['PAID', '25000', '24999']);
+	const paidRow = (await api.get('/x/assets/activity?kind=ln-receive')).rows.find((x) => x.paymentHash === listed[0].paymentHash);
+	assert.equal(paidRow.assets[0].amount, '24999', 'the row says what arrived');
+
+	const r = await mountAssets(backend, 'demo-main', { at: { view: 'receive' } });
+	try {
+		await settle(60);
+		const rows = r.tests('asset-receive-row');
+		const mine = rows.find((tr) => tr.querySelector('[data-testid="asset-receive-short"]'));
+		assert.ok(mine, 'the row of that invoice says both');
+		assert.equal(mine.querySelector('[data-testid="asset-receive-short"]').textContent, 'asked for 250.00 BUSD, received 249.99 BUSD');
+		assert.equal(r.tests('asset-receive-short').length, 1, 'and no other row says anything');
+		await click(mine);
+		await settle(60);
+		assert.match(r.test('asset-invoice-short').textContent, /^The invoice asked for 250\.00 BUSD, received 249\.99 BUSD\. A payer's price can come to a unit less than an invoice names, and\s+the invoice is paid all the same\.$/);
+	} finally {
+		await r.unmount();
+	}
+
+	// The next invoice made here is paid a unit short too, and its receipt says what arrived.
+	const busdHeld = (await api.get('/x/assets/balances')).assets.find((a) => a.name === 'BUSD');
+	const quote = await api.post('/x/assets/invoices/quote', { key: busdHeld.key, amount: '2000' });
+	const made = await api.post('/x/assets/invoices', { key: busdHeld.key, amount: '2000', quoteId: quote.quoteId });
+	assert.equal((await api.get('/x/assets/invoices')).invoices.find((i) => i.paymentHash === made.paymentHash).receivedAmount, null, 'nothing has arrived yet');
+	backend.pass(13000);
+	const after = (await api.get('/x/assets/invoices')).invoices.find((i) => i.paymentHash === made.paymentHash);
+	assert.deepEqual([after.status, after.assetAmount, after.receivedAmount], ['PAID', '2000', '1999']);
+	// And the one after that arrives whole: where they agree, the list says the same figure twice.
+	const q2 = await api.post('/x/assets/invoices/quote', { key: busdHeld.key, amount: '300' });
+	const whole = await api.post('/x/assets/invoices', { key: busdHeld.key, amount: '300', quoteId: q2.quoteId });
+	backend.pass(13000);
+	const settled = (await api.get('/x/assets/invoices')).invoices.find((i) => i.paymentHash === whole.paymentHash);
+	assert.deepEqual([settled.status, settled.receivedAmount], ['PAID', '300']);
+});
+
+test('a node that does not offer asset channels: the tab says so across its top, and the invoice card and the pay flow are held with that reason', async () => {
+	const backend = assetsBackend();
+	backend.mock.seed('demo-main', 'not-advertised');
+	const said = (await backend.api('demo-main').get('/x/assets/status')).lightning.unavailable.message;
+	const r = await asking(backend, 'demo-main', 'BUSD', '250');
+	try {
+		const top = r.tests('asset-warning').filter((w) => w.getAttribute('data-code') === 'NOT_ADVERTISED');
+		assert.equal(top.length, 1);
+		assert.equal(top[0].textContent, said);
+		// The card is there, says why, and asks the peer for nothing.
+		assert.equal(r.test('asset-invoice-card').getAttribute('data-state'), 'held');
+		const held = r.test('asset-invoice-held');
+		assert.deepEqual([held.getAttribute('data-code'), held.getAttribute('role'), held.textContent], ['NOT_ADVERTISED', 'alert', said]);
+		assert.equal(r.test('asset-invoice-create'), null);
+		assert.equal(backend.posted('/invoices/quote').length, 0);
+		// The on-chain address beside it is untouched.
+		assert.ok(titles(r).includes('On-chain address'));
+
+		// A pasted invoice is read, and held with the same reason.
+		await r.view('Send');
+		const { bech32Encode } = await import('../../../../lib/payment-uri.js');
+		await type(r.test('asset-send-input'), bech32Encode('lnbc50u', Array.from({ length: 200 }, (_, i) => (i * 7 + 3) % 32)));
+		await settle(PRICED_MS);
+		const pay = r.test('asset-pay-held');
+		assert.equal(pay.getAttribute('data-code'), 'NOT_ADVERTISED');
+		assert.equal(pay.textContent, `That is a Lightning invoice, and this wallet cannot pay it with an asset now. ${said}`);
+		assert.equal(r.test('asset-pay'), null);
+		assert.equal(backend.posted('/pay/quote').length, 0);
+	} finally {
+		await r.unmount();
+	}
+});
+
+test('with the peer of the only channel away the wallet is asked all the same, and its refusal names the peer', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'peer-offline'), true);
+	const r = await asking(backend, 'demo-main', 'BUSD', '250');
+	try {
+		await settle(PRICED_MS);
+		const refusal = r.test('asset-invoice-refusal');
+		assert.equal(refusal.getAttribute('data-code'), 'PEER_OFFLINE');
+		assert.equal(refusal.textContent, 'The peer of the asset channel this would be received through, Lightning Labs edge, is not connected, so no invoice was made. Try again once it is back.');
+		assert.equal(r.test('asset-invoice-create').disabled, true);
+		assert.ok(backend.posted('/invoices/quote').length >= 1, 'the wallet was asked, where a wallet with no channel is not');
+		// More than the channel could take with its peer there is still the amount's fault.
+		await type(r.test('asset-receive-amount'), '5000');
+		await settle(PRICED_MS);
+		assert.equal(r.test('asset-invoice-refusal').getAttribute('data-code'), 'INSUFFICIENT_INBOUND');
+	} finally {
+		await r.unmount();
+	}
+	// The demo answers as the wallet does: the code, the status and the peer.
+	const busd = (await backend.api('demo-main').get('/x/assets/balances')).assets.find((a) => a.name === 'BUSD');
+	await assert.rejects(
+		backend.api('demo-main').post('/x/assets/invoices/quote', { key: busd.key, amount: '25000' }),
+		(e) => e.code === 'PEER_OFFLINE' && e.status === 409 && e.details.peerAlias === 'Lightning Labs edge' && /^0[23][0-9a-f]{64}$/.test(e.details.peerPubkey)
+	);
 });

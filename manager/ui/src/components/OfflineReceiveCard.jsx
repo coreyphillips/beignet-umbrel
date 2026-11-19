@@ -5,6 +5,7 @@ import { Badge, Button, Card, CopyText, Field, Help, QR } from './ui.jsx';
 import { fmtSats } from '../lib/format.js';
 import { protocolText } from '../lib/protocol-text.js';
 import { manager } from '../api.js';
+import { bitcoinChannels } from '../lib/channels.js';
 import {
 	DEFAULT_FEE,
 	bookFits,
@@ -52,7 +53,7 @@ export default function OfflineReceiveCard({ id, api, rec, tick, info, config })
 		[id, tick]
 	);
 	const { data: candidates } = usePoll(() => manager.fforCandidates(id).catch(() => []), 15000, [id, tick]);
-	const { data: channels } = usePoll(() => api.get('/channels').catch(() => null), 15000, [id, tick]);
+	const { data: channels } = usePoll(() => api.get('/channels').then(bitcoinChannels).catch(() => null), 15000, [id, tick]);
 	const unsupported = !!(epochs && epochs.unsupported);
 	const epoch = useMemo(() => (Array.isArray(epochs) ? currentEpoch(epochs) : null), [epochs]);
 	const eligible = useMemo(() => settlementChannels(channels, candidates), [channels, candidates]);

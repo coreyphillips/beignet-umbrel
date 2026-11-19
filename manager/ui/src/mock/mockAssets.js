@@ -20,6 +20,7 @@
 
 import { bech32Encode, convertBits } from '../lib/payment-uri.js';
 import { MAX_UNITS, addUnits, cmpUnits, isZero, subUnits, toUnits } from '../lib/asset-amount.js';
+import { CHANNEL_BITCOIN_SHORT_TEXT } from '../lib/asset-lightning.js';
 
 const STORE_KEY = 'beignet-demo-assets-v1';
 const HEX = '0123456789abcdef';
@@ -45,6 +46,9 @@ const RECEIVE = { firstAt: 9000, firstAtFromSibling: 6000, every: 1600, proofAft
 const BURN = { confirmAt: 6000, doneAt: 7000 };
 const RETRY_PROOF_MS = 3000;
 const CHANNEL_OPEN_MS = 15000;
+// A funding taken back: how long its transaction waits for a block, and its size.
+const RECLAIM_CONFIRMS_MS = 6000;
+const RECLAIM_VBYTES = 180;
 const INVOICE_QUOTE_MS = 60 * SECOND;
 const INVOICE_SETTLES_MS = 12 * SECOND;
 const PAY_QUOTE_MS = 30 * SECOND;
@@ -113,6 +117,8 @@ const hostOfRest = (rest) => {
  *   clock()              the time, for tests that move it by hand
  *   ticker               false to leave out the once-a-second advance
  *   lightning            whether asset channels are offered at all
+ *   priced               false when no channel peer sets a bitcoin price,
+ *                        as between two wallets of this app
  */
 export function createAssetsMock(ctx) {
 	const now = () => (ctx.clock ? ctx.clock() : Date.now());
@@ -234,9 +240,12 @@ export function createAssetsMock(ctx) {
 		for (const c of S(id).channels) {
 			if (c.asset.key !== key || c.state === 'CLOSED') continue;
 			local += toUnits(c.localBalance) ?? 0n;
+			// As the host: a payment goes through one channel, so what can be
+			// sent or received is what the best single channel carries.
 			if (c.state === 'NORMAL') {
-				sendable += toUnits(c.sendable) ?? 0n;
-				receivable += toUnits(c.receivable) ?? 0n;
+				const [out, back] = [toUnits(c.sendable) ?? 0n, toUnits(c.receivable) ?? 0n];
+				if (out > sendable) sendable = out;
+				if (back > receivable) receivable = back;
 			}
 		}
 		return { local: local.toString(), sendable: sendable.toString(), receivable: receivable.toString() };
@@ -261,6 +270,7 @@ export function createAssetsMock(ctx) {
 			balance: {
 				total: addUnits(rec.onchain, ch.local),
 				onchain: rec.onchain,
+				channelable: channelableOf(rec),
 				pendingIn: moving('receive', ['confirming', 'proofs']),
 				pendingOut: moving('send', ['pending', 'broadcast', 'confirming', 'proofs']),
 				channelLocal: ch.local,
@@ -278,6 +288,56 @@ export function createAssetsMock(ctx) {
 
 	const held = (id) =>
 		Object.values(S(id).assets).filter((a) => !isZero(a.onchain) || !isZero(channelTotals(id, a.key).local));
+
+	/**
+	 * A channel as the host lists it on GET /channels, key for key
+	 * (assets-host/views.js channelView). A funding can be taken back while
+	 * this wallet's open has made its transaction and no block has taken it.
+	 */
+	const pubChannel = (c) => ({
+		channelId: c.channelId,
+		pendingChannelId: c.pendingChannelId || c.channelId,
+		peerPubkey: c.peerPubkey,
+		peerAlias: c.peerAlias || null,
+		state: c.state,
+		failure: c.failure || null,
+		peerConnected: c.peerConnected !== false,
+		asset: c.asset,
+		capacity: c.capacity,
+		localBalance: c.localBalance,
+		remoteBalance: c.remoteBalance,
+		sendable: c.sendable,
+		receivable: c.receivable,
+		channelSats: c.channelSats,
+		fundingTxid: c.fundingTxid || null,
+		reclaimable: c.state === 'OPENING' && !!c.fundingTxid,
+		reclaimTxid: c.reclaimTxid || null,
+		...(Number.isInteger(c.undeliveredOutcomes) && c.undeliveredOutcomes > 0 ? { undeliveredOutcomes: c.undeliveredOutcomes } : {}),
+		...(Number.isInteger(c.sendablePayments) ? { sendablePayments: c.sendablePayments } : {}),
+		...(Number.isInteger(c.receivablePayments) ? { receivablePayments: c.receivablePayments } : {}),
+		...(Number.isInteger(c.recoveryWaitsUntil) ? { recoveryWaitsUntil: c.recoveryWaitsUntil } : {})
+	});
+
+	/**
+	 * An invoice as the host lists it on GET /invoices, key for key
+	 * (assets-host/lightning.js invoiceView). `receivedAmount` is what a paid
+	 * invoice brought in, which can be a unit under what it asked for.
+	 */
+	const pubInvoice = (i) => ({
+		bolt11: i.bolt11,
+		paymentHash: i.paymentHash,
+		assetAmount: i.assetAmount,
+		amountSats: i.amountSats,
+		rateText: i.rateText,
+		priced: i.priced,
+		expiresAt: i.expiresAt,
+		invoiceExpiresAt: i.invoiceExpiresAt,
+		description: i.description,
+		asset: i.asset,
+		status: i.status === 'PAID' ? 'PAID' : Math.min(i.expiresAt, i.invoiceExpiresAt) <= now() ? 'EXPIRED' : 'OPEN',
+		receivedAmount: i.status === 'PAID' ? i.receivedAmount || i.assetAmount : null,
+		createdAt: i.createdAt
+	});
 
 	const pubRow = (row) => {
 		const out = {};
@@ -490,7 +550,16 @@ export function createAssetsMock(ctx) {
 			if (t < row._t0 + INVOICE_SETTLES_MS) return;
 			const invoice = s.invoices.find((i) => i.paymentHash === row.paymentHash);
 			const ch = s.channels.find((c) => c.channelId === row._channelId);
+			// Armed by `invoice-short`: the payer's price came to one unit
+			// under what the invoice asked for. The row says what arrived,
+			// as the host's does, and the invoice goes on saying what it asked.
+			const short = s.invoiceShort === true && cmpUnits(row.assets[0].amount, '1') > 0;
+			if (short) {
+				s.invoiceShort = false;
+				row.assets[0] = { ...row.assets[0], amount: subUnits(row.assets[0].amount, '1') };
+			}
 			const amount = row.assets[0].amount;
+			if (invoice) invoice.receivedAmount = amount;
 			if (ch) {
 				ch.localBalance = addUnits(ch.localBalance, amount);
 				ch.remoteBalance = subUnits(ch.remoteBalance, amount);
@@ -502,6 +571,10 @@ export function createAssetsMock(ctx) {
 			row.at.completed = row._t0 + INVOICE_SETTLES_MS;
 			row._done = true;
 			ctx.emit(id, 'assets:balance', { key: row.assets[0].key });
+			// The daemon says it too, as it says every settled invoice, and marks it.
+			const settled = { paymentHash: row.paymentHash, amountSats: invoice ? invoice.amountSats : 354, auxiliary: true };
+			ctx.emit(id, 'payment:received', settled);
+			ctx.emit(id, 'invoice:settled', { ...settled, bolt11: invoice ? invoice.bolt11 : null });
 		}
 	}
 
@@ -520,7 +593,24 @@ export function createAssetsMock(ctx) {
 			if (row.kind === 'send' && row.at.proof && before.endsWith(':0')) ctx.emit(id, 'assets:proof-delivery', { row: pubRow(row) });
 		}
 		for (const c of s.channels) {
-			if (c.state !== 'OPENING' || t < c._openedAt + CHANNEL_OPEN_MS) continue;
+			if (c.state !== 'OPENING') continue;
+			// A funding that was taken back: its bitcoin is this wallet's again
+			// once that transaction is in a block, the open is over, and the
+			// asset never left the wallet.
+			if (c._reclaimAt) {
+				if (t < c._reclaimAt + RECLAIM_CONFIRMS_MS) continue;
+				const rec = s.assets[c.asset.key];
+				if (rec) rec.onchain = addUnits(rec.onchain, c.localBalance);
+				c.state = 'CLOSED';
+				c.localBalance = '0';
+				changed = true;
+				ctx.emit(id, 'assets:channel', { channelId: c.channelId, state: c.state });
+				ctx.emit(id, 'assets:balance', { key: c.asset.key });
+				continue;
+			}
+			// `_stuck` is a funding no block takes (the `open-stuck` state).
+			// `_unfunded` is an open whose funding is on no chain at all.
+			if (c._stuck || c._unfunded || t < c._openedAt + CHANNEL_OPEN_MS) continue;
 			c.state = 'NORMAL';
 			c.sendable = c.localBalance;
 			c.receivable = c.remoteBalance;
@@ -633,7 +723,129 @@ export function createAssetsMock(ctx) {
 	 * Four states the demo does not reach by itself, put on a wallet by the
 	 * address bar (`?assets-demo=`) or by a test. Each is added once.
 	 */
+	// The host's sentence for an open a restart cut short (assets-host/lightning.js OPEN_FAILURES).
+	const OPEN_INTERRUPTED_TEXT =
+		'This channel open was interrupted before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
+	// The host's sentence for an open the library ended with nothing signed
+	// (OPEN_FAILURES.CHANNEL_OPEN_FAILED), and the library's own reason after it.
+	const OPEN_FAILED_TEXT =
+		'This channel open ended before any bitcoin or asset left the wallet, so nothing was opened and nothing was spent. It can be tried again.';
+	const OPEN_FAILED_REASON = 'Funding wallet terms changed';
+	// The host's sentence for a payment a channel refuses while results of earlier ones are not taken in (errors.js).
+	const OUTCOMES_UNDELIVERED_TEXT =
+		'This wallet has not yet taken in the results of earlier payments on that channel, so nothing was paid. Nothing is wrong with this payment. Restart the wallet, and if this is said again afterwards, its log says why.';
 	const SEEDS = {
+		// An open the library ended with nothing signed, after the wallet had
+		// taken it on: a failed open like the one a restart cut short, with the
+		// reason the library gave written after the host's sentence.
+		'open-failed'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c.state === 'FAILED')) return false;
+			const rec = Object.values(s.assets).find((a) => a.type !== 'collectible');
+			if (!rec) return false;
+			s.channels.unshift({
+				channelId: derivedHex(`seed-failed-open:${id}`, 64),
+				peerPubkey: `03${derivedHex('seed-peer:stuck-open', 64)}`,
+				peerAlias: 'Meridian edge',
+				state: 'FAILED',
+				// As the host: its own sentence, and the library's words apart, as the detail.
+				failure: { code: 'CHANNEL_OPEN_FAILED', message: OPEN_FAILED_TEXT, detail: OPEN_FAILED_REASON },
+				asset: brief(rec),
+				capacity: '50000',
+				localBalance: '0',
+				remoteBalance: '0',
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				_unpriced: true
+			});
+			return true;
+		},
+		// A channel that has not taken in the results of two earlier payments:
+		// its row says so, and a payment through it is refused until it has.
+		'outcomes-undelivered'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL');
+			if (!c) return false;
+			c.undeliveredOutcomes = 2;
+			return true;
+		},
+		// This wallet's side of a channel has paid until its bitcoin in the
+		// channel carries no further payment: it sends nothing, whatever units
+		// it holds, and a payment is refused, until a payment comes in.
+		'bitcoin-short'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL' && x.peerConnected !== false && !x._short);
+			if (!c) return false;
+			c._short = { sendable: c.sendable, sendablePayments: c.sendablePayments, receivablePayments: c.receivablePayments };
+			Object.assign(c, { sendable: '0', sendablePayments: 0, receivablePayments: 12 });
+			return true;
+		},
+		// That side has been paid, and carries payments again.
+		'bitcoin-back'(id) {
+			const c = S(id).channels.find((x) => x._short);
+			if (!c) return false;
+			Object.assign(c, { sendable: c._short.sendable, sendablePayments: c._short.sendablePayments, receivablePayments: c._short.receivablePayments });
+			delete c._short;
+			return true;
+		},
+		// The peer of the wallet's asset channel is away. The channel is still
+		// open, and carries nothing until the peer is back.
+		'peer-offline'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL' && x.peerConnected !== false);
+			if (!c) return false;
+			c._could = { sendable: c.sendable, receivable: c.receivable };
+			Object.assign(c, { peerConnected: false, sendable: '0', receivable: '0' });
+			return true;
+		},
+		// The peer of that channel is back, and the channel carries again what it could.
+		'peer-back'(id) {
+			const c = S(id).channels.find((x) => x.peerConnected === false && x._could);
+			if (!c) return false;
+			Object.assign(c, { peerConnected: true, ...c._could });
+			delete c._could;
+			return true;
+		},
+		// A channel closed without its peer whose delay still runs: it carries
+		// nothing, and its bitcoin is on its way back (GET /balance says so).
+		'channel-closing'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL');
+			if (!c) return false;
+			// Closed without its peer: the wallet's side waits out the delay of 144 blocks.
+			Object.assign(c, { state: 'FORCE_CLOSING', sendable: '0', receivable: '0', recoveryWaitsUntil: ctx.height(id) + 144 });
+			return true;
+		},
+		// A channel the wallet's node gave up: it carries nothing, and is closed
+		// only without its peer.
+		'channel-failed'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL');
+			if (!c) return false;
+			Object.assign(c, { state: 'ERRORED', sendable: '0', receivable: '0' });
+			return true;
+		},
+		// An open the wallet had taken on that a restart cut short before its
+		// funding was signed. Nothing left the wallet: the row says so for a
+		// while, and it is no channel to anything that counts them.
+		'open-interrupted'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c.state === 'FAILED')) return false;
+			const rec = Object.values(s.assets).find((a) => a.type !== 'collectible');
+			if (!rec) return false;
+			s.channels.unshift({
+				channelId: derivedHex(`seed-interrupted-open:${id}`, 64),
+				peerPubkey: `03${derivedHex('seed-peer:stuck-open', 64)}`,
+				peerAlias: 'Meridian edge',
+				state: 'FAILED',
+				failure: { code: 'CHANNEL_OPEN_INTERRUPTED', message: OPEN_INTERRUPTED_TEXT },
+				asset: brief(rec),
+				capacity: '50000',
+				localBalance: '0',
+				remoteBalance: '0',
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				_unpriced: true
+			});
+			return true;
+		},
 		// A send no block has taken for two hours, at a rate under the going one.
 		stuck(id) {
 			const s = S(id);
@@ -711,7 +923,250 @@ export function createAssetsMock(ctx) {
 				_unwatched: true
 			});
 			return true;
+		},
+		// An open whose funding transaction has sat an hour without a block, at
+		// a rate under the going one. Its bitcoin can be taken back.
+		'open-stuck'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c._stuck)) return false;
+			const amount = '50000';
+			const rec = Object.values(s.assets).find((a) => a.type !== 'collectible' && cmpUnits(a.onchain, amount) >= 0);
+			if (!rec) return false;
+			rec.onchain = subUnits(rec.onchain, amount);
+			const channelId = derivedHex(`seed-stuck-open:${id}`, 64);
+			s.channels.unshift({
+				channelId,
+				peerPubkey: `03${derivedHex('seed-peer:stuck-open', 64)}`,
+				peerAlias: 'Meridian edge',
+				state: 'OPENING',
+				asset: brief(rec),
+				capacity: amount,
+				localBalance: amount,
+				remoteBalance: '0',
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				fundingTxid: derivedHex(`funding:${channelId}`, 64),
+				_unpriced: true,
+				_openedAt: now() - HOUR,
+				_fundingRate: 2,
+				_stuck: true
+			});
+			return true;
+		},
+		// An open a peer began whose opener went away as it opened: the node
+		// has given the channel up, its funding transaction is on no chain,
+		// and the open has not ended yet. As the host, it reads as an open
+		// under way and never as a failed channel.
+		'open-unfunded'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c._unfunded)) return false;
+			const rec = Object.values(s.assets).find((a) => a.type !== 'collectible');
+			if (!rec) return false;
+			const amount = '30000';
+			s.channels.unshift({
+				channelId: derivedHex(`seed-unfunded-open:${id}`, 64),
+				peerPubkey: `03${derivedHex('seed-peer:unfunded-open', 64)}`,
+				peerAlias: 'Harbor relay',
+				peerConnected: false,
+				state: 'OPENING',
+				asset: brief(rec),
+				capacity: amount,
+				localBalance: '0',
+				remoteBalance: amount,
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				_unpriced: true,
+				_openedAt: now() - 20000,
+				_unfunded: true
+			});
+			return true;
+		},
+		// An invoice a payer's price left one unit short: paid an hour ago, and
+		// the next one made here is paid the same way.
+		'invoice-short'(id) {
+			const s = S(id);
+			const ch = s.channels.find((c) => c.state === 'NORMAL');
+			if (!ch) return false;
+			const t = now() - HOUR;
+			const paymentHash = derivedHex(`seed-short:${id}`, 64);
+			const row = newRow(id, 'ln-receive', {
+				state: 'complete',
+				assets: [{ ...ch.asset, amount: '24999' }],
+				paymentHash,
+				_done: true
+			});
+			row.at.created = t;
+			row.at.completed = t + INVOICE_SETTLES_MS;
+			s.invoices.unshift({
+				bolt11: `lnbc885u1${derivedHex(`seed-short-invoice:${id}`, 120)}`,
+				paymentHash,
+				assetAmount: '25000',
+				amountSats: 88500,
+				rateText: '',
+				priced: true,
+				expiresAt: t + INVOICE_QUOTE_MS,
+				invoiceExpiresAt: t + HOUR,
+				description: '',
+				asset: { ...ch.asset },
+				status: 'PAID',
+				receivedAmount: '24999',
+				createdAt: t
+			});
+			s.invoiceShort = true;
+			return true;
+		},
+		// The node does not offer asset channels: nothing new over them, and
+		// what is there stays listed and closable. `ok` puts it back.
+		'not-advertised'(id) {
+			S(id).notAdvertised = true;
+			return true;
+		},
+		// The budget for the miner fees of asset channels is used up: a
+		// warning, and nothing lost. `ok` puts it back.
+		'fee-budget'(id) {
+			S(id).feeBudgetOut = true;
+			return true;
+		},
+		// The wallet's bitcoin sits on addresses a channel cannot be funded
+		// from: an open and a reclaim are refused with the figures. `ok` puts
+		// it back.
+		'funding-inputs'(id) {
+			S(id).fundingShort = true;
+			return true;
+		},
+		// The wallet is shutting down: it takes no new payment, and nothing
+		// is paid. `ok` puts it back.
+		draining(id) {
+			S(id).draining = true;
+			return true;
+		},
+		// The node has no confirmed bitcoin to prepare a fee coin from: a
+		// wallet with an asset channel is told how much to keep, in blue, and
+		// an open is not refused for it. `ok` puts it back.
+		'no-fee-coins'(id) {
+			S(id).noFeeCoins = true;
+			return true;
+		},
+		// The node refused the fee settings it was given: no new channel, and
+		// the channels there keep working. `ok` puts it back.
+		'fee-policy'(id) {
+			S(id).feePolicyRefused = true;
+			return true;
+		},
+		// Use demo-capsule. The checkpoint a peer returned for the wallet holds
+		// two asset channels, so Resume channels is refused with the list, and
+		// goes through without them once that is confirmed. `ok` puts it back.
+		'capsule-assets'(id) {
+			S(id).capsuleAssets = true;
+			return true;
+		},
+		// The same checkpoint on a wallet that applies checkpoints by itself:
+		// its daemon refused to, over the two asset channels, and says so on
+		// the status route with the list. The checkpoint still waits.
+		'capsule-auto-refused'(id) {
+			Object.assign(S(id), { capsuleAssets: true, capsuleAuto: true });
+			return true;
+		},
+		// A checkpoint that is a backup of the channel list only: the entry of
+		// its one asset channel is skipped and the rest recovered, by a restore
+		// from the card and by the wallet's own.
+		'capsule-skipped'(id) {
+			S(id).capsuleSkipped = true;
+			return true;
+		},
+		// A payment the node has no record of any more: it may have been paid.
+		'pay-unaccounted'(id) {
+			return plantNotice(id, 'PAYMENT_UNACCOUNTED');
+		},
+		// A payment the node took without confirming that it went out as an asset payment.
+		'pay-unconfirmed'(id) {
+			return plantNotice(id, 'PAYMENT_UNCONFIRMED');
+		},
+		// A channel on the wallet's record that its node does not hold: what a
+		// restore from a backup leaves. It carries nothing from then on.
+		'channel-missing'(id) {
+			const c = S(id).channels.find((x) => x.state === 'NORMAL');
+			if (!c) return false;
+			c.state = 'MISSING';
+			c.sendable = '0';
+			c.receivable = '0';
+			return true;
 		}
+	};
+
+	// What the host says of a payment whose end it cannot vouch for, word for
+	// word (assets-host/lightning.js): on the activity row and on the answer
+	// of POST /pay, as `notice`.
+	const PAY_NOTICES = {
+		PAYMENT_UNACCOUNTED: {
+			code: 'PAYMENT_UNACCOUNTED',
+			message: 'The node no longer has a record of this payment, so how it ended cannot be known. It may have been paid. This wallet will not pay the invoice again.'
+		},
+		PAYMENT_UNCONFIRMED: {
+			code: 'PAYMENT_UNCONFIRMED',
+			message: 'The node took this payment without confirming that it went out as an asset payment. It ends as the node reports, and its units are not known to have left the channel.'
+		}
+	};
+
+	// A payment made a while ago that carries one of them, and the next
+	// payment made here ending the same way, so that the receipt can be seen.
+	function plantNotice(id, code) {
+		const s = S(id);
+		const ch = s.channels.find((c) => c.state === 'NORMAL');
+		if (!ch) return false;
+		const row = newRow(id, 'ln-send', {
+			state: 'pending',
+			assets: [{ ...ch.asset, amount: '357' }],
+			paymentHash: derivedHex(`seed-notice:${code}:${id}`, 64),
+			notice: { ...PAY_NOTICES[code] },
+			_done: true
+		});
+		row.at.created = now() - 20 * MINUTE;
+		s.payNotice = code;
+		return true;
+	}
+
+	// A node that does not offer asset channels to its peers, as the host
+	// says it in `status.lightning.unavailable` (assets-host/lightning.js).
+	// `reason` is the node's own word for what is turned off.
+	const NOT_ADVERTISED = {
+		code: 'NOT_ADVERTISED',
+		message:
+			"This wallet's node does not offer asset channels to its peers: a Lightning feature they depend on is turned off in the node's settings. Nothing new can be opened, invoiced or paid over asset channels until it is turned on. The channels there already are stay listed and can still be closed.",
+		reason: 'option_simple_taproot is not offered'
+	};
+	// The engine refusing a fee action of the loop's, as the host's status warns of it.
+	const FEE_BUDGET_TEXT =
+		'The budget this app sets for the miner fees of asset channels is used up, so nothing was done. Nothing was lost: the channels and what is in them are as they were.';
+
+	// The fee coin pool, in the host's sentences. A fee coin is a small
+	// confirmed coin of the wallet's own bitcoin that pays the miner fee of
+	// an on-chain claim; the demo's node needs 1,500 sats to prepare one.
+	const FEE_COINS_NEEDED_SATS = '1500';
+	const FEE_COINS_TEXT = `Keep at least ${FEE_COINS_NEEDED_SATS} sats of confirmed bitcoin on-chain in this wallet. A payment caught in an asset channel that has to be closed without the peer is claimed with an on-chain transaction, and its miner fee comes from the wallet's own bitcoin. The wallet has no confirmed coin large enough for that now, so such a claim could come too late.`;
+	const FEE_POLICY_TEXT =
+		"The wallet's node did not take the settings this app gives it for the miner fees of asset channels, so no new asset channel is opened. The channels there already are keep working. This is for whoever runs the wallet to put right, and the wallet's log says what the node refused.";
+	function feeCoinsOf(id, s) {
+		if (s.feePolicyRefused) return null;
+		return s.noFeeCoins
+			? { possible: false, neededSats: FEE_COINS_NEEDED_SATS, largestConfirmedSats: '0', ready: 0, budgetRemainingSats: '25000', reason: 'FEE_FUNDS_UNAVAILABLE' }
+			: { possible: true, neededSats: FEE_COINS_NEEDED_SATS, largestConfirmedSats: String(Math.max(0, Math.floor(ctx.spendable(id)))), ready: 2, budgetRemainingSats: '25000', reason: null };
+	}
+
+	// The host's own sentence for it, as its status says it.
+	const CHANNEL_MISSING_TEXT =
+		"An asset channel is on record that the wallet's node does not hold, as happens after a restore from a backup. It cannot be used or closed from this wallet, and its balance is the last one known. This wallet cannot bring the assets in it back by itself.";
+	const channelWarningsOf = (s) => {
+		const said = s.channels.some((c) => c.state === 'MISSING') ? [{ code: 'CHANNEL_MISSING', text: CHANNEL_MISSING_TEXT }] : [];
+		if (s.feeBudgetOut) said.push({ code: 'FEE_BUDGET_EXHAUSTED', text: FEE_BUDGET_TEXT });
+		// The fee coin pool, as the host warns of it: a refused policy whatever
+		// the wallet holds, and no bitcoin for a fee coin only while there is a
+		// channel that is not over.
+		if (s.feePolicyRefused) said.push({ code: 'FEE_POLICY_REFUSED', text: FEE_POLICY_TEXT });
+		else if (s.noFeeCoins && s.channels.some((c) => c.state !== 'CLOSED' && c.state !== 'MISSING' && c.state !== 'FAILED')) said.push({ code: 'FEE_COINS_UNAVAILABLE', text: FEE_COINS_TEXT });
+		return said.length ? { warning: said.map((w) => w.text).join(' '), warnings: said } : {};
 	};
 
 	function putState(id, what) {
@@ -731,10 +1186,25 @@ export function createAssetsMock(ctx) {
 			const want = m && new URLSearchParams(loc.search || '').get('assets-demo');
 			if (!want) return;
 			const s = S(decodeURIComponent(m[1]));
-			const before = `${s.host}:${s.proofServerDown}`;
+			const before = `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}:${!!s.noFeeCoins}:${!!s.feePolicyRefused}:${!!s.capsuleAssets}`;
 			if (want === 'ok') {
 				s.host = null;
 				s.proofServerDown = false;
+				// The two that are states and not rows, so they can be put on again.
+				s.notAdvertised = false;
+				s.feeBudgetOut = false;
+				s.fundingShort = false;
+				s.draining = false;
+				s.noFeeCoins = false;
+				s.feePolicyRefused = false;
+				s.capsuleAssets = false;
+				s.capsuleAuto = false;
+				s.capsuleSkipped = false;
+				if (s.seeded) {
+					delete s.seeded['not-advertised'];
+					delete s.seeded['fee-budget'];
+					for (const name of ['funding-inputs', 'draining', 'no-fee-coins', 'fee-policy', 'capsule-assets', 'capsule-auto-refused', 'capsule-skipped']) delete s.seeded[name];
+				}
 			} else if (want === 'proof-server-down') {
 				s.host = null;
 				s.proofServerDown = true;
@@ -743,7 +1213,7 @@ export function createAssetsMock(ctx) {
 			} else if (SEEDS[want]) {
 				putState(decodeURIComponent(m[1]), want);
 			}
-			if (before !== `${s.host}:${s.proofServerDown}`) save();
+			if (before !== `${s.host}:${s.proofServerDown}:${!!s.notAdvertised}:${!!s.feeBudgetOut}:${!!s.fundingShort}:${!!s.draining}:${!!s.noFeeCoins}:${!!s.feePolicyRefused}:${!!s.capsuleAssets}`) save();
 		} catch (_) {
 			/* no address to read, nothing switched */
 		}
@@ -763,6 +1233,7 @@ export function createAssetsMock(ctx) {
 				chain: { name: chainOf(id), height: s.host === 'failed' ? 0 : ctx.height(id), minConfirmations: required(id) },
 				pending: { mints: 0, sends: 0, receives: 0, burns: 0 },
 				holdsAssets: false,
+				assetChannels: null,
 				lockedSats: 0,
 				anchorCount: 0,
 				startup: s.host === 'starting' ? { ...STARTUP } : null,
@@ -772,7 +1243,10 @@ export function createAssetsMock(ctx) {
 				limits: { ...FEE_LIMITS }
 			};
 		}
-		const active = (kind) => s.rows.filter((r) => r.kind === kind && !r._done && !r.failed && r.state !== 'waiting' && r.state !== 'cancelled').length;
+		// A send whose proof was handed over as a file is not still happening.
+		const settled = (r) => r.kind === 'send' && r.state === 'proofs' && !!r.handedOver;
+		const active = (kind) =>
+			s.rows.filter((r) => r.kind === kind && !r._done && !r.failed && r.state !== 'waiting' && r.state !== 'cancelled' && !settled(r)).length;
 		const anchors = Object.values(s.assets).reduce((n, a) => n + a.anchors, 0);
 		const mode = lightningMode(id);
 		return {
@@ -785,10 +1259,21 @@ export function createAssetsMock(ctx) {
 			chain: { name: chainOf(id), height: ctx.height(id), minConfirmations: required(id) },
 			pending: { mints: active('mint'), sends: active('send'), receives: active('receive'), burns: active('burn') },
 			holdsAssets: held(id).length > 0,
+			// As the host: counted as the status is asked, by the one function
+			// the manager's refusals go by too.
+			assetChannels: liveChannels(id),
 			lockedSats: anchors * ANCHOR_SATS,
 			anchorCount: anchors,
 			startup: null,
-			lightning: { mode, usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL').length },
+			// A node that does not offer asset channels reads as off, with the
+			// reason beside it, and its channels still counted and warned of.
+			lightning: {
+				mode: mode !== 'off' && s.notAdvertised ? 'off' : mode,
+				usableChannels: mode === 'off' ? 0 : s.channels.filter((c) => c.state === 'NORMAL' && c.peerConnected !== false).length,
+				feeCoins: mode === 'off' ? null : feeCoinsOf(id, s),
+				...(mode !== 'off' && s.notAdvertised ? { unavailable: { ...NOT_ADVERTISED } } : {}),
+				...(mode === 'off' ? {} : channelWarningsOf(s))
+			},
 			proofServer: proofServer(id),
 			backup: { ...s.backup },
 			limits: { ...FEE_LIMITS }
@@ -1098,6 +1583,8 @@ export function createAssetsMock(ctx) {
 		incoming._paidAt = t;
 		incoming._firstAt = RECEIVE.firstAtFromSibling;
 		incoming.txid = row.txid;
+		// A proof the server never got is one the recipient cannot fetch.
+		if (row._courierDown) incoming._proofLate = true;
 
 		ctx.emit(id, 'assets:transfer', { row: pubRow(row) });
 		ctx.emit(id, 'assets:balance', { key: rec.key });
@@ -1124,6 +1611,7 @@ export function createAssetsMock(ctx) {
 			confirmations: 0,
 			confirmationsRequired: required(id),
 			stuck: false,
+			handedOver: null,
 			at: { created: t, broadcast: null, confirmed: null, proof: null, completed: null },
 			clientRef: null,
 			_t0: t
@@ -1198,24 +1686,88 @@ export function createAssetsMock(ctx) {
 
 	const rateText = (identity, perWhole = satsPerWhole(identity)) => `1 ${identity.name} = ${perWhole.toLocaleString('en-US')} sats`;
 
-	function requireLightning(id) {
-		if (lightningMode(id) === 'off') throw fail('This wallet has no Lightning, so it has no asset channels', 'LIGHTNING_UNAVAILABLE');
+	// A channel is funded with one issuance of an asset. A wallet that holds
+	// several issuances of a group (`tranches`, what it holds of each) can
+	// put into one channel what it holds of the largest, as the host says in
+	// `balance.channelable`.
+	function channelableOf(rec) {
+		const held = Array.isArray(rec.tranches) && rec.tranches.length > 1 ? rec.tranches : null;
+		if (!held) return rec.onchain;
+		const most = held.reduce((a, b) => (cmpUnits(b, a) > 0 ? b : a), '0');
+		return cmpUnits(most, rec.onchain) < 0 ? most : rec.onchain;
 	}
 
-	function usableChannel(id, key, direction, amount) {
-		const field = direction === 'in' ? 'receivable' : 'sendable';
-		return S(id).channels.find((c) => c.asset.key === key && c.state === 'NORMAL' && cmpUnits(c[field], amount) >= 0) || null;
+	// The host's sentences (errors.js), word for word.
+	const DRAINING_TEXT = 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.';
+	const FUNDING_ELIGIBLE_SATS = 40000;
+	function fundingInputsRefusal(neededSats, otherSats) {
+		const elsewhere = otherSats > 0 ? ` Another ${otherSats} sats are on addresses of other types, which cannot be used for it.` : '';
+		return fail(
+			`The bitcoin for an asset channel has to be on native SegWit addresses. This wallet has ${FUNDING_ELIGIBLE_SATS} sats on those, and this needs about ${neededSats}.${elsewhere} Nothing was done and nothing was spent.`,
+			'FUNDING_INPUTS',
+			{ status: 409, details: { eligibleSats: String(FUNDING_ELIGIBLE_SATS), neededSats: String(neededSats), otherSats: String(otherSats) } }
+		);
 	}
+
+	function requireLightning(id) {
+		if (lightningMode(id) === 'off') throw fail('This wallet has no Lightning, so it has no asset channels', 'LIGHTNING_UNAVAILABLE');
+		// As the host: nothing new over asset channels while the node does not offer them.
+		if (S(id).notAdvertised) throw fail(NOT_ADVERTISED.message, 'LIGHTNING_NOT_ADVERTISED', { status: 409, details: { reason: NOT_ADVERTISED.reason } });
+	}
+
+	// As the host words a peer (assets-host/lightning.js peerSaid): the name the user gave it, or its key cut short.
+	const peerSaid = (c) => c.peerAlias || `${String(c.peerPubkey).slice(0, 8)}\u2026${String(c.peerPubkey).slice(-6)}`;
+	/** As the host: the channel that could carry the amount were its peer there (awayChannel). */
+	function awayChannel(id, key, direction, amount) {
+		const field = direction === 'in' ? 'receivable' : 'sendable';
+		return S(id).channels.find((c) => c.asset.key === key && c.state === 'NORMAL' && c.peerConnected === false && c._could && cmpUnits(c._could[field], amount) >= 0) || null;
+	}
+	/** The host's refusal of a price whose channel has a peer that is away, word for word (peerOffline). */
+	function peerOffline(c, way) {
+		const through = way === 'pay' || way === 'send' ? 'this would be paid through' : 'this would be received through';
+		const so = way === 'pay' ? 'so nothing was priced and nothing was paid' : way === 'send' ? 'so nothing was paid' : 'so no invoice was made';
+		return fail(`The peer of the asset channel ${through}, ${peerSaid(c)}, is not connected, ${so}. Try again once it is back.`, 'PEER_OFFLINE', {
+			status: 409,
+			details: { peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null }
+		});
+	}
+
+	function usableChannel(id, key, direction, amount, only = () => true) {
+		const field = direction === 'in' ? 'receivable' : 'sendable';
+		return S(id).channels.find((c) => c.asset.key === key && c.state === 'NORMAL' && only(c) && cmpUnits(c[field], amount) >= 0) || null;
+	}
+
+	// A peer that is another wallet sets no bitcoin price: an invoice through
+	// its channel is for the asset alone, one unit to the sat on its face. The
+	// demo's edge peer prices; a channel opened here from the dialog does not.
+	const unpriced = (c) => ctx.priced === false || !!c._unpriced;
+
+	// What starts on the peer's side of a new channel, so it can pay back: the
+	// reserve it must keep and the bitcoin two asset payments travel with.
+	const CHANNEL_PUSH_SATS = 1708;
 
 	function channelQuote(id, body) {
 		requireLightning(id);
+		// As the host: no new channel while the node has refused its fee settings.
+		if (S(id).feePolicyRefused) throw fail(FEE_POLICY_TEXT, 'FEE_POLICY_REFUSED', { status: 409 });
 		const identity = identityFor(id, String(body?.key || '').toLowerCase());
-		requireAmount(body?.amount, identity);
+		const wanted = requireAmount(body?.amount, identity);
+		// As the host: one issuance a channel, said when all the wallet holds would have been enough.
+		const held = S(id).assets[identity.key];
+		if (held && cmpUnits(wanted, held.onchain) <= 0 && cmpUnits(wanted, channelableOf(held)) > 0) {
+			const most = channelableOf(held);
+			throw fail(
+				`A channel holds units of one issuance of an asset. This wallet holds enough of this asset in all, spread over ${held.tranches.length} issuances, and the most it has of a single one on-chain is ${most} units. Open a channel with that much or less, and another for the rest.`,
+				'CHANNEL_ASSETS',
+				{ status: 409, details: { needed: wanted, largest: most, available: held.onchain, issuances: held.tranches.length } }
+			);
+		}
 		const fee = feeFor('channel', body?.feeRate);
 		const channelSats = 100000;
 		const totalSats = channelSats + fee.sats;
+		if (S(id).fundingShort) throw fundingInputsRefusal(totalSats, 250000);
 		const spendableSats = ctx.spendable(id);
-		return { channelSats, feeSats: fee.sats, totalSats, spendableSats, sufficient: spendableSats >= totalSats };
+		return { channelSats, pushSats: CHANNEL_PUSH_SATS, feeSats: fee.sats, totalSats, spendableSats, sufficient: spendableSats >= totalSats };
 	}
 
 	function openChannel(id, body) {
@@ -1236,8 +1788,14 @@ export function createAssetsMock(ctx) {
 		if (/^0[23]0{8}/.test(pubkey)) throw fail('That peer does not take asset channels', 'PEER_NO_ASSET_CHANNELS');
 		ctx.spend(id, quote.totalSats);
 		rec.onchain = subUnits(rec.onchain, amount);
+		// It comes out of the issuance the wallet holds most of.
+		if (Array.isArray(rec.tranches) && rec.tranches.length) {
+			const at = rec.tranches.reduce((best, held, i) => (cmpUnits(held, rec.tranches[best]) > 0 ? i : best), 0);
+			rec.tranches[at] = cmpUnits(rec.tranches[at], amount) > 0 ? subUnits(rec.tranches[at], amount) : '0';
+		}
+		const channelId = derivedHex(`chan:${id}:${state.n}:${now()}`, 64);
 		const channel = {
-			channelId: derivedHex(`chan:${id}:${state.n}:${now()}`, 64),
+			channelId,
 			peerPubkey: pubkey,
 			peerAlias: body.peer.alias || null,
 			state: 'OPENING',
@@ -1248,7 +1806,10 @@ export function createAssetsMock(ctx) {
 			sendable: '0',
 			receivable: '0',
 			channelSats: quote.channelSats,
-			_openedAt: now()
+			fundingTxid: derivedHex(`funding:${channelId}`, 64),
+			_unpriced: true,
+			_openedAt: now(),
+			_fundingRate: feeFor('channel', body?.feeRate).feeRate
 		};
 		s.channels.unshift(channel);
 		ctx.emit(id, 'assets:channel', { channelId: channel.channelId, state: channel.state });
@@ -1259,7 +1820,43 @@ export function createAssetsMock(ctx) {
 	function closeChannel(id, body) {
 		const s = S(id);
 		const c = s.channels.find((x) => x.channelId === body?.channelId);
-		if (!c) throw notFound('This wallet has no asset channel with that id', 'CHANNEL_NOT_FOUND');
+		// As the host: an open that failed is no channel.
+		if (!c || c.state === 'FAILED') throw notFound('This wallet has no asset channel with that id', 'CHANNEL_NOT_FOUND');
+		if (c.state === 'MISSING') {
+			throw fail("This channel is on record, but the wallet's node does not hold it, as happens after a restore from a backup. It cannot be closed from this wallet.", 'CHANNEL_MISSING');
+		}
+		// As the host: the funding transaction of an open is on no chain, so
+		// there is nothing a force close could close. Nor is there a close
+		// with the peer for an open the node has given up.
+		if (c.state === 'OPENING' && !pubChannel(c).reclaimable && (body.force || c._unfunded)) {
+			throw fail(
+				'The funding transaction of this channel is not on chain, so there is nothing on chain to close and nothing was done. An open that does not go through ends by itself, and the channel then goes from the list.',
+				'CHANNEL_NOT_FUNDED',
+				{ status: 409 }
+			);
+		}
+		// As the host: a close with the peer is refused where it cannot work.
+		if (!body.force) {
+			if (c.state === 'ERRORED') {
+				throw fail('This channel has failed and can no longer be closed together with its peer. Force close it to bring what is in it back on-chain.', 'CHANNEL_ERRORED', { status: 409 });
+			}
+			if (c.peerConnected === false) {
+				throw fail(
+					`The peer of this channel, ${peerSaid(c)}, is not connected, and a channel is closed together with its peer only while it is. Try again once it is back${c.state === 'OPENING' ? '' : ', or force close the channel'}.`,
+					'PEER_OFFLINE',
+					{ status: 409, details: { peerPubkey: c.peerPubkey, peerAlias: c.peerAlias || null } }
+				);
+			}
+		}
+		// As the host: an open whose funding is signed and not yet on the chain
+		// cannot be closed. Its bitcoin can be taken back instead.
+		if (pubChannel(c).reclaimable) {
+			throw fail(
+				'This channel is still being opened, and its funding transaction is already signed. It can be closed once it is on the chain. If that transaction will not confirm, its bitcoin can be taken back instead, which ends the open.',
+				'CHANNEL_OPENING',
+				{ status: 409, details: { reclaimable: true } }
+			);
+		}
 		c.state = 'CLOSED';
 		const rec = s.assets[c.asset.key];
 		if (rec) rec.onchain = addUnits(rec.onchain, c.localBalance);
@@ -1267,6 +1864,57 @@ export function createAssetsMock(ctx) {
 		ctx.emit(id, 'assets:channel', { channelId: c.channelId, state: c.state });
 		ctx.emit(id, 'assets:balance', { key: c.asset.key });
 		return { channelId: c.channelId, closing: true, force: !!body.force };
+	}
+
+	/**
+	 * Taking a funding back (POST /channels/reclaim): a transaction that
+	 * spends the same bitcoin back to this wallet at a higher fee. The
+	 * host's answer and its refusals, word for word (assets-host/lightning.js
+	 * reclaimFunding). A replacement has to pay more than what it replaces,
+	 * so a rate that is not above the funding's, or above the one sent
+	 * before, is the transaction the network does not take.
+	 */
+	function reclaimFunding(id, body) {
+		// As the host: the fee of taking a funding back comes from native SegWit coins too.
+		if (S(id).fundingShort && S(id).channels.some((c) => c.channelId === body?.channelId || c.pendingChannelId === body?.channelId)) {
+			throw fundingInputsRefusal(Math.ceil((Number(body?.feeRate) || 1) * RECLAIM_VBYTES), 0);
+		}
+		const s = S(id);
+		const c = s.channels.find((x) => x.channelId === body?.channelId && x.state !== 'CLOSED');
+		if (!c) throw notFound('This wallet has no asset channel with that id.', 'CHANNEL_NOT_FOUND');
+		if (!pubChannel(c).reclaimable) {
+			throw fail(
+				c.state === 'NORMAL'
+					? 'The funding of this channel is on the chain, so there is nothing to take back. Close the channel instead.'
+					: 'The funding of this channel cannot be taken back. That can be done only for a channel this wallet is opening with its own bitcoin, once its funding transaction is made and while it has not confirmed.',
+				'CHANNEL_NOT_RECLAIMABLE',
+				{ status: 409 }
+			);
+		}
+		const given = body?.feeRate;
+		let rate = ((ctx.fees && ctx.fees()) || { fast: 18 }).fast;
+		if (given !== undefined && given !== null && given !== '') {
+			rate = Number(given);
+			if (!Number.isFinite(rate) || rate <= 0) throw fail('The fee rate must be a number of sats per vbyte above zero.', 'INVALID_PARAMS');
+			if (rate > FEE_LIMITS.maxFeeRate) {
+				throw fail(`That fee rate is above the ${FEE_LIMITS.maxFeeRate} sat/vB this wallet allows for an asset transaction.`, 'FEE_TOO_HIGH', {
+					status: 400,
+					details: { maxFeeRate: FEE_LIMITS.maxFeeRate }
+				});
+			}
+		}
+		if (rate <= Math.max(Number(c._fundingRate) || 0, Number(c._reclaimRate) || 0)) {
+			throw fail(
+				'The transaction that takes the funding back could not be made or sent. If the funding transaction is already on the network, it takes a fee rate above the one that transaction pays.',
+				'CHANNEL_RECLAIM_FAILED',
+				{ status: 502 }
+			);
+		}
+		c.reclaimTxid = derivedHex(`reclaim:${c.channelId}:${rate}`, 64);
+		c._reclaimRate = rate;
+		c._reclaimAt = now();
+		ctx.emit(id, 'assets:channel', { channelId: c.channelId, state: c.state });
+		return { channelId: c.channelId, pendingChannelId: c.pendingChannelId || c.channelId, txid: c.reclaimTxid, feeSats: Math.ceil(rate * RECLAIM_VBYTES), feeRate: rate };
 	}
 
 	function invoiceQuote(id, body) {
@@ -1278,15 +1926,19 @@ export function createAssetsMock(ctx) {
 		const maxReceivable = channels.reduce((m, c) => (cmpUnits(c.receivable, m) > 0 ? c.receivable : m), '0');
 		const ch = usableChannel(id, identity.key, 'in', amount);
 		if (!ch) {
+			const idle = awayChannel(id, identity.key, 'in', amount);
+			if (idle) throw peerOffline(idle, 'receive');
 			throw fail('No asset channel can receive that much', 'INSUFFICIENT_INBOUND', { details: { maxReceivable } });
 		}
+		const plain = unpriced(ch);
 		const quote = {
 			quoteId: nextId('rfq'),
 			peerPubkey: ch.peerPubkey,
 			peerAlias: ch.peerAlias,
 			assetAmount: amount,
-			amountSats: toSats(identity, amount),
-			rateText: rateText(identity),
+			amountSats: plain ? Number(amount) : toSats(identity, amount),
+			rateText: plain ? '' : rateText(identity),
+			priced: !plain,
 			expiresAt: now() + INVOICE_QUOTE_MS,
 			maxReceivable,
 			_channelId: ch.channelId,
@@ -1320,6 +1972,7 @@ export function createAssetsMock(ctx) {
 			assetAmount: quote.assetAmount,
 			amountSats: quote.amountSats,
 			rateText: quote.rateText,
+			priced: quote.priced,
 			expiresAt: quote.expiresAt,
 			invoiceExpiresAt: now() + HOUR,
 			description: String(body?.description || ''),
@@ -1340,19 +1993,42 @@ export function createAssetsMock(ctx) {
 		// No digits before the separator is an invoice that names no amount.
 		const m = /^ln(?:bcrt|bc|tb)(\d*)([munp]?)1/i.exec(String(body?.bolt11 || ''));
 		if (!m) throw fail('That is not a Lightning invoice', 'BAD_INVOICE');
+		// As the host: an invoice this wallet has paid, or may have, is not priced again.
+		if (S(id).lost && S(id).lost[String(body.bolt11)]) throw fail('This wallet has already paid that invoice, or is paying it now.', 'ALREADY_PAID', { status: 409 });
 		const perBtc = { '': 1e8, m: 1e5, u: 100, n: 0.1, p: 0.0001 };
 		const amountSats = m[1] ? Math.round(Number(m[1]) * perBtc[m[2].toLowerCase()]) : Number(body.amountSats) || 0;
 		if (!(amountSats > 0)) throw fail('This invoice names no amount, so one is needed', 'AMOUNT_REQUIRED');
 		const perWhole = satsPerWhole(identity) - (moved ? Math.max(1, Math.round(satsPerWhole(identity) / 100)) : 0);
-		const assetAmount = toAssetUnits(identity, amountSats, perWhole);
 		const sendable = channelTotals(id, identity.key).sendable;
-		const ch = usableChannel(id, identity.key, 'out', assetAmount);
-		if (!ch) throw fail('No asset channel can send that much', 'INSUFFICIENT_OUTBOUND', { details: { sendable } });
+		// A peer that prices is asked first. One that does not takes the
+		// invoice at its face: a unit to the sat.
+		let assetAmount = toAssetUnits(identity, amountSats, perWhole);
+		let ch = usableChannel(id, identity.key, 'out', assetAmount, (c) => !unpriced(c));
+		if (!ch) {
+			const face = String(Math.max(1, Math.floor(amountSats)));
+			const other = usableChannel(id, identity.key, 'out', face, unpriced);
+			if (other) {
+				ch = other;
+				assetAmount = face;
+			}
+		}
+		if (!ch) {
+			const idle = awayChannel(id, identity.key, 'out', assetAmount);
+			if (idle) throw peerOffline(idle, 'pay');
+			// As the host: units a channel holds and cannot move for want of
+			// bitcoin on this side are refused in the carrier's own words.
+			if (sendable === '0' && S(id).channels.some((c) => c.asset.key === identity.key && c.state === 'NORMAL' && c.peerConnected !== false && c.sendablePayments === 0 && cmpUnits(c.localBalance, '0') > 0)) {
+				throw fail(CHANNEL_BITCOIN_SHORT_TEXT, 'CHANNEL_BITCOIN_SHORT', { status: 409 });
+			}
+			throw fail('No asset channel can send that much', 'INSUFFICIENT_OUTBOUND', { details: { sendable } });
+		}
+		const plain = unpriced(ch);
 		const quote = {
 			quoteId: nextId('rfq'),
 			assetAmount,
 			amountSats,
-			rateText: rateText(identity, perWhole),
+			rateText: plain ? '' : rateText(identity, perWhole),
+			priced: !plain,
 			peerAlias: ch.peerAlias,
 			expiresAt: now() + PAY_QUOTE_MS,
 			sendable,
@@ -1366,6 +2042,7 @@ export function createAssetsMock(ctx) {
 	function pay(id, body, key) {
 		requireLightning(id);
 		const s = S(id);
+		if (s.draining) throw fail(DRAINING_TEXT, 'SERVICE_DRAINING', { status: 409 });
 		const quote = s.quotes[body?.quoteId];
 		if (!quote || quote.expiresAt < now()) {
 			// The price ran out, and the demo's peer asks a little more the next
@@ -1377,11 +2054,52 @@ export function createAssetsMock(ctx) {
 		if (body.maxAssetAmount != null && cmpUnits(quote.assetAmount, body.maxAssetAmount) > 0) {
 			throw fail('The price changed before the payment was made', 'QUOTE_CHANGED', { details: { quote: pubRow(quote) } });
 		}
+		// Nothing can say how the payment of this invoice ended, so it may have been paid.
+		if (s.lost && s.lost[String(body.bolt11)]) throw fail(PAY_NOTICES.PAYMENT_UNACCOUNTED.message, 'PAYMENT_UNACCOUNTED', { status: 409 });
 		const identity = identityFor(id, quote._key);
 		const ch = s.channels.find((c) => c.channelId === quote._channelId);
+		// As the host: the peer of the channel may have gone since the price
+		// was given. That is said before anything is sent or recorded, with
+		// the peer named, and the price is kept for when it is back.
+		if (ch && ch.state === 'NORMAL' && ch.peerConnected === false) throw peerOffline(ch, 'send');
+		// As the host: nothing is recorded or sent while the channel has not taken in what earlier payments left.
+		if (ch && ch.undeliveredOutcomes > 0) {
+			throw fail(OUTCOMES_UNDELIVERED_TEXT, 'OUTCOMES_UNDELIVERED', { status: 409, details: { undeliveredOutcomes: ch.undeliveredOutcomes } });
+		}
 		delete s.quotes[quote.quoteId];
 		return new Promise((resolve) => {
 			setTimeout(() => {
+				// Armed by `pay-unaccounted` or `pay-unconfirmed`: this payment is
+				// one the wallet cannot vouch for. Nothing is known to have left
+				// the channel, so its balances stay as they were.
+				const armed = s.payNotice && PAY_NOTICES[s.payNotice] ? s.payNotice : null;
+				if (armed) {
+					const lost = armed === 'PAYMENT_UNACCOUNTED';
+					const hash = derivedHex(`pay:${id}:${quote.quoteId}`, 64);
+					const noted = newRow(id, 'ln-send', {
+						state: lost ? 'pending' : 'complete',
+						assets: [brief(identity, quote.assetAmount)],
+						paymentHash: hash,
+						feeSats: lost ? null : 2,
+						clientRef: key || null,
+						notice: { ...PAY_NOTICES[armed] },
+						_done: true
+					});
+					if (!lost) noted.at.completed = now();
+					s.payNotice = null;
+					if (lost) s.lost = { ...(s.lost || {}), [String(body.bolt11)]: true };
+					save();
+					ctx.emit(id, 'assets:payment', { row: pubRow(noted) });
+					resolve({
+						status: lost ? 'PENDING' : 'COMPLETED',
+						paymentHash: hash,
+						assetAmount: quote.assetAmount,
+						feeSats: lost ? null : 2,
+						failureDescription: null,
+						notice: { ...PAY_NOTICES[armed] }
+					});
+					return;
+				}
 				ch.localBalance = subUnits(ch.localBalance, quote.assetAmount);
 				ch.remoteBalance = addUnits(ch.remoteBalance, quote.assetAmount);
 				ch.sendable = subUnits(ch.sendable, quote.assetAmount);
@@ -1399,14 +2117,88 @@ export function createAssetsMock(ctx) {
 				save();
 				ctx.emit(id, 'assets:payment', { row: pubRow(row) });
 				ctx.emit(id, 'assets:balance', { key: identity.key });
+				// The daemon's own word on it, marked as one an asset channel carried.
+				ctx.emit(id, 'payment:sent', { paymentHash, amountSats: 354, feeSats: 2, auxiliary: true });
 				resolve({ status: 'COMPLETED', paymentHash, assetAmount: quote.assetAmount, feeSats: 2, failureDescription: null });
 			}, ctx.ticker === false ? 0 : PAY_ANSWERS_MS);
 		});
 	}
 
+	/* --------------------------------------------- proofs handed over by file */
+
+	// The demo's proof file says who it pays and with what, and only the demo
+	// can read it. A real one is the asset's whole history, which the wallet
+	// verifies against the chain before it takes anything from it.
+	function exportProof(id, rowId) {
+		const row = findRow(id, rowId);
+		if (row.kind !== 'send') throw fail('Only a send has a proof file to hand to someone.', 'NO_PROOF_FILE');
+		if (!['proofs', 'complete'].includes(row.state)) {
+			throw fail(`The proof file exists once the transaction is ${row.confirmationsRequired} blocks deep.`, 'PROOF_NOT_READY', { status: 409 });
+		}
+		const a = row.assets[0];
+		const text = JSON.stringify({ demoProof: 1, address: row.address || null, txid: row.txid, assetId: a.assetId, amount: a.amount });
+		return {
+			id: row.id,
+			fileName: `proof-${a.assetId.slice(0, 8)}-${row.txid.slice(0, 8)}.assetproof`,
+			file: btoa(text),
+			bytes: text.length,
+			assetId: a.assetId,
+			address: row.address || null,
+			txid: row.txid
+		};
+	}
+
+	function importProof(id, body) {
+		const text = typeof body?.file === 'string' ? body.file.trim() : '';
+		if (!text) throw fail('A proof file is needed.', 'BAD_PROOF_FILE');
+		let proof = null;
+		try {
+			proof = JSON.parse(atob(text));
+		} catch {
+			/* not one of the demo's */
+		}
+		if (!proof || proof.demoProof !== 1) throw fail('That file is not a Taproot Assets proof file this wallet can read.', 'BAD_PROOF_FILE');
+		advance(id);
+		const s = S(id);
+		const mine = s.rows.filter((r) => r.kind === 'receive' && proof.address && r.address === proof.address);
+		if (!mine.length) {
+			throw notFound('This proof is not for an address this wallet made. It has to be the file of a payment to this wallet.', 'PROOF_NOT_OURS');
+		}
+		const row = mine.find((r) => r.txid === proof.txid && r.state !== 'waiting');
+		if (!row) {
+			if (mine.some((r) => r.state === 'waiting')) {
+				throw fail('The payment this proof is for is not in a block yet. Import the file once its transaction has confirmed.', 'PAYMENT_NOT_SEEN', {
+					status: 409
+				});
+			}
+			throw fail('This proof is for a different payment than the one this wallet found for that address.', 'PROOF_OTHER_PAYMENT', { status: 409 });
+		}
+		if (row.state === 'complete') return { result: 'already', row: pubRow(row) };
+		if (row.state === 'confirming') {
+			// Kept, and used when the transaction is deep enough.
+			delete row._proofLate;
+			row._handed = true;
+			save();
+			return { result: 'kept', waitingFor: 'confirmations', reason: null, row: pubRow(row) };
+		}
+		const t = now();
+		delete row._proofLate;
+		row.failure = null;
+		row.state = 'complete';
+		row.at.proof = row.at.proof || t;
+		row.at.completed = t;
+		credit(id, row._identity || row.assets[0], row.assets[0].amount, { at: t });
+		row._done = true;
+		s.backup.dirty = true;
+		save();
+		ctx.emit(id, 'assets:receive', { row: pubRow(row) });
+		ctx.emit(id, 'assets:balance', { key: row.assets[0].key });
+		return { result: 'complete', row: pubRow(row) };
+	}
+
 	/* ----------------------------------------------------------- dispatch */
 
-	const IDEMPOTENT = new Set(['/mint', '/send/prepare', '/send/commit', '/burn/prepare', '/burn/commit', '/channels/open', '/pay']);
+	const IDEMPOTENT = new Set(['/mint', '/send/prepare', '/send/commit', '/burn/prepare', '/burn/commit', '/channels/open', '/channels/reclaim', '/pay']);
 
 	function handle(id, sub, q, method, body, key) {
 		if (method === 'GET') {
@@ -1414,8 +2206,9 @@ export function createAssetsMock(ctx) {
 			if (sub === '/balances') return balances(id);
 			if (sub === '/asset') return assetDetail(id, String(q.get('key') || '').toLowerCase());
 			if (sub === '/activity') return activity(id, q);
-			if (sub === '/channels') return { channels: S(id).channels.filter((c) => c.state !== 'CLOSED').map(pubRow) };
-			if (sub === '/invoices') return { invoices: S(id).invoices.map((i) => ({ ...i })) };
+			if (sub === '/proofs/export') return exportProof(id, q.get('id'));
+			if (sub === '/channels') return { channels: S(id).channels.filter((c) => c.state !== 'CLOSED').map(pubChannel) };
+			if (sub === '/invoices') return { invoices: S(id).invoices.map(pubInvoice) };
 			return undefined;
 		}
 		if (method !== 'POST') return undefined;
@@ -1458,6 +2251,25 @@ export function createAssetsMock(ctx) {
 					row._t0 = now() - SEND.proofAt;
 					save();
 				}
+				// A server that was down and is back takes the proof it missed.
+				if (row._courierDown && !S(id).proofServerDown) {
+					delete row._courierDown;
+					save();
+				}
+				return { row: pubRow(row) };
+			}
+			case '/proofs/import':
+				return importProof(id, body);
+			case '/proofs/handed-over': {
+				const row = findRow(id, body?.id);
+				if (row.kind !== 'send') throw fail('Only a send has a proof file to hand to someone.', 'NO_PROOF_FILE');
+				if (row.state === 'complete') return { row: pubRow(row) };
+				if (row.state !== 'proofs') {
+					throw fail(`The proof file exists once the transaction is ${row.confirmationsRequired} blocks deep.`, 'PROOF_NOT_READY', { status: 409 });
+				}
+				row.handedOver = body?.handedOver === false ? null : row.handedOver || now();
+				save();
+				ctx.emit(id, 'assets:transfer', { row: pubRow(row) });
 				return { row: pubRow(row) };
 			}
 			case '/send/prepare':
@@ -1494,6 +2306,12 @@ export function createAssetsMock(ctx) {
 				return openChannel(id, body);
 			case '/channels/close':
 				return closeChannel(id, body);
+			case '/channels/reclaim':
+				// As the host: taking a funding back is asked for once, by its key.
+				if (!key) {
+					throw fail('This request needs an X-Idempotency-Key header, so that sending it twice does not take the same funding back twice.', 'IDEMPOTENCY_KEY_REQUIRED', { status: 400 });
+				}
+				return reclaimFunding(id, body);
 			case '/invoices/quote':
 				return invoiceQuote(id, body);
 			case '/invoices':
@@ -1635,6 +2453,8 @@ export function createAssetsMock(ctx) {
 		if (ids.has('demo-main')) {
 			const id = 'demo-main';
 			hold(id, busd, '1250000', { mintedHere: true, anchors: 2, proofs: 7 });
+			// Held over its two issuances: 9,000.00 of one and 3,500.00 of the other.
+			S(id).assets[busd.key].tranches = ['900000', '350000'];
 			hold(id, points, '4200', { proofs: 4, depth: 3 });
 			hold(id, pico, '9007199254740993', { mintedHere: true, proofs: 1 });
 			hold(id, ticket, '1', { proofs: 5, depth: 4 });
@@ -1644,6 +2464,7 @@ export function createAssetsMock(ctx) {
 				peerPubkey: `02${derivedHex('seed-peer:busd', 64)}`,
 				peerAlias: 'Lightning Labs edge',
 				state: 'NORMAL',
+				fundingTxid: derivedHex('seed-funding:demo-main:busd', 64),
 				asset: brief(busd),
 				capacity: '550000',
 				localBalance: '240000',
@@ -1748,8 +2569,145 @@ export function createAssetsMock(ctx) {
 		save();
 	}
 
+	// The daemon's word for each state of an asset channel on GET /channels.
+	const DAEMON_STATE = { OPENING: 'AWAITING_FUNDING_CONFIRMED', NORMAL: 'NORMAL', CLOSING: 'NEGOTIATING_CLOSING', FORCE_CLOSING: 'FORCE_CLOSED' };
+
+	/**
+	 * This wallet's asset channels as its daemon lists them on GET /channels:
+	 * beside the bitcoin ones, marked `auxiliary`, with the sats that carry
+	 * the asset. Reading it moves nothing and marks nothing as seen.
+	 */
+	// The asset channels the checkpoint a peer returned for this wallet
+	// holds, as the engine names them when it refuses a capsule restore over
+	// them and when it leaves them out: null when it holds none.
+	/** The payments the demo's restore without its asset channels leaves unresolved, as the daemon's answer lists them. */
+	function capsuleUnresolved(id) {
+		return S(id).capsuleAssets ? [0, 1, 2].map((i) => derivedHex(`capsule-unresolved:${id}:${i}`, 64)) : [];
+	}
+
+	function capsuleAssetChannels(id) {
+		if (!S(id).capsuleAssets) return null;
+		return [0, 1].map((i) => ({
+			channelId: derivedHex(`capsule-asset-channel:${id}:${i}`, 64),
+			peerPubkey: `0${2 + i}${derivedHex(`capsule-asset-peer:${i}`, 64)}`,
+			capacitySats: 100000
+		}));
+	}
+
+	/** The asset channels the demo daemon's own apply of the checkpoint was refused over, or null. */
+	function capsuleAutoRefused(id) {
+		return S(id).capsuleAuto ? capsuleAssetChannels(id) : null;
+	}
+
+	/** The asset channel entries a backup-only checkpoint of the demo skips, or null. */
+	function capsuleSkipped(id) {
+		if (!S(id).capsuleSkipped) return null;
+		return [{ channelId: derivedHex(`capsule-skipped-channel:${id}`, 64), peerPubkey: `02${derivedHex('capsule-skipped-peer', 64)}`, capacitySats: 100000 }];
+	}
+
+	/**
+	 * How many asset channels are not over, as the host counts them
+	 * (lightning.js liveChannels): every row but a closed one and an open
+	 * that failed. The status gives this number and the manager refuses by it.
+	 */
+	function liveChannels(id) {
+		return S(id).channels.filter((c) => !['CLOSED', 'FORCE_CLOSED', 'FAILED'].includes(c.state)).length;
+	}
+
+	function daemonChannels(id) {
+		if (!state.wallets[id]) return [];
+		return state.wallets[id].channels
+			.filter((c) => c.state !== 'CLOSED' && c.state !== 'MISSING' && c.state !== 'FAILED')
+			.map((c) => {
+				const capacitySats = Number(c.channelSats) || 0;
+				const remoteBalanceSats = Math.min(capacitySats, CHANNEL_PUSH_SATS);
+				const daemonState = DAEMON_STATE[c.state] || c.state;
+				return {
+					channelId: c.channelId,
+					peerPubkey: c.peerPubkey,
+					alias: c.peerAlias || null,
+					capacitySats,
+					localBalanceSats: capacitySats - remoteBalanceSats,
+					remoteBalanceSats,
+					state: daemonState,
+					htlcUsable: daemonState === 'NORMAL',
+					isPrivate: true,
+					auxiliary: true
+				};
+			});
+	}
+
+	/**
+	 * What the daemon's GET /balance says of the bitcoin on this wallet's side
+	 * of its asset channels, to be spread into that answer:
+	 * `assetChannelSats` for the channels that are neither closing nor over,
+	 * `assetChannelClosingSats` for those that are closing. Each key is there
+	 * only while the wallet has such a channel, as on the engine, and neither
+	 * figure is in `lightning` or `total`.
+	 */
+	function channelBitcoin(id) {
+		if (!state.wallets[id]) return {};
+		let open = null;
+		let closing = null;
+		for (const c of state.wallets[id].channels) {
+			const mine = Math.max(0, (Number(c.channelSats) || 0) - CHANNEL_PUSH_SATS);
+			if (c.state === 'CLOSING' || c.state === 'FORCE_CLOSING') closing = (closing || 0) + mine;
+			else if (c.state === 'OPENING' || c.state === 'NORMAL' || c.state === 'ERRORED') open = (open || 0) + mine;
+		}
+		return { ...(open !== null ? { assetChannelSats: open } : {}), ...(closing !== null ? { assetChannelClosingSats: closing } : {}) };
+	}
+
+	// The sats an asset payment carries beside the asset, as the daemon counts them.
+	const CARRIER_SATS = 354;
+
+	/**
+	 * This wallet's asset payments as its daemon lists them on GET /payments:
+	 * beside the bitcoin ones, marked `auxiliary`. One out counts the sats
+	 * that carried it, one in the face value of its invoice.
+	 */
+	function daemonPayments(id) {
+		if (!state.wallets[id]) return [];
+		const s = state.wallets[id];
+		return s.rows
+			.filter((r) => (r.kind === 'ln-send' || r.kind === 'ln-receive') && r.state === 'complete' && r.paymentHash)
+			.map((r) => {
+				const invoice = r.kind === 'ln-receive' ? s.invoices.find((i) => i.paymentHash === r.paymentHash) : null;
+				return {
+					paymentHash: r.paymentHash,
+					direction: r.kind === 'ln-send' ? 'OUTGOING' : 'INCOMING',
+					amountSats: r.kind === 'ln-send' ? CARRIER_SATS : invoice ? invoice.amountSats : CARRIER_SATS,
+					feeSats: r.kind === 'ln-send' ? r.feeSats : null,
+					status: 'COMPLETED',
+					createdAt: r.at.created,
+					completedAt: r.at.completed || r.at.created,
+					auxiliary: true
+				};
+			});
+	}
+
+	/** This wallet's asset invoices as its daemon lists them on GET /invoices, marked `auxiliary`. */
+	function daemonInvoices(id) {
+		if (!state.wallets[id]) return [];
+		const t = now();
+		return state.wallets[id].invoices.map((i) => ({
+			bolt11: i.bolt11,
+			paymentHash: i.paymentHash,
+			amountSats: i.amountSats,
+			description: i.description,
+			expiry: Math.round((i.invoiceExpiresAt - i.createdAt) / 1000),
+			createdAt: Math.round(i.createdAt / 1000),
+			status: i.status === 'PAID' ? 'PAID' : i.invoiceExpiresAt < t ? 'EXPIRED' : 'PENDING',
+			auxiliary: true
+		}));
+	}
+
 	return {
 		request,
+		daemonChannels,
+		liveChannels,
+		channelBitcoin,
+		daemonPayments,
+		daemonInvoices,
 		/** What the wallet record's `assets` block says, for the manager routes. */
 		recordOf: (id) => ({
 			enabled: true,
@@ -1762,6 +2720,13 @@ export function createAssetsMock(ctx) {
 		setHost,
 		/** For tests and the demo's switch: 'stuck', 'proof-refused', 'send-refused' or 'unwatched' on this wallet. */
 		seed: putState,
+		/** For the demo daemon: the asset channels the wallet's checkpoint holds, or null. */
+		capsuleAssetChannels,
+		capsuleUnresolved,
+		capsuleAutoRefused,
+		capsuleSkipped,
+		/** For the demo daemon: read the switch in the address now, ahead of a route that depends on it. */
+		readSwitch,
 		/** For tests: this wallet's proof server stops answering, or answers again. */
 		setProofServer(id, down) {
 			S(id).proofServerDown = !!down;

@@ -145,6 +145,40 @@ export function onHandShortage(details, what) {
 }
 
 /**
+ * What the assets host says is wrong with the wallet's asset channels, one
+ * note each: { code, tone, text }, the sentence being the host's own. A
+ * recovery that is taking long is a wait, and is said in blue. Anything else
+ * is something the wallet cannot put right by itself, and is said in red. A
+ * host that names no codes is believed all the same, in one red note.
+ */
+/**
+ * Why this wallet's node takes nothing new over asset channels, when the
+ * wallet's assets host says it does not (`status.lightning.unavailable`):
+ * { code, text }, with the host's own sentence. Null for a wallet whose
+ * asset channels work, and for one that has none to speak of. The channels
+ * there already are stay listed and can still be closed, so the screens
+ * stay, held with this reason.
+ */
+export function lightningHeld(status) {
+	const said = status && status.lightning && status.lightning.unavailable;
+	if (!said || typeof said.message !== 'string' || !said.message.trim()) return null;
+	return { code: typeof said.code === 'string' && said.code ? said.code : 'LIGHTNING_UNAVAILABLE', text: said.message.trim() };
+}
+
+// A warning that is a wait or a thing said, not a loss: shown blue.
+const CHANNEL_NOTES = new Set(['RECOVERY_STUCK', 'FEE_BUDGET_EXHAUSTED', 'FEE_COINS_UNAVAILABLE']);
+
+export function channelWarnings(status) {
+	const ln = status && status.lightning;
+	if (!ln) return [];
+	const said = Array.isArray(ln.warnings) ? ln.warnings.filter((w) => w && typeof w.text === 'string' && w.text.trim()) : [];
+	if (said.length > 0) {
+		return said.map((w) => ({ code: String(w.code || 'CHANNEL_WARNING'), tone: CHANNEL_NOTES.has(w.code) ? 'info' : 'error', text: w.text.trim() }));
+	}
+	return typeof ln.warning === 'string' && ln.warning.trim() ? [{ code: 'CHANNEL_WARNING', tone: 'error', text: ln.warning.trim() }] : [];
+}
+
+/**
  * The notes across the top of the Assets tab. Errors first, then the things
  * worth knowing. Each is { code, tone: 'error' | 'info', text, action }, the
  * action being 'backup' where the reader can do something about it now.
@@ -191,6 +225,14 @@ export function assetWarnings({ status, rec, info, health, btc, holdings, rows, 
 			]
 		});
 	}
+
+	// What is wrong with an asset channel is said here too: the assets in it
+	// are part of what this tab counts.
+	for (const w of channelWarnings(status)) out.push({ code: w.code, tone: w.tone, parts: [w.text] });
+	// A node that does not offer asset channels: nothing new can be opened,
+	// invoiced or paid over them, in the host's own sentence.
+	const held = lightningHeld(status);
+	if (held) out.push({ code: held.code, tone: 'error', parts: [held.text] });
 
 	if (health && health.electrumConnected === false) {
 		out.push({
@@ -434,6 +476,39 @@ export function sentence(text) {
 	return /[.!?…]$/.test(t) ? t : `${t}.`;
 }
 
+/* ------------------------------------------------------------ proof files */
+
+/** The largest proof file the wallet takes by hand. */
+export const MAX_PROOF_FILE_BYTES = 4 * 1024 * 1024;
+
+/** A proof file as the wallet hands it over (base64), as bytes to save. */
+export function proofFileBytes(base64) {
+	const binary = atob(String(base64 || ''));
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+	return bytes;
+}
+
+/**
+ * What to say once the wallet has taken a proof file: { text, tone }. A file
+ * is `complete` when it verified and the asset is held, `kept` when the
+ * wallet will verify it later by itself, and `already` when there was
+ * nothing left to do.
+ */
+export function proofTaken(answer) {
+	const a = answer || {};
+	const row = a.row || null;
+	// What arrived is said by the wallet's own event; this says the file was good.
+	if (a.result === 'complete') return { text: 'The proof checks out, and the asset is in your holdings.', tone: 'success' };
+	if (a.result === 'already') return { text: 'This wallet already has that payment. Nothing changed.', tone: 'info' };
+	if (a.waitingFor === 'confirmations') {
+		const need = row && row.confirmationsRequired ? `${row.confirmationsRequired} blocks deep` : 'deep enough';
+		return { text: `The proof file is kept. The asset arrives once its transaction is ${need}, with no proof server needed.`, tone: 'info' };
+	}
+	const why = a.reason ? ` (${String(a.reason).replace(/\.$/, '')})` : '';
+	return { text: `The proof file is kept, and could not be checked just now${why}. The wallet tries again by itself.`, tone: 'info' };
+}
+
 /* ----------------------------------------------------------------- events */
 
 /**
@@ -445,6 +520,12 @@ export function sentence(text) {
  * timeline for anyone watching.
  */
 export function describeAssetEvent(name, data) {
+	// A channel open that was turned down after the dialog had closed: the
+	// wallet says why in a sentence of its own, and the row is already gone,
+	// so this is the only place it can be read.
+	if (name === 'assets:error' && data && data.channelId && typeof data.message === 'string' && data.message.trim()) {
+		return { text: `The asset channel was not opened. ${data.message.trim()}`, tone: 'error', duration: 12000 };
+	}
 	const row = data && data.row;
 	if (!row) return null;
 	const failed = isFailed(row);

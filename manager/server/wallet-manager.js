@@ -28,6 +28,40 @@ const {
 	parseGuardianEntry,
 	validateGuardianSet
 } = require('./recovery');
+
+
+// What the engine itself refuses over stored asset channels, in the words a
+// wallet's owner is shown. This is the one place in the manager that knows
+// the engine's codes for them. The dashboard words the two restore refusals
+// itself (ui/src/lib/recovery.js, assetRestoreRefusal), since a restore is
+// asked of the daemon through the proxy and its answer is not rewritten.
+const NOT_RUN_UNWATCHED =
+	'so the wallet was not started: an asset channel is never run unwatched. The channels and the assets in them are untouched. Start the wallet again with assets turned on.';
+const ENGINE_ASSET_REFUSALS = {
+	// The daemon's own form of ASSET_CHANNELS_OPEN (_refuseStartOverAssetChannels),
+	// for a start the manager's count did not catch. It refuses before the
+	// node is built, so nothing reached a guardian.
+	ASSET_GUARDIAN_START_REFUSED:
+		'This wallet has an asset channel and is on a channel backup kept by guardians, which does not cover asset channels, so it was not started and nothing was sent to the guardians. Take it off the guardian backup, start it, and close the channel on the Channels tab. Once the assets are back on-chain it can go back on a guardian backup.',
+	// Asset channels are stored and the assets part of the wallet is not
+	// there to watch them: it did not come up, came up twice, or failed.
+	ASSET_PROVIDER_REQUIRED: `This wallet has an asset channel, and the assets part of the wallet did not come up, ${NOT_RUN_UNWATCHED}`,
+	ASSET_PROVIDER_CONFLICT: `This wallet has an asset channel, and the assets part of the wallet came up twice, ${NOT_RUN_UNWATCHED}`,
+	ASSET_PROVIDER_FAILED: `This wallet has an asset channel, and the assets part of the wallet failed while it was starting, ${NOT_RUN_UNWATCHED}`,
+	// A restore of channel state that holds an asset channel.
+	ASSET_RESTORE_REFUSED:
+		'The channel state that was to be restored holds an asset channel, which a restore does not bring back, so nothing was restored and nothing was written. The wallet is as it was.',
+	AUXILIARY_GUARDIAN_RESTORE_REFUSED:
+		'The channel state the guardians keep for this wallet holds an asset channel, which a guardian backup does not cover, so nothing was restored and nothing was written. The wallet is as it was.'
+};
+
+/** The sentence for an engine refusal over asset channels named by `code` or in `text`, or null. */
+function engineAssetRefusal(code, text) {
+	for (const [name, sentence] of Object.entries(ENGINE_ASSET_REFUSALS)) {
+		if (code === name || new RegExp(`\\b${name}\\b`).test(String(text || ''))) return { code: name, message: sentence };
+	}
+	return null;
+}
 const {
 	ArchiveError,
 	assertPassphrase,
@@ -72,6 +106,7 @@ const { normalizeElectrumTls, electrumTlsEnv } = require('./electrum-tls');
 const { electrumRequests, cachedProbe, discoverServers } = require('./electrum-probe');
 const lfbw = require('./lfbw');
 const ffor = require('./ffor');
+const { bitcoinChannels } = require('./channels');
 const assets = require('./assets');
 const netmode = require('./network-mode');
 const { createOutbound } = require('./outbound');
@@ -242,7 +277,9 @@ class WalletManager {
 			String(process.env.BEIGNET_ASSETS || '').toLowerCase() !== 'off';
 		// Assets in Lightning channels (Milestone B): the engine's contract
 		// has to hand an extension the node, and the adapter has to carry
-		// its Lightning entry. Neither does yet.
+		// its Lightning entry. The adapter under vendor/ carries it, and the
+		// engine this app is built on, Beignet 0.43.0, hands over the node, so
+		// on the bundled engine this is true. On an older engine it is false.
 		this.assetChannelsSupported = this.assetsSupported && assetChannelsAvailable();
 		// Lightning-first setups in flight, one per wallet at a time.
 		this.lfbwSetupRunning = new Set();
@@ -1552,6 +1589,21 @@ class WalletManager {
 		// server in place of the network's default. The daemon restarts
 		// below, which is what hands the host its new settings.
 		const nextAssets = assetsInput !== undefined ? this._normalizeAssets(assetsInput, rec) : undefined;
+		await this._refuseIfAssetChannels(
+			rec,
+			rt,
+			{
+				onchainOnly: nextOnchainOnly,
+				recovery,
+				assetsEnabled: nextAssets ? nextAssets.enabled : assets.normalizeAssets(undefined, rec.assets, { network: rec.network }).enabled
+			},
+			(next) =>
+				next.onchainOnly
+					? 'An on-chain only wallet cannot keep one.'
+					: !next.assetsEnabled
+						? 'Turning assets off would leave it with nothing to enforce it.'
+						: 'A channel backup kept by guardians does not cover asset channels.'
+		);
 		// The network mode and public address are held to the same rules as on
 		// create, against the posture the wallet is about to have.
 		const nextMode = netmode.requestedMode({ networkMode, tor }, netmode.networkMode(rec));
@@ -1746,10 +1798,87 @@ class WalletManager {
 				mode,
 				torProxy: config.torProxy,
 				walletDir: p.base,
-				lightning: 'off'
+				lightning: this._assetsLightning(rec)
 			})
 		);
 		return env;
+	}
+
+	/**
+	 * Whether a wallet's assets host may open and use asset channels:
+	 * 'full' or 'off' (BEIGNET_ASSETS_LIGHTNING).
+	 *
+	 * It takes an install that can carry them, a wallet with Lightning, and
+	 * a channel backup that is not kept by guardians. A guardian restore
+	 * rebuilds a wallet's channels on another device from what its guardians
+	 * hold, and an asset channel's proofs are not part of that, so the two
+	 * are not offered together.
+	 */
+	_assetsLightning(rec) {
+		if (!this.assetChannelsSupported || rec.onchainOnly) return 'off';
+		if (isGuardianMode(rec.recovery && rec.recovery.mode)) return 'off';
+		return 'full';
+	}
+
+	/**
+	 * A running wallet's bitcoin channels: what its daemon lists, less its
+	 * asset channels (see channels.js). Lightning-first and offline receives
+	 * choose, count, close and wait on channels from this read, so neither
+	 * ever picks up a channel that carries an asset. It rejects as the
+	 * daemon call does, for the caller to decide what an unanswered list means.
+	 */
+	async _bitcoinChannels(rec) {
+		return bitcoinChannels(await this._daemonCall(rec, 'GET', '/channels'));
+	}
+
+	/**
+	 * How many asset channels a running wallet still has, closing ones
+	 * included, or null when its assets host cannot be asked.
+	 */
+	async _liveAssetChannels(rec) {
+		try {
+			// The host's own count, taken as it is asked (`assetChannels` of
+			// its status). The manager counts no rows itself: one function,
+			// the host's, says what an asset channel that is not over is, so
+			// what is refused here and what the status shows cannot disagree.
+			const res = await fetch(`http://127.0.0.1:${rec.port}/x/assets/status`, {
+				headers: { Authorization: `Bearer ${this.token(rec.id)}` },
+				signal: AbortSignal.timeout(3000)
+			});
+			if (!res.ok) return null;
+			const body = await res.json();
+			const count = body && body.result && body.result.assetChannels;
+			return Number.isInteger(count) && count >= 0 ? count : null;
+		} catch (_) {
+			return null;
+		}
+	}
+
+	/**
+	 * Refuse an edit that would take asset Lightning away from a wallet
+	 * that still has an asset channel.
+	 *
+	 * The channel's funds are enforced by the assets host: it signs every
+	 * commitment and it is what brings the assets home after a close. A
+	 * daemon holding such a channel refuses to start without it. So the
+	 * channel is closed first, while the wallet can still close it.
+	 */
+	async _refuseIfAssetChannels(rec, rt, next, reason) {
+		const had = this._assetsLightning(rec) === 'full' && assets.normalizeAssets(undefined, rec.assets, { network: rec.network }).enabled;
+		if (!had) return;
+		const keeps = this._assetsLightning({ ...rec, onchainOnly: next.onchainOnly, recovery: next.recovery }) === 'full' && next.assetsEnabled;
+		if (keeps) return;
+		// A wallet that is stopped, or whose assets host does not answer,
+		// cannot be asked: what its host last said stands, since a channel
+		// does not end while nobody is running it.
+		const asked = rt.proc ? await this._liveAssetChannels(rec) : null;
+		const live = asked === null ? this._rememberedAssetChannels(rec) : asked;
+		if (!live) return;
+		throw httpError(
+			409,
+			'ASSET_CHANNELS_OPEN',
+			`This wallet has ${live === 1 ? 'an asset channel' : `${live} asset channels`} open. ${reason(next)} Close ${live === 1 ? 'it' : 'them'} on the Channels tab first, and wait for the assets to be back on-chain.`
+		);
 	}
 
 	/**
@@ -1789,11 +1918,39 @@ class WalletManager {
 		}
 	}
 
+	/** How many asset channels the wallet's assets host last listed as not over. 0 when it never said. */
+	_rememberedAssetChannels(rec) {
+		return Number.isInteger(rec.assetChannelsLive) && rec.assetChannelsLive > 0 ? rec.assetChannelsLive : 0;
+	}
+
+	/**
+	 * Refuse to start a wallet that is on a channel backup kept by guardians
+	 * while its assets host last listed an asset channel that is not over.
+	 *
+	 * The daemon refuses to boot in a guardian recovery mode over stored
+	 * asset channels, and would be started again and again to no end. The
+	 * edit that puts such a wallet on a guardian backup is refused already
+	 * (_refuseIfAssetChannels). This is for a record that got there all the
+	 * same: written before that rule, or restored.
+	 */
+	_refuseStartOverAssetChannels(rec, rt) {
+		if (!this.assetChannelsSupported || !isGuardianMode(rec.recovery && rec.recovery.mode)) return;
+		const live = this._rememberedAssetChannels(rec);
+		if (!live) return;
+		const message = `This wallet has ${live === 1 ? 'an asset channel' : `${live} asset channels`} open and is on a channel backup kept by guardians, which does not cover asset channels, so it was not started. Take it off the guardian backup, start it, and close ${live === 1 ? 'the channel' : 'the channels'} on the Channels tab. Once the assets are back on-chain it can go back on a guardian backup.`;
+		rt.lastStartError = { code: 'ASSET_CHANNELS_OPEN', message, at: nowIso() };
+		rt.status = 'stopped';
+		rt.healthy = false;
+		this._log(rec.id, `not started: ${message}`);
+		throw httpError(409, 'ASSET_CHANNELS_OPEN', message);
+	}
+
 	async startWallet(id) {
 		const rec = this.registry.get(id);
 		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
 		const rt = this.runtimeState(id);
 		if (rt.proc || rt.spawning) return;
+		this._refuseStartOverAssetChannels(rec, rt);
 		rt.spawning = true;
 		try {
 			await this._startWalletLocked(id, rec, rt);
@@ -2504,7 +2661,14 @@ class WalletManager {
 		} catch (_) {
 			return;
 		}
-		if (parsed && parsed.ok === false && parsed.error && parsed.error.code === 'START_FAILED') {
+		if (!parsed || parsed.ok !== false || !parsed.error) return;
+		// What the engine refuses over stored asset channels, in the manager's own words.
+		const refused = engineAssetRefusal(parsed.error.code, parsed.error.message);
+		if (refused) {
+			rt.lastStartError = { ...refused, at: nowIso() };
+			return;
+		}
+		if (parsed.error.code === 'START_FAILED') {
 			rt.lastStartError = { message: String(parsed.error.message || ''), at: nowIso() };
 		}
 	}
@@ -2917,8 +3081,15 @@ class WalletManager {
 			this._log(id, `assets: not running, ${rt.assets.error || 'no reason given'}. The bitcoin wallet is unaffected.`);
 		}
 		const rec = this.registry.get(id);
-		if (rec && (rec.assetsHeld === true) !== rt.assets.holdsAssets) {
-			rec.assetsHeld = rt.assets.holdsAssets;
+		// Kept in the record, for a wallet that is stopped: whether it holds
+		// assets, and how many asset channels it has that are not over. A
+		// host that cannot say how many (null) changes nothing.
+		const channels = Number.isInteger(status.assetChannels) && status.assetChannels >= 0 ? status.assetChannels : null;
+		const heldChanged = !!rec && (rec.assetsHeld === true) !== rt.assets.holdsAssets;
+		const channelsChanged = !!rec && channels !== null && (rec.assetChannelsLive || 0) !== channels;
+		if (heldChanged || channelsChanged) {
+			if (heldChanged) rec.assetsHeld = rt.assets.holdsAssets;
+			if (channelsChanged) rec.assetChannelsLive = channels;
 			this.registry.upsert(rec);
 		}
 	}
@@ -3122,7 +3293,9 @@ class WalletManager {
 			/* non-JSON body */
 		}
 		if (!res.ok || data.ok === false) {
-			const err = new Error((data.error && data.error.message) || `${apiPath} failed (${res.status})`);
+			// What the engine refuses over asset channels is said in the manager's words.
+			const refused = engineAssetRefusal(data.error && data.error.code, '');
+			const err = new Error(refused ? refused.message : (data.error && data.error.message) || `${apiPath} failed (${res.status})`);
 			err.code = (data.error && data.error.code) || 'DAEMON_ERROR';
 			throw err;
 		}
@@ -3385,7 +3558,7 @@ class WalletManager {
 		const managed = this.offlineReceiveAvailable() ? await this._daemonCall(rec, 'GET', '/receive/status') : null;
 		const owned = new Set((managed?.requests || []).filter(j => !j.done).map((j) => j.channelId));
 		if (!ffor.returnJobs(epochs).length) return;
-		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+		const channels = await this._bitcoinChannels(rec).catch(() => null);
 		for (const job of ffor.returnJobs(epochs, channels, true).filter((job) => !owned.has(job.channelId) && (!concurrentOnly || job.concurrentVersion) && (!peer || channels?.some(ch => ch.channelId === job.channelId && ch.peerPubkey === peer)))) {
 			await this.fforReturn(id, { ...job, waitForPeer: true }).catch(() => {});
 		}
@@ -3434,7 +3607,7 @@ class WalletManager {
 			if (result && !epoch?.concurrent && result.action !== 'synced' && (result.action !== 'nothing' || (epoch && epoch.state === 'DRAINING'))) {
 				epoch = (await this._waitEpochSettled(rec, channelId)) || epoch;
 			}
-			const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+			const channels = await this._bitcoinChannels(rec).catch(() => null);
 			const ch = Array.isArray(channels) ? channels.find((c) => c.channelId === channelId) : null;
 			const channelState = ch ? ch.state : null;
 			const outcome = ffor.returnOutcome({ action: result && result.action, epoch, channelState });
@@ -3602,7 +3775,7 @@ class WalletManager {
 		if (!rt.proc) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
 		if (!channelId || typeof channelId !== 'string') throw httpError(400, 'INVALID_PARAMS', 'channelId is required');
 		if (rt.fforSetup && rt.fforSetup.running) throw httpError(409, 'FFOR_SETUP_IN_PROGRESS', 'An epoch setup is already running');
-		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => []);
+		const channels = await this._bitcoinChannels(rec).catch(() => []);
 		const ch = (channels || []).find((c) => c.channelId === channelId);
 		// Request the chosen profile explicitly. The engine negotiates it with the peer;
 		// automatic receive quotes impose additional capacity policy on manual books.
@@ -3777,7 +3950,7 @@ class WalletManager {
 		let toS = null;
 		const deadline = Date.now() + ffor.SETUP_ACTIVE_TIMEOUT_MS;
 		while (!toS && Date.now() < deadline) {
-			const wChannels = await this._daemonCall(issuerRec, 'GET', '/channels').catch(() => []);
+			const wChannels = await this._bitcoinChannels(issuerRec).catch(() => []);
 			toS = (wChannels || []).find((c) => c.peerPubkey === view.peerNodeId && c.state === 'NORMAL' && c.shortChannelId) || null;
 			if (!toS) {
 				const any = (wChannels || []).some((c) => c.peerPubkey === view.peerNodeId && !ffor.CLOSED_CHANNEL_STATES.includes(c.state));
@@ -3884,7 +4057,7 @@ class WalletManager {
 		const deadline = Date.now() + timeoutMs;
 		while (Date.now() < deadline) {
 			if (!this.runtimeState(rec.id).proc) return false;
-			const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+			const channels = await this._bitcoinChannels(rec).catch(() => null);
 			const ch = Array.isArray(channels) ? channels.find((c) => c.channelId === channelId) : null;
 			if (ch && ch.state === 'NORMAL') return true;
 			await sleep(ffor.RETURN_POLL_MS);
@@ -3941,14 +4114,14 @@ class WalletManager {
 			const onchainSats = balance.onchain || 0;
 			if (onchainSats < lfbw.CHANNELIZE_FLOOR_SATS) {
 				if (lf.previousPrimary) {
-					const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+					const channels = await this._bitcoinChannels(rec).catch(() => null);
 					if (channels) this._forgetPreviousPrimary(rec, channels);
 				}
 				return decided({ action: 'wait', reason: 'below-floor' });
 			}
 			const [utxos, channels] = await Promise.all([
 				this._daemonCall(rec, 'GET', '/utxos').catch(() => null),
-				this._daemonCall(rec, 'GET', '/channels').catch(() => null)
+				this._bitcoinChannels(rec).catch(() => null)
 			]);
 			// An unanswered channel list says nothing about the previous
 			// primary: only a list that was read can show its channel gone.
@@ -4072,7 +4245,7 @@ class WalletManager {
 		if (!rt.proc || !rt.healthy) throw httpError(409, 'NOT_RUNNING', 'The wallet is not running');
 		const previous = rec.lfbw.previousPrimary;
 		if (!previous) throw httpError(409, 'NO_PREVIOUS_PRIMARY', 'This wallet has not changed its primary node');
-		const channels = await this._daemonCall(rec, 'GET', '/channels').catch(() => null);
+		const channels = await this._bitcoinChannels(rec).catch(() => null);
 		if (!channels) throw httpError(503, 'WALLET_UNRESPONSIVE', 'The wallet did not answer');
 		if (this._forgetPreviousPrimary(rec, channels)) {
 			throw httpError(409, 'NO_PREVIOUS_CHANNEL', 'There is no channel with the previous primary left to move');
@@ -4358,4 +4531,4 @@ class WalletManager {
 	}
 }
 
-module.exports = { WalletManager };
+module.exports = { WalletManager, ENGINE_ASSET_REFUSALS };
