@@ -838,7 +838,16 @@ env:
   # methods, which the app does not call. The storage schema (20), the
   # environment settings and the runtime dependencies are unchanged, and
   # the capability probes in server/engine.js answer as for 0.43.2.
-  BEIGNET_VERSION: "0.43.3"
+  # 0.43.4 prices every sweep of a plain channel output from the virtual
+  # size of the signed transaction it builds (coreyphillips/beignet#2108),
+  # so it pays at least the rate it was built at; asset channel sweeps are
+  # priced as before. It also carries the contract of a forward with an
+  # asset leg (coreyphillips/beignet#2099): two optional host hooks, which
+  # no code calls yet, so the node refuses every such forward as 0.43.3
+  # does, and the assets host supplies neither. The storage schema (20),
+  # the routes, the environment settings and the runtime dependencies are
+  # unchanged.
+  BEIGNET_VERSION: "0.43.4"
 
 jobs:
   build:
