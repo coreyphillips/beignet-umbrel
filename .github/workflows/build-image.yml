@@ -829,7 +829,16 @@ env:
   # ITxHash.scriptHash. The storage schema (20), the environment settings
   # and the runtime dependencies are unchanged, and the capability probes in
   # server/engine.js answer as for 0.43.1.
-  BEIGNET_VERSION: "0.43.2"
+  # 0.43.3 prices a force close with no HTLC on its commitment at the live
+  # fee rate (coreyphillips/beignet#2104): its anchor child, the child's
+  # re-bids and the delayed sweep built when the commitment is first seen
+  # bid the live rate, rounded up, and 10 sat/vB only with no fee data. A
+  # commitment with an HTLC on it bids as before. The one change to the
+  # exported API is an optional trailing parameter on four ChannelManager
+  # methods, which the app does not call. The storage schema (20), the
+  # environment settings and the runtime dependencies are unchanged, and
+  # the capability probes in server/engine.js answer as for 0.43.2.
+  BEIGNET_VERSION: "0.43.3"
 
 jobs:
   build:

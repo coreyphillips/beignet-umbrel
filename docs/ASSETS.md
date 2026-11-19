@@ -2,7 +2,7 @@
 
 A wallet can create, receive, send and burn [Taproot Assets](https://docs.lightning.engineering/the-lightning-network/taproot-assets): tokens and collectibles that live in ordinary bitcoin transactions. It works on mainnet, testnet (testnet3 and testnet4) and regtest, for Lightning wallets and on-chain only wallets alike, from the **Assets** tab.
 
-A Lightning wallet can also keep an asset in a Lightning channel: open a channel with it, make invoices for it and pay invoices with it. **That needs an engine that can carry asset channels. Beignet 0.43.0 is the first that can, and this app bundles 0.43.2.** On an older engine everything about asset channels stays hidden and nothing puts an asset in a channel. [Assets over Lightning](#assets-over-lightning) describes them.
+A Lightning wallet can also keep an asset in a Lightning channel: open a channel with it, make invoices for it and pay invoices with it. **That needs an engine that can carry asset channels. Beignet 0.43.0 is the first that can, and this app bundles 0.43.3.** On an older engine everything about asset channels stays hidden and nothing puts an asset in a channel. [Assets over Lightning](#assets-over-lightning) describes them.
 
 **Read [Before you use this on mainnet](#before-you-use-this-on-mainnet) first.** The short version: the recovery phrase alone does not bring assets back, none of this code has had an independent security review, and a transfer normally reaches its recipient through a proof server, which has to accept its proof. The public testnet3 server did not when this was tested; such a transfer is finished by handing the proof over as a file (see [Transfers and the public universe servers](#transfers-and-the-public-universe-servers)). An asset channel adds limits of its own, and the first is that no backup brings a channel back (see [Asset channels and backups](#asset-channels-and-backups)).
 
@@ -54,9 +54,9 @@ browser ──> manager ──> /wallets/:id/api/x/assets/*  ──> the wallet'
 
 **Where the code comes from.** ts-tap is not published to npm. Two tarballs built from one ts-tap commit are committed under `vendor/`, with their checksums and the commit they came from (`vendor/ts-tap.lock.json`). They hold the compiled library, its type declarations and source maps that name each source file and line. They do not hold ts-tap's TypeScript sources. The image build checks the checksums and installs them beside the engine in one step, so the adapter and the daemon share a single copy of the engine.
 
-**When the tab appears.** Assets need an engine release that carries the host extension contract. Beignet 0.42.0 is the first; this app bundles 0.43.2. The manager looks at the engine it is bundled with: on an older engine the Assets tab is simply absent and every wallet runs as before. `BEIGNET_ASSETS=off` in the app's environment switches assets off for the whole box.
+**When the tab appears.** Assets need an engine release that carries the host extension contract. Beignet 0.42.0 is the first; this app bundles 0.43.3. The manager looks at the engine it is bundled with: on an older engine the Assets tab is simply absent and every wallet runs as before. `BEIGNET_ASSETS=off` in the app's environment switches assets off for the whole box.
 
-**When asset channels appear.** They need more than the tab does: an engine whose extension contract hands the assets host the node's channels, and a ts-tap build that ships its Lightning part. The build under `vendor/` ships it, so the engine is what decides. The manager looks for both in the engine it is bundled with and reports what it found (`assetChannelsAvailable` in `GET /api/config`). Beignet 0.43.0 is the first engine that can carry asset channels, and this app bundles 0.43.2. On an older engine that reads false and nothing about them is shown. On an engine that can, a wallet has them when it is a Lightning wallet (not on-chain only), its assets are on, and its channel backup is not kept by guardians.
+**When asset channels appear.** They need more than the tab does: an engine whose extension contract hands the assets host the node's channels, and a ts-tap build that ships its Lightning part. The build under `vendor/` ships it, so the engine is what decides. The manager looks for both in the engine it is bundled with and reports what it found (`assetChannelsAvailable` in `GET /api/config`). Beignet 0.43.0 is the first engine that can carry asset channels, and this app bundles 0.43.3. On an older engine that reads false and nothing about them is shown. On an engine that can, a wallet has them when it is a Lightning wallet (not on-chain only), its assets are on, and its channel backup is not kept by guardians.
 
 ## Where the requests go
 
@@ -148,7 +148,7 @@ A **lightning-first** wallet moves its on-chain bitcoin into its channel by itse
 
 ## Assets over Lightning
 
-Everything in this section needs an engine that can carry asset channels: Beignet 0.43.0 or later. This app bundles 0.43.2. On an older engine none of it is shown.
+Everything in this section needs an engine that can carry asset channels: Beignet 0.43.0 or later. This app bundles 0.43.3. On an older engine none of it is shown.
 
 An asset channel is a Lightning channel funded with an asset. What moves through it is the asset. Asset channels are listed under **Asset channels** on the Channels tab, apart from the wallet's bitcoin channels, and they are left out of the bitcoin figures there.
 
