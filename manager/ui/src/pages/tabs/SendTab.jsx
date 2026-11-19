@@ -5,7 +5,7 @@ import { AmountField, Button, Card, Field, FeeField, Badge, Help, Segmented } fr
 import { fmtDuration, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE } from '../../lib/fees.js';
 import { formatInvoiceWarning } from '../../lib/hints.js';
-import { parsePayment } from '../../lib/payment-uri.js';
+import { TAP_NOT_PAYABLE_HERE, parsePayment } from '../../lib/payment-uri.js';
 import { beginOwnPayment, endOwnPayment } from '../../lib/own-payments.js';
 import {
 	describeFallback,
@@ -26,6 +26,7 @@ import { useSettledRefusal } from '../../hooks/useSettledRefusal.js';
 import { LnurlAuth, LnurlFrom, LnurlSuccess, LnurlWithdraw, lnurlInvoice } from '../../components/Lnurl.jsx';
 import { usePubkyLookup } from '../../hooks/usePubkyLookup.js';
 import { manager, walletApi } from '../../api.js';
+import { bitcoinChannels } from '../../lib/channels.js';
 
 // Headroom over the quoted routing fee when a payment is held to its estimate,
 // the same figure the shared wallet client uses.
@@ -63,7 +64,7 @@ export default function SendTab({ id, api, info, rec, tick, bump, lastReceive })
 	// invoice itself names none, and a fresh identity each time so the card knows
 	// to take the caret.
 	const [arrival, setArrival] = useState(null);
-	const { data: channels } = usePoll(() => api.get('/channels').catch(() => null), 15000, [id, tick]);
+	const { data: channels } = usePoll(() => api.get('/channels').then(bitcoinChannels).catch(() => null), 15000, [id, tick]);
 	// splicingOnly covers the rare parked splice (e.g. taproot), where "open a
 	// channel first" would still be the wrong message.
 	const splicingOnly = channels
@@ -813,6 +814,11 @@ function OnChain({ id, api, info, rec, bump, state, patch, arrival, onLightning,
 					{parsed.message}
 				</div>
 			)}
+			{parsed.kind === 'tap' && (
+				<div className="error-note" role="alert" data-testid="send-tap-refusal">
+					{TAP_NOT_PAYABLE_HERE}
+				</div>
+			)}
 			{parsed.kind === 'pubky' && pubkyRead.looking && (
 				<div className="wallet-meta" role="status">
 					Reading {pubkyRead.who}'s payment details…
@@ -1548,6 +1554,11 @@ function Lightning({ id, api, rec, info, channels, value, onChange, onOnchain, o
 			{parsed.kind === 'invalid' && mayRefuse && (
 				<div className="error-note" role="alert">
 					{parsed.message}
+				</div>
+			)}
+			{parsed.kind === 'tap' && (
+				<div className="error-note" role="alert" data-testid="send-tap-refusal">
+					{TAP_NOT_PAYABLE_HERE}
 				</div>
 			)}
 			{error && (

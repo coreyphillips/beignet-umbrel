@@ -4,7 +4,7 @@ import { useToast } from '../../../components/Toast.jsx';
 import { AmountField, Button, Card, FeeField, Field } from '../../../components/ui.jsx';
 import { fmtSats } from '../../../lib/format.js';
 import { FEE_CAP_MULTIPLE, perkwFromSatVb } from '../../../lib/fees.js';
-import { parsePayment } from '../../../lib/payment-uri.js';
+import { TAP_NOT_PAYABLE_HERE, parsePayment } from '../../../lib/payment-uri.js';
 import { usePubkyLookup } from '../../../hooks/usePubkyLookup.js';
 import { useSettledRefusal } from '../../../hooks/useSettledRefusal.js';
 import {
@@ -371,6 +371,11 @@ export default function AddressSend({ id, api, rec, channels, bump, state, patch
 			{parsed.kind === 'invalid' && mayRefuse && (
 				<div className="error-note" role="alert">
 					{parsed.message}
+				</div>
+			)}
+			{parsed.kind === 'tap' && (
+				<div className="error-note" role="alert" data-testid="send-tap-refusal">
+					{TAP_NOT_PAYABLE_HERE}
 				</div>
 			)}
 			{parsed.kind === 'onchain' && parsed.warnings.length > 0 && (

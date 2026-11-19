@@ -1,0 +1,28 @@
+# Laid over ts-tap's docker/compose.yml by stack.sh. tapd is built from
+# ts-tap's pinned commit, which takes a while: when that repository's own
+# regtest run has already built the image, it is reused as it is.
+#
+# The command is ts-tap's own with one flag added. A stock regtest tapd
+# applies the proof rules of before v0.8.5 for ever, which no public network
+# does any more. --proofactivationheight=1 puts today's rules in force from
+# the first block (transition proofs of version 1, with the root locator and
+# the proofs of what was spent), so a proof this stack's tapd accepts is one
+# that the rules of mainnet, testnet3 and testnet4 accept. A list replaces
+# the one it is laid over, so every flag is restated: keep it in step with
+# ts-tap's compose file.
+services:
+  tapd:
+    image: ${ASSETS_TAPD_IMAGE:-ts-tap-regtest-tapd:latest}
+    command:
+      - --network=regtest
+      - --lnd.host=lnd:10009
+      - --lnd.macaroonpath=/root/.lnd/data/chain/bitcoin/regtest/admin.macaroon
+      - --lnd.tlspath=/root/.lnd/tls.cert
+      - --rpclisten=0.0.0.0:10029
+      - --restlisten=0.0.0.0:8089
+      - --restcors=*
+      - --tlsextradomain=tapd
+      - --proofcourieraddr=universerpc://tapd:10029
+      - --universe.public-access=rw
+      - --universe.no-default-federation
+      - --proofactivationheight=1

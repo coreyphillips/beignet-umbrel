@@ -6,12 +6,14 @@ import { fmtDate, fmtSats, shortId } from '../../lib/format.js';
 import { FEE_CAP_MULTIPLE, vbytes } from '../../lib/fees.js';
 import { useQuote } from '../../hooks/useQuote.js';
 import { withPeerHint } from '../../lib/hints.js';
-import { isClosedChannel, isClosedChannelState } from '../../lib/channels.js';
+import { bitcoinChannels, isClosedChannel, isClosedChannelState } from '../../lib/channels.js';
 import { closeStory, rebroadcastAlreadyDone } from '../../lib/close-story.js';
 import { watchChannelOpen } from '../../lib/channel-open.js';
 import { nodeNames } from '../../lib/node-names.js';
 import PeerName from '../../components/PeerName.jsx';
 import { manager, walletApi } from '../../api.js';
+import { assetChannelsOffered } from '../../lib/asset-lightning.js';
+import AssetChannelsCard from './assets/lightning/AssetChannelsCard.jsx';
 
 const STATE_TONE = {
 	NORMAL: 'green',
@@ -30,13 +32,17 @@ const SATVB_TO_PERKW = 250;
 
 const clickOrigin = (e) => ({ x: e.clientX, y: e.clientY });
 
-export default function ChannelsTab({ id, api, rec, tick, bump }) {
+export default function ChannelsTab({ id, api, rec, tick, bump, config, route, go, assets }) {
 	const toast = useToast();
 	const [modal, setModal] = useState(null);
 	const [view, setView] = useState('open');
+	// Channels funded with a Taproot Asset have a card of their own under the
+	// bitcoin ones. Only a wallet whose engine and assets host both carry them
+	// gets it; for every other wallet this tab is exactly what it was.
+	const assetChannels = assetChannelsOffered({ config, rec, status: assets?.status });
 	const { data: channels, refresh } = usePoll(
 		async () => {
-			const list = await api.get('/channels').catch(() => []);
+			const list = await api.get('/channels').then(bitcoinChannels).catch(() => []);
 			// The channel list carries no alias; resolve each peer's from the gossip
 			// graph, the same lookup the Peers tab uses. The names are remembered
 			// (lib/node-names), so a peer is asked about once, not once per channel
@@ -212,6 +218,10 @@ export default function ChannelsTab({ id, api, rec, tick, bump }) {
 					renderRows(shown, { withActions: view === 'open' })
 				)}
 			</Card>
+
+			{assetChannels && view === 'open' && (
+				<AssetChannelsCard id={id} api={api} tick={tick} bump={bump} route={route} go={go} status={assets?.status} />
+			)}
 
 			{modal?.type === 'open' && (
 				<OpenChannelModal id={id} api={api} rec={rec} origin={modal.origin} onClose={() => setModal(null)} onDone={() => { setModal(null); refresh(); bump(); }} />
@@ -515,7 +525,7 @@ function OpenChannelModal({ id, api, rec, origin, onClose, onDone }) {
 			// not by the id we get back. This must not be allowed to fail quietly: an
 			// empty snapshot would make a channel we already hold with this peer look
 			// like the one we just opened, and report a failed open as a success.
-			const before = await api.get('/channels');
+			const before = await api.get('/channels').then(bitcoinChannels);
 			const knownIds = new Set((before || []).map((c) => c.channelId));
 			const since = Date.now();
 

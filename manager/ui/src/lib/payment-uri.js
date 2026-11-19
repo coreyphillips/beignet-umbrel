@@ -106,7 +106,13 @@ const MESSAGES = {
 	PRIVATE_KEY:
 		'That looks like a private key. Never paste a private key into a send box, and treat any coins it holds as spent.',
 	DESCRIPTOR: 'That is an output descriptor, not an address.',
-	NOSTR_KEY: 'That is a nostr key, not a bitcoin address.'
+	NOSTR_KEY: 'That is a nostr key, not a bitcoin address.',
+	TAP_CHECKSUM:
+		'This Taproot Assets address fails its own checksum, so it is incomplete or was mistyped. Copy the whole of it again.',
+	TAP_TRUNCATED:
+		'This Taproot Assets address is too short to be a whole one, so the end of it is missing. Copy the whole of it again.',
+	TAP_MIXED_CASE:
+		'This Taproot Assets address mixes upper and lower case, which a valid one never does. Copy it again from the source.'
 };
 
 const WARNINGS = {
@@ -489,7 +495,7 @@ function stripInvisibles(text) {
  * would be a guess about where money goes, and it is left alone to be refused.
  */
 function squeeze(token, warnings) {
-	if (!/^(ln|bc1|tb1|bcrt1)/i.test(token)) return token;
+	if (!/^(ln|bc1|tb1|bcrt1|tap(bc|tb|rt|sb|sn)1)/i.test(token)) return token;
 	const tight = token.replace(/\s+/g, '');
 	if (tight !== token) warn(warnings, 'WHITESPACE_REPAIRED');
 	return tight;
@@ -608,6 +614,78 @@ function parseLightning(token, warnings, opts) {
 		amountSats: hrp.amountMsat == null ? null : Number(hrp.amountMsat / 1000n),
 		warnings
 	};
+}
+
+/* ---------------------------------------------------------- Taproot Assets */
+
+// A Taproot Assets address names its chain in its prefix, as a bitcoin address
+// does. Signet and simnet ones are recognised so they can be refused by name:
+// the manager runs neither.
+const TAP_HRP = { tapbc: 'mainnet', taptb: 'testnet', taprt: 'regtest' };
+const TAP_UNSUPPORTED_HRP = { tapsb: 'signet', tapsn: 'simnet' };
+const TAP_PREFIX = /^tap(bc|tb|rt|sb|sn)1/i;
+
+// The fields every address carries: a version, the asset ID, the script key,
+// the internal key and an amount, each a type, a length and a value. That is
+// just over a hundred bytes, so 160 five-bit characters is a floor no whole
+// address can be under. A real one, with its proof courier written in, runs
+// well past 250.
+const TAP_MIN_DATA = 160;
+
+/**
+ * Is this a Taproot Assets address, and which chain is it for.
+ *
+ * Checked to the checksum, like a bech32 bitcoin address, and for the same
+ * reason: an address cut short in a copy is caught here and not after a round
+ * trip. What it asks for (which asset, how much, through which proof server)
+ * is encoded in the body, and reading that is the wallet's work.
+ */
+export function classifyTapAddress(text) {
+	if (typeof text !== 'string' || !TAP_PREFIX.test(text)) return { ok: false, code: 'NOT_PAYABLE' };
+	const decoded = bech32Decode(text, { maxLength: MAX_INPUT });
+	if (!decoded.ok) return { ok: false, code: decoded.code === 'B32_MIXED_CASE' ? 'TAP_MIXED_CASE' : 'TAP_CHECKSUM' };
+	// The chain comes off the decoded prefix, never the leading characters: the
+	// separator is the last '1', so the two can differ.
+	const network = TAP_HRP[decoded.hrp];
+	const unsupported = TAP_UNSUPPORTED_HRP[decoded.hrp];
+	if (!network && !unsupported) return { ok: false, code: 'NOT_PAYABLE' };
+	// Taproot Assets addresses are bech32m. One that verifies as plain bech32
+	// was not written by anything that writes them.
+	if (decoded.encoding !== 'bech32m') return { ok: false, code: 'TAP_CHECKSUM' };
+	if (decoded.data.length < TAP_MIN_DATA) return { ok: false, code: 'TAP_TRUNCATED' };
+	if (unsupported) return { ok: false, code: 'TAP_NETWORK_UNSUPPORTED', network: unsupported };
+	return { ok: true, address: text.toLowerCase(), network };
+}
+
+/**
+ * What a bitcoin send card says when it is handed one. Reading it is this
+ * file's work; paying it belongs to the Assets tab, which knows the asset.
+ */
+export const TAP_NOT_PAYABLE_HERE =
+	'That is a Taproot Assets address. It asks for an asset, not bitcoin, so it cannot be paid from this card.';
+
+/** A string that begins `tap…1`: an address for an asset, not for bitcoin. */
+function parseTap(token, warnings, opts) {
+	const tight = squeeze(token, warnings);
+	const classified = classifyTapAddress(tight);
+	if (!classified.ok) {
+		if (classified.code === 'TAP_NETWORK_UNSUPPORTED') {
+			return refuse(
+				'TAP_NETWORK_UNSUPPORTED',
+				`That is a Taproot Assets address for ${classified.network}, which this app does not run.`
+			);
+		}
+		return refuse(classified.code);
+	}
+	if (tight !== classified.address) warn(warnings, 'CASE_FOLDED_FROM_QR');
+	const wanted = opts.network;
+	if (wanted && classified.network !== wanted) {
+		return refuse(
+			'WRONG_NETWORK',
+			`That is a Taproot Assets address for ${NETWORK_LABEL[classified.network] || classified.network}, and this wallet is on ${wanted}. It cannot be paid from here.`
+		);
+	}
+	return { kind: 'tap', address: classified.address, network: classified.network, warnings };
 }
 
 /** A bare address, with the well known things that are not one named as such. */
@@ -838,6 +916,7 @@ function parseBip21(text, warnings, opts) {
  *   { kind: 'bolt12', offer }
  *   { kind: 'lnurl', input, lightningAddress }   (read by the manager, lnurl.js)
  *   { kind: 'pubky', pubky }   (its payment details are looked up by the manager, paykit.js)
+ *   { kind: 'tap', address, network }   (a Taproot Assets address: paid from the Assets tab)
  *   { kind: 'invalid', code, message }
  *
  * `opts.network` is the wallet's chain. Given it, an address or invoice for a
@@ -907,6 +986,10 @@ function readPayment(input, opts) {
 }
 
 function attempt(text, warnings, opts) {
+	// Before the others: `tapbc1…` would otherwise be read as a bitcoin address
+	// with an unknown prefix and refused as "not a bitcoin address", which is
+	// true and no help.
+	if (TAP_PREFIX.test(text)) return parseTap(text, warnings, opts);
 	return /^ln/i.test(text) ? parseLightning(text, warnings, opts) : parseAddress(text, warnings, opts);
 }
 
@@ -927,6 +1010,10 @@ const SHORTEST_BECH32_ADDRESS = 14;
 // precedes it: version 0 is 20 or 32 bytes, so 32 characters is its floor, and
 // version 1 is always the 32 bytes of a taproot output key.
 const PROGRAM_CHARS = { q: 32, p: 52 };
+
+// A Taproot Assets address: its prefix, the separator, the fields every one
+// carries, and the checksum.
+const SHORTEST_TAP_ADDRESS = 'tapbc'.length + 1 + TAP_MIN_DATA + 6;
 
 /** hrp, separator, witness version, program, six checksum characters. */
 function shortestAddress(body) {
@@ -958,5 +1045,6 @@ export function tooShortToJudge(input) {
 	// is what the length is about.
 	const body = schemeOf(text) ? text.slice(text.indexOf(':') + 1) : text;
 	if (/^ln/i.test(body)) return body.length < SHORTEST_INVOICE;
+	if (TAP_PREFIX.test(body)) return body.length < SHORTEST_TAP_ADDRESS;
 	return body.length < shortestAddress(body);
 }

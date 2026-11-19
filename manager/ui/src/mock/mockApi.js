@@ -12,6 +12,7 @@ import {
 } from '../lib/payment-uri.js';
 
 import { decodeFundingEnvelope, encodeFundingEnvelope } from '../lib/funding-envelope.js';
+import { createAssetsMock } from './mockAssets.js';
 import { MODES, hostForUri, usesOnion, usesPublic } from '../lib/node-uris.js';
 
 const HEX = '0123456789abcdef';
@@ -811,12 +812,31 @@ function runDemoAutoRestore(w, st) {
 	if (autoRestoreScripted) return;
 	autoRestoreScripted = true;
 	const r = st.recovery;
+	// As the engine: an apply of a checkpoint that holds asset channels is
+	// refused, the event names them as the status does, nothing is applied
+	// and the checkpoint goes on waiting (the switch `capsule-auto-refused`).
+	const refusedOver = () => {
+		if (typeof assetsMock.readSwitch === 'function') assetsMock.readSwitch();
+		return r.capsule ? assetsMock.capsuleAutoRefused(w.id) : null;
+	};
+	let refused = false;
 	setTimeout(() => {
-		r.autoApply = { phase: 'applying', settleUntil: null, lastReason: null };
 		emit(w.id, 'recovery:capsule-retrieved', { fromPeer: autoPeer, writerEpoch: '1', latestSequence: '96', inline: true, channelCount: 2, candidates: 1 });
+		const over = refusedOver();
+		if (over) {
+			refused = true;
+			emit(w.id, 'recovery:restore-progress', {
+				type: 'capsule:auto-refused',
+				detail: 'The capsule holds asset channels this wallet cannot restore; nothing was installed',
+				refusal: { code: 'ASSET_RESTORE_REFUSED', assetChannels: over }
+			});
+			return;
+		}
+		r.autoApply = { phase: 'applying', settleUntil: null, lastReason: null };
 		emit(w.id, 'recovery:restore-progress', { type: 'capsule:selecting', detail: 'selecting the newest of 1 checkpoint' });
 	}, 8000);
 	setTimeout(() => {
+		if (refused) return;
 		const chans = makeChannels([
 			[1500000, 58, 'NORMAL', false, 'ACINQ'],
 			[600000, 35, 'FORCE_CLOSED', false, 'Bitrefill']
@@ -1366,6 +1386,125 @@ export const mockEvents = {
 	}
 };
 
+// ---------- Taproot Assets (mockAssets.js) ----------
+
+// Sats leave the wallet's coins largest first, the way a fee and an anchor
+// output would be paid for.
+function spendOnchain(id, sats) {
+	let left = Math.max(0, Math.floor(sats));
+	const utxos = store.state[id].utxos.slice().sort((a, b) => b.valueSats - a.valueSats);
+	for (const u of utxos) {
+		if (left <= 0) break;
+		const take = Math.min(u.valueSats, left);
+		u.valueSats -= take;
+		left -= take;
+	}
+	store.state[id].utxos = store.state[id].utxos.filter((u) => u.valueSats > 0);
+}
+
+function demoStorage() {
+	try {
+		return globalThis.sessionStorage || null;
+	} catch (_) {
+		return null;
+	}
+}
+
+const assetsMock = createAssetsMock({
+	wallets: () => store.wallets,
+	// A lightning-first wallet's coins are on their way into its channel, so
+	// none of them are there to pay an asset fee with.
+	spendable: (id) => (store.wallets.find((w) => w.id === id)?.lfbw?.enabled ? 0 : store.state[id] ? onchainBalance(id) : 0),
+	spend: spendOnchain,
+	height: (id) => store.state[id]?.blockHeight || 0,
+	fees: () => ({ fast: 18, normal: 7, slow: 2 }),
+	emit,
+	err: (message, code) => err(message, code),
+	storage: demoStorage(),
+	lightning: true
+});
+
+/**
+ * The on-chain transactions behind a wallet's asset operations. A real
+ * wallet's history has them like any other transaction, and its daemon lists
+ * the unconfirmed ones as boostable because it cannot tell them apart. The
+ * demo's history has them too, so the Activity tab has something to name and
+ * something to withhold Bump fee from.
+ */
+function assetAnchorTxs(id) {
+	let rows = [];
+	try {
+		rows = assetsMock.request(id, '/x/assets/activity', 'limit=200', 'GET').rows || [];
+	} catch (_) {
+		return [];
+	}
+	const tip = store.state[id]?.blockHeight || 0;
+	return rows
+		.filter((r) => r.txid && !String(r.kind).startsWith('ln-') && !r.failed)
+		.map((r) => {
+			const received = r.kind === 'receive';
+			const confirmed = !!(r.at && r.at.confirmed);
+			return {
+				txid: r.txid,
+				type: received ? 'received' : 'sent',
+				// What moves in bitcoin is the output the asset sits in, and the fee.
+				valueSats: received ? r.anchorSats || 1000 : -((r.feeSats || 0) + (r.anchorSats || 0)),
+				feeSats: received ? null : r.feeSats ?? null,
+				satsPerVbyte: received ? null : r.satsPerVbyte ?? null,
+				confirmed,
+				height: confirmed ? r.blockHeight || Math.max(1, tip - Math.max(0, (r.confirmations || 1) - 1)) : null,
+				timestamp: (r.at && (r.at.broadcast || r.at.created)) || Date.now(),
+				confirmTimestamp: (r.at && r.at.confirmed) || null
+			};
+		});
+}
+
+/** A wallet's transactions with its asset transactions among them, newest first. */
+function withAssetAnchors(id, txs) {
+	const have = new Set(txs.map((t) => t.txid));
+	const out = txs.slice();
+	for (const anchor of assetAnchorTxs(id)) {
+		if (have.has(anchor.txid)) continue;
+		const at = out.findIndex((t) => (t.timestamp || 0) < anchor.timestamp);
+		out.splice(at === -1 ? out.length : at, 0, anchor);
+	}
+	return out;
+}
+
+// Wallets whose assets the last demo archive was written without, and why
+// ('no-file' or 'too-large'), as the manager records it against each wallet.
+const assetsLeftOut = new Map();
+
+// The universe servers the app knows (the manager's PUBLIC_UNIVERSE_SERVERS).
+const UNIVERSE_SERVERS = [
+	{
+		id: 'lightning-labs',
+		label: 'Lightning Labs',
+		courier: 'universerpc://universe.lightning.finance:10029',
+		rest: 'https://universe.lightning.finance',
+		networks: ['mainnet'],
+		note: "Lightning Labs' universe, the default of their own daemon"
+	},
+	{
+		id: 'lightning-labs-testnet',
+		label: 'Lightning Labs testnet3',
+		courier: 'universerpc://testnet.universe.lightning.finance:10029',
+		rest: 'https://testnet.universe.lightning.finance',
+		networks: ['testnet'],
+		chain: 'testnet3',
+		note: "Lightning Labs' testnet3 universe"
+	},
+	{
+		id: 'lightning-labs-testnet4',
+		label: 'Lightning Labs testnet4',
+		courier: 'universerpc://testnet4.universe.lightning.finance:443',
+		rest: 'https://testnet4.universe.lightning.finance',
+		networks: ['testnet'],
+		chain: 'testnet4',
+		note: "Lightning Labs' testnet4 universe"
+	}
+];
+
 // ---------- Request handling ----------
 
 const latency = () => new Promise((r) => setTimeout(r, 150 + rnd() * 250));
@@ -1623,6 +1762,18 @@ function publicRecord(w) {
 	rec.fforEnforced = w.fforEnforced || null;
 	rec.fforSetup = w.fforSetup || null;
 	rec.fforIssuance = w.fforIssuance || {};
+	// Taproot Assets, in the manager's shape: whether the wallet runs the
+	// host and how the host is doing, its own proof server if it has one,
+	// whether it holds anything, and where its assets stand against the box
+	// backup (the file an archive carries, and why the last one left it out).
+	const held = assetsMock.recordOf(w.id);
+	rec.assets = {
+		...held,
+		phase: w.status === 'running' || w.status === 'restore-required' ? 'ready' : null,
+		error: null,
+		backupFile: held.holdsAssets ? true : null,
+		notArchived: held.holdsAssets ? assetsLeftOut.get(w.id) || null : null
+	};
 	return rec;
 }
 
@@ -1881,7 +2032,12 @@ function managerRequest(path, method, body) {
 			recoveryAutoApplyAvailable: true,
 			guardianHostingAvailable: true,
 			guardianRotationAvailable: true,
-			fforAvailable: true
+			fforAvailable: true,
+			// Taproot Assets: the app's assets host is up, and so are asset
+			// channels, so the demo shows the whole Assets tab.
+			assetsAvailable: true,
+			assetChannelsAvailable: true,
+			universeServers: UNIVERSE_SERVERS.map((s) => ({ ...s, chain: s.chain || null, networks: s.networks.slice() }))
 		};
 	}
 	if ((path === '/backup/inspect' || path === '/backup/restore') && method === 'POST') {
@@ -2061,6 +2217,20 @@ function managerRequest(path, method, body) {
 			}
 			if (body.name) w.name = body.name;
 			if (body.electrum) w.electrum = body.electrum;
+			// The proof server is a wallet setting: null puts the default back.
+			if (body.assets !== undefined) {
+				const universe = body.assets && body.assets.universe;
+				if (universe && (!String(universe.courier || '').trim() || !String(universe.rest || '').trim())) {
+					throw err('A universe server is a courier address and a web address.', 'BAD_UNIVERSE');
+				}
+				if (universe && !/^universerpc:\/\/[a-z0-9.\-[\]:]+$/i.test(String(universe.courier).trim())) {
+					throw err('The proof courier address looks like universerpc://universe.example.com:10029.', 'BAD_UNIVERSE');
+				}
+				if (universe && !/^https:\/\//i.test(String(universe.rest).trim()) && w.network !== 'regtest') {
+					throw err('The universe server is on plain http. Only https, or an onion address, is used.', 'BAD_UNIVERSE');
+				}
+				w.assets = { ...(w.assets || {}), universe: universe ? { courier: String(universe.courier).trim(), rest: String(universe.rest).trim() } : null };
+			}
 			Object.assign(w, network);
 			delete w.tor;
 			if (body.announce !== undefined) w.announce = !!body.announce;
@@ -2241,6 +2411,17 @@ function managerRequest(path, method, body) {
 		return runDemoLfbwSetup(w).then(() => publicRecord(w));
 	}
 	if (sub === 'start') {
+		// As the manager (wallet-manager.js, _refuseStartOverAssetChannels): a
+		// wallet on a channel backup kept by guardians that still has an asset
+		// channel is not started, and says why for as long as it is stopped.
+		const live = assetsMock.liveChannels(w.id);
+		if (live > 0 && ['async-remote', 'quorum'].includes(w.recovery?.mode)) {
+			const message = `This wallet has ${live === 1 ? 'an asset channel' : `${live} asset channels`} open and is on a channel backup kept by guardians, which does not cover asset channels, so it was not started. Take it off the guardian backup, start it, and close the channel on the Channels tab. Once the assets are back on-chain it can go back on a guardian backup.`;
+			w.lastStartError = { code: 'ASSET_CHANNELS_OPEN', message, at: new Date().toISOString() };
+			w.status = 'stopped';
+			throw Object.assign(err(message, 'ASSET_CHANNELS_OPEN'), { status: 409 });
+		}
+		w.lastStartError = null;
 		w.status = 'starting';
 		setTimeout(() => {
 			w.status = 'running';
@@ -2872,6 +3053,24 @@ function recoveryStatus(w, st) {
 		mode === 'peer-storage'
 			? { enabled: !!w.recovery?.autoApply, phase: 'idle', settleUntil: null, lastReason: null, ...(w.recovery?.autoApply ? r.autoApply || {} : {}) }
 			: undefined;
+	// As the engine: its own apply refused over the asset channels of a
+	// checkpoint that still waits, with the route's code and list, and the
+	// asset entries an apply of a backup-only checkpoint skipped.
+	if (autoApply) {
+		if (typeof assetsMock.readSwitch === 'function') assetsMock.readSwitch();
+		const over = r.capsule ? assetsMock.capsuleAutoRefused(w.id) : null;
+		if (over) {
+			Object.assign(autoApply, {
+				enabled: true,
+				phase: 'refused',
+				settleUntil: null,
+				lastReason: 'ASSET_RESTORE_REFUSED: The capsule holds asset channels this wallet cannot restore; nothing was installed',
+				refusal: { code: 'ASSET_RESTORE_REFUSED', assetChannels: over }
+			});
+		}
+		const passed = autoApply.enabled && autoApply.phase === 'applied' ? assetsMock.capsuleSkipped(w.id) : null;
+		if (passed) autoApply.skippedAssetChannels = passed;
+	}
 	const gate = isGuardianMode(mode) ? r.gate : 'disabled';
 	const channels = st.channels
 		.filter((c) => c.state !== 'CLOSED' && c.state !== 'FORCE_CLOSED')
@@ -2939,7 +3138,7 @@ function closeDemoChannel(id, channelId, force) {
 	}, 6000);
 }
 
-function walletRequest(id, path, method, body) {
+function walletRequest(id, path, method, body, headers) {
 	const w = store.wallets.find((x) => x.id === id);
 	if (!w) throw err('Wallet not found', 'NOT_FOUND');
 	const st = store.state[id];
@@ -2966,6 +3165,11 @@ function walletRequest(id, path, method, body) {
 
 	if (route.startsWith('/ffor/')) {
 		const answer = fforRequest(w, st, route, query, method, body);
+		if (answer !== undefined) return answer;
+	}
+	// Taproot Assets, the host extension's namespace (mockAssets.js).
+	if (route === '/x/assets' || route.startsWith('/x/assets/')) {
+		const answer = assetsMock.request(w.id, route, query, method, body, headers);
 		if (answer !== undefined) return answer;
 	}
 
@@ -3003,7 +3207,26 @@ function walletRequest(id, path, method, body) {
 			if (st.channels.some((c) => c.state !== 'CLOSED' && c.state !== 'FORCE_CLOSED')) {
 				throw err('The database already holds channels; a capsule restore needs an empty target', 'CAPSULE_RESTORE_TARGET_DIRTY');
 			}
-			return runDemoCapsuleRestore(w, st);
+			if (body?.omitAssetChannels !== undefined && typeof body.omitAssetChannels !== 'boolean') throw err('omitAssetChannels must be a boolean', 'INVALID_PARAMS');
+			{
+				// As the engine: a capsule that holds asset channels is refused
+				// with the channels it names, nothing installed, unless the call
+				// says to leave them out, and then the answer lists them.
+				if (typeof assetsMock.readSwitch === 'function') assetsMock.readSwitch();
+				const assetChannels = assetsMock.capsuleAssetChannels(w.id);
+				if (assetChannels && body?.omitAssetChannels !== true) {
+					throw Object.assign(err('The capsule holds asset channels this wallet cannot restore; nothing was installed', 'ASSET_RESTORE_REFUSED'), {
+						status: 409,
+						details: { assetChannels }
+					});
+				}
+				const restored = runDemoCapsuleRestore(w, st);
+				// As the daemon: the payments that were under way on them, by payment hash.
+				if (assetChannels) return { ...restored, omittedAssetChannels: assetChannels, unresolvedPayments: assetsMock.capsuleUnresolved(w.id) };
+				// As the engine at Tier 1: an asset entry of a backup-only checkpoint is skipped and said, and the rest recovered.
+				const passed = assetsMock.capsuleSkipped(w.id);
+				return passed ? { ...restored, tier: 1, skippedAssetChannels: passed } : restored;
+			}
 		case '/backup/peer-retrieved':
 			if (!st.recovery.capsule) throw err('No peer-retrieved backup this session', 'NOT_FOUND');
 			return { encoded: 'beignet-scb-v1:' + hex(96), createdAt: st.recovery.capsule.receivedAt, fromPeer: st.recovery.capsule.fromPeer };
@@ -3042,7 +3265,10 @@ function walletRequest(id, path, method, body) {
 				onchain,
 				lightning,
 				total: onchain + lightning,
-				splicingSats: splicingBalance(id)
+				splicingSats: splicingBalance(id),
+				// The bitcoin in the wallet's asset channels: keys of their own, in
+				// neither figure above, and absent without such a channel.
+				...assetsMock.channelBitcoin(id)
 			};
 		}
 		case '/readiness':
@@ -3168,7 +3394,8 @@ function walletRequest(id, path, method, body) {
 			return invoiceInfo(inv);
 		}
 		case '/invoices':
-			return st.invoices.map(invoiceInfo);
+			// The daemon lists an asset invoice beside the bitcoin ones, marked.
+			return st.invoices.map(invoiceInfo).concat(assetsMock.daemonInvoices(w.id));
 
 		case '/receive/status':
 			return { available: true, reservedChannelIds: [], requests: [] };
@@ -3597,7 +3824,7 @@ function walletRequest(id, path, method, body) {
 			return { txid, hex: hex(400) };
 		}
 		case '/transactions/boostable': {
-			const pending = st.txs.filter((t) => !t.confirmed);
+			const pending = withAssetAnchors(w.id, st.txs).filter((t) => !t.confirmed);
 			return {
 				rbf: pending.filter((t) => t.type === 'sent'),
 				cpfp: pending.filter((t) => t.type === 'received')
@@ -3631,11 +3858,17 @@ function walletRequest(id, path, method, body) {
 			return { txid: newTxid, hex: hex(400), boostType: 'cpfp', feeSats, originalTxid: body.txid };
 		}
 		case '/channels':
-			return st.channels.map((c) => ({
-				...c,
-				localReserveSats: c.localReserveSats ?? mockChannelReserve(c),
-				maxSendableSats: mockMaxSendable(c)
-			}));
+			// An asset channel is listed beside the bitcoin ones, marked
+			// `auxiliary`, as the daemon lists it. It is in no other answer
+			// here: the daemon leaves it out of /liquidity and /balance, and
+			// the bitcoin screens leave it out of this one (lib/channels.js).
+			return st.channels
+				.map((c) => ({
+					...c,
+					localReserveSats: c.localReserveSats ?? mockChannelReserve(c),
+					maxSendableSats: mockMaxSendable(c)
+				}))
+				.concat(assetsMock.daemonChannels(w.id).map((c) => ({ ...c, localReserveSats: mockChannelReserve(c), maxSendableSats: 0 })));
 		case '/channel/diagnostics': {
 			const cid = new URLSearchParams(query).get('channelId');
 			const c = st.channels.find((x) => x.channelId === cid);
@@ -3982,9 +4215,10 @@ function walletRequest(id, path, method, body) {
 			return { valid: false, pubkey: null, knownNode: false };
 		}
 		case '/transactions':
-			return st.txs;
+			return withAssetAnchors(w.id, st.txs);
 		case '/payments':
-			return st.payments;
+			// And the payments an asset channel carried, marked the same way.
+			return st.payments.concat(assetsMock.daemonPayments(w.id));
 		case '/direct-funding/received':
 			// The engine's record of direct-funding payments this wallet took.
 			return st.dfReceived || [];
@@ -4092,16 +4326,24 @@ export async function mockDownload(path, body) {
 	const text = demoArchive(body.passphrase, createdAt);
 	store.settings.lastBackupAt = createdAt;
 	for (const w of store.wallets) w.lastBackupAt = createdAt;
+	// A wallet's assets go into the archive from the file its host writes. The
+	// demo takes a stopped wallet to be one that has not written it, which is
+	// the usual way an archive comes to be without them.
+	for (const w of store.wallets) {
+		if (assetsMock.recordOf(w.id).holdsAssets && w.status === 'stopped') assetsLeftOut.set(w.id, 'no-file');
+		else assetsLeftOut.delete(w.id);
+	}
+	assetsMock.backedUp(createdAt);
 	return {
 		blob: new Blob([text], { type: 'application/octet-stream' }),
 		filename: `beignet-backup-${createdAt.replace(/[:.]/g, '-')}.beignet`
 	};
 }
 
-export async function mockRequest(path, { method = 'GET', body } = {}) {
+export async function mockRequest(path, { method = 'GET', body, headers } = {}) {
 	await latency();
 	if (path.startsWith('/api/')) return managerRequest(path.slice(4), method, body);
 	const m = path.match(/^\/wallets\/([^/]+)\/api(\/.*)$/);
-	if (m) return walletRequest(m[1], m[2], method, body);
+	if (m) return walletRequest(m[1], m[2], method, body, headers);
 	throw err(`Unknown demo endpoint ${path}`, 'NOT_FOUND');
 }

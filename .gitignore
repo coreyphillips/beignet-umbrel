@@ -6,5 +6,8 @@ dist/
 manager/public/
 data/
 .idea/
-# Local engine tarballs for image builds against unreleased engine work.
-vendor/*.tgz
+# A local engine tarball for image builds against unreleased engine work.
+# The ts-tap tarballs beside it are committed (scripts/vendor-ts-tap.sh).
+vendor/beignet-local.tgz
+# An engine prefix made by scripts/engine-prefix.sh.
+.engine-prefix/

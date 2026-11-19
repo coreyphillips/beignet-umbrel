@@ -786,7 +786,59 @@ env:
   # (#2055). The storage schema (20), the environment settings and the
   # runtime dependencies are unchanged, and the capability probes in
   # server/engine.js answer as for 0.40.0.
-  BEIGNET_VERSION: "0.41.0"
+  # 0.42.0 adds host extensions (coreyphillips/beignet#2094): the process
+  # that starts a daemon can name modules that run inside it, beside the
+  # wallet, with `beignet start --extension <path>` or BEIGNET_EXTENSIONS.
+  # Their routes are served under /x/<id>, and GET /extensions lists them.
+  # A daemon started with no extension behaves as 0.41.0 does, so nothing
+  # changes for a wallet that loads none. It is the first release the
+  # Taproot Assets host (#308) can be loaded on. BeignetErrorCode gains
+  # EXTENSION_ERROR and EXTENSION_UNAVAILABLE. The storage schema (20) and
+  # the runtime dependencies are unchanged, BEIGNET_EXTENSIONS is the one
+  # new environment setting, and the capability probes in server/engine.js
+  # answer as for 0.41.0.
+  # 0.43.0 adds asset channels (coreyphillips/beignet#2096): a host
+  # extension may supply an auxiliary channel provider, a fee policy for
+  # transactions whose outputs are fixed and a binding to the node, and a
+  # node with a provider can hold Lightning channels whose commitments
+  # carry asset outputs. It is the first release the assets host's
+  # Lightning side (#311) runs on: the probe for asset channels in
+  # server/engine.js now answers yes, and every other probe answers as for
+  # 0.42.0. A daemon started with no extension, or with one that supplies
+  # no provider, behaves as 0.42.0 does. BeignetErrorCode gains
+  # ASSET_PROVIDER_REQUIRED, ASSET_PROVIDER_CONFLICT, ASSET_PROVIDER_FAILED,
+  # ASSET_RESTORE_REFUSED, ASSET_GUARDIAN_START_REFUSED and
+  # PAYMENT_UNRESOLVED. The storage schema (20), the environment settings
+  # and the runtime dependencies are unchanged.
+  # 0.43.1 changes the fee coin pool of asset channels only
+  # (coreyphillips/beignet#2100): it follows each fee coin through
+  # replacements and reorganisations, builds replacements the network
+  # takes, and hands the pool's free coins back to the wallet once no
+  # asset channel is left. The one change to an exported type is an
+  # optional member, IFundingProvider.releaseFixedOutputFeeCoins, which
+  # the wallet's own provider implements. The storage schema (20), the
+  # environment settings and the runtime dependencies are unchanged, and
+  # the capability probes in server/engine.js answer as for 0.43.0.
+  # 0.43.2 reads an Electrum server that answers transactions only in raw
+  # form (coreyphillips/beignet#2102): electrs-esplora, which Blockstream's
+  # and Bitkit's public servers run, refuses verbose lookups, and the
+  # wallet now decodes the raw answer instead, so a received coin is seen
+  # at its first confirmation there and the history lists the wallet's
+  # transactions. A server that answers verbose lookups is asked as before.
+  # The one change to an exported type is an optional member,
+  # ITxHash.scriptHash. The storage schema (20), the environment settings
+  # and the runtime dependencies are unchanged, and the capability probes in
+  # server/engine.js answer as for 0.43.1.
+  # 0.43.3 prices a force close with no HTLC on its commitment at the live
+  # fee rate (coreyphillips/beignet#2104): its anchor child, the child's
+  # re-bids and the delayed sweep built when the commitment is first seen
+  # bid the live rate, rounded up, and 10 sat/vB only with no fee data. A
+  # commitment with an HTLC on it bids as before. The one change to the
+  # exported API is an optional trailing parameter on four ChannelManager
+  # methods, which the app does not call. The storage schema (20), the
+  # environment settings and the runtime dependencies are unchanged, and
+  # the capability probes in server/engine.js answer as for 0.43.2.
+  BEIGNET_VERSION: "0.43.3"
 
 jobs:
   build:

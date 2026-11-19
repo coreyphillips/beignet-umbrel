@@ -5,9 +5,10 @@ import { AnimatePresence, m } from 'motion/react';
 import { manager, walletApi } from '../api.js';
 import { usePoll } from '../hooks/usePoll.js';
 import { useSSE } from '../hooks/useSSE.js';
+import { useAssetSummary } from '../hooks/useAssets.js';
 import { describeReceive, useReceiveWatch } from '../hooks/useReceiveWatch.js';
 import { useToast } from '../components/Toast.jsx';
-import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal } from '../components/ui.jsx';
+import { AnimatedNumber, Badge, Button, CopyText, Field, Help, Modal, Skeleton } from '../components/ui.jsx';
 import ElectrumFields, { electrumBody } from '../components/ElectrumFields.jsx';
 import { ChainMismatchNote, chainKey } from '../components/ElectrumStatus.jsx';
 import RecoveryModeField from '../components/RecoveryModeField.jsx';
@@ -17,22 +18,25 @@ import GuardianServeField from '../components/GuardianServeField.jsx';
 import NetworkModeField from '../components/NetworkModeField.jsx';
 import GuardianRotateFields from '../components/GuardianRotateFields.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
-import CapsuleRestoreCard from '../components/CapsuleRestoreCard.jsx';
+import CapsuleRestoreCard, { AutoApplySkipped } from '../components/CapsuleRestoreCard.jsx';
 import FforReturnPanel from '../components/FforReturnPanel.jsx';
 import FforSettleField from '../components/FforSettleField.jsx';
 import RecoveryPhraseModal from '../components/RecoveryPhraseModal.jsx';
 import { currentEpoch, describeEpoch } from '../lib/ffor.js';
 import { shortId } from '../lib/format.js';
+import { describeAssetEvent, pendingCount } from '../lib/assets.js';
+import { assetsShown } from '../lib/wallet-assets.js';
 import { isOwnPayment } from '../lib/own-payments.js';
 
-import { isClosedChannel } from '../lib/channels.js';
+import { bitcoinChannels, isAssetRow, openBitcoinChannelCount } from '../lib/channels.js';
 import { modeOf, usesOnion, usesPublic } from '../lib/node-uris.js';
-import { capsuleOffer, describeRecovery, isGuardianMode, restoreProgress } from '../lib/recovery.js';
+import { autoApplyState, capsuleOffer, describeRecovery, heardAutoRefusal, isGuardianMode, restoreProgress, skippedAssetChannels } from '../lib/recovery.js';
 import LfbwFields, { EMPTY_LFBW, ProviderFields, lfbwBody, lfbwComplete, primaryCandidates } from '../components/LfbwFields.jsx';
 import OverviewTab from './tabs/OverviewTab.jsx';
 import LfbwOverviewTab from './tabs/lfbw/LfbwOverviewTab.jsx';
 import ReceiveTab from './tabs/ReceiveTab.jsx';
 import SendTab from './tabs/SendTab.jsx';
+import AssetsTab from './tabs/AssetsTab.jsx';
 import ChannelsTab from './tabs/ChannelsTab.jsx';
 import PeersTab from './tabs/PeersTab.jsx';
 import ActivityTab from './tabs/ActivityTab.jsx';
@@ -45,6 +49,7 @@ const TABS = [
 	['overview', 'Overview', OverviewTab],
 	['receive', 'Receive', ReceiveTab],
 	['send', 'Send', SendTab],
+	['assets', 'Assets', AssetsTab],
 	['channels', 'Channels', ChannelsTab],
 	['peers', 'Peers', PeersTab],
 	['activity', 'Activity', ActivityTab],
@@ -61,6 +66,34 @@ const LFBW_TABS = [
 	['receive', 'Receive', ReceiveTab],
 	['send', 'Send', SendTab]
 ];
+// Taproot Assets. The tab exists where the app has an assets host, and it is
+// not part of the simple view until the wallet has an asset to show there.
+const ASSETS_TAB = TABS.find(([key]) => key === 'assets');
+
+// An on-chain only wallet gets no Lightning apparatus: not hidden features,
+// absent ones. A URL pointing at a withheld tab falls back to Overview the
+// same way an unknown tab always has.
+const LIGHTNING_TABS = ['channels', 'peers', 'offers'];
+
+/**
+ * The tabs a wallet's page offers, as [key, label, component] rows.
+ *
+ * `assetsOffered` is whether assets are shown for this wallet at all (the app
+ * has an assets host and the wallet has not switched them off): without it
+ * there is no Assets tab in any view. The simple view adds the tab only once
+ * the wallet holds an asset, or has one on its way.
+ */
+export function tabsFor({ simple, onchainOnly, assetsOffered, assetsHeld }) {
+	return (
+		simple
+			? assetsOffered && assetsHeld
+				? [...LFBW_TABS, ASSETS_TAB]
+				: LFBW_TABS
+			: onchainOnly
+			? TABS.filter(([key]) => !LIGHTNING_TABS.includes(key))
+			: TABS
+	).filter(([key]) => key !== 'assets' || assetsOffered);
+}
 const ADVANCED_KEY = 'beignet-lfbw-advanced';
 
 /** Whether the edit form points the wallet at a different primary than its record holds. */
@@ -141,6 +174,13 @@ export default function WalletPage() {
 	const location = useLocation();
 	const toast = useToast();
 	const api = useMemo(() => walletApi(id), [id]);
+	// The checkpoint card, kept after a restore that left asset channels out, until that has been read.
+	const [capsuleKept, setCapsuleKept] = useState(null);
+	// The daemon's own apply of a checkpoint: what its event said of a
+	// refusal over asset channels, until the status says it too, and which
+	// wallet's list of skipped asset channels has been read.
+	const [autoHeard, setAutoHeard] = useState(null);
+	const [autoSkippedRead, setAutoSkippedRead] = useState(null);
 	const [tick, setTick] = useState(0);
 	const bump = useCallback(() => setTick((t) => t + 1), []);
 	const [advanced, setAdvanced] = useState(readAdvanced);
@@ -233,6 +273,15 @@ export default function WalletPage() {
 	// bypasses the hold, and restore progress rides it.
 	useSSE(running || restoreHold ? api.eventsUrl() : null, (name, data) => {
 		bump();
+		// What the daemon says of an asset channel, or of a payment or an
+		// invoice one carried, is not announced as bitcoin: the assets host
+		// says the same thing in units of the asset, a few lines down.
+		// The wallet's own apply of a checkpoint, refused over asset channels:
+		// the event names them, and the card that offers the restore opens on
+		// the list without waiting for the status to be read again.
+		const refusedOver = heardAutoRefusal(name, data);
+		if (refusedOver) setAutoHeard({ wallet: rec?.id, said: refusedOver });
+		if (isAssetRow(data) && !name.startsWith('assets:')) return;
 		receiveEvent(name, data);
 		// A payment this page made has already been announced by the card that
 		// made it, from the daemon's answer; its event is announced only when it
@@ -242,7 +291,20 @@ export default function WalletPage() {
 		if (name === 'ffor:state' && data && FFOR_STATE_LABELS[data.state]) {
 			toast(FFOR_STATE_LABELS[data.state], data.state === 'ABORTED' ? 'error' : 'success');
 		}
+		// An asset finishing, or failing, is said with what it was: the name
+		// and the amount ride the event, so no label table can carry them.
+		const assetNote = describeAssetEvent(name, data);
+		if (assetNote) toast(assetNote.text, assetNote.tone, { duration: assetNote.duration });
 	});
+	// Taproot Assets: one summary for the whole page. It decides whether the
+	// simple view has an Assets tab, puts the count of things in progress
+	// beside the tab's name, and is handed to every tab. A wallet with assets
+	// switched off is not asked: nothing about assets is shown for it.
+	const assetsTabShown = assetsShown(config, rec);
+	const assetsOn = assetsTabShown && running;
+	const assetSummary = useAssetSummary(api, assetsOn, tick);
+	const assetsBusy = pendingCount(assetSummary.status);
+	const assetsHeld = !!assetSummary.status?.holdsAssets || !!rec?.assets?.holdsAssets || assetsBusy > 0;
 	// FFOR offline receive: a live voucher book earns a badge in the header,
 	// in the place the degraded backup badge sits, since both change what
 	// the owner should do next (come back before the deadline).
@@ -256,7 +318,7 @@ export default function WalletPage() {
 	// The channel the epoch runs on: a force close leaves the epoch ACTIVE
 	// on the record, so the channel's state decides between the two badges.
 	const { data: fforChannels } = usePoll(
-		() => (liveEpoch ? api.get('/channels').catch(() => null) : Promise.resolve(null)),
+		() => (liveEpoch ? api.get('/channels').then(bitcoinChannels).catch(() => null) : Promise.resolve(null)),
 		10000,
 		[id, tick, !!liveEpoch]
 	);
@@ -264,23 +326,39 @@ export default function WalletPage() {
 		? describeEpoch(liveEpoch, info?.blockHeight || 0, (fforChannels || []).find((c) => c.channelId === liveEpoch.channelId) || null)
 		: null;
 
-	// An on-chain only wallet gets no Lightning apparatus: not hidden features,
-	// absent ones. A URL pointing at a withheld tab falls back to Overview the
-	// same way an unknown tab always has.
-	const LIGHTNING_TABS = ['channels', 'peers', 'offers'];
 	const isLfbw = !!rec?.lfbw?.enabled;
 	const simple = isLfbw && !advanced;
-	const tabs = simple
-		? LFBW_TABS
-		: rec?.onchainOnly
-		? TABS.filter(([key]) => !LIGHTNING_TABS.includes(key))
-		: TABS;
+	const tabs = tabsFor({ simple, onchainOnly: !!rec?.onchainOnly, assetsOffered: assetsTabShown, assetsHeld });
 	const ActiveTab = (tabs.find((t) => t[0] === tab) || tabs[0])[2];
+	// Opened straight at /assets, the page does not yet know whether there is
+	// an Assets tab: the app's config has not answered, or (in the simple
+	// view) the wallet has not said whether it holds anything. Until it does
+	// the tab area waits, instead of showing Overview under the wrong address
+	// or sending a lightning-first wallet away from a tab it is about to have.
+	const assetsUndecided =
+		tab === 'assets' && (config === null || (simple && assetsOn && !assetSummary.status && !assetSummary.error));
 	// A URL pointing at a tab the simple view withholds lands on Overview,
 	// and the address bar says so.
 	useEffect(() => {
+		if (assetsUndecided) return;
 		if (simple && !tabs.some((t) => t[0] === tab)) navigate(`/w/${id}/overview`, { replace: true });
-	}, [simple, tab, tabs, id, navigate]);
+	}, [simple, tab, tabs, id, navigate, assetsUndecided]);
+
+	// Where a tab is, beyond its name, and how a tab moves the page: the
+	// query (?asset=, ?view=) and whatever one tab hands another on the way.
+	const route = useMemo(
+		() => ({ query: Object.fromEntries(new URLSearchParams(location.search)), state: location.state || null }),
+		[location.search, location.state]
+	);
+	const go = useCallback(
+		(to, { query, state, replace } = {}) => {
+			const search = new URLSearchParams(
+				Object.entries(query || {}).filter(([, v]) => v !== undefined && v !== null && v !== '')
+			).toString();
+			navigate(`/w/${id}/${to}${search ? `?${search}` : ''}`, { state, replace });
+		},
+		[id, navigate]
+	);
 
 	return (
 		<div className="container">
@@ -363,9 +441,22 @@ export default function WalletPage() {
 				</div>
 			</m.div>
 
-			{rec?.status === 'restarting' && rec.lastStartError && (
-				<div className="error-note" style={{ marginBottom: 14 }}>
-					The wallet's last start failed and it is retrying: {rec.lastStartError.message}
+			{/* Why the wallet is not running, while it retries and once it has
+			    stopped. A refusal the manager words itself (it has a code) is a
+			    whole sentence; anything else is what the daemon printed. */}
+			{rec?.lastStartError && (rec.status === 'restarting' || rec.status === 'stopped') && (
+				<div
+					className="error-note"
+					role="alert"
+					data-testid="wallet-start-error"
+					data-code={rec.lastStartError.code || undefined}
+					style={{ marginBottom: 14 }}
+				>
+					{rec.status === 'restarting'
+						? `The wallet's last start failed and it is retrying: ${rec.lastStartError.message}`
+						: rec.lastStartError.code
+							? rec.lastStartError.message
+							: `The wallet's last start failed: ${rec.lastStartError.message}`}
 				</div>
 			)}
 
@@ -424,16 +515,29 @@ export default function WalletPage() {
 							}}
 						/>
 					)}
-					{capsuleOffer(recovery, info) && (
+					{autoApplyState(recovery)?.skipped.length > 0 && autoSkippedRead !== rec?.id && (
+						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
+							<AutoApplySkipped channels={autoApplyState(recovery).skipped} onDismiss={() => setAutoSkippedRead(rec?.id)} />
+						</div>
+					)}
+					{(capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null) || (capsuleKept && capsuleKept.wallet === rec?.id)) && (
 						<div style={{ gridColumn: '1 / -1', marginBottom: 14 }}>
 							<CapsuleRestoreCard
 								api={api}
-								offer={capsuleOffer(recovery, info)}
-								onRestored={() => {
+								offer={capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null) || capsuleKept.offer}
+								restored={capsuleKept && capsuleKept.wallet === rec?.id ? capsuleKept.result : null}
+								onRestored={(r) => {
 									toast('Checkpoint restored', 'success');
+									// The offer goes with the restore. What the restore left out stays on the page until it has been read.
+									// So does what a backup-only checkpoint skipped.
+									if (r && ((Array.isArray(r.omittedAssetChannels) && r.omittedAssetChannels.length > 0) || skippedAssetChannels(r).length > 0)) {
+										setCapsuleKept({ wallet: rec?.id, offer: capsuleOffer(recovery, info, autoHeard && autoHeard.wallet === rec?.id ? autoHeard.said : null), result: r });
+									}
+									setAutoHeard(null);
 									refreshRec();
 									bump();
 								}}
+								onDismiss={() => setCapsuleKept(null)}
 							/>
 						</div>
 					)}
@@ -453,7 +557,13 @@ export default function WalletPage() {
 					)}
 					<nav className="wnav">
 						{tabs.map(([key, label]) => (
-							<NavLink key={key} to={`/w/${id}/${key}`} className={key === tab ? 'active' : ''}>
+							<NavLink
+								key={key}
+								to={`/w/${id}/${key}`}
+								className={key === tab ? 'active' : ''}
+								data-testid={`wnav-${key}`}
+								aria-label={key === 'assets' && assetsBusy > 0 ? `Assets, ${assetsBusy} in progress` : undefined}
+							>
 								{key === tab && (
 									<m.span
 										layoutId="wnav-indicator"
@@ -462,6 +572,11 @@ export default function WalletPage() {
 									/>
 								)}
 								{label}
+								{key === 'assets' && assetsBusy > 0 && (
+									<span className="wnav-count" aria-hidden="true" data-testid="wnav-assets-count">
+										{assetsBusy}
+									</span>
+								)}
 							</NavLink>
 						))}
 						{!simple && (
@@ -483,18 +598,25 @@ export default function WalletPage() {
 							exit={{ opacity: 0, y: -6 }}
 							transition={{ duration: 0.18, ease: 'easeOut' }}
 						>
-							<ActiveTab
-								id={id}
-								api={api}
-								info={info}
-								health={health}
-								recovery={recovery}
-								rec={rec}
-								tick={tick}
-								bump={bump}
-								lastReceive={lastReceive}
-								config={config}
-							/>
+							{assetsUndecided ? (
+								<Skeleton height={220} />
+							) : (
+								<ActiveTab
+									id={id}
+									api={api}
+									info={info}
+									health={health}
+									recovery={recovery}
+									rec={rec}
+									tick={tick}
+									bump={bump}
+									lastReceive={lastReceive}
+									config={config}
+									route={route}
+									go={go}
+									assets={assetSummary}
+								/>
+							)}
 						</m.div>
 					</AnimatePresence>
 				</div>
@@ -673,7 +795,12 @@ export function EditWalletModal({
 		let alive = true;
 		walletApi(rec.id)
 			.get('/channels')
-			.then((chs) => alive && setOpenChannels(chs.filter((c) => !isClosedChannel(c)).length))
+			.then(openBitcoinChannelCount)
+			.then((open) => {
+				// Bitcoin channels: an asset channel is refused by the manager, in its own words.
+				if (open === null) throw new Error('no list');
+				if (alive) setOpenChannels(open);
+			})
 			.catch(() => alive && setChannelsUnknown(true));
 		return () => {
 			alive = false;

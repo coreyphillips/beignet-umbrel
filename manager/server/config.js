@@ -186,4 +186,82 @@ function publicElectrumServers(network) {
 	return PUBLIC_ELECTRUM_SERVERS.filter((s) => s.networks.includes(network));
 }
 
-module.exports = { config, toBool, SUPPORTED_NETWORKS, ELECTRUM_PRESETS, PUBLIC_ELECTRUM_SERVERS, publicElectrumServers };
+// Taproot Assets universe servers (docs/ASSETS.md): where a wallet fetches
+// the proofs of assets sent to it and leaves the proofs of assets it sends.
+// An asset address names its proof courier as a universerpc:// address,
+// which is gRPC; this app speaks the same server's REST gateway, so each
+// entry pairs the two. The first entry for a network is the one new
+// addresses name. Each is someone else's machine: it learns which assets a
+// wallet asks about and this Umbrel's IP address, unless the wallet's
+// network mode is Tor.
+const PUBLIC_UNIVERSE_SERVERS = [
+	{
+		id: 'lightning-labs',
+		label: 'Lightning Labs',
+		courier: 'universerpc://universe.lightning.finance:10029',
+		rest: 'https://universe.lightning.finance',
+		networks: ['mainnet'],
+		note: "Lightning Labs' universe, the default of their own daemon"
+	},
+	// A wallet's `testnet` is testnet3 or testnet4, whichever its Electrum
+	// server is on, and each has a universe of its own. `chain` says which
+	// one a server is for; a wallet's assets host finds out which chain it
+	// is on and uses that server (assets-host/chain.js).
+	{
+		id: 'lightning-labs-testnet',
+		label: 'Lightning Labs testnet3',
+		courier: 'universerpc://testnet.universe.lightning.finance:10029',
+		rest: 'https://testnet.universe.lightning.finance',
+		networks: ['testnet'],
+		chain: 'testnet3',
+		note: "Lightning Labs' testnet3 universe"
+	},
+	{
+		id: 'lightning-labs-testnet4',
+		label: 'Lightning Labs testnet4',
+		courier: 'universerpc://testnet4.universe.lightning.finance:443',
+		rest: 'https://testnet4.universe.lightning.finance',
+		networks: ['testnet'],
+		chain: 'testnet4',
+		note: "Lightning Labs' testnet4 universe"
+	}
+];
+
+/**
+ * A universe for regtest, which has no public one: the operator names a
+ * local tapd's courier address and REST gateway. Both or neither.
+ */
+function regtestUniverse(env = process.env) {
+	const courier = String(env.ASSETS_REGTEST_UNIVERSE_COURIER || '').trim();
+	const rest = String(env.ASSETS_REGTEST_UNIVERSE_REST || '').trim();
+	if (!courier || !rest) return null;
+	// A local tapd serves its gateway on a certificate it signed itself;
+	// ASSETS_REGTEST_UNIVERSE_CA names the file to trust for it.
+	const ca = String(env.ASSETS_REGTEST_UNIVERSE_CA || '').trim();
+	return {
+		id: 'regtest',
+		label: 'Local universe',
+		courier,
+		rest,
+		networks: ['regtest'],
+		note: 'Set by ASSETS_REGTEST_UNIVERSE_COURIER',
+		...(ca ? { ca } : {})
+	};
+}
+
+/** The universe servers offered for `network`, the default first. */
+function publicUniverseServers(network, env = process.env) {
+	const local = regtestUniverse(env);
+	return [...PUBLIC_UNIVERSE_SERVERS, ...(local ? [local] : [])].filter((s) => s.networks.includes(network));
+}
+
+module.exports = {
+	config,
+	toBool,
+	SUPPORTED_NETWORKS,
+	ELECTRUM_PRESETS,
+	PUBLIC_ELECTRUM_SERVERS,
+	publicElectrumServers,
+	PUBLIC_UNIVERSE_SERVERS,
+	publicUniverseServers
+};

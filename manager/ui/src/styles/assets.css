@@ -1,0 +1,1608 @@
+/* Taproot Assets: the Assets tab and the pieces of it other tabs borrow.
+   The one new colour here is the faces: every other surface is the glass the
+   rest of the app is made of. */
+
+/* ---------- Faces ---------- */
+/* An asset's picture, drawn from its ID: two hues and a pattern of dots.
+   A circle for an asset, a rounded square for a collectible, so the two are
+   told apart by shape. The hues are set inline (lib/asset-avatar.js); how
+   light they are drawn is the theme's (--av-l1, --av-l2 in tokens.css). */
+.asset-avatar {
+	--av-size: 36px;
+	flex: none;
+	display: inline-grid;
+	place-items: center;
+	width: var(--av-size);
+	height: var(--av-size);
+	border-radius: 50%;
+	background: linear-gradient(
+		var(--av-angle, 135deg),
+		hsl(var(--av-h1, 220) var(--av-s) calc(var(--av-l1) + var(--av-k1, 0%))),
+		hsl(var(--av-h2, 260) var(--av-s) calc(var(--av-l2) + var(--av-k2, 0%)))
+	);
+	box-shadow: 0 0 0 1px var(--av-ring), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+	overflow: hidden;
+}
+
+.asset-avatar svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.asset-avatar.xs {
+	--av-size: 20px;
+}
+
+.asset-avatar.sm {
+	--av-size: 28px;
+}
+
+.asset-avatar.lg {
+	--av-size: 56px;
+}
+
+.asset-avatar.xl {
+	--av-size: 72px;
+}
+
+.asset-avatar.collectible {
+	border-radius: 28%;
+}
+
+/* No ID yet, so no face: a mint still being written, or "another asset". */
+.asset-avatar.seedling {
+	background: var(--glass-inner);
+	box-shadow: none;
+	border: 1.5px dashed var(--glass-border-bright);
+}
+
+/* The moment a mint becomes an asset. */
+.asset-avatar.ready {
+	animation: avatar-ready 900ms var(--ease-out-expo) 1;
+}
+
+/* ---------- Amounts ---------- */
+.asset-amount {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/* The asset's name beside a figure: smaller and quieter than the figure, and
+   never styled like sats. */
+.asset-unit {
+	margin-left: 0.35em;
+	font-size: max(0.72em, 11px);
+	font-weight: 550;
+	letter-spacing: 0;
+	color: var(--muted);
+}
+
+.asset-cell {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+/* ---------- Shell ---------- */
+/* A host name moves to the next line whole before it is broken. */
+.assets .wallet-meta code {
+	word-break: normal;
+}
+
+.assets code,
+.modal-box .asset-limits code,
+.info-note code,
+.error-note code {
+	font-family: var(--font-mono);
+	font-size: 0.92em;
+	overflow-wrap: anywhere;
+}
+
+/* The views, and Settings at the far end of the same line. */
+.assets-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px 12px;
+	flex-wrap: wrap;
+	margin-bottom: 16px;
+}
+
+.assets-bar .pills {
+	margin-bottom: 0;
+}
+
+/* A note with something to do about it: the text, and a button that stays
+   on the first line beside it until there is no room. */
+.note-with-action {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 14px;
+	flex-wrap: wrap;
+}
+
+.note-with-action > span {
+	flex: 1 1 260px;
+	min-width: 0;
+}
+
+.note-with-action .btn {
+	flex: none;
+}
+
+/* Two things to do about one note stay together, and wrap as a pair. */
+.note-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.note-actions:empty {
+	display: none;
+}
+
+/* With two or more, they take a line of their own under the text, so the
+   text keeps the note's full width. */
+.note-with-action .note-actions:has(> button:nth-of-type(2)) {
+	flex-basis: 100%;
+}
+
+.detail-hint {
+	margin-left: 10px;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
+/* A disclosure inside a card: the summary reads as a quiet link. */
+.asset-details > summary {
+	cursor: pointer;
+	color: var(--muted);
+	font-size: 13px;
+	list-style-position: inside;
+	transition: color var(--dur-fast) ease;
+}
+
+.asset-details > summary:hover,
+.asset-details[open] > summary {
+	color: var(--text);
+}
+
+.asset-details > summary:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 3px;
+	border-radius: 4px;
+}
+
+.asset-limits {
+	margin: 10px 0 0;
+	padding-left: 18px;
+	display: grid;
+	gap: 7px;
+	font-size: 12.5px;
+	line-height: 1.5;
+}
+
+.asset-section {
+	margin: 20px 0 12px;
+	color: var(--faint);
+	font-size: 11px;
+	font-weight: 550;
+	text-transform: uppercase;
+	letter-spacing: 0.09em;
+}
+
+/* ---------- Holdings ---------- */
+.asset-rows {
+	display: grid;
+	/* Not `auto`: a row is as wide as the list, however long its figure. */
+	grid-template-columns: minmax(0, 1fr);
+	gap: 10px;
+}
+
+/* One asset: the wallet row's recipe, a little shorter. */
+.asset-row {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	min-height: 64px;
+	padding: 12px 16px;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-md);
+	color: inherit;
+	text-decoration: none;
+	transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease,
+		transform var(--dur-fast) ease, box-shadow var(--dur-med) ease;
+}
+
+.asset-row:hover {
+	border-color: rgba(247, 147, 26, 0.35);
+	background: var(--glass-inner-2);
+	transform: translateY(-1px);
+	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+}
+
+.asset-row:focus-visible,
+.asset-tile:focus-visible,
+.choice:focus-visible,
+.asset-chip:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.asset-row-main {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.asset-name {
+	font-size: 15px;
+	font-weight: 620;
+	letter-spacing: -0.01em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.asset-id {
+	color: var(--faint);
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.asset-balance {
+	flex: 0 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 2px;
+	text-align: right;
+	font-size: 18px;
+	font-weight: 650;
+	letter-spacing: -0.015em;
+}
+
+/* In a row the name keeps a share of the line whatever the figure is. A
+   figure too long for the rest lets its unit drop to the next line, and only
+   one longer than the row itself is ever broken. */
+.asset-row .asset-balance {
+	max-width: 72%;
+}
+
+.asset-row .asset-balance .asset-amount {
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+/* When the figure and a long name do not fit one line, the name goes to the
+   next whole: it is never cut in the middle of a word. */
+.asset-row .asset-balance .asset-unit {
+	display: inline-block;
+	white-space: nowrap;
+}
+
+.asset-balance-sub {
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 400;
+	letter-spacing: 0;
+	font-variant-numeric: tabular-nums;
+}
+
+.asset-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+	gap: 10px;
+}
+
+.asset-tile {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	padding: 16px 12px 14px;
+	min-width: 0;
+	text-align: center;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-md);
+	color: inherit;
+	text-decoration: none;
+	transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease,
+		transform var(--dur-fast) ease;
+}
+
+.asset-tile:hover {
+	border-color: rgba(247, 147, 26, 0.35);
+	background: var(--glass-inner-2);
+	transform: translateY(-1px);
+}
+
+.asset-tile .asset-avatar {
+	margin-bottom: 4px;
+}
+
+/* A collectible's name is the whole of it, so it gets two lines before it
+   is cut. */
+.asset-tile .asset-name {
+	max-width: 100%;
+	font-size: 14px;
+	line-height: 1.3;
+	white-space: normal;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow-wrap: anywhere;
+}
+
+.asset-card-foot {
+	margin-top: 16px;
+	padding-top: 14px;
+	border-top: 1px solid var(--hairline);
+	display: grid;
+	gap: 8px;
+}
+
+.asset-card-foot .field {
+	margin-bottom: 0;
+}
+
+/* ---------- In progress ---------- */
+.progress-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 12px;
+}
+
+.progress-item {
+	padding: 14px 16px;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-md);
+}
+
+.progress-item .error-note,
+.progress-item .info-note {
+	margin: 12px 0 0;
+}
+
+.progress-head + .error-note {
+	margin-top: 0;
+}
+
+.progress-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 12px;
+}
+
+.progress-title {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: 14px;
+	font-weight: 600;
+	/* An asset's name can be 64 characters with no space in it. */
+	overflow-wrap: anywhere;
+}
+
+.progress-head .btn {
+	flex: none;
+}
+
+/* ---------- Empty state ---------- */
+.asset-empty {
+	padding: 34px 28px 28px;
+}
+
+.asset-empty-faces {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin-bottom: 18px;
+}
+
+/* Three faces overlapping, the middle one forward. */
+.asset-empty-faces .asset-avatar {
+	box-shadow: 0 0 0 3px var(--bg-deep), 0 10px 26px rgba(0, 0, 0, 0.35);
+}
+
+.asset-empty-faces .asset-avatar:first-child {
+	margin-right: -14px;
+	transform: rotate(-8deg);
+}
+
+.asset-empty-faces .asset-avatar:last-child {
+	margin-left: -14px;
+	transform: rotate(8deg);
+}
+
+.asset-empty-faces .asset-avatar:nth-child(2) {
+	position: relative;
+	z-index: 1;
+}
+
+.asset-empty-title {
+	text-align: center;
+	font-size: 20px;
+	font-weight: 650;
+	letter-spacing: -0.02em;
+}
+
+.asset-empty-body {
+	max-width: 520px;
+	margin: 8px auto 22px;
+	text-align: center;
+	color: var(--muted);
+	font-size: 14px;
+	line-height: 1.55;
+}
+
+.choice-row {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+}
+
+/* A way in: a whole card that is a button. */
+.choice {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 16px 18px;
+	text-align: left;
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+	background: var(--glass-inner);
+	border: 1px solid var(--glass-border);
+	border-radius: var(--r-md);
+	transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease,
+		transform var(--dur-fast) ease;
+}
+
+.choice:hover {
+	border-color: rgba(247, 147, 26, 0.5);
+	background: var(--glass-inner-2);
+	transform: translateY(-1px);
+}
+
+.choice-title {
+	font-size: 15px;
+	font-weight: 620;
+	letter-spacing: -0.01em;
+}
+
+.choice-title::after {
+	content: ' →';
+	color: var(--accent);
+}
+
+.choice-body {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+.asset-empty-sub {
+	margin: 26px 0 0;
+	color: var(--faint);
+	font-size: 11px;
+	font-weight: 550;
+	text-transform: uppercase;
+	letter-spacing: 0.09em;
+}
+
+/* ---------- The host is not up ---------- */
+/* One card in place of the views: what stands, why, and what is untouched.
+   The face is the empty ring, since there is nothing to draw one from. */
+.asset-notice {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 36px 28px 30px;
+	text-align: center;
+}
+
+.asset-notice .asset-avatar {
+	margin-bottom: 16px;
+}
+
+.asset-notice-title {
+	margin: 0;
+	font-size: 20px;
+	font-weight: 650;
+	letter-spacing: -0.02em;
+	text-wrap: balance;
+}
+
+.asset-notice-body {
+	max-width: 520px;
+	margin: 8px 0 0;
+	color: var(--muted);
+	font-size: 14px;
+	line-height: 1.55;
+}
+
+.asset-notice-reason {
+	width: 100%;
+	max-width: 520px;
+	margin: 18px 0 0;
+	padding: 12px 16px;
+	text-align: left;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-md);
+}
+
+.asset-notice-reason dt {
+	margin-bottom: 4px;
+	color: var(--faint);
+	font-size: 11px;
+	font-weight: 550;
+	text-transform: uppercase;
+	letter-spacing: 0.09em;
+}
+
+.asset-notice-reason dd {
+	margin: 0;
+	font-size: 13.5px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+.asset-notice-foot {
+	max-width: 520px;
+	margin: 14px 0 0;
+	color: var(--faint);
+	font-size: 12.5px;
+	line-height: 1.5;
+}
+
+.asset-notice-actions {
+	justify-content: center;
+	margin-top: 16px;
+}
+
+/* Waiting, not broken: the ring breathes, and nothing spins. */
+.asset-notice.waiting .asset-avatar {
+	animation: notice-breathe 2.4s ease-in-out infinite;
+}
+
+.asset-notice-bar {
+	width: 100%;
+	max-width: 240px;
+	height: 4px;
+	margin-top: 18px;
+	border-radius: var(--r-full);
+	background: var(--glass-inner-2);
+	overflow: hidden;
+}
+
+.asset-notice-bar span {
+	display: block;
+	height: 100%;
+	border-radius: inherit;
+	background: var(--accent);
+	transition: width 600ms var(--ease-out-expo);
+}
+
+@keyframes notice-breathe {
+	0%,
+	100% {
+		opacity: 0.5;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.asset-notice.waiting .asset-avatar {
+		animation: none;
+	}
+}
+
+/* ---------- One asset ---------- */
+.asset-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 20px;
+}
+
+.asset-head-main {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.asset-head .wallet-title h2 {
+	overflow-wrap: anywhere;
+}
+
+.asset-head-id {
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.asset-head-balance {
+	margin-top: 10px;
+	font-size: 28px;
+	font-weight: 680;
+	letter-spacing: -0.025em;
+	line-height: 1.15;
+	overflow-wrap: anywhere;
+}
+
+.asset-head-balance .asset-amount {
+	white-space: normal;
+}
+
+.asset-head .field-hint {
+	display: block;
+	margin-top: 8px;
+}
+
+.asset-head .center-actions {
+	margin-top: 16px;
+}
+
+/* On-chain is the neutral segment: it is not Lightning liquidity, so it does
+   not take either of the liquidity bar's colours. */
+.asset-where .where-onchain {
+	background: var(--glass-border-bright);
+	transition: width 600ms var(--ease-out-expo);
+}
+
+.where-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	margin-top: 8px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.where-legend .swatch {
+	display: inline-block;
+	width: 9px;
+	height: 9px;
+	margin-right: 6px;
+	border-radius: 3px;
+	vertical-align: -0.5px;
+}
+
+.swatch.onchain {
+	background: var(--glass-border-bright);
+}
+
+.swatch.out {
+	background: var(--accent);
+}
+
+.swatch.in {
+	background: var(--blue);
+}
+
+.where-stats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px 32px;
+	margin: 16px 0 12px;
+}
+
+.asset-where + .where-legend + .where-stats {
+	margin-top: 18px;
+}
+
+.where-stat {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	font-size: 17px;
+	font-weight: 620;
+	letter-spacing: -0.01em;
+}
+
+.where-stats:first-child {
+	margin-top: 0;
+}
+
+.asset-meta {
+	max-height: 220px;
+	overflow: auto;
+	margin: 0;
+	font-size: 13px;
+	white-space: pre-wrap;
+}
+
+pre.asset-meta {
+	font-family: var(--font-mono);
+	font-size: 12px;
+}
+
+/* The transfer dialog: what moved and its state, then the steps. */
+.asset-transfer-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 14px;
+	font-size: 17px;
+	font-weight: 620;
+}
+
+.asset-transfer-steps {
+	margin-bottom: 14px;
+	padding: 14px 16px;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-md);
+}
+
+/* Steps written out down a card keep one rhythm whether or not a step has
+   its second line yet, so the card does not grow each time one is reached. */
+.assets .timeline:not(.compact) .tl-step,
+.asset-transfer-steps .timeline:not(.compact) .tl-step {
+	min-height: 62px;
+}
+
+.assets .timeline:not(.compact) .tl-step:last-child,
+.asset-transfer-steps .timeline:not(.compact) .tl-step:last-child {
+	min-height: 44px;
+}
+
+/* ---------- Choosing an asset ---------- */
+.asset-pick-card {
+	margin-bottom: 14px;
+}
+
+.asset-pick-card > :last-child,
+.asset-pick-card .field:last-child {
+	margin-bottom: 0;
+}
+
+.asset-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.asset-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+	padding: 6px 14px 6px 7px;
+	font: inherit;
+	font-size: 13px;
+	font-weight: 550;
+	color: var(--muted);
+	cursor: pointer;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-full);
+	transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.asset-chip:hover {
+	color: var(--text);
+	background: var(--glass-inner-2);
+}
+
+.asset-chip.active {
+	color: var(--text);
+	background: var(--accent-dim);
+	border-color: rgba(247, 147, 26, 0.55);
+}
+
+.asset-chip-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.asset-select-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.asset-select-row select {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.asset-other {
+	margin-top: 10px;
+	display: grid;
+	gap: 8px;
+}
+
+.asset-lookup {
+	min-height: 18px;
+}
+
+.asset-found {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 12px;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-sm);
+}
+
+.asset-found .asset-name {
+	white-space: normal;
+	font-size: 14px;
+}
+
+.asset-found .copytext {
+	flex: none;
+}
+
+/* ---------- Receive and send ---------- */
+.asset-flow > * {
+	flex: 1 1 320px;
+	min-width: 0;
+	margin-bottom: 0;
+}
+
+.asset-flow {
+	margin-bottom: 18px;
+}
+
+.asset-address-block {
+	margin-top: 18px;
+}
+
+.asset-qr {
+	max-width: 264px;
+	margin: 0 auto 14px;
+}
+
+/* The address the way it is checked: where it starts, and how it ends. */
+.tap-address {
+	display: grid;
+	gap: 10px;
+}
+
+.tap-address-line {
+	display: flex;
+	align-items: baseline;
+	justify-content: center;
+	gap: 2px;
+	padding: 10px 12px;
+	font-size: 14px;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-sm);
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+.tap-address-gap {
+	color: var(--faint);
+	padding: 0 4px;
+}
+
+.tap-address-tail {
+	color: var(--accent-2);
+	font-weight: 650;
+}
+
+.tap-address-actions {
+	justify-content: center;
+	margin-top: 0;
+}
+
+.tap-address-full {
+	margin-top: 8px;
+	font-size: 12px;
+	line-height: 1.55;
+	word-break: break-all;
+	user-select: all;
+}
+
+.tap-address .wallet-meta,
+.tap-address .field-hint {
+	text-align: center;
+	margin-top: 0;
+}
+
+/* What an address asks for, or what a form describes: the face, the amount,
+   and the facts under them. */
+.asset-preview {
+	margin-bottom: 14px;
+	padding: 14px 16px;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-md);
+}
+
+.asset-preview-head {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 10px;
+	min-width: 0;
+}
+
+.asset-preview-head > div {
+	min-width: 0;
+}
+
+.asset-preview-amount {
+	font-size: 20px;
+	font-weight: 660;
+	letter-spacing: -0.02em;
+	overflow-wrap: anywhere;
+}
+
+.asset-preview-amount .asset-amount {
+	white-space: normal;
+}
+
+.asset-preview .asset-name + .asset-preview-amount {
+	color: var(--muted);
+	font-size: 14px;
+	font-weight: 500;
+	letter-spacing: 0;
+}
+
+.asset-preview .kv td,
+.mint-cost td {
+	padding: 7px 0;
+}
+
+.asset-preview .kv td:first-child,
+.mint-cost td:first-child {
+	padding-right: 12px;
+	color: var(--muted);
+	white-space: nowrap;
+	vertical-align: top;
+}
+
+/* The small print of a figure, on a line of its own under it. */
+.kv-sub {
+	display: block;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.asset-preview .kv td:last-child,
+.mint-cost td:last-child {
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+
+.asset-preview .field-hint {
+	display: block;
+	margin-top: 8px;
+}
+
+.asset-send-lines {
+	display: grid;
+	gap: 4px;
+	margin-bottom: 14px;
+}
+
+.asset-send-lines .info-note {
+	margin-bottom: 6px;
+}
+
+.asset-send-lines .wallet-meta {
+	margin-top: 0;
+	line-height: 1.5;
+}
+
+/* ---------- Create ---------- */
+.mint-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+	gap: 28px;
+	align-items: start;
+}
+
+.mint-fields,
+.mint-side {
+	min-width: 0;
+}
+
+.mint-fields .pills {
+	margin-bottom: 0;
+	align-self: flex-start;
+}
+
+/* The answer to the form stays in sight while the form is scrolled. */
+.mint-side {
+	position: sticky;
+	top: 16px;
+	display: grid;
+	gap: 14px;
+}
+
+.mint-side .asset-preview {
+	margin-bottom: 0;
+}
+
+.mint-side > .btn {
+	justify-self: stretch;
+}
+
+.mint-side .error-note {
+	margin-bottom: 0;
+}
+
+.mint-batch {
+	display: grid;
+	gap: 8px;
+	justify-items: start;
+}
+
+.mint-batch-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	width: 100%;
+	display: grid;
+	gap: 6px;
+}
+
+.mint-batch-list li {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 8px 8px 12px;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-sm);
+}
+
+.mint-batch-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 13px;
+	font-weight: 550;
+}
+
+.mint-cost {
+	margin-bottom: 6px;
+}
+
+.mint-done-head {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 18px;
+	min-width: 0;
+}
+
+/* The name beside the faces gives way, the faces do not. */
+.mint-done-head > div:last-child {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.mint-done-head .wallet-meta {
+	overflow-wrap: anywhere;
+}
+
+/* The watching line under a status: quieter than a note, same layout. */
+.asset-watch {
+	margin-top: 12px;
+}
+
+.mint-done-faces {
+	flex: none;
+	display: flex;
+	gap: 6px;
+}
+
+/* ---------- Settings ---------- */
+.radio-list {
+	display: grid;
+	gap: 2px;
+	margin-bottom: 6px;
+}
+
+.radio-list .checkbox {
+	margin-bottom: 6px;
+	align-items: baseline;
+}
+
+.radio-list .checkbox > span {
+	min-width: 0;
+}
+
+/* Who runs a server, on a line of its own under its address. */
+.radio-sub {
+	display: block;
+	margin-top: 2px;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+/* ---------- One column means one column ---------- */
+/* A grid with no columns named sizes its one column to the widest thing in
+   it, and a name that does not wrap is as wide as it is long. Named, the
+   column is the width of its container and the name is cut instead. */
+.progress-list,
+.asset-card-foot,
+.asset-other,
+.tap-address,
+.asset-send-lines,
+.mint-side,
+.mint-batch,
+.mint-batch-list,
+.radio-list {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+/* ---------- Light theme ---------- */
+:root[data-theme='light'] .asset-row:hover {
+	box-shadow: 0 6px 24px rgba(35, 45, 80, 0.12);
+}
+
+:root[data-theme='light'] .asset-empty-faces .asset-avatar {
+	box-shadow: 0 0 0 3px #ffffff, 0 10px 26px rgba(35, 45, 80, 0.16);
+}
+
+:root[data-theme='light'] .asset-avatar {
+	box-shadow: 0 0 0 1px var(--av-ring), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+:root[data-theme='light'] .asset-avatar.seedling {
+	box-shadow: none;
+}
+
+:root[data-theme='light'] .tap-address-tail {
+	color: #a85d00;
+}
+
+/* ---------- Narrower ---------- */
+@media (max-width: 820px) {
+	.mint-layout {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 18px;
+	}
+
+	.mint-side {
+		position: static;
+	}
+}
+
+@media (max-width: 760px) {
+	.asset-flow > * {
+		flex-basis: 100%;
+	}
+}
+
+@media (max-width: 480px) {
+	.asset-empty {
+		padding: 26px 16px 20px;
+	}
+
+	.asset-notice {
+		padding: 28px 16px 22px;
+	}
+
+	.choice-row {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.asset-row {
+		gap: 12px;
+		padding: 12px;
+	}
+
+	.asset-balance {
+		font-size: 16px;
+	}
+
+	.asset-head {
+		flex-direction: column;
+		gap: 14px;
+	}
+
+	.asset-head .asset-avatar.xl {
+		--av-size: 56px;
+	}
+
+	.asset-head-balance {
+		font-size: 24px;
+	}
+
+	.asset-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.where-stats {
+		gap: 12px 20px;
+	}
+
+	/* Five labels abreast on a phone: each keeps clear of the next. */
+	.progress-item .timeline.compact .tl-body {
+		padding: 0 3px;
+	}
+
+	/* The label gives way before the value does, so a proof server's host
+	   stays on one line. */
+	.asset-preview .kv td:first-child {
+		width: 34%;
+		white-space: normal;
+	}
+
+	/* A table of transfers becomes a list: what it was and how much on one
+	   line, its state and its date on the next. Four columns do not fit a
+	   phone, and a table scrolled sideways hides the date. */
+	.asset-table,
+	.asset-table tbody {
+		display: block;
+	}
+
+	.asset-table thead {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+
+	.asset-table tr {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 6px 12px;
+		padding: 12px 4px;
+		border-bottom: 1px solid var(--hairline);
+	}
+
+	.asset-table tr:last-child {
+		border-bottom: 0;
+	}
+
+	.asset-table td {
+		display: block;
+		min-width: 0;
+		padding: 0;
+		border: 0;
+	}
+
+	.asset-table td:nth-child(even) {
+		justify-self: end;
+		text-align: right;
+	}
+
+	.asset-table td:nth-child(n + 3) {
+		color: var(--muted);
+		font-size: 12px;
+	}
+
+	.asset-table .row-clickable:hover td {
+		background: none;
+	}
+}
+
+/* ---------- Lightning: asset channels ---------- */
+/* One block a channel, not a table row: six figures do not fit a phone as
+   columns, and a block wraps where a row would scroll sideways. */
+.asset-channel-list {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 12px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.asset-channel {
+	padding: 14px 16px;
+	background: var(--glass-inner);
+	border: 1px solid var(--hairline);
+	border-radius: var(--r-md);
+}
+
+.asset-channel-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+}
+
+.asset-channel-head .asset-avatar {
+	flex: none;
+}
+
+/* The name and the peer give way, the state and the button do not. */
+.asset-channel-title {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.asset-channel-title .wallet-meta {
+	margin-top: 2px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.asset-channel-head .badge,
+.asset-channel-head .btn {
+	flex: none;
+}
+
+.asset-channel-bar {
+	height: 10px;
+	margin: 14px 0 7px;
+}
+
+.asset-channel-sides {
+	display: flex;
+	justify-content: space-between;
+	gap: 6px 16px;
+	flex-wrap: wrap;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.asset-channel-sides .side-word {
+	color: var(--muted);
+	font-weight: 500;
+}
+
+.asset-channel-facts {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+	gap: 12px 20px;
+	margin: 14px 0 0;
+	padding-top: 12px;
+	border-top: 1px solid var(--hairline);
+}
+
+.asset-channel-facts > div {
+	min-width: 0;
+}
+
+.asset-channel-facts dt {
+	color: var(--faint);
+	font-size: 11px;
+	font-weight: 550;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+
+.asset-channel-facts dd {
+	margin: 4px 0 0;
+	font-size: 14px;
+	font-weight: 620;
+	font-variant-numeric: tabular-nums;
+}
+
+/* How many more payments that way carries, on its own line under the figure. */
+.asset-channel-carries {
+	display: block;
+	margin-top: 2px;
+	font-size: 12px;
+	font-weight: 450;
+	color: var(--muted);
+}
+
+.asset-channel > .field-hint {
+	display: block;
+	margin-top: 12px;
+}
+
+.asset-channel-cost {
+	margin-bottom: 14px;
+}
+
+.asset-channel-cost .field-hint {
+	display: block;
+}
+
+/* A note that follows a channel's figures stands a little off them. */
+/* What the wallet's node said of a failed open, beneath the wallet's own sentence. */
+.asset-channel-failure-detail {
+	margin-top: 6px;
+	font-size: 12px;
+	opacity: 0.8;
+	overflow-wrap: anywhere;
+}
+
+.asset-channel-facts + .info-note {
+	margin-top: 12px;
+}
+
+/* ---------- Lightning: an invoice to receive with ---------- */
+.invoice-facts {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 6px;
+	justify-items: center;
+	margin: 14px 0 10px;
+	text-align: center;
+}
+
+.invoice-for {
+	font-size: 16px;
+}
+
+.invoice-facts .wallet-meta {
+	margin-top: 0;
+}
+
+.invoice-clock {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px 10px;
+	flex-wrap: wrap;
+	margin-top: 4px;
+}
+
+.asset-invoice > .field-hint {
+	display: block;
+	text-align: center;
+}
+
+.asset-invoice > .center-actions {
+	margin-top: 12px;
+}
+
+.invoice-hint {
+	display: block;
+	margin-top: 10px;
+}
+
+.asset-invoice-over {
+	margin-top: 4px;
+}
+
+/* ---------- Lightning: paying an invoice with an asset ---------- */
+.asset-pay {
+	margin-top: 4px;
+}
+
+/* Where an asset's face would be, for the thing being paid: an invoice has
+   no face, so it gets the bolt. */
+.ln-mark {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: 56px;
+	height: 56px;
+	color: var(--accent);
+	background: var(--accent-dim);
+	border: 1px solid var(--accent-glow);
+	border-radius: 50%;
+}
+
+.asset-preview-head .wallet-meta {
+	margin-top: 2px;
+}
+
+.asset-pay .asset-picker {
+	margin-bottom: 14px;
+}
+
+.asset-preview .countdown {
+	justify-content: flex-end;
+}
+
+/* The invoice's panel is its head and nothing under it. */
+.asset-pay-invoice .asset-preview-head {
+	margin-bottom: 0;
+}
+
+/* A price that has run out stays readable, and stops looking current. */
+.pay-quote.stale {
+	opacity: 0.55;
+}
+
+.asset-pay-receipt {
+	margin-top: 4px;
+}
+
+.asset-pay-facts {
+	width: auto;
+	min-width: min(100%, 300px);
+	margin: 14px auto 0;
+	text-align: left;
+}
+
+.asset-pay-facts td {
+	padding: 6px 0;
+	border-bottom: none;
+}
+
+.asset-pay-facts td:first-child {
+	padding-right: 18px;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+.asset-pay-facts td:last-child {
+	text-align: right;
+}
+
+.asset-pay-facts tr:hover {
+	background: none;
+}
+
+:root[data-theme='light'] .asset-channel {
+	background: rgba(255, 255, 255, 0.5);
+}
+
+@media (max-width: 480px) {
+	.asset-channel {
+		padding: 12px;
+	}
+
+	/* The state and the button drop under the name instead of squeezing it. */
+	.asset-channel-head {
+		flex-wrap: wrap;
+	}
+
+	.asset-channel-title {
+		flex-basis: calc(100% - 52px);
+	}
+
+	.asset-channel-facts {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.ln-mark {
+		width: 44px;
+		height: 44px;
+	}
+}
+
+/* The quiet line under Recent receives that takes a proof file by hand. */
+.asset-handover {
+	margin-top: 14px;
+}
+
+/* A receipt the wallet has a note on is not a success: how the payment
+   ended is not known. It takes the blue of something said, not the green
+   of something done. */
+.paid-receipt.noted {
+	border-color: rgba(110, 168, 255, 0.3);
+	background: rgba(110, 168, 255, 0.06);
+}
+
+.paid-receipt.noted .paid-check,
+.paid-receipt.noted .paid-title {
+	color: #bcd4ff;
+}
+
+.paid-receipt.noted .paid-check {
+	border-color: currentColor;
+}
+
+:root[data-theme='light'] .paid-receipt.noted .paid-check,
+:root[data-theme='light'] .paid-receipt.noted .paid-title {
+	color: #2b579a;
+}
+
+.paid-receipt.noted .info-note {
+	margin: 12px 0 4px;
+}

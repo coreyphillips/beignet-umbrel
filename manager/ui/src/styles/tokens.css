@@ -56,6 +56,16 @@
 		Arial, sans-serif;
 	--font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 
+	/* Asset faces: the two hues come from the asset's ID and never change;
+	   these set how saturated and how light they are drawn. Mirrored in
+	   lib/asset-avatar.js, which works out the ink from them. */
+	--av-s: 72%;
+	--av-l1: 64%;
+	--av-l2: 46%;
+	--av-ink-light: #ffffff;
+	--av-ink-dark: #0d1017;
+	--av-ring: rgba(255, 255, 255, 0.16);
+
 	color-scheme: dark;
 }
 
@@ -88,6 +98,10 @@
 
 	--spot-warm: rgba(247, 147, 26, 0.07);
 	--spot-cool: rgba(47, 111, 219, 0.05);
+
+	--av-l1: 56%;
+	--av-l2: 40%;
+	--av-ring: rgba(20, 30, 60, 0.14);
 
 	color-scheme: light;
 }
