@@ -149,6 +149,9 @@ function normalizePorch(
 			if (via === 'tor' && !onion && isPrivateHost(host)) {
 				throw bad(`${host} is a private address that Tor cannot reach. Use the default or direct connection for it.`);
 			}
+			if (porchProxy && !onion && isPrivateHost(host)) {
+				throw bad(`${host} is a private address, which the Porch proxy in this wallet's config file cannot reach. Remove the proxy from that file to use this relay.`);
+			}
 		}
 	}
 	return { porch: { enabled, relays, ...(via !== 'default' ? { via } : {}) }, tokens };

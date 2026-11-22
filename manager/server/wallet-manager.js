@@ -79,6 +79,7 @@ const {
 	tokenPath,
 	assetsBackupPath,
 	porchTokensPath,
+	walletConfigPath,
 	sealWithinLimit,
 	backupFilename
 } = require('./backup');
@@ -1672,10 +1673,19 @@ class WalletManager {
 			relayOnlyAvailable: this.irohRelayOnlyAvailable(),
 			onchainOnly: nextOnchainOnly
 		});
-		// Porch is checked here with the rest, so a setting the engine would
-		// refuse never reaches a running wallet. A wallet whose config.json
-		// set Porch by hand is taken over by its first Porch save, keeping
-		// the tokens that file held unless the save replaces them.
+		// The server is checked against the wallet's network only when it is
+		// actually being changed, so an edit to anything else goes through
+		// even if the server it already has is on the wrong chain or away.
+		const nextElectrum = electrum !== undefined ? this._normalizeElectrum(electrum) : undefined;
+		if (nextElectrum && this._electrumChanged(nextElectrum, rec.electrum)) {
+			await this._refuseWrongChain(nextElectrum, rec.network, { allow: allowChainMismatch });
+		}
+		// Porch is read after the last await, so a save made in another tab
+		// while this one waited is not undone. It is checked here with the
+		// rest, so a setting the engine would refuse never reaches a running
+		// wallet. A wallet whose config.json set Porch by hand is taken over
+		// by its first Porch save, keeping the tokens that file held unless
+		// the save replaces them.
 		const porchWas = this._porchState(rec);
 		const nativeConfig = porchRules.readNativeConfig(this.paths(id).home);
 		const nextPorch =
@@ -1694,13 +1704,6 @@ class WalletManager {
 		const porchAfter = nextPorch?.porch || rec.porch;
 		if (nativeConfig === null && porchAfter && porchRules.porchOn({ porch: porchAfter, onchainOnly: nextOnchainOnly }, this.porchAvailable())) {
 			throw httpError(400, 'PORCH_CONFIG_UNREADABLE', `${porchRules.nativeConfigPath(this.paths(id).home)} could not be read, so Porch cannot be set up in it. Repair or remove that file first.`);
-		}
-		// The server is checked against the wallet's network only when it is
-		// actually being changed, so an edit to anything else goes through
-		// even if the server it already has is on the wrong chain or away.
-		const nextElectrum = electrum !== undefined ? this._normalizeElectrum(electrum) : undefined;
-		if (nextElectrum && this._electrumChanged(nextElectrum, rec.electrum)) {
-			await this._refuseWrongChain(nextElectrum, rec.network, { allow: allowChainMismatch });
 		}
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (nextElectrum) rec.electrum = nextElectrum;
@@ -2900,15 +2903,6 @@ class WalletManager {
 		// has never saved any still has defaults worth carrying: write them out
 		// now, or the first archive off a box restores one with none.
 		this.settings.save();
-		// Porch set by hand in a wallet's config.json is nowhere the archive
-		// reads, so the app takes it over now, as a first dashboard save would.
-		for (const rec of this.registry.list()) {
-			const state = rec.porch || !this.porchAvailable() ? null : this._porchState(rec);
-			if (state?.source !== 'native') continue;
-			porchRules.writeTokens(this.paths(rec.id).porchTokensFile, state.tokens);
-			rec.porch = state.porch;
-			this.registry.save();
-		}
 		const ids = this.registry.list().map((rec) => rec.id);
 		// A running wallet's assets host writes its backup file again now, so
 		// the archive holds its assets as they are and not as of its last
@@ -3076,6 +3070,13 @@ class WalletManager {
 			const porchTokens = files.get(porchTokensPath(rec.id));
 			if (porchTokens) this._writeSecret(p.porchTokensFile, porchTokens);
 			else fs.rmSync(p.porchTokensFile, { force: true });
+			// The wallet's own config file, with whatever was set there by hand.
+			const nativeConfig = files.get(walletConfigPath(rec.id));
+			if (nativeConfig) {
+				const file = porchRules.nativeConfigPath(p.home);
+				fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+				this._writeSecret(file, nativeConfig);
+			}
 			// The wallet's assets, when the archive carries them, wait where
 			// its assets host looks on its first start: a seed alone brings
 			// back none of them.

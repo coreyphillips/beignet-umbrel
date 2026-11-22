@@ -55,6 +55,7 @@ test('settings the engine would refuse are refused before anything is written', 
 	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'direct', relays: ['ws://abc.onion'] }, ON), /onion/);
 	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'direct', relays: ['wss://a.example'] }, { ...ON, porchProxy: '127.0.0.1:1080' }), /proxy/);
 	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'tor', relays: ['wss://a.example'] }, { ...ON, porchProxy: '127.0.0.1:1080' }), /proxy/);
+	assert.throws(() => porch.normalizePorch({ enabled: true, relays: ['ws://192.168.1.4:2114'] }, { ...ON, porchProxy: '127.0.0.1:1080' }), /private address/);
 	assert.throws(() => porch.normalizePorch({ enabled: true, relays: [{ url: 'wss://a.example', token: 'x'.repeat(257) }] }, ON), { code: 'BAD_PORCH_TOKEN' });
 	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'sideways', relays: ['wss://a.example'] }, ON), { code: 'BAD_PORCH' });
 });

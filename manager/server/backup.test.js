@@ -421,21 +421,27 @@ test("a wallet's assets ride in the archive and wait for its assets host after a
 	assert.equal(manager().publicRecord(a.id).assets.holdsAssets, true);
 });
 
-test('Porch set by hand in config.json comes back from a restore with its token', async () => {
+test('Porch set by hand in config.json, proxy and token included, comes back from a restore as it was', async () => {
 	const { a } = twoWalletBox();
-	const native = path.join(DATA_DIR, 'wallets', a.id, 'home', '.beignet');
-	fs.mkdirSync(native, { recursive: true });
-	fs.writeFileSync(path.join(native, 'config.json'), JSON.stringify({ porchRelays: ['wss://relay.example'], porchToken: 'hand-set' }));
+	const native = path.join(DATA_DIR, 'wallets', a.id, 'home', '.beignet', 'config.json');
+	fs.mkdirSync(path.dirname(native), { recursive: true });
+	const hand = JSON.stringify({ porchRelays: ['wss://relay.example'], porchToken: 'hand-set', porchProxy: '10.21.21.11:9050' });
+	fs.writeFileSync(native, hand, { mode: 0o600 });
 	const m = manager();
 	m.porchSupported = true;
 	const out = await quiet(() => m.exportBackup({ passphrase: PASSPHRASE }));
+	// Exporting takes nothing over, so a later edit to the file still counts.
+	assert.equal(manager().registry.get(a.id).porch, undefined);
 
 	wipe();
 	const fresh = manager();
+	fresh.porchSupported = true;
 	await quiet(() => fresh.restoreBackup({ passphrase: PASSPHRASE, archive: out.archive.toString('base64') }));
-	assert.deepEqual(fresh.registry.get(a.id).porch, { enabled: true, relays: ['wss://relay.example'] });
-	const tokens = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'wallets', a.id, 'secrets', 'porch_tokens'), 'utf8'));
-	assert.deepEqual(tokens, { 'wss://relay.example': 'hand-set' });
+	assert.equal(fs.readFileSync(native, 'utf8'), hand);
+	assert.equal(modeOf(native), 0o600);
+	const state = fresh._porchState(fresh.registry.get(a.id));
+	assert.equal(state.source, 'native');
+	assert.deepEqual(state.tokens, { 'wss://relay.example': 'hand-set' });
 });
 
 test('an archive is never written larger than a restore accepts: the largest assets backups are left out and named', () => {
