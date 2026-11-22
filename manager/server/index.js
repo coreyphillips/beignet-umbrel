@@ -116,6 +116,9 @@ async function main() {
 				// Iroh held to the relay (beignet #1982): without it the dashboard
 				// offers no relay-only switch beside the phone link.
 				irohRelayOnlyAvailable: manager.irohRelayOnlyAvailable(),
+				// Porch relays with a token each (beignet docs/PORCH.md): without
+				// them the dashboard offers no Porch section.
+				porchAvailable: manager.porchAvailable(),
 				// Taproot Assets (docs/ASSETS.md): the engine loads host
 				// extensions and the assets host is installed beside it. The
 				// second flag is assets in Lightning channels, which need more
@@ -471,6 +474,15 @@ async function main() {
 		asyncHandler(async (req, res) => {
 			const { guardians } = req.body || {};
 			res.json({ ok: true, result: await manager.rotateGuardians(req.params.id, guardians) });
+		})
+	);
+
+	// How the wallet stands with its Porch relays and the links they serve,
+	// with any saved token taken out of the daemon's words.
+	api.get(
+		'/wallets/:id/porch',
+		asyncHandler(async (req, res) => {
+			res.json({ ok: true, result: await manager.porchStatus(req.params.id) });
 		})
 	);
 

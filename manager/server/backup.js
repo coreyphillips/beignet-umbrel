@@ -55,7 +55,7 @@ const MIN_PASSPHRASE = 8;
 // one thing here a seed cannot recreate (docs/ASSETS.md): the proofs that
 // make an output an asset exist nowhere on chain.
 const SAFE_PATH =
-	/^(registry\.json|settings\.json|wallets\/[0-9a-zA-Z-]+\/(secrets\/(mnemonic|api_token)|assets\/backup\.json))$/;
+	/^(registry\.json|settings\.json|wallets\/[0-9a-zA-Z-]+\/(secrets\/(mnemonic|api_token|porch_tokens)|assets\/backup\.json))$/;
 
 class ArchiveError extends Error {
 	constructor(code, message) {
@@ -192,6 +192,7 @@ function buildPayload({ dataDir, walletIds, app, engine, createdAt, withoutAsset
 	for (const id of walletIds) {
 		add(`wallets/${id}/secrets/mnemonic`, true);
 		add(`wallets/${id}/secrets/api_token`, true);
+		add(porchTokensPath(id), false);
 		// Written by the wallet's assets host whenever its assets change.
 		// Absent for a wallet that never held any, and left out for one whose
 		// file would make the archive larger than a restore accepts.
@@ -257,6 +258,11 @@ function mnemonicPath(id) {
 
 function tokenPath(id) {
 	return `wallets/${id}/secrets/api_token`;
+}
+
+/** A wallet's Porch relay tokens (porch.js), present once one is saved. */
+function porchTokensPath(id) {
+	return `wallets/${id}/secrets/porch_tokens`;
 }
 
 /** A wallet's Taproot Assets backup, as its assets host writes it. */
@@ -386,6 +392,7 @@ module.exports = {
 	mnemonicPath,
 	tokenPath,
 	assetsBackupPath,
+	porchTokensPath,
 	RESTORE_BODY_LIMIT_BYTES,
 	MAX_ARCHIVE_BYTES,
 	sealWithinLimit,

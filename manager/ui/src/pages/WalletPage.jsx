@@ -16,6 +16,8 @@ import RecoveryAutoApplyField from '../components/RecoveryAutoApplyField.jsx';
 
 import GuardianServeField from '../components/GuardianServeField.jsx';
 import NetworkModeField from '../components/NetworkModeField.jsx';
+import PorchField from '../components/PorchField.jsx';
+import { porchBody, porchRows, porchChanged } from '../lib/porch.js';
 import GuardianRotateFields from '../components/GuardianRotateFields.jsx';
 import RestorePanel, { readRestoreMarker } from '../components/RestorePanel.jsx';
 import CapsuleRestoreCard, { AutoApplySkipped } from '../components/CapsuleRestoreCard.jsx';
@@ -632,6 +634,7 @@ export default function WalletPage() {
 					torAvailable={!!config?.torAvailable}
 					torProxyScopeAvailable={config?.torProxyScopeAvailable !== false}
 					irohAvailable={!!config?.irohAvailable}
+					porchAvailable={!!config?.porchAvailable}
 					electrumTlsVerifyAvailable={!!config?.electrumTlsVerifyAvailable}
 					recoveryAvailable={!!config?.recoveryAvailable}
 					recoveryAutoApplyAvailable={!!config?.recoveryAutoApplyAvailable}
@@ -691,6 +694,7 @@ export function EditWalletModal({
 	torAvailable,
 	torProxyScopeAvailable = true,
 	irohAvailable = false,
+	porchAvailable = false,
 	electrumTlsVerifyAvailable = false,
 	recoveryAvailable = false,
 	recoveryAutoApplyAvailable = false,
@@ -757,6 +761,13 @@ export function EditWalletModal({
 	const [announce, setAnnounce] = useState(!!rec.announce);
 	const [iroh, setIroh] = useState(!!rec.iroh?.enabled);
 	const [irohRelays, setIrohRelays] = useState((rec.iroh?.relays || []).join(', '));
+	const [porchOn, setPorchOn] = useState(!!rec.porch?.enabled);
+	const [porchVia, setPorchVia] = useState(rec.porch?.via || 'default');
+	const [porchRelayRows, setPorchRelayRows] = useState(() => {
+		const rows = porchRows(rec);
+		return rows.length ? rows : [{ url: '', token: '', hasToken: false, removeToken: false }];
+	});
+	const porchEdited = porchAvailable && porchChanged(rec, porchOn, porchVia, porchRelayRows.filter((row) => row.url.trim() || row.hasToken));
 	const announced = announce && (usesOnion(networkMode) || (usesPublic(networkMode) && !!publicHost.trim()));
 	const networkChanged =
 		networkMode !== modeOf(rec) || publicHost.trim() !== (rec.publicHost || '') || announce !== !!rec.announce || iroh !== !!rec.iroh?.enabled || irohRelays !== (rec.iroh?.relays || []).join(', ');
@@ -818,6 +829,7 @@ export function EditWalletModal({
 				...(allow ? { allowChainMismatch: true } : {}),
 				networkMode,
 				...(irohAvailable ? { iroh: irohBody(iroh && !onchainOnly, irohRelays) } : {}),
+				...(porchAvailable ? { porch: porchBody(porchOn && !onchainOnly, porchVia, porchRelayRows) } : {}),
 				publicHost,
 				announce: onchainOnly ? false : announce,
 				onchainOnly,
@@ -1045,7 +1057,19 @@ export function EditWalletModal({
 							irohRelays={irohRelays}
 							onIrohRelays={setIrohRelays}
 						/>
-						{networkChanged && <div className="info-note">Changing this restarts the wallet.</div>}
+						{porchAvailable && (
+							<PorchField
+								enabled={porchOn}
+								onEnabled={setPorchOn}
+								via={porchVia}
+								onVia={setPorchVia}
+								rows={porchRelayRows}
+								onRows={setPorchRelayRows}
+								source={rec.porch?.source}
+								torAvailable={torAvailable}
+							/>
+						)}
+						{(networkChanged || porchEdited) && <div className="info-note">Changing this restarts the wallet.</div>}
 					</>
 				)}
 				{/* Outside every Lightning and channel backup block: the seed is the

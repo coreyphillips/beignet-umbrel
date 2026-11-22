@@ -78,6 +78,7 @@ const {
 	mnemonicPath,
 	tokenPath,
 	assetsBackupPath,
+	porchTokensPath,
 	sealWithinLimit,
 	backupFilename
 } = require('./backup');
@@ -98,6 +99,7 @@ const {
 	electrumTlsVerifyAvailable,
 	irohAvailable,
 	irohRelayOnlyAvailable,
+	porchAvailable,
 	assetsAvailable,
 	assetChannelsAvailable,
 	assetsModulesDir
@@ -109,6 +111,7 @@ const ffor = require('./ffor');
 const { bitcoinChannels } = require('./channels');
 const assets = require('./assets');
 const netmode = require('./network-mode');
+const porchRules = require('./porch');
 const { createOutbound } = require('./outbound');
 const { createLnurl } = require('./lnurl');
 const paykit = require('./paykit');
@@ -261,6 +264,8 @@ class WalletManager {
 		this.irohSupported = irohAvailable();
 		// Iroh held to the relay (beignet #1982, engine 0.39.0).
 		this.irohRelayOnlySupported = irohRelayOnlyAvailable();
+		// Porch relays with a token per relay (beignet docs/PORCH.md, 0.45.0).
+		this.porchSupported = porchAvailable();
 		// Electrum TLS certificate verification (beignet #1776, engine 0.31.0).
 		this.electrumTlsVerifySupported = electrumTlsVerifyAvailable();
 		// Taproot Assets (docs/ASSETS.md) needs three things of the install:
@@ -698,7 +703,8 @@ class WalletManager {
 			data: path.join(base, 'data'),
 			secrets: path.join(base, 'secrets'),
 			mnemonicFile: path.join(base, 'secrets', 'mnemonic'),
-			tokenFile: path.join(base, 'secrets', 'api_token')
+			tokenFile: path.join(base, 'secrets', 'api_token'),
+			porchTokensFile: path.join(base, 'secrets', 'porch_tokens')
 		};
 	}
 
@@ -1084,6 +1090,51 @@ class WalletManager {
 
 	torProxyScopeAvailable() {
 		return this.torProxyScopeSupported === true;
+	}
+
+	porchAvailable() {
+		return this.porchSupported === true;
+	}
+
+	/**
+	 * A wallet's Porch settings and tokens: the record's once the app has
+	 * saved them, else what its config.json sets by hand (source 'native').
+	 */
+	_porchState(rec) {
+		const p = this.paths(rec.id);
+		if (rec.porch) return { porch: rec.porch, tokens: porchRules.readTokens(p.porchTokensFile), source: 'app' };
+		const native = porchRules.nativePorch(porchRules.readNativeConfig(p.home));
+		return native ? { ...native, source: 'native' } : { porch: undefined, tokens: {}, source: null };
+	}
+
+	/**
+	 * How a running wallet stands with its Porch relays, and the links they
+	 * serve, from the daemon (GET /porch/links). Any saved token that turns
+	 * up in the daemon's words is taken out before it leaves the manager.
+	 */
+	async porchStatus(id) {
+		const rec = this.registry.get(id);
+		if (!rec) throw httpError(404, 'NOT_FOUND', 'Wallet not found');
+		const state = this._porchState(rec);
+		const settings = porchRules.publicPorch(state.porch, state.tokens, rec.onchainOnly, state.source);
+		const rt = this.runtimeState(id);
+		const base = { available: this.porchAvailable(), settings, running: !!(rt.proc && rt.healthy) };
+		if (!base.available || !base.running) return { ...base, enabled: false, listening: false, links: [], relays: [] };
+		let result;
+		try {
+			result = await this._daemonCall(rec, 'GET', '/porch/links');
+		} catch (err) {
+			return { ...base, enabled: false, listening: false, links: [], relays: [], error: porchRules.redact(err.message, state.tokens) };
+		}
+		const clean = porchRules.redact(result || {}, state.tokens);
+		return {
+			...base,
+			enabled: clean.enabled === true,
+			listening: clean.listening === true,
+			links: Array.isArray(clean.links) ? clean.links : [],
+			relays: Array.isArray(clean.relays) ? clean.relays : [],
+			...(clean.problem ? { problem: clean.problem } : {})
+		};
 	}
 
 	/** Whether this install can run Taproot Assets at all (docs/ASSETS.md). */
@@ -1534,6 +1585,7 @@ class WalletManager {
 			tor,
 			networkMode,
 			iroh,
+			porch: porchInput,
 			publicHost,
 			announce,
 			onchainOnly,
@@ -1615,6 +1667,22 @@ class WalletManager {
 			relayOnlyAvailable: this.irohRelayOnlyAvailable(),
 			onchainOnly: nextOnchainOnly
 		});
+		// Porch is checked here with the rest, so a setting the engine would
+		// refuse never reaches a running wallet. A wallet whose config.json
+		// set Porch by hand is taken over by its first Porch save, keeping
+		// the tokens that file held unless the save replaces them.
+		const porchWas = this._porchState(rec);
+		const nextPorch =
+			porchInput !== undefined || (rec.porch && nextOnchainOnly)
+				? porchRules.normalizePorch(porchInput, {
+						existing: porchWas.porch,
+						existingTokens: porchWas.tokens,
+						available: this.porchAvailable(),
+						onchainOnly: nextOnchainOnly,
+						torAvailable: !!config.torProxy,
+						porchProxy: porchRules.readNativeConfig(this.paths(id).home)?.porchProxy
+				  })
+				: undefined;
 		// The server is checked against the wallet's network only when it is
 		// actually being changed, so an edit to anything else goes through
 		// even if the server it already has is on the wrong chain or away.
@@ -1627,6 +1695,10 @@ class WalletManager {
 
 		rec.networkMode = nextMode;
 		rec.iroh = nextIroh;
+		if (nextPorch && nextPorch.porch) {
+			porchRules.writeTokens(this.paths(id).porchTokensFile, nextPorch.tokens);
+			rec.porch = nextPorch.porch;
+		}
 		rec.publicHost = nextHost;
 		// The mode replaced the outbound-over-Tor flag; a record written by an
 		// earlier release loses the flag here so there is one truth.
@@ -1764,6 +1836,9 @@ class WalletManager {
 			publicPort: this.publicPort(rec)
 		});
 		Object.assign(env, netmode.irohEnv(rec, this.irohAvailable(), this.irohRelayOnlyAvailable()));
+		// Porch rides the wallet's config.json (syncNativeConfig, before the
+		// spawn); the env only ever turns it off, over whatever that file says.
+		Object.assign(env, porchRules.porchEnv(rec, this.porchAvailable()));
 		if (announced.length) env.BEIGNET_ANNOUNCE_ADDRESSES = announced.join(',');
 		// Channel backup (the Recovery Protocol). Off contributes nothing, so
 		// an engine that predates the feature sees the env it always saw. It
@@ -2007,6 +2082,9 @@ class WalletManager {
 		const mnemonic = fs.readFileSync(p.mnemonicFile, 'utf8').trim();
 		const token = this.token(id);
 		this._clearStaleInstanceLock(rec, p);
+		if (rec.porch) {
+			porchRules.syncNativeConfig(p.home, rec, porchRules.readTokens(p.porchTokensFile), this.porchAvailable());
+		}
 		const env = this._daemonEnv(rec, p, mnemonic, token);
 		if (env.BEIGNET_ASSETS_BACKUP_FILE) {
 			// Where the assets host keeps its backup file, readable by no one else.
@@ -2973,6 +3051,10 @@ class WalletManager {
 			fs.mkdirSync(p.secrets, { recursive: true, mode: 0o700 });
 			this._writeSecret(p.mnemonicFile, files.get(mnemonicPath(rec.id)));
 			this._writeSecret(p.tokenFile, files.get(tokenPath(rec.id)));
+			// Porch relay tokens, when the wallet had any saved.
+			const porchTokens = files.get(porchTokensPath(rec.id));
+			if (porchTokens) this._writeSecret(p.porchTokensFile, porchTokens);
+			else fs.rmSync(p.porchTokensFile, { force: true });
 			// The wallet's assets, when the archive carries them, wait where
 			// its assets host looks on its first start: a seed alone brings
 			// back none of them.
@@ -4321,6 +4403,11 @@ class WalletManager {
 			// addresses the wallet announces, each null while it does not.
 			networkMode: netmode.networkMode(rec),
 			iroh: { ...rec.iroh, enabled: rec.iroh?.enabled === true && !rec.onchainOnly },
+			// Porch relays (umbrel #327): which have a token, never the token.
+			porch: (() => {
+				const state = this._porchState(rec);
+				return porchRules.publicPorch(state.porch, state.tokens, rec.onchainOnly, state.source);
+			})(),
 			publicHost: rec.publicHost || '',
 			publicPort: this.publicPort(rec),
 			publicAddress: pub ? `${netmode.hostForUri(pub.host)}:${pub.port}` : null,

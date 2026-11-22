@@ -96,6 +96,8 @@ const PAYKIT_LOOKUP_TIMEOUT_MS = 100000;
 
 export const manager = {
 	config: () => request('/api/config'),
+	// Porch relay states and links, tokens taken out (umbrel #327).
+	porchStatus: (id) => request(`/api/wallets/${encodeURIComponent(id)}/porch`),
 	getSettings: () => request('/api/settings'),
 	updateSettings: (body) => request('/api/settings', { method: 'PUT', body }),
 	// The Electrum presets, each probed for whether it is there and what it
