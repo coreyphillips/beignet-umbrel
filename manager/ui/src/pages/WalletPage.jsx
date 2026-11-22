@@ -833,7 +833,7 @@ export function EditWalletModal({
 				...(allow ? { allowChainMismatch: true } : {}),
 				networkMode,
 				...(irohAvailable ? { iroh: irohBody(iroh && !onchainOnly, irohRelays) } : {}),
-				...(porchEdited ? { porch: porchBody(porchOn && !onchainOnly, porchVia, porchRelayRows) } : {}),
+				...(porchEdited ? { porch: porchBody(porchOn && !onchainOnly, porchVia, porchRelayRows, porchOpened) } : {}),
 				publicHost,
 				announce: onchainOnly ? false : announce,
 				onchainOnly,

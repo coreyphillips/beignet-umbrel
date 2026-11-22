@@ -1686,27 +1686,41 @@ class WalletManager {
 		// wallet. A wallet whose config.json set Porch by hand is taken over
 		// by its first Porch save, keeping the tokens that file held unless
 		// the save replaces them.
+		const onchainNow = onchainOnly === undefined ? !!rec.onchainOnly : !!onchainOnly;
 		const porchWas = this._porchState(rec);
+		// While parked, Porch was off whatever config.json said, and the
+		// dashboard showed it off. Lightning coming back leaves it off unless
+		// this save turns it on.
+		const unparking = !!rec.onchainOnly && !onchainNow;
+		const porchBefore = unparking && porchWas.porch ? { ...porchWas.porch, enabled: false } : porchWas.porch;
 		const nativeConfig = porchRules.readNativeConfig(this.paths(id).home);
 		const nextPorch =
-			porchInput !== undefined || (rec.porch && nextOnchainOnly)
+			porchInput !== undefined || (rec.porch && onchainNow) || (unparking && porchWas.porch)
 				? porchRules.normalizePorch(porchInput, {
-						existing: porchWas.porch,
+						existing: porchBefore,
 						existingTokens: porchWas.tokens,
 						available: this.porchAvailable(),
-						onchainOnly: nextOnchainOnly,
+						onchainOnly: onchainNow,
 						torAvailable: !!config.torProxy,
 						porchProxy: nativeConfig?.porchProxy
 				  })
 				: undefined;
-		// config.json is written here, before anything else changes, so a file
-		// that cannot be written refuses the edit before a running daemon is
-		// stopped, and a stopped wallet keeps no token the edit removed.
+		const nextGuardianServe = guardianServe !== undefined ? this._normalizeGuardianServe(guardianServe, onchainNow) : undefined;
+		// Porch is written after every check and before anything else changes,
+		// so a file that cannot be written refuses the edit before a running
+		// daemon is stopped, and a refused edit leaves both files as they were.
 		const porchAfter = nextPorch || (rec.porch ? { porch: rec.porch, tokens: porchWas.tokens } : null);
 		if (porchAfter) {
+			const tokensFile = this.paths(id).porchTokensFile;
+			let wroteTokens = false;
 			try {
-				porchRules.syncNativeConfig(this.paths(id).home, { porch: porchAfter.porch, onchainOnly: nextOnchainOnly }, porchAfter.tokens, this.porchAvailable());
+				if (nextPorch) {
+					porchRules.writeTokens(tokensFile, nextPorch.tokens);
+					wroteTokens = true;
+				}
+				porchRules.syncNativeConfig(this.paths(id).home, { porch: porchAfter.porch, onchainOnly: onchainNow }, porchAfter.tokens, this.porchAvailable());
 			} catch (err) {
+				if (wroteTokens) porchRules.writeTokens(tokensFile, rec.porch ? porchWas.tokens : {});
 				throw httpError(400, 'PORCH_CONFIG_UNWRITABLE', `Porch was not saved: ${err.message}. Repair that file or its permissions first.`);
 			}
 		}
@@ -1715,10 +1729,7 @@ class WalletManager {
 
 		rec.networkMode = nextMode;
 		rec.iroh = nextIroh;
-		if (nextPorch && nextPorch.porch) {
-			porchRules.writeTokens(this.paths(id).porchTokensFile, nextPorch.tokens);
-			rec.porch = nextPorch.porch;
-		}
+		if (nextPorch) rec.porch = nextPorch.porch;
 		rec.publicHost = nextHost;
 		// The mode replaced the outbound-over-Tor flag; a record written by an
 		// earlier release loses the flag here so there is one truth.
@@ -1734,8 +1745,8 @@ class WalletManager {
 			rec.onchainOnly = !!onchainOnly;
 			if (rec.onchainOnly) rec.announce = false;
 		}
-		if (guardianServe !== undefined) {
-			rec.guardianServe = this._normalizeGuardianServe(guardianServe, rec.onchainOnly);
+		if (nextGuardianServe !== undefined) {
+			rec.guardianServe = nextGuardianServe;
 		} else if (rec.onchainOnly && rec.guardianServe) {
 			// Parking Lightning stops the listener the guardian is served on.
 			rec.guardianServe = false;

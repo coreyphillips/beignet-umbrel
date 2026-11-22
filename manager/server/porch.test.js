@@ -188,3 +188,66 @@ test('a backup archive may carry a wallet\'s Porch tokens', () => {
 	const files = payloadFiles({ files: [{ path: 'wallets/abc-1/secrets/porch_tokens', mode: 0o600, data: Buffer.from('{}').toString('base64') }] });
 	assert.ok(files.has('wallets/abc-1/secrets/porch_tokens'));
 });
+
+function editableWallet(rec, native) {
+	const { WalletManager } = require('./wallet-manager');
+	const home = tempHome(native);
+	const secrets = path.join(home, 'secrets');
+	const records = { w1: { id: 'w1', name: 'w', network: 'regtest', electrum: {}, port: 3001, recovery: { mode: 'off', guardians: [] }, ...rec } };
+	const m = Object.assign(Object.create(WalletManager.prototype), {
+		porchSupported: true,
+		guardianHostingSupported: true,
+		settings: { get: () => ({ defaultNetwork: 'regtest', recoveryGuardians: [] }) },
+		registry: { get: (id) => records[id], list: () => Object.values(records), upsert: (r) => (records[r.id] = r) },
+		runtime: new Map(),
+		paths: () => ({ home, secrets, porchTokensFile: path.join(secrets, 'porch_tokens') }),
+		publicRecord: (id) => records[id],
+		_log: () => {}
+	});
+	return { m, records, home, tokensFile: path.join(secrets, 'porch_tokens'), config: () => porch.readNativeConfig(home) };
+}
+
+test('a refused edit leaves Porch on disk as it was', async () => {
+	const native = { porchRelays: [{ url: 'wss://a.example', token: 't' }] };
+	const w = editableWallet({}, native);
+	await assert.rejects(w.m.updateWallet('w1', { onchainOnly: true, guardianServe: true, porch: { enabled: false } }), { code: 'GUARDIAN_SERVE_NEEDS_LIGHTNING' });
+	assert.deepEqual(w.config(), native);
+	assert.equal(w.records.w1.porch, undefined);
+
+	// The token file cannot be written: config.json is not touched.
+	const locked = editableWallet({});
+	fs.mkdirSync(path.dirname(locked.tokensFile), { mode: 0o500 });
+	await assert.rejects(locked.m.updateWallet('w1', { porch: { enabled: true, relays: [{ url: 'wss://a.example', token: 't' }] } }), { code: 'PORCH_CONFIG_UNWRITABLE' });
+	assert.deepEqual(locked.config(), {});
+
+	// config.json cannot be read: the token file written first is taken back.
+	const broken = editableWallet({}, {});
+	fs.writeFileSync(porch.nativeConfigPath(broken.home), '{');
+	await assert.rejects(broken.m.updateWallet('w1', { porch: { enabled: true, relays: [{ url: 'wss://a.example', token: 't' }] } }), { code: 'PORCH_CONFIG_UNWRITABLE' });
+	assert.equal(fs.existsSync(broken.tokensFile), false);
+	assert.equal(broken.records.w1.porch, undefined);
+});
+
+test('Lightning coming back leaves Porch off unless the save turns it on', async () => {
+	const w = editableWallet({ onchainOnly: true }, { porchRelays: [{ url: 'wss://a.example', token: 't' }], keep: 1 });
+	await w.m.updateWallet('w1', { onchainOnly: false });
+	assert.deepEqual(w.records.w1.porch, { enabled: false, relays: ['wss://a.example'] });
+	assert.deepEqual(porch.readTokens(w.tokensFile), { 'wss://a.example': 't' });
+	assert.deepEqual(w.config(), { keep: 1 });
+	assert.deepEqual(porch.porchEnv(w.records.w1, true), { BEIGNET_PORCH_RELAYS: '' });
+
+	await w.m.updateWallet('w1', { porch: { enabled: true } });
+	assert.deepEqual(w.config().porchRelays, [{ url: 'wss://a.example', token: 't' }]);
+});
+
+test('an edit that waited on its Electrum check does not undo Porch saved meanwhile', async () => {
+	const w = editableWallet({ onchainOnly: true });
+	w.m._normalizeElectrum = (e) => e;
+	w.m._electrumChanged = () => true;
+	w.m._refuseWrongChain = async () => {
+		Object.assign(w.records.w1, { onchainOnly: false, porch: { enabled: true, relays: ['wss://a.example'] } });
+	};
+	await w.m.updateWallet('w1', { electrum: { host: 'e.example', port: 50001 } });
+	assert.equal(w.records.w1.porch.enabled, true);
+	assert.equal(w.records.w1.onchainOnly, false);
+});

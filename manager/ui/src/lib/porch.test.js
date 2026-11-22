@@ -16,6 +16,14 @@ test('a saved token is kept unless replaced or removed', () => {
 	});
 });
 
+test('a save that leaves the relays alone does not send them', () => {
+	assert.deepEqual(porchBody(true, 'tor', porchRows(rec), rec), { enabled: true, via: 'tor' });
+	assert.deepEqual(porchBody(true, 'default', porchRows(rec), rec), { enabled: true });
+	const rows = porchRows(rec);
+	rows[1].token = 't';
+	assert.equal(porchBody(true, 'default', rows, rec).relays.length, 2);
+});
+
 test('turning Porch off sends nothing a stray row could block', () => {
 	assert.deepEqual(porchBody(false, 'tor', [{ url: 'not a url', token: 'x', removeToken: false }]), { enabled: false });
 });

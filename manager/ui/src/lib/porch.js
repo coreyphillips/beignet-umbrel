@@ -3,13 +3,21 @@ export function porchRows(rec) {
 	return (rec?.porch?.relays || []).map((relay) => ({ url: relay.url, savedUrl: relay.url, savedToken: !!relay.hasToken, hasToken: !!relay.hasToken, token: '', removeToken: false }));
 }
 
+function relaysChanged(rec, rows) {
+	const kept = rows.filter((row) => row.url.trim());
+	const before = (rec?.porch?.relays || []).map((relay) => relay.url).join(' ');
+	return before !== kept.map((row) => row.url.trim()).join(' ') || kept.some((row) => row.token || row.removeToken);
+}
+
 /**
  * The porch block of a wallet update. A token is sent only when one was
  * typed (set or replace) or removed on purpose (null); left out, the saved
- * one is kept. Turning Porch off sends nothing else, so a half-typed relay
- * never blocks it.
+ * one is kept. The relay list and connection go only when they differ from
+ * `opened` (Porch as the form opened), so a save about something else keeps
+ * relays saved elsewhere since. Turning Porch off sends nothing else, so a
+ * half-typed relay never blocks it.
  */
-export function porchBody(enabled, via, rows) {
+export function porchBody(enabled, via, rows, opened) {
 	if (!enabled) return { enabled: false };
 	const relays = rows
 		.filter((row) => row.url.trim())
@@ -18,7 +26,11 @@ export function porchBody(enabled, via, rows) {
 			if (row.removeToken) return { url: row.url.trim(), token: null };
 			return { url: row.url.trim() };
 		});
-	return { enabled: true, via, relays };
+	return {
+		enabled: true,
+		...(via !== (opened?.porch?.via || 'default') ? { via } : {}),
+		...(relaysChanged(opened, rows) ? { relays } : {})
+	};
 }
 
 export function porchChanged(rec, enabled, via, rows) {
@@ -26,8 +38,7 @@ export function porchChanged(rec, enabled, via, rows) {
 	if (enabled !== !!was.enabled) return true;
 	if (!enabled) return false;
 	if (via !== (was.via || 'default')) return true;
-	const before = (was.relays || []).map((relay) => relay.url).join(' ');
-	return before !== rows.map((row) => row.url.trim()).join(' ') || rows.some((row) => row.token || row.removeToken);
+	return relaysChanged(rec, rows);
 }
 
 /**
