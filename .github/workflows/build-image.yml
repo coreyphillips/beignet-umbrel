@@ -854,7 +854,21 @@ env:
   # by force. The two additions to the exported API are optional, and the
   # app uses neither. The storage schema (20), the routes, the environment
   # settings and the runtime dependencies are unchanged.
-  BEIGNET_VERSION: "0.43.5"
+  # 0.44.0 forwards payments with an asset leg for a host that supplies
+  # prepareForward (coreyphillips/beignet#2122, #2125). The assets host
+  # supplies none, so its node refuses every such forward as 0.43.5 does
+  # and funds its spends as before; such a refusal's SSE event is marked
+  # auxiliary. The storage schema moves to 21: one nullable column of
+  # forwarding_events, empty for every ordinary forward.
+  # 0.45.0 (coreyphillips/beignet#2130) collects and sends asset payments
+  # in parts for a host that asks (receiveInParts, sendInParts), which the
+  # library does not, and makes an invoice its host marks as an asset
+  # invoice with only the host's routing hints. The library at b7e6bfb
+  # marks every asset invoice it makes, so each carries its quote's hint
+  # alone and offers no basic_mpp. It stores nothing new: the schema stays
+  # 21. The routes, the environment settings and the runtime dependencies
+  # are unchanged since 0.43.5.
+  BEIGNET_VERSION: "0.45.0"
 
 jobs:
   build:
