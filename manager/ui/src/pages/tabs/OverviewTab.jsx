@@ -26,7 +26,7 @@ import { describeRecovery } from '../../lib/recovery.js';
 
 import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
 import { nodeUris } from '../../lib/node-uris.js';
-import { relayStateLabel, relayAdvice } from '../../lib/porch.js';
+import { relayStateLabel, relayAdvice, readyUri } from '../../lib/porch.js';
 import { liquiditySendableSats } from '../../lib/sendable.js';
 
 // How many holdings the Overview lists before it hands over to the Assets tab.
@@ -363,9 +363,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 function PorchCard({ rec }) {
 	const { data } = usePoll(() => manager.porchStatus(rec.id), 5000, [rec.id]);
 	const relays = data?.relays || [];
-	const ready = relays.some((relay) => relay.state === 'ready');
-	const link = (data?.links || []).find((l) => l.default) || (data?.links || [])[0];
-	const uri = ready && data?.listening ? link?.uris?.[0] : null;
+	const uri = readyUri(data);
 	return (
 		<Card
 			title="Porch peer link"
@@ -374,6 +372,7 @@ function PorchCard({ rec }) {
 			<div data-testid="porch-status">
 				{!data?.running && <div className="empty">Start the wallet to register with its relays.</div>}
 				{data?.error && <div className="error-note">{data.error}</div>}
+				{data?.problem && <div className="error-note">{data.problem}</div>}
 				{relays.map((relay) => (
 					<div key={relay.relay} style={{ marginBottom: 8 }} data-testid="porch-relay-state">
 						<span className="mono">{relay.relay}</span> <Badge tone={relay.state === 'ready' ? 'green' : relay.state === 'connecting' ? 'muted' : 'red'}>{relayStateLabel(relay.state)}</Badge>{' '}
@@ -390,7 +389,7 @@ function PorchCard({ rec }) {
 						</div>
 					</>
 				) : (
-					data?.running && <div className="empty">No link yet: waiting for a relay to report ready.</div>
+					data?.running && !data?.problem && <div className="empty">No link yet: waiting for a relay to report ready.</div>
 				)}
 			</div>
 		</Card>

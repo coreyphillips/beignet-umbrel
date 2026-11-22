@@ -1126,13 +1126,18 @@ class WalletManager {
 		} catch (err) {
 			return { ...base, enabled: false, listening: false, links: [], relays: [], error: porchRules.redact(err.message, state.tokens) };
 		}
-		const clean = porchRules.redact(result || {}, state.tokens);
+		// Only the error text is redacted: a short token can match part of a
+		// state name or a route id, and those must reach the dashboard intact.
+		const clean = result || {};
+		const relays = (Array.isArray(clean.relays) ? clean.relays : []).map((relay) =>
+			typeof relay?.lastError === 'string' ? { ...relay, lastError: porchRules.redact(relay.lastError, state.tokens) } : relay
+		);
 		return {
 			...base,
 			enabled: clean.enabled === true,
 			listening: clean.listening === true,
 			links: Array.isArray(clean.links) ? clean.links : [],
-			relays: Array.isArray(clean.relays) ? clean.relays : [],
+			relays,
 			...(clean.problem ? { problem: clean.problem } : {})
 		};
 	}
@@ -1672,6 +1677,7 @@ class WalletManager {
 		// set Porch by hand is taken over by its first Porch save, keeping
 		// the tokens that file held unless the save replaces them.
 		const porchWas = this._porchState(rec);
+		const nativeConfig = porchRules.readNativeConfig(this.paths(id).home);
 		const nextPorch =
 			porchInput !== undefined || (rec.porch && nextOnchainOnly)
 				? porchRules.normalizePorch(porchInput, {
@@ -1680,9 +1686,15 @@ class WalletManager {
 						available: this.porchAvailable(),
 						onchainOnly: nextOnchainOnly,
 						torAvailable: !!config.torProxy,
-						porchProxy: porchRules.readNativeConfig(this.paths(id).home)?.porchProxy
+						porchProxy: nativeConfig?.porchProxy
 				  })
 				: undefined;
+		// The restart writes the relays into config.json and will not write
+		// over a file it cannot read, so that is caught here, before the stop.
+		const porchAfter = nextPorch?.porch || rec.porch;
+		if (nativeConfig === null && porchAfter && porchRules.porchOn({ porch: porchAfter, onchainOnly: nextOnchainOnly }, this.porchAvailable())) {
+			throw httpError(400, 'PORCH_CONFIG_UNREADABLE', `${porchRules.nativeConfigPath(this.paths(id).home)} could not be read, so Porch cannot be set up in it. Repair or remove that file first.`);
+		}
 		// The server is checked against the wallet's network only when it is
 		// actually being changed, so an edit to anything else goes through
 		// even if the server it already has is on the wrong chain or away.
@@ -2888,6 +2900,15 @@ class WalletManager {
 		// has never saved any still has defaults worth carrying: write them out
 		// now, or the first archive off a box restores one with none.
 		this.settings.save();
+		// Porch set by hand in a wallet's config.json is nowhere the archive
+		// reads, so the app takes it over now, as a first dashboard save would.
+		for (const rec of this.registry.list()) {
+			const state = rec.porch || !this.porchAvailable() ? null : this._porchState(rec);
+			if (state?.source !== 'native') continue;
+			porchRules.writeTokens(this.paths(rec.id).porchTokensFile, state.tokens);
+			rec.porch = state.porch;
+			this.registry.save();
+		}
 		const ids = this.registry.list().map((rec) => rec.id);
 		// A running wallet's assets host writes its backup file again now, so
 		// the archive holds its assets as they are and not as of its last

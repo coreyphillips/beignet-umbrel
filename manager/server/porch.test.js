@@ -14,7 +14,7 @@ test('relay URLs are held to the engine rules and reduced to their origin', () =
 	assert.equal(porch.parseRelayUrl(' wss://Relay.Example.com/ ').url, 'wss://relay.example.com');
 	assert.equal(porch.parseRelayUrl('wss://relay.example.com:443').url, 'wss://relay.example.com');
 	assert.equal(porch.parseRelayUrl('ws://10.0.0.5:2114').url, 'ws://10.0.0.5:2114');
-	for (const bad of ['https://relay.example.com', 'wss://relay.example.com/v1/p/abc', 'wss://u:p@relay.example.com', 'wss://a.com,wss://b.com', 'relay.example.com', '']) {
+	for (const bad of ['https://relay.example.com', 'wss://relay.example.com/v1/p/abc', 'wss://u:p@relay.example.com', 'wss://a.com,wss://b.com', 'relay.example.com', 'wss://relay.example.com:0', '']) {
 		assert.throws(() => porch.parseRelayUrl(bad), { statusCode: 400 }, bad);
 	}
 });
@@ -54,6 +54,7 @@ test('settings the engine would refuse are refused before anything is written', 
 	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'tor', relays: ['wss://a.example'] }, { available: true }), /Tor is not available/);
 	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'direct', relays: ['ws://abc.onion'] }, ON), /onion/);
 	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'direct', relays: ['wss://a.example'] }, { ...ON, porchProxy: '127.0.0.1:1080' }), /proxy/);
+	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'tor', relays: ['wss://a.example'] }, { ...ON, porchProxy: '127.0.0.1:1080' }), /proxy/);
 	assert.throws(() => porch.normalizePorch({ enabled: true, relays: [{ url: 'wss://a.example', token: 'x'.repeat(257) }] }, ON), { code: 'BAD_PORCH_TOKEN' });
 	assert.throws(() => porch.normalizePorch({ enabled: true, via: 'sideways', relays: ['wss://a.example'] }, ON), { code: 'BAD_PORCH' });
 });
@@ -130,7 +131,9 @@ test('an unreadable config file is never written over', () => {
 	const home = tempHome();
 	fs.mkdirSync(path.join(home, '.beignet'));
 	fs.writeFileSync(path.join(home, '.beignet', 'config.json'), '{ not json');
-	assert.throws(() => porch.syncNativeConfig(home, { porch: { enabled: false, relays: [] } }, {}, true), /could not be read/);
+	// Off needs nothing from the file: the env turns Porch off over it.
+	assert.equal(porch.syncNativeConfig(home, { porch: { enabled: false, relays: [] } }, {}, true), false);
+	assert.throws(() => porch.syncNativeConfig(home, { porch: { enabled: true, relays: ['wss://a.example'] } }, {}, true), /could not be read/);
 	assert.equal(fs.readFileSync(path.join(home, '.beignet', 'config.json'), 'utf8'), '{ not json');
 });
 
@@ -145,6 +148,30 @@ test('tokens stay out of what the dashboard reads and out of daemon errors', () 
 	assert.ok(!JSON.stringify(pub).includes('sekrit'));
 	const status = porch.redact({ relays: [{ relay: 'wss://a.example', lastError: 'refused token sekrit' }] }, { 'wss://a.example': 'sekrit' });
 	assert.equal(status.relays[0].lastError, 'refused token [redacted]');
+});
+
+test('a short token is taken out of relay errors and nowhere else', async () => {
+	const { WalletManager } = require('./wallet-manager');
+	const tokenFile = path.join(tempHome(), 'porch_tokens');
+	porch.writeTokens(tokenFile, { 'wss://a.example': 'e' });
+	const uri = '02' + 'ab'.repeat(32) + '@wss://a.example/v1/p/route';
+	const m = Object.assign(Object.create(WalletManager.prototype), {
+		porchSupported: true,
+		registry: { get: () => ({ id: 'w1', porch: { enabled: true, relays: ['wss://a.example'] } }) },
+		paths: () => ({ home: tempHome(), porchTokensFile: tokenFile }),
+		runtimeState: () => ({ proc: {}, healthy: true }),
+		_daemonCall: async () => ({
+			enabled: true,
+			listening: true,
+			links: [{ default: true, uris: [uri] }],
+			relays: [{ relay: 'wss://a.example', state: 'refused', lastError: 'token e refused' }]
+		})
+	});
+	const status = await m.porchStatus('w1');
+	assert.equal(status.relays[0].state, 'refused');
+	assert.equal(status.relays[0].relay, 'wss://a.example');
+	assert.equal(status.links[0].uris[0], uri);
+	assert.equal(status.relays[0].lastError, 'tok[redacted]n [redacted] r[redacted]fus[redacted]d');
 });
 
 test('the token file is written readable by the owner only, and removed when empty', () => {

@@ -30,6 +30,19 @@ export function porchChanged(rec, enabled, via, rows) {
 	return before !== rows.map((row) => row.url.trim()).join(' ') || rows.some((row) => row.token.trim() || row.removeToken);
 }
 
+/**
+ * The default link's URI at a relay that reports ready, or null. A link
+ * carries one URI per relay in configured order, so the first one may name
+ * a relay that refused it.
+ */
+export function readyUri(status) {
+	if (!status?.listening) return null;
+	const ready = (status.relays || []).filter((relay) => relay.state === 'ready').map((relay) => relay.relay);
+	const links = status.links || [];
+	const link = links.find((l) => l.default) || links[0];
+	return (link?.uris || []).find((uri) => ready.some((origin) => uri.includes(`@${origin}/`))) || null;
+}
+
 const STATES = {
 	ready: 'Ready',
 	connecting: 'Connecting',

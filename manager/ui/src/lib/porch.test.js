@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { porchBody, porchRows, porchChanged, relayAdvice } from './porch.js';
+import { porchBody, porchRows, porchChanged, relayAdvice, readyUri } from './porch.js';
 
 const rec = { porch: { enabled: true, via: 'default', relays: [{ url: 'wss://a.example', hasToken: true }, { url: 'wss://b.example', hasToken: false }] } };
 
@@ -26,6 +26,18 @@ test('the restart note follows what changed', () => {
 	const rows = porchRows(rec);
 	rows[0].token = 'x';
 	assert.equal(porchChanged(rec, true, 'default', rows), true);
+});
+
+test('the link handed out names a relay that reports ready', () => {
+	const node = '02' + 'ab'.repeat(32);
+	const status = {
+		listening: true,
+		relays: [{ relay: 'wss://a.example', state: 'refused' }, { relay: 'wss://b.example', state: 'ready' }],
+		links: [{ default: true, uris: [`${node}@wss://a.example/v1/p/r1`, `${node}@wss://b.example/v1/p/r1`] }]
+	};
+	assert.equal(readyUri(status), `${node}@wss://b.example/v1/p/r1`);
+	status.relays[1].state = 'unreachable';
+	assert.equal(readyUri(status), null);
 });
 
 test('a refused relay points at the token', () => {

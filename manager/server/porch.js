@@ -55,6 +55,7 @@ function parseRelayUrl(input) {
 		throw bad("Enter the relay's base URL only, with no path: the node adds the paths it needs.");
 	}
 	if (!url.hostname) throw bad('The relay URL needs a host name.');
+	if (url.port === '0') throw bad('The relay port must be from 1 to 65535.');
 	if (Buffer.byteLength(url.host) > MAX_AUTHORITY_BYTES) throw bad('The relay name is too long.');
 	return { url: `${url.protocol}//${url.host}`, authority: url.host, host: url.hostname.replace(/^\[|\]$/g, '') };
 }
@@ -136,8 +137,10 @@ function normalizePorch(
 		if (via === 'tor' && !torAvailable) {
 			throw bad('Tor is not available to this app, so the relays cannot be reached through it.');
 		}
-		if (via === 'direct' && porchProxy) {
-			throw bad("This wallet's config file names a Porch proxy, which cannot be combined with direct relay connections.");
+		// The engine sends every relay connection through a porchProxy of its
+		// own, whatever porchVia says.
+		if (via !== 'default' && porchProxy) {
+			throw bad("This wallet's config file names a Porch proxy, which every relay connection goes through. Remove it from that file to choose Tor or direct here.");
 		}
 		for (const url of relays) {
 			const { host } = parseRelayUrl(url);
@@ -209,6 +212,9 @@ function porchOn(rec, available) {
 function syncNativeConfig(home, rec, tokens, available) {
 	if (!rec.porch) return false;
 	const native = readNativeConfig(home);
+	// With Porch off the env turns it off over the file (porchEnv), and the
+	// engine reads a broken file as empty, so there is nothing to write.
+	if (native === null && !porchOn(rec, available)) return false;
 	if (native === null) {
 		throw new Error(`${nativeConfigPath(home)} could not be read, so its Porch settings were not updated`);
 	}

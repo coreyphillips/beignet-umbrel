@@ -421,6 +421,23 @@ test("a wallet's assets ride in the archive and wait for its assets host after a
 	assert.equal(manager().publicRecord(a.id).assets.holdsAssets, true);
 });
 
+test('Porch set by hand in config.json comes back from a restore with its token', async () => {
+	const { a } = twoWalletBox();
+	const native = path.join(DATA_DIR, 'wallets', a.id, 'home', '.beignet');
+	fs.mkdirSync(native, { recursive: true });
+	fs.writeFileSync(path.join(native, 'config.json'), JSON.stringify({ porchRelays: ['wss://relay.example'], porchToken: 'hand-set' }));
+	const m = manager();
+	m.porchSupported = true;
+	const out = await quiet(() => m.exportBackup({ passphrase: PASSPHRASE }));
+
+	wipe();
+	const fresh = manager();
+	await quiet(() => fresh.restoreBackup({ passphrase: PASSPHRASE, archive: out.archive.toString('base64') }));
+	assert.deepEqual(fresh.registry.get(a.id).porch, { enabled: true, relays: ['wss://relay.example'] });
+	const tokens = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'wallets', a.id, 'secrets', 'porch_tokens'), 'utf8'));
+	assert.deepEqual(tokens, { 'wss://relay.example': 'hand-set' });
+});
+
 test('an archive is never written larger than a restore accepts: the largest assets backups are left out and named', () => {
 	// A restore carries the archive as base64 in one request body.
 	assert.ok(Math.ceil((MAX_ARCHIVE_BYTES * 4) / 3) < RESTORE_BODY_LIMIT_BYTES);
