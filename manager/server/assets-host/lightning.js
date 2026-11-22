@@ -145,7 +145,7 @@
 const crypto = require('crypto');
 const { sha256Hex } = require('./store');
 const { CHANNEL_SATS, CARRIER_SATS, unhex } = require('./adapter');
-const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS, LIGHTNING_REFUSALS, modeUnavailable, FEE_POLICY_REFUSED } = require('./errors');
+const { refusal, isRefusal, mapLightning, peerWordsOf, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS, LIGHTNING_REFUSALS, modeUnavailable, FEE_POLICY_REFUSED } = require('./errors');
 const views = require('./views');
 const ops = require('./ops');
 
@@ -1472,9 +1472,16 @@ function lightningError(host, err, details) {
 		host.say('warn', `assets: a Lightning request failed: ${plainMessage(err)}`);
 		return refusal('LIGHTNING_FAILED', 'Lightning could not do that just now. Try again in a moment.', 502);
 	}
+	// A peer that refused to price: what it said goes to the log, never to
+	// the screen, and its code stays in the details.
+	if (mapped.extensionCode === 'PEER_GAVE_NO_PRICE') {
+		const words = peerWordsOf(err);
+		const peerCode = mapped.details && mapped.details.peerCode;
+		if (words || peerCode !== undefined) host.say('warn', `assets: the channel's peer refused to price a Lightning request${peerCode !== undefined ? ` (code ${peerCode})` : ''}${words ? `: ${words}` : ''}`);
+	}
 	// Only those whose figures the dashboard words carry them: the two that
 	// are about a channel's balance, and bitcoin on the wrong address types.
-	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS', 'PEER_OFFLINE', 'CHANNEL_MODE_UNAVAILABLE', 'OUTCOMES_UNDELIVERED', 'CHANNEL_PAYMENTS_FULL'].includes(mapped.extensionCode)) delete mapped.details;
+	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS', 'PEER_OFFLINE', 'CHANNEL_MODE_UNAVAILABLE', 'OUTCOMES_UNDELIVERED', 'CHANNEL_PAYMENTS_FULL', 'PEER_GAVE_NO_PRICE'].includes(mapped.extensionCode)) delete mapped.details;
 	return mapped;
 }
 

@@ -19,6 +19,7 @@ const {
 	plainMessage,
 	mapError,
 	mapLightning,
+	peerWordsOf,
 	workingSats,
 	LIGHTNING_REFUSALS,
 	ENGINE_REFUSALS,
@@ -403,6 +404,25 @@ test('the refusals the library added: this node\'s own no to an open, a refused 
 	// A try that never entered the channel.
 	assert.equal(paymentFailure('anything at all', { neverSent: true }).message, 'This payment never left the wallet, so nothing was paid. The invoice can be paid again.');
 	assert.equal(paymentFailure('anything at all', { neverSent: true }).known, true);
+});
+
+test('a peer that refused to price: for the size asked, said without asking to try again; its code kept, its own words never in the sentence', () => {
+	const said = (details) => mapLightning(Object.assign(new Error('the peer refused to price the asset'), { code: 'ERR_BEIGNET_LN_NO_QUOTE', ...(details ? { details } : {}) }));
+	const size = said({ peerCode: 2, peerMessage: 'minimum fill not met' });
+	assert.deepEqual([size.extensionCode, size.status, size.details], ['PEER_GAVE_NO_PRICE', 502, { peerCode: 2 }]);
+	assert.equal(size.message, "The channel's peer would not price that much at once, so nothing was done. A smaller amount may be priced.");
+	assert.equal(said({ peerCode: 4, peerMessage: 'fill-or-kill not viable' }).message, size.message);
+	const other = said({ peerCode: 1, peerMessage: 'Quote is unavailable' });
+	assert.deepEqual([other.extensionCode, other.status, other.details], ['PEER_GAVE_NO_PRICE', 502, { peerCode: 1 }]);
+	assert.equal(other.message, "The channel's peer did not give a price, so nothing was done. Try again in a moment.");
+	const none = said();
+	assert.deepEqual([none.extensionCode, none.status, 'details' in none], ['PEER_GAVE_NO_PRICE', 502, false]);
+	assert.equal('details' in said({ peerCode: 'two' }), false);
+	for (const r of [size, other, none]) assert.equal(/minimum fill|unavailable|fill-or-kill/i.test(r.message), false);
+	// What the peer said, for the log: one line, its controls taken out, at most 200 characters.
+	assert.equal(peerWordsOf(Object.assign(new Error('x'), { details: { peerMessage: 'minimum\n fill\u202e not\u2028met\u200f' } })), 'minimum fill not met');
+	assert.equal(peerWordsOf(Object.assign(new Error('x'), { details: { peerMessage: 'a'.repeat(300) } })).length, 200);
+	assert.equal(peerWordsOf(new Error('x')), '');
 });
 
 test('a peer that keeps no more unused prices for this wallet: said as a wait of a few minutes, also when it is the cause of what the library threw', () => {

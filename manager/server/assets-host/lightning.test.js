@@ -945,6 +945,14 @@ test('an invoice quote refuses what no channel can receive', async () => {
 	const silent = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '150' }));
 	assert.deepEqual([silent.extensionCode, silent.status], ['PEER_GAVE_NO_PRICE', 502]);
 	assert.equal('details' in silent, false);
+	// A peer that refused for the size asked: said so without asking to try
+	// again, its code kept, what it said only in the log.
+	h.ln.opts.quoteFails = { code: 'ERR_BEIGNET_LN_NO_QUOTE', details: { peerCode: 2, peerMessage: 'minimum fill not met' } };
+	const large = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '150' }));
+	assert.deepEqual([large.extensionCode, large.status, large.details], ['PEER_GAVE_NO_PRICE', 502, { peerCode: 2 }]);
+	assert.equal(large.message, "The channel's peer would not price that much at once, so nothing was done. A smaller amount may be priced.");
+	assert.equal(h.logs.some(([level, text]) => level === 'warn' && text === "assets: the channel's peer refused to price a Lightning request (code 2): minimum fill not met"), true);
+	h.ln.opts.quoteFails = null;
 	// A channel that is not open yet receives nothing.
 	const fresh = await funded();
 	await fresh.h.call('POST /channels/open', openBody(fresh.asset), 'open-key');

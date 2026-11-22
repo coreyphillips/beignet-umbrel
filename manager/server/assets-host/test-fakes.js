@@ -37,6 +37,9 @@ function tapError(code, message) {
 	return err;
 }
 
+/** A quote the peer refused: `quoteFails` is the library's code, or `{ code, details }` as the library gives a peer's refusal. */
+const quoteFailure = (fails) => (typeof fails === 'string' ? tapError(fails, 'the peer gave no price') : Object.assign(tapError(fails.code, 'the peer gave no price'), fails.details ? { details: fails.details } : {}));
+
 const encodeFake = (fields, hrp = 'taprt') => `${hrp}1${Buffer.from(JSON.stringify(fields)).toString('hex')}`;
 
 /**
@@ -1124,7 +1127,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				const groupKey = asset.groupKey ? hexOf(asset.groupKey) : null;
 				const peerPubkey = peer ? hexOf(peer) : null;
 				log('quoteInvoice', { assetId, groupKey, amount, peerPubkey, expirySeconds });
-				if (opts.quoteFails) throw tapError(opts.quoteFails, 'the peer gave no price');
+				if (opts.quoteFails) throw quoteFailure(opts.quoteFails);
 				const quoteId = id('quote');
 				// The quote stands as long as it was asked to, and no longer than the peer gives.
 				const lasts = Math.min(opts.quoteMs, (expirySeconds || 3600) * 1000);
@@ -1184,7 +1187,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				refusePaid(invoice.hash);
 				const msat = invoice.msat !== null ? BigInt(invoice.msat) : amountMsat === undefined || amountMsat === null ? null : BigInt(amountMsat);
 				if (msat === null) throw refuse('AMOUNT_REQUIRED', 'the invoice names no amount');
-				if (opts.quoteFails) throw tapError(opts.quoteFails, 'the peer gave no price');
+				if (opts.quoteFails) throw quoteFailure(opts.quoteFails);
 				const flow = [...flows.values()].find((f) => f.state === 'NORMAL' && f.confirmed && (groupKey ? f.groupKey === groupKey : f.assetId === assetId));
 				if (!flow) throw refuse('INSUFFICIENT_OUTBOUND', 'no open asset channel carries this asset');
 				const quoteId = id('quote');

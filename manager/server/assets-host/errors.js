@@ -375,11 +375,39 @@ function modeUnavailable(reason) {
 const TOO_MANY_REQUESTS = 'ERR_LIGHTNING_TOO_MANY_REQUESTS';
 const TOO_MANY_QUOTES = 'The peer is already keeping as many unused prices for this wallet as it keeps at once, so it gave no new one. Try again in a few minutes.';
 
+// The codes of the quote protocol a peer may give with its refusal, which the
+// library passes on. A peer that prices no more than one of a wallet's
+// channels at a time, as Lightning Labs' tapd does, refuses a request for more
+// with "minimum fill not met" (2) or "fill-or-kill not viable" (4).
+const REFUSED_FOR_SIZE = new Set([2, 4]);
+const REFUSED_FOR_SIZE_SAID = "The channel's peer would not price that much at once, so nothing was done. A smaller amount may be priced.";
+
+/**
+ * ERR_BEIGNET_LN_NO_QUOTE in the host's words. Where the peer refused for the
+ * size of what was asked, it says so and does not ask to try again. The
+ * peer's code is kept in the details; its own words are logged by the caller
+ * and never shown.
+ */
+function noQuote(err) {
+	const [code, message, status] = LIGHTNING_REFUSALS.ERR_BEIGNET_LN_NO_QUOTE;
+	const peerCode = Number(detailOf(err, 'peerCode'));
+	const known = Number.isInteger(peerCode) && peerCode >= 0 && peerCode <= 255;
+	if (known && REFUSED_FOR_SIZE.has(peerCode)) return refusal(code, REFUSED_FOR_SIZE_SAID, status, { peerCode });
+	return refusal(code, message, status, known ? { peerCode } : undefined);
+}
+
+/** What the peer said with its refusal to price, as the library passed it on: one line, at most 200 characters. '' when it said nothing. */
+function peerWordsOf(err) {
+	const said = detailOf(err, 'peerMessage');
+	return typeof said === 'string' ? said.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+}
+
 function mapLightning(err, context = {}) {
 	if (isRefusal(err)) return err;
 	if (causesOf(err).some((e) => codeOf(e) === TOO_MANY_REQUESTS || new RegExp(`\\b${TOO_MANY_REQUESTS}\\b`).test(String((e && e.message) || '')))) {
 		return refusal('TOO_MANY_QUOTES', TOO_MANY_QUOTES, 429);
 	}
+	if (codeOf(err) === 'ERR_BEIGNET_LN_NO_QUOTE') return noQuote(err);
 	const engine = engineCodeOf(err);
 	if (codeOf(err) === 'ERR_BEIGNET_LN_MODE_UNAVAILABLE') return modeUnavailable(detailOf(err, 'reason'));
 	if (codeOf(err) === 'ERR_BEIGNET_LN_HTLC_LIMIT') {
@@ -506,6 +534,7 @@ module.exports = {
 	plainMessage,
 	mapError,
 	mapLightning,
+	peerWordsOf,
 	workingSats,
 	LIGHTNING_REFUSALS,
 	ENGINE_REFUSALS,
