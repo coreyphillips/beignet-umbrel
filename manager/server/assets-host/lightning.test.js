@@ -2242,6 +2242,147 @@ test('an invoice paid in full says that all of it arrived', async () => {
 	assert.deepEqual([listed.status, listed.assetAmount, listed.receivedAmount], ['PAID', '150', '150']);
 });
 
+test('an invoice paid in parts is paid from its first part, and its row and the list follow the figure as the later parts arrive', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+	const invoice = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+	const before = events(h, 'balance').length;
+	const paidAt = h.clock.t;
+	h.ln.settlePart(invoice.paymentHash, 60n);
+	await h.host.pass();
+	const first = (await h.get('/activity', 'kind=ln-receive')).rows[0];
+	assert.deepEqual([first.state, first.assets[0].amount, first.at.completed], ['complete', '60', paidAt]);
+	const listedFirst = (await h.get('/invoices')).invoices[0];
+	assert.deepEqual([listedFirst.status, listedFirst.receivedAmount], ['PAID', '60']);
+	// The second part a moment later. Each part rounds down on its own, so
+	// the two come to a unit under what was invoiced.
+	h.clock.t += 1000;
+	h.ln.settlePart(invoice.paymentHash, 89n);
+	await h.host.pass();
+	const row = (await h.get('/activity', 'kind=ln-receive')).rows[0];
+	assert.deepEqual([row.state, row.failed, row.assets[0].amount, row.at.completed], ['complete', false, '149', paidAt], 'paid when the first part came');
+	const listed = (await h.get('/invoices')).invoices[0];
+	assert.deepEqual([listed.status, listed.assetAmount, listed.receivedAmount], ['PAID', '150', '149']);
+	// Said again with its new figure, and marked so: one payment, not two.
+	assert.deepEqual(
+		events(h, 'invoice').map((e) => [e.row.state, e.row.assets[0].amount, e.again === true]),
+		[
+			['waiting', '150', false],
+			['complete', '60', false],
+			['complete', '149', true]
+		]
+	);
+	assert.deepEqual(events(h, 'balance').slice(before), [{ key: asset.key }, { key: asset.key }]);
+	const channel = (await h.get('/channels')).channels[0];
+	assert.deepEqual([channel.localBalance, channel.remoteBalance], ['549', '51']);
+	// Looking again changes nothing and says nothing.
+	const said = h.events.length;
+	await h.host.pass();
+	assert.equal(h.events.length, said);
+});
+
+test('an invoice whose payment the peer took back on the chain is lost: its row fails in words of its own, the list says LOST, and it never waits again', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const quote = await h.call('POST /invoices/quote', { key: asset.key, amount: '150' });
+	const invoice = await h.call('POST /invoices', { key: asset.key, amount: '150', quoteId: quote.quoteId });
+	h.ln.settle(invoice.paymentHash, 149n);
+	await h.host.pass();
+	assert.equal((await h.get('/activity', 'kind=ln-receive')).rows[0].state, 'complete');
+	const before = events(h, 'balance').length;
+	h.ln.takeBack(invoice.paymentHash, 149n);
+	await h.host.pass();
+	const row = (await h.get('/activity', 'kind=ln-receive')).rows[0];
+	assert.deepEqual(
+		[row.state, row.failed, row.failure, row.assets[0].amount],
+		['failed', true, { code: 'INVOICE_LOST', message: 'This invoice was paid, but the peer took the payment back on the chain before the wallet could claim it, so nothing was received.' }, '150']
+	);
+	const listed = (await h.get('/invoices')).invoices[0];
+	assert.deepEqual([listed.status, listed.assetAmount, listed.receivedAmount], ['LOST', '150', '0']);
+	assert.deepEqual(
+		events(h, 'invoice').map((e) => [e.row.state, e.again === true]),
+		[
+			['waiting', false],
+			['complete', false],
+			['failed', false]
+		]
+	);
+	assert.deepEqual(events(h, 'balance').slice(before), [{ key: asset.key }]);
+	assert.deepEqual((await h.get('/channels')).channels[0].localBalance, '400');
+	// One nobody paid, beside it.
+	const other = await h.call('POST /invoices/quote', { key: asset.key, amount: '10' });
+	const unpaid = await h.call('POST /invoices', { key: asset.key, amount: '10', quoteId: other.quoteId });
+	// Past the end of its price it is still lost, never run out.
+	h.clock.t = Math.max(quote.expiresAt, other.expiresAt) + 1;
+	const said = events(h, 'invoice').length;
+	await h.host.pass();
+	assert.deepEqual(
+		events(h, 'invoice')
+			.slice(said)
+			.map((e) => [e.row.paymentHash, e.row.failure.code]),
+		[[unpaid.paymentHash, 'INVOICE_EXPIRED']]
+	);
+	const listedOf = async (hash) => (await h.get('/invoices')).invoices.find((i) => i.paymentHash === hash);
+	assert.deepEqual([(await listedOf(invoice.paymentHash)).status, (await listedOf(unpaid.paymentHash)).status], ['LOST', 'EXPIRED']);
+	assert.equal((await h.get('/activity', 'kind=ln-receive')).rows.find((r) => r.id === row.id).failure.code, 'INVOICE_LOST');
+	// Long after, it stays on the list as a paid one does, and the one nobody paid goes.
+	h.clock.t += 8 * 24 * 60 * 60 * 1000;
+	await h.host.lock.run(() => lightning.prune(h.host));
+	assert.deepEqual(
+		(await h.get('/invoices')).invoices.map((i) => [i.paymentHash, i.status]),
+		[[invoice.paymentHash, 'LOST']]
+	);
+});
+
+test('an invoice keeps what the payer did not take back, and one the host never saw paid reads lost from waiting or from run out', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const make = async (amount) => {
+		const quote = await h.call('POST /invoices/quote', { key: asset.key, amount });
+		return { quote, invoice: await h.call('POST /invoices', { key: asset.key, amount, quoteId: quote.quoteId }) };
+	};
+	const rowOf = async (hash) => (await h.get('/activity', 'kind=ln-receive')).rows.find((r) => r.paymentHash === hash);
+	const listedOf = async (hash) => {
+		const i = (await h.get('/invoices')).invoices.find((x) => x.paymentHash === hash);
+		return [i.status, i.receivedAmount];
+	};
+	// Two parts, and the payer takes one back: the invoice stays paid with the other.
+	const { invoice: parts } = await make('100');
+	h.ln.settlePart(parts.paymentHash, 40n);
+	h.ln.settlePart(parts.paymentHash, 60n);
+	await h.host.pass();
+	assert.equal((await rowOf(parts.paymentHash)).assets[0].amount, '100');
+	h.ln.takeBack(parts.paymentHash, 40n);
+	await h.host.pass();
+	const kept = await rowOf(parts.paymentHash);
+	assert.deepEqual([kept.state, kept.failure, kept.assets[0].amount], ['complete', null, '60']);
+	assert.deepEqual(await listedOf(parts.paymentHash), ['PAID', '60']);
+	assert.deepEqual([events(h, 'invoice').at(-1).row.assets[0].amount, events(h, 'invoice').at(-1).again], ['60', true]);
+	// Paid and taken back between two looks: the row goes from waiting to lost.
+	const { invoice: quick } = await make('30');
+	h.ln.settle(quick.paymentHash);
+	h.ln.takeBack(quick.paymentHash, 30n);
+	await h.host.pass();
+	const gone = await rowOf(quick.paymentHash);
+	assert.deepEqual([gone.state, gone.failure.code, gone.at.completed], ['failed', 'INVOICE_LOST', null]);
+	assert.deepEqual(await listedOf(quick.paymentHash), ['LOST', '0']);
+	// Written down as run out first: the node's word that it was lost wins.
+	const { quote: late, invoice: ranOut } = await make('20');
+	h.clock.t = late.expiresAt + 1;
+	await h.host.pass();
+	assert.equal((await rowOf(ranOut.paymentHash)).failure.code, 'INVOICE_EXPIRED');
+	h.ln.settle(ranOut.paymentHash);
+	h.ln.takeBack(ranOut.paymentHash, 20n);
+	await h.host.pass();
+	assert.equal((await rowOf(ranOut.paymentHash)).failure.code, 'INVOICE_LOST');
+	assert.deepEqual(await listedOf(ranOut.paymentHash), ['LOST', '0']);
+	// A part that settles after the others were taken back is the node's word too: paid again, with what it brought.
+	h.ln.settlePart(quick.paymentHash, 30n);
+	await h.host.pass();
+	const back = await rowOf(quick.paymentHash);
+	assert.deepEqual([back.state, back.failure, back.assets[0].amount], ['complete', null, '30']);
+	assert.deepEqual(await listedOf(quick.paymentHash), ['PAID', '30']);
+	assert.equal(events(h, 'invoice').at(-1).again, undefined, 'a payment the row had lost is news again');
+});
+
 test('a peer whose price cannot name the amount gets no invoice made at it', async () => {
 	const { h, asset } = await channelled({ remote: 200n });
 	h.ln.opts.quoteFails = 'ERR_BEIGNET_LN_RATE_TOO_COARSE';

@@ -174,8 +174,10 @@ export function assetsApi(api) {
 		createInvoice: ({ key, amount, description, quoteId }) => post('/invoices', { key, amount, description, quoteId }),
 		/**
 		 * { invoices: [{ bolt11, paymentHash, assetAmount, amountSats, rateText, priced, expiresAt, invoiceExpiresAt,
-		 *   description, asset, status: 'OPEN' | 'PAID' | 'EXPIRED', receivedAmount, createdAt }] }
-		 * `receivedAmount` is what a paid invoice brought in, and null until it is paid.
+		 *   description, asset, status: 'OPEN' | 'PAID' | 'LOST' | 'EXPIRED', receivedAmount, createdAt }] }
+		 * `receivedAmount` is what a paid invoice brought in, and null until it is paid. A payment in parts
+		 * raises it as each part arrives. LOST is a paid invoice whose payment the peer took back on the
+		 * chain: it brought in '0', and its row is failed with INVOICE_LOST.
 		 */
 		invoices: () => get('/invoices'),
 		/** A price for paying: { quoteId, assetAmount, amountSats, rateText, peerAlias, expiresAt, sendable } */

@@ -446,6 +446,9 @@ const fakeInvoice = ({ msat, hash } = {}) =>
  * makes it NORMAL, `set(id, fields)` changes it, `abandon(id, reason)` gives
  * a signed funding up as unable to confirm, `recover(id)` brings a closed
  * channel's assets home, `settle(paymentHash)` pays an invoice,
+ * `settlePart(paymentHash, units)` settles one part of a payment in parts,
+ * `takeBack(paymentHash, units)` is the payer taking an HTLC that paid it
+ * back on the chain,
  * `finish(paymentHash, status)` ends a payment that was left pending, and
  * `offer(proposal)` is a peer offering a channel.
  */
@@ -1474,6 +1477,50 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			type: 'invoice',
 			paymentHash: bytes(paymentHash),
 			status: 'paid',
+			assetAmount: invoice.assetAmount,
+			receivedAssetAmount: invoice.received,
+			channelId: bytes(flow ? flow.channelId : '00'.repeat(32))
+		});
+	};
+	/**
+	 * One part of a payment in parts settles an invoice, `units` of it: the
+	 * invoice reads paid from the first part, with what arrived so far, and
+	 * each part is said as an event of its own.
+	 */
+	ln.settlePart = (paymentHash, units) => {
+		const invoice = invoices.get(paymentHash);
+		invoice.status = 'paid';
+		invoice.received = (invoice.received === undefined ? 0n : invoice.received) + BigInt(units);
+		const flow = [...flows.values()].find((f) => f.peerPubkey === invoice.peerPubkey && f.state === 'NORMAL');
+		if (flow) ln.move(flow.channelId, BigInt(units));
+		persist();
+		emit({
+			type: 'invoice',
+			paymentHash: bytes(paymentHash),
+			status: 'paid',
+			assetAmount: invoice.assetAmount,
+			receivedAssetAmount: invoice.received,
+			channelId: bytes(flow ? flow.channelId : '00'.repeat(32))
+		});
+	};
+	/**
+	 * The payer takes an HTLC that paid an invoice, `units` of it, back on
+	 * the chain after the wallet had let its preimage go: they are no longer
+	 * received, and an invoice with none left received reads lost, never
+	 * open again.
+	 */
+	ln.takeBack = (paymentHash, units) => {
+		const invoice = invoices.get(paymentHash);
+		const left = (invoice.received === undefined ? 0n : invoice.received) - BigInt(units);
+		invoice.received = left > 0n ? left : 0n;
+		if (invoice.received === 0n) invoice.status = 'lost';
+		const flow = [...flows.values()].find((f) => f.peerPubkey === invoice.peerPubkey && f.state === 'NORMAL');
+		if (flow) ln.move(flow.channelId, -BigInt(units));
+		persist();
+		emit({
+			type: 'invoice',
+			paymentHash: bytes(paymentHash),
+			status: 'lost',
 			assetAmount: invoice.assetAmount,
 			receivedAssetAmount: invoice.received,
 			channelId: bytes(flow ? flow.channelId : '00'.repeat(32))

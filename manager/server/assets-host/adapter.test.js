@@ -168,6 +168,8 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 		invoices: () => [
 			{ paymentHash: buf(0x02), assetAmount: 150n, receivedAssetAmount: 149n, status: 'paid', bolt11: 'lnbcrt1invoice', description: 'tea' },
 			{ paymentHash: buf(0x03), assetAmount: 5n, receivedAssetAmount: 0n, status: 'something new' },
+			// Paid, and every HTLC of it taken back on the chain.
+			{ paymentHash: buf(0x0a), assetAmount: 5n, receivedAssetAmount: 0n, status: 'lost' },
 			// An entry that does not say what arrived.
 			{ paymentHash: buf(0x08), assetAmount: 5n, status: 'expired' }
 		],
@@ -750,12 +752,14 @@ test('invoices and payments: amounts as bigint, times in milliseconds, a status 
 	assert.deepEqual(calls('createInvoice'), [{ quoteId: buf(0x01), description: 'tea', expirySeconds: 3600 }]);
 	await ln.createInvoice({ quoteId: quote.quoteId, description: '', expirySeconds: 60 });
 	assert.equal('description' in calls('createInvoice')[1], false);
-	// A status this host has no word for is an open invoice until it is paid
-	// or expired. What the engine still keeps of an invoice is not read: the
-	// host has its own row. What arrived stands beside what was invoiced.
+	// A status this host has no word for is an open invoice until it is
+	// paid, lost or expired. What the engine still keeps of an invoice is not
+	// read: the host has its own row. What arrived stands beside what was
+	// invoiced.
 	assert.deepEqual(ln.invoices(), [
 		{ paymentHash: '02'.repeat(32), assetAmount: 150n, received: 149n, status: 'paid' },
 		{ paymentHash: '03'.repeat(32), assetAmount: 5n, received: 0n, status: 'open' },
+		{ paymentHash: '0a'.repeat(32), assetAmount: 5n, received: 0n, status: 'lost' },
 		{ paymentHash: '08'.repeat(32), assetAmount: 5n, received: null, status: 'expired' }
 	]);
 

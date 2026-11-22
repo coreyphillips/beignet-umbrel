@@ -155,6 +155,20 @@ test('an invoice is paid when the wallet says so, and never because the clock ra
 	assert.equal(invoiceStanding({ invoice: {}, row: null, now: NOW }), 'waiting');
 });
 
+test('an invoice whose payment the peer took back reads lost, by its row or by the list, and never paid, expired or waiting', () => {
+	const invoice = { expiresAt: NOW + 60_000, invoiceExpiresAt: NOW + 3_600_000 };
+	const lost = { kind: 'ln-receive', state: 'failed', failed: true, failure: { code: 'INVOICE_LOST', message: 'Nothing was received.' } };
+	assert.equal(invoiceStanding({ invoice, row: lost, now: NOW }), 'lost');
+	assert.equal(invoiceStanding({ invoice, row: lost, listed: { status: 'PAID' }, now: NOW }), 'lost', 'the row is believed before a list read before the loss');
+	assert.equal(invoiceStanding({ invoice, row: lost, now: NOW + 90_000 }), 'lost', 'and the clock does not make it expired');
+	assert.equal(invoiceStanding({ invoice, row: { kind: 'ln-receive', state: 'waiting' }, listed: { status: 'LOST' }, now: NOW }), 'lost', 'the list is believed too');
+	assert.equal(invoiceStanding({ invoice, row: null, listed: { status: 'lost' }, now: NOW + 90_000 }), 'lost');
+	// A paid row is not undone by a list that has not caught up, and one that ran out is not lost.
+	assert.equal(invoiceStanding({ invoice, row: { kind: 'ln-receive', state: 'complete' }, listed: { status: 'OPEN' }, now: NOW }), 'paid');
+	const ranOut = { kind: 'ln-receive', state: 'failed', failed: true, failure: { code: 'INVOICE_EXPIRED', message: 'Nobody paid this invoice before it ran out.' } };
+	assert.equal(invoiceStanding({ invoice, row: ranOut, now: NOW + 90_000 }), 'failed');
+});
+
 const refusal = (code, details, message) => Object.assign(new Error(message || code), { code, details, status: 400 });
 
 test('each Lightning refusal is said in plain words, with the figure that matters', () => {

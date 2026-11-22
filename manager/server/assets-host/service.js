@@ -318,7 +318,9 @@ function createHost({ cfg, storage, wallet, lib, net, emit, logger, tap = null, 
 		return row;
 	};
 
-	host.emitRow = (row) => host.emitEvent(EVENT_OF[row.kind] || 'transfer', { row: host.view(row) });
+	// `extra` rides beside the row: `again` marks an invoice already said
+	// paid whose figure moved (lightning.js recordInvoice).
+	host.emitRow = (row, extra) => host.emitEvent(EVENT_OF[row.kind] || 'transfer', { row: host.view(row), ...extra });
 
 	/** Store a row if it changed, and tell whoever is listening. */
 	function commitRow(prev, row) {

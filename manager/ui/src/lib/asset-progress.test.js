@@ -16,6 +16,7 @@ import {
 	etaText,
 	handedOver,
 	headline,
+	invoiceLost,
 	isFailed,
 	isPending,
 	kindWord,
@@ -198,6 +199,24 @@ test('a Lightning row settles in one step and has no timeline', () => {
 	assert.equal(railOf(row('receive', 'complete')), 'on-chain');
 	assert.equal(kindWord(row('ln-send', 'complete')), 'Lightning payment');
 	assert.equal(timelineLabel(row('mint', 'pending')), 'Mint progress');
+});
+
+test('a Lightning invoice whose payment the peer took back on the chain reads lost, in words apart from one that ran out', () => {
+	const lostFailure = { code: 'INVOICE_LOST', message: 'This invoice was paid, but the peer took the payment back on the chain before the wallet could claim it, so nothing was received.' };
+	const lost = row('ln-receive', 'failed', { failed: true, failure: lostFailure });
+	assert.equal(invoiceLost(lost), true);
+	assert.deepEqual(statusOf(lost), { text: 'lost', tone: 'red' });
+	assert.equal(headline(lost), 'Lightning invoice for 100.00 BUSD: taken back on the chain, nothing received');
+	assert.equal(isPending(lost), false);
+	// One that ran out unpaid is said as before.
+	const ranOut = row('ln-receive', 'failed', { failed: true, failure: { code: 'INVOICE_EXPIRED', message: 'Nobody paid this invoice before it ran out.' } });
+	assert.equal(invoiceLost(ranOut), false);
+	assert.deepEqual(statusOf(ranOut), { text: 'failed', tone: 'red' });
+	assert.equal(headline(ranOut), 'Lightning invoice for 100.00 BUSD expired');
+	// Only an invoice made here, and only once the wallet says it failed that way.
+	assert.equal(invoiceLost(row('ln-send', 'failed', { failed: true, failure: lostFailure })), false);
+	assert.equal(invoiceLost(row('ln-receive', 'complete')), false);
+	assert.equal(invoiceLost(null), false);
 });
 
 test('the time left is said the way a person would, and not promised on testnet', () => {

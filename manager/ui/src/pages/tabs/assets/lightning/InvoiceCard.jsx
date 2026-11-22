@@ -353,7 +353,7 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 							</div>
 						</m.div>
 					)}
-					{made && (standing === 'expired' || standing === 'failed') && (
+					{made && (standing === 'expired' || standing === 'failed' || standing === 'lost') && (
 						<m.div
 							key={`over-${made.paymentHash}`}
 							className="asset-invoice-over"
@@ -361,9 +361,11 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 							animate={{ opacity: 1 }}
 						>
 							<div className="info-note" role="status" data-testid="asset-invoice-expired" data-state={standing}>
-								{standing === 'failed'
-									? `The invoice for ${what} failed, and nothing was received. Make a new one when the payer is ready.`
-									: `The invoice for ${what} was not paid before its price ran out, so it can no longer be paid. Nothing was received. Make a new one when the payer is ready.`}
+								{standing === 'lost'
+									? `The invoice for ${what} was paid, but the peer took the payment back on the chain before the wallet could claim it, so nothing was received. Make a new one if the payer is to pay again.`
+									: standing === 'failed'
+										? `The invoice for ${what} failed, and nothing was received. Make a new one when the payer is ready.`
+										: `The invoice for ${what} was not paid before its price ran out, so it can no longer be paid. Nothing was received. Make a new one when the payer is ready.`}
 							</div>
 							<Button variant="primary" data-testid="asset-invoice-new" onClick={again}>
 								Make a new invoice

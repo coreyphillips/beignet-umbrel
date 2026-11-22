@@ -7,7 +7,7 @@
  * conditions can both be pinned by tests.
  */
 import { cmpUnits, decimalsOf, fmtAsset, fmtUnits, isZero, unitOf } from './asset-amount.js';
-import { amountOf, canRebroadcast, isFailed, isPending, namesOf, stuckNote } from './asset-progress.js';
+import { amountOf, canRebroadcast, invoiceLost, isFailed, isPending, namesOf, stuckNote } from './asset-progress.js';
 import { timeAgo } from './backup.js';
 import { fmtSats, shortId } from './format.js';
 
@@ -556,7 +556,13 @@ export function describeAssetEvent(name, data) {
 			if (failed) return { text: `Sending ${what} failed${reason}`, tone: 'error', duration: 9000 };
 			return { text: `Sent ${what}: proof delivered`, tone: 'success', duration: 6000 };
 		case 'assets:invoice':
-			if (failed || row.kind !== 'ln-receive') return null;
+			if (row.kind !== 'ln-receive') return null;
+			// A paid invoice whose payment the peer took back: news, since the
+			// payment may have been announced as received before.
+			if (invoiceLost(row)) return { text: `The Lightning payment of ${what} was taken back on the chain, so nothing was received`, tone: 'error', duration: 12000 };
+			// An invoice already announced as paid, said again because the
+			// figure moved (a payment in parts): not a payment of its own.
+			if (failed || data.again === true) return null;
 			return { text: `Received ${what} over Lightning`, tone: 'success', duration: 8000 };
 		default:
 			return null;

@@ -120,8 +120,14 @@
  * Being paid
  *
  *   An invoice says what was invoiced and, once paid, what arrived: a
- *   payer's rate can round that one unit down. The activity row and the
- *   balance count what arrived.
+ *   payer's rate can round each HTLC that paid it one unit down. The
+ *   activity row and the balance count what arrived, and follow the node's
+ *   figure after the row is paid: a payment in parts is paid from its
+ *   first part and rises as each later part's end comes, and the figure
+ *   falls when the payer takes an HTLC back on the chain. An invoice whose
+ *   every HTLC the payer took back on the chain, after the wallet had let
+ *   its preimage go, is lost: nothing was received, and it never waits to
+ *   be paid again.
  *
  * Rows
  *
@@ -1575,10 +1581,11 @@ function invoiceView(host, inv) {
 		invoiceExpiresAt: inv.invoiceExpiresAt,
 		description: inv.description,
 		asset: inv.asset,
-		status: inv.status === 'PAID' ? 'PAID' : deadline <= host.now() ? 'EXPIRED' : 'OPEN',
-		// What a paid invoice brought in. A payer's rate can round it one
-		// unit under what was invoiced, which `assetAmount` goes on saying.
-		receivedAmount: inv.status === 'PAID' ? inv.receivedAmount || inv.assetAmount : null,
+		status: inv.status === 'PAID' || inv.status === 'LOST' ? inv.status : deadline <= host.now() ? 'EXPIRED' : 'OPEN',
+		// What a paid invoice brought in. A payer's rate can round each HTLC
+		// that paid it one unit under what it declared, and `assetAmount`
+		// goes on saying what was invoiced. A lost invoice brought in nothing.
+		receivedAmount: inv.status === 'PAID' ? inv.receivedAmount || inv.assetAmount : inv.status === 'LOST' ? '0' : null,
 		createdAt: inv.createdAt
 	};
 }
@@ -1669,27 +1676,48 @@ function listInvoices(host) {
 	return { invoices: all.slice(0, MAX_INVOICES_LISTED).map((inv) => invoiceView(host, inv)) };
 }
 
+// An invoice whose every HTLC the payer took back on the chain after the
+// wallet had let its preimage go. The row says it as a failure of its own.
+const INVOICE_LOST = Object.freeze({
+	code: 'INVOICE_LOST',
+	message: 'This invoice was paid, but the peer took the payment back on the chain before the wallet could claim it, so nothing was received.'
+});
+const isLostRow = (row) => row.state === 'failed' && !!row.failure && row.failure.code === INVOICE_LOST.code;
+
 /**
- * An invoice was paid, or ran out unpaid. That it was paid is the node's
- * word and wins at any time, also over a row that already says nobody
- * paid: a payment can arrive as the invoice runs out. `received` is what
- * arrived, which is what the row then counts: the amount invoiced stays on
- * the invoice.
+ * An invoice was paid, was lost, or ran out unpaid. That it was paid or
+ * lost is the node's word and wins at any time, also over a row that
+ * already says nobody paid: a payment can arrive as the invoice runs out.
+ * `received` is what arrived, which is what the row then counts: the
+ * amount invoiced stays on the invoice. A paid row takes the node's figure
+ * again whenever it moves, and is said again marked as such (`again`): a
+ * payment in parts rises as each part's end comes, and the figure falls
+ * when the payer takes an HTLC back on the chain. A lost row received
+ * nothing, and names what was invoiced, as one that ran out does.
  */
 function recordInvoice(host, rowId, outcome, received) {
 	const { rows } = host;
 	return host.lock.run(() => {
 		const row = host.getRow(rowId);
-		if (!row || row.kind !== 'ln-receive' || row.state === 'complete') return null;
-		if (outcome !== 'paid' && row.state !== 'waiting') return null;
+		if (!row || row.kind !== 'ln-receive') return null;
+		const got = received === undefined || received === null ? null : received.toString();
+		const paidBefore = row.state === 'complete';
+		if (outcome === 'paid' && paidBefore && (got === null || !row.assets[0] || row.assets[0].amount === got)) return null;
+		if (outcome === 'lost' && isLostRow(row)) return null;
+		if (outcome === 'expired' && row.state !== 'waiting') return null;
 		const next = clone(row);
 		const now = host.now();
 		const inv = rows.get(`inv/${row.paymentHash}`);
 		if (outcome === 'paid') {
 			next.state = 'complete';
 			next.failure = null;
-			next.at.completed = now;
-			if (received !== undefined && received !== null && next.assets[0]) next.assets[0].amount = received.toString();
+			// When it was first paid, which a figure that moves after does not change.
+			if (!paidBefore || !next.at.completed) next.at.completed = now;
+			if (got !== null && next.assets[0]) next.assets[0].amount = got;
+		} else if (outcome === 'lost') {
+			next.state = 'failed';
+			next.failure = { ...INVOICE_LOST };
+			if (inv && next.assets[0]) next.assets[0].amount = String(inv.assetAmount);
 		} else {
 			next.state = 'failed';
 			next.failure = { code: 'INVOICE_EXPIRED', message: 'Nobody paid this invoice before it ran out.' };
@@ -1697,12 +1725,14 @@ function recordInvoice(host, rowId, outcome, received) {
 		rows.tx(() => {
 			rows.put(`row/${rowId}`, next);
 			if (inv && outcome === 'paid') {
-				rows.put(`inv/${row.paymentHash}`, { ...inv, status: 'PAID', paidAt: now, ...(received !== undefined && received !== null ? { receivedAmount: received.toString() } : {}) });
+				rows.put(`inv/${row.paymentHash}`, { ...inv, status: 'PAID', paidAt: inv.paidAt || now, ...(got !== null ? { receivedAmount: got } : {}) });
+			} else if (inv && outcome === 'lost') {
+				rows.put(`inv/${row.paymentHash}`, { ...inv, status: 'LOST', lostAt: now, receivedAmount: '0' });
 			}
 		});
 		host.markDirty();
-		host.emitRow(next);
-		if (outcome === 'paid') for (const a of next.assets || []) host.emitEvent('balance', { key: a.key });
+		host.emitRow(next, outcome === 'paid' && paidBefore ? { again: true } : undefined);
+		if (outcome !== 'expired') for (const a of next.assets || []) host.emitEvent('balance', { key: a.key });
 		return next;
 	});
 }
@@ -2166,17 +2196,23 @@ async function settleRows(host) {
 			await failUnsent(host, row.id, { code: 'PAYMENT_NOT_SENT', message: 'This payment was never sent, so nothing was paid.' });
 		}
 	}
-	// Every invoice that is not paid yet, the ones written down as run out
-	// among them: the node saying one was paid is the last word on it.
-	const unpaid = stored.filter((r) => r.kind === 'ln-receive' && r.state !== 'complete');
-	if (unpaid.length === 0) return;
+	// Every invoice, the ones written down as run out, paid or lost among
+	// them: what the node says of one is the last word on it. A paid one is
+	// looked at again while the node knows it, since its figure moves with
+	// a payment in parts and with an HTLC the payer took back on the chain.
+	const invoices = stored.filter((r) => r.kind === 'ln-receive');
+	if (invoices.length === 0) return;
 	const known = new Map(ln.invoices().map((i) => [i.paymentHash, i]));
-	for (const row of unpaid) {
+	for (const row of invoices) {
 		if (host.mem.stopped) return;
 		const inv = known.get(row.paymentHash);
-		// What arrived, where the library says it: never nothing for an invoice it calls paid.
-		if (inv && inv.status === 'paid') await recordInvoice(host, row.id, 'paid', inv.received !== null && inv.received > 0n ? inv.received : inv.assetAmount);
-		else if (row.state === 'waiting' && ((inv && inv.status === 'expired') || (row.expiresAt || 0) <= host.now())) await recordInvoice(host, row.id, 'expired');
+		if (inv && inv.status === 'paid') {
+			// What arrived, where the library says it: never nothing for an invoice it calls paid.
+			const received = inv.received !== null && inv.received > 0n ? inv.received : inv.assetAmount;
+			if (row.state !== 'complete' || (row.assets[0] && row.assets[0].amount !== received.toString())) await recordInvoice(host, row.id, 'paid', received);
+		} else if (inv && inv.status === 'lost') {
+			if (!isLostRow(row)) await recordInvoice(host, row.id, 'lost');
+		} else if (row.state === 'waiting' && ((inv && inv.status === 'expired') || (row.expiresAt || 0) <= host.now())) await recordInvoice(host, row.id, 'expired');
 	}
 }
 
@@ -2636,7 +2672,8 @@ function prune(host) {
 	dropOldQuotes(host);
 	for (const { key, value } of host.rows.list('inv/')) {
 		const deadline = Math.min(value.expiresAt || 0, value.invoiceExpiresAt || 0);
-		if (value.status !== 'PAID' && deadline + INVOICE_KEEP_MS < now) host.rows.del(key);
+		// One that was paid stays on the list, also once the payer took it back.
+		if (value.status !== 'PAID' && value.status !== 'LOST' && deadline + INVOICE_KEEP_MS < now) host.rows.del(key);
 	}
 }
 

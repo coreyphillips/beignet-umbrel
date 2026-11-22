@@ -510,11 +510,19 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  * 20. invoices() is synchronous: [{ paymentHash, assetAmount,
  *     receivedAssetAmount, milliSatoshi, expiresAt, status, bolt11?,
  *     description? }] for every asset invoice kept, `status` being 'open',
- *     'paid' or 'expired'. `assetAmount` is what was invoiced, and
+ *     'paid', 'lost' or 'expired'. `assetAmount` is what was invoiced, and
  *     `receivedAssetAmount` what arrived, summed over the HTLCs that
- *     settled it: 0 while none has, and at most one unit under the amount
- *     invoiced, where the rate rounds a payer down. A paid invoice keeps
- *     reading `paid` after the engine has forgotten the payment. `bolt11`
+ *     settled it, less those the payer took back on the chain: 0 while
+ *     none has. Each HTLC can come a unit short where the rate rounds a
+ *     payer down, so it can be under the amount invoiced by up to one unit
+ *     for each HTLC that paid it. A payer may pay an invoice in parts, each
+ *     an HTLC of its own: the invoice reads `paid` from the first part that
+ *     settles, and `receivedAssetAmount` rises as each later part's end
+ *     arrives. It falls when the payer takes an HTLC back on the chain
+ *     after the wallet had let its preimage go, and once none is left
+ *     received the invoice reads `lost`, never `open` again. A paid
+ *     invoice keeps reading `paid` after the engine has forgotten the
+ *     payment. `bolt11`
  *     and `description` are there only while the engine keeps the invoice,
  *     so the host keeps its own row of each (`inv/<hash>`). The record of
  *     an invoice is pruned a day after it expired: its hash then stays on
@@ -597,8 +605,10 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     ERR_BEIGNET_FEE pass through for the funding transaction, as for a
  *     mint or a send.
  * 25. onEvent receives { type: 'channel', pendingChannelId?, channelId?,
- *     phase?, error? }, { type: 'invoice', paymentHash, status: 'paid',
- *     assetAmount, receivedAssetAmount, channelId }, { type: 'payment',
+ *     phase?, error? }, { type: 'invoice', paymentHash, status: 'paid' |
+ *     'lost', assetAmount, receivedAssetAmount, channelId } once for each
+ *     HTLC that paid an invoice (`lost` for one the payer took back on the
+ *     chain, with what is left received), { type: 'payment',
  *     paymentHash, attempt, status, assetAmount, channelId, feeMsat?,
  *     failure? } and { type: 'recovery',
  *     channelId, status }, each after the change is stored and outside any
@@ -1005,12 +1015,15 @@ const plainPayment = (p) => ({
 	...(p.neverSent === true ? { neverSent: true } : {})
 });
 
+// The statuses of an invoice the host has words for, beside 'open' (20).
+const INVOICE_ENDS = Object.freeze(['paid', 'lost', 'expired']);
+
 const plainInvoice = (i) => ({
 	paymentHash: asHex(i.paymentHash),
 	assetAmount: BigInt(i.assetAmount),
 	received: receivedOf(i),
-	// A status this host has no word for is an open invoice until it is paid or expired.
-	status: i.status === 'paid' || i.status === 'expired' ? i.status : 'open'
+	// A status this host has no word for is an open invoice until it is paid, lost or expired.
+	status: INVOICE_ENDS.includes(i.status) ? i.status : 'open'
 });
 
 /** S7. One report of what became of a funding's reservation, in plain values. */
@@ -1092,7 +1105,8 @@ function plainEvent(e) {
  *                                   amountMsat, expiresAt }
  *   invoices()                 [{ paymentHash, assetAmount, received,
  *                                status }], assetAmount being what was
- *                                invoiced and received what arrived (S4)
+ *                                invoiced and received what arrived (S4),
+ *                                status 'open', 'paid', 'lost' or 'expired'
  *
  *   quotePayment({ bolt11, assetId, groupKey, amountMsat })
  *                              -> { quoteId, paymentHash, peerPubkey,
