@@ -606,7 +606,10 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     ended is a channel event with `error`; a payment's end after
  *     `pending` is a payment event. The host treats each as a reason to
  *     look again and reads the state itself, so an event that is missed
- *     costs time and nothing else.
+ *     costs time and nothing else. The library also has { type:
+ *     'forward' }, the end of a leg of a forward a primary took on; a
+ *     wallet here forwards nothing, so it never comes, and would be one
+ *     more reason to look.
  *
  * The backup
  *
@@ -1134,7 +1137,8 @@ function plainEvent(e) {
  * `assets` and `change` are [{ assetId, amount }]. `unitsPerBtc` is
  * { coefficient, scale }. The events `onEvent` is given are { type,
  * pendingChannelId?, channelId?, paymentHash?, phase?, status?, failure?,
- * error? }, type being 'channel', 'invoice', 'payment' or 'recovery'.
+ * error? }, type being 'channel', 'invoice', 'payment' or 'recovery' (or
+ * 'forward', which only a node that forwards is given: see 25).
  */
 function createLightning({ entry, storage, cfg, now = null }) {
 	if (!entry) return null;
