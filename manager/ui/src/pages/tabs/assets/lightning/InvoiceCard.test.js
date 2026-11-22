@@ -395,7 +395,7 @@ test('an invoice that brought in a unit less than it asked for says both, in its
 		assert.equal(r.tests('asset-receive-short').length, 1, 'and no other row says anything');
 		await click(mine);
 		await settle(60);
-		assert.match(r.test('asset-invoice-short').textContent, /^The invoice asked for 250\.00 BUSD, received 249\.99 BUSD\. A payer's price can come to a unit less than an invoice names, and\s+the invoice is paid all the same\.$/);
+		assert.match(r.test('asset-invoice-short').textContent, /^The invoice asked for 250\.00 BUSD, received 249\.99 BUSD\. A payer's price can leave a payment up to a unit short of what an\s+invoice names for each part it arrives in, and the invoice is paid all the same\.$/);
 	} finally {
 		await r.unmount();
 	}

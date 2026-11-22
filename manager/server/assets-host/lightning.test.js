@@ -1171,28 +1171,70 @@ test('a recovery that keeps failing is logged, and after a while the status says
 	assert.deepEqual((await h.get('/status')).lightning, { mode: 'full', usableChannels: 0, feeCoins: null });
 });
 
-test('what one payment can move is the most one channel can, never the sum of several', async () => {
+test('what one payment can send is what the channels of one peer can send together, and what one invoice can receive the most one channel can', async () => {
 	const { h, asset } = await channelled({ remote: 200n });
-	// A second channel of the same asset: 300 on this side, 100 on the peer's.
-	const second = await h.call('POST /channels/open', openBody(asset, '400'), 'second-key');
+	// A second channel of the same asset with the same peer, 300 on this side,
+	// and a third with another peer, 100 on this side.
+	const second = await h.call('POST /channels/open', openBody(asset, '300'), 'second-key');
 	h.ln.confirm(second.pendingChannelId);
-	h.ln.move(h.ln.flow(second.pendingChannelId).channelId, -100n);
+	const other = await h.call('POST /channels/open', openBody(asset, '100', { peer: { ...PEER, pubkey: `03${'cd'.repeat(32)}`, alias: 'other' } }), 'other-key');
+	h.ln.confirm(other.pendingChannelId);
 	await h.host.pass({ block: true });
-	assert.deepEqual((await h.get('/channels')).channels.map((c) => [c.sendable, c.receivable]).sort(), [['300', '100'], ['400', '200']]);
+	assert.deepEqual((await h.get('/channels')).channels.map((c) => [c.sendable, c.receivable]).sort(), [['100', '0'], ['300', '0'], ['400', '200']]);
 	const { balance } = (await h.get('/balances')).assets[0];
-	// 700 of it is in channels, and one payment can send 400 of that or receive 200.
-	assert.deepEqual([balance.channelLocal, balance.lightningSendable, balance.lightningReceivable], ['700', '400', '200']);
+	// 800 of it is in channels: one payment can send the 700 the first peer's
+	// channels hold, in parts over both, never adding the other peer's 100,
+	// and an invoice can receive 200.
+	assert.deepEqual([balance.channelLocal, balance.lightningSendable, balance.lightningReceivable], ['800', '700', '200']);
 
+	// An invoice is quoted through one channel that can receive the whole of it.
 	const tooMuchIn = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '250' }));
 	assert.deepEqual([tooMuchIn.extensionCode, tooMuchIn.details], ['INSUFFICIENT_INBOUND', { maxReceivable: '200' }]);
 	assert.equal((await h.call('POST /invoices/quote', { key: asset.key, amount: '150' })).maxReceivable, '200');
-	const tooMuchOut = await refused(h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 500000 }), key: asset.key }));
-	assert.deepEqual([tooMuchOut.extensionCode, tooMuchOut.details], ['INSUFFICIENT_OUTBOUND', { sendable: '400' }]);
-	// The price names what one payment can send, whichever channel it goes through.
-	assert.equal((await h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 50000 }), key: asset.key })).sendable, '400');
+	const tooMuchOut = await refused(h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 800000 }), key: asset.key }));
+	assert.deepEqual([tooMuchOut.extensionCode, tooMuchOut.details], ['INSUFFICIENT_OUTBOUND', { sendable: '700' }]);
+	// The price names what one payment can send, over whichever channels it goes.
+	const one = await h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 50000 }), key: asset.key });
+	assert.deepEqual([one.sendable, one.parts], ['700', 1]);
+	const split = await h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 500000 }), key: asset.key });
+	assert.deepEqual([split.assetAmount, split.sendable, split.parts], ['500', '700', 2]);
 	// What a payment under way holds is not there for the next one.
 	h.ln.set(h.ln.flows.keys().next().value, { reserved: 150n });
-	assert.equal((await h.get('/balances')).assets[0].balance.lightningSendable, '300');
+	assert.equal((await h.get('/balances')).assets[0].balance.lightningSendable, '550');
+});
+
+test('a payment one channel cannot carry goes in parts over the channels of its peer, and the row says so', async () => {
+	const { h, asset } = await channelled({ remote: 200n });
+	const second = await h.call('POST /channels/open', openBody(asset, '400'), 'second-key');
+	h.ln.confirm(second.pendingChannelId);
+	await h.host.pass({ block: true });
+	// 400 and 400 on this side: 500 units go as two parts, the fullest channel first.
+	// A sending that stops after the first of two parts: the payment waits on
+	// the part that went out, and says how many were planned, until the record ends it.
+	const first = fakeInvoice({ msat: 500000, hash: 'c3'.repeat(32) });
+	const priced = await h.call('POST /pay/quote', { bolt11: first, key: asset.key });
+	assert.deepEqual([priced.assetAmount, priced.parts, priced.sendable], ['500', 2, '800']);
+	h.ln.opts.payStopsAfter = 1;
+	const stopped = await h.call('POST /pay', { bolt11: first, key: asset.key, quoteId: priced.quoteId, maxAssetAmount: '500' }, 'stopped-key');
+	assert.deepEqual([stopped.status, stopped.parts, stopped.planned], ['PENDING', undefined, 2]);
+	const waiting = (await h.get('/activity', 'kind=ln-send')).rows.find((r) => r.paymentHash === stopped.paymentHash);
+	assert.deepEqual([waiting.state, 'parts' in waiting, waiting.planned], ['pending', false, 2]);
+	h.ln.finish(stopped.paymentHash, 'failed');
+	await h.host.pass({ block: true });
+	const ended = (await h.get('/activity', 'kind=ln-send')).rows.find((r) => r.paymentHash === stopped.paymentHash);
+	assert.deepEqual([ended.state, ended.failure.message, ended.planned], ['failed', 'The payment did not go through, so nothing was paid.', 2]);
+	h.ln.opts.payStopsAfter = null;
+
+	// Paid whole, in two parts.
+	const bolt11 = fakeInvoice({ msat: 500000 });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	assert.deepEqual([quote.assetAmount, quote.parts, quote.sendable], ['500', 2, '800']);
+	const paid = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: '500' }, 'parts-key');
+	assert.deepEqual([paid.status, paid.assetAmount, paid.parts, 'planned' in paid], ['COMPLETED', '500', 2, false]);
+	const row = (await h.get('/activity', 'kind=ln-send')).rows.find((r) => r.paymentHash === paid.paymentHash);
+	assert.deepEqual([row.state, row.parts, 'planned' in row, row.assets[0].amount], ['complete', 2, false, '500']);
+	// Both channels paid their part.
+	assert.deepEqual((await h.get('/channels')).channels.map((c) => c.localBalance).sort(), ['0', '300']);
 });
 
 /* ------------------------------------------------------------------ paying */
@@ -1201,7 +1243,7 @@ test('a pay quote: how much of the asset the invoice takes, and what the channel
 	const { h, asset } = await channelled();
 	const bolt11 = fakeInvoice({ msat: 50000 });
 	const quote = await h.call('POST /pay/quote', { bolt11: `lightning:${bolt11}`, key: asset.key });
-	assert.deepEqual(quote, { quoteId: quote.quoteId, assetAmount: '50', amountSats: 50, rateText: '', priced: false, peerAlias: 'edge', expiresAt: h.clock.t + 60000, sendable: '600' });
+	assert.deepEqual(quote, { quoteId: quote.quoteId, assetAmount: '50', amountSats: 50, rateText: '', priced: false, peerAlias: 'edge', expiresAt: h.clock.t + 60000, sendable: '600', parts: 1 });
 	assert.deepEqual(named(h, 'quotePayment')[0][1], { bolt11, assetId: asset.assetId, groupKey: null, amountMsat: null });
 	// A peer that prices.
 	h.ln.opts.rate = { coefficient: 4_000_000n, scale: 0 };
@@ -3257,7 +3299,7 @@ test('an open this wallet\'s own node cannot make is said as that, with the reas
 	assert.equal((await h.call('POST /channels/open', openBody(asset), 'open-key')).phase, 'funding');
 });
 
-test('a payment that never entered the channel says nothing left the wallet and that the invoice can be paid again, and the two new refusals say nothing was paid', async () => {
+test('a payment that never entered the channel says nothing left the wallet and that the invoice can be paid again, and the newer refusals say nothing was paid', async () => {
 	const { h, asset } = await channelled();
 	const bolt11 = fakeInvoice({ msat: 50000 });
 	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
@@ -3270,7 +3312,11 @@ test('a payment that never entered the channel says nothing left the wallet and 
 	Object.assign(h.ln.opts, { payStatus: 'complete', payFailure: null, payNeverSent: false });
 
 	// Nothing was recorded or sent by either: the row fails with the host's sentence, and the key is not bound to a payment.
-	for (const [code, hostCode] of [['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'PAYMENT_UNSUPPORTED'], ['ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', 'OUTCOMES_UNDELIVERED']]) {
+	for (const [code, hostCode] of [
+		['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'PAYMENT_UNSUPPORTED'],
+		['ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', 'OUTCOMES_UNDELIVERED'],
+		['ERR_BEIGNET_LN_HTLC_NOT_ADMITTED', 'PAYMENT_NOT_ADMITTED']
+	]) {
 		const again = await h.call('POST /pay/quote', { bolt11, key: asset.key });
 		h.ln.opts.payFails = code;
 		const said = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: again.quoteId, maxAssetAmount: '50' }, `key-${hostCode}`);
@@ -3280,6 +3326,8 @@ test('a payment that never entered the channel says nothing left the wallet and 
 		assert.deepEqual([failure.code, failure.message], [hostCode, said.failureDescription], code);
 		h.ln.opts.payFails = null;
 	}
+	// Why the channel did not take it is the engine's to say, and goes to the log only.
+	assert.equal(h.logs.filter(([, text]) => /an asset channel did not take a Lightning payment/.test(text)).length, 1);
 	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
 });
 

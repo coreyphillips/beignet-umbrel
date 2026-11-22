@@ -469,7 +469,8 @@ export function headline(row, { network } = {}) {
 			// Neither "paid" nor "failed": the wallet cannot say which.
 			if (noticeOf(row)) return `Lightning payment of ${what}: ${noticeWords(noticeOf(row))[0]}`;
 			if (failed) return `Paying ${what} over Lightning failed`;
-			return s === 'complete' ? `Paid ${what} over Lightning` : `Paying ${what} over Lightning`;
+			if (s === 'complete') return row.parts > 1 ? `Paid ${what} over Lightning in ${row.parts} parts` : `Paid ${what} over Lightning`;
+			return `Paying ${what} over Lightning`;
 		default:
 			return names;
 	}

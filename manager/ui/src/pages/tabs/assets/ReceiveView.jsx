@@ -143,7 +143,8 @@ export default function ReceiveView({ api, state, patch, holdings, rows, network
 
 	const receives = (rows || []).filter((r) => r.kind === 'receive' || r.kind === 'ln-receive');
 	// What each paid invoice asked for: its row says what arrived, and the
-	// two can differ by a unit. Asked for again when another one is paid.
+	// two can differ by up to a unit for each part a payment arrived in.
+	// Asked for again when another one is paid.
 	const paidInvoices = lightning ? receives.filter((r) => r.kind === 'ln-receive' && r.state === 'complete').length : 0;
 	const { data: invoiceList } = usePoll(() => (paidInvoices > 0 ? assets.invoices().catch(() => null) : Promise.resolve(null)), 0, [assets, paidInvoices]);
 	const shortOf = (r) =>
@@ -342,8 +343,8 @@ export default function ReceiveView({ api, state, patch, holdings, rows, network
 				<AssetTransferDetail row={open} network={network} host={open.courier || host} origin={detail.open.origin} onClose={detail.close}>
 					{shortOf(open) && (
 						<div className="info-note" role="status" data-testid="asset-invoice-short">
-							The invoice {shortOf(open).text}. A payer&apos;s price can come to a unit less than an invoice names, and
-							the invoice is paid all the same.
+							The invoice {shortOf(open).text}. A payer&apos;s price can leave a payment up to a unit short of what an
+							invoice names for each part it arrives in, and the invoice is paid all the same.
 						</div>
 					)}
 					<ProofLateNote row={open} host={open.courier || host} onRetry={() => retry(open)} busy={retrying} />

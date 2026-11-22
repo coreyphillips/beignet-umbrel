@@ -237,14 +237,19 @@ export function createAssetsMock(ctx) {
 		let local = 0n;
 		let sendable = 0n;
 		let receivable = 0n;
+		const byPeer = new Map();
 		for (const c of S(id).channels) {
 			if (c.asset.key !== key || c.state === 'CLOSED') continue;
 			local += toUnits(c.localBalance) ?? 0n;
-			// As the host: a payment goes through one channel, so what can be
-			// sent or received is what the best single channel carries.
+			// As the host: a payment is sent over the channels of one peer, in
+			// parts when one cannot carry it, so what can be sent is what the
+			// best peer's channels carry together. An invoice is received
+			// through one channel, so what can be received is the best one's.
 			if (c.state === 'NORMAL') {
 				const [out, back] = [toUnits(c.sendable) ?? 0n, toUnits(c.receivable) ?? 0n];
-				if (out > sendable) sendable = out;
+				const peer = (byPeer.get(c.peerPubkey) ?? 0n) + out;
+				byPeer.set(c.peerPubkey, peer);
+				if (peer > sendable) sendable = peer;
 				if (back > receivable) receivable = back;
 			}
 		}
@@ -2012,6 +2017,30 @@ export function createAssetsMock(ctx) {
 				assetAmount = face;
 			}
 		}
+		// As the host: a payment one channel cannot carry goes in parts over
+		// the channels of one peer that carry it together, the fullest first.
+		let parts = null;
+		if (!ch) {
+			const byPeer = new Map();
+			for (const c of S(id).channels) {
+				if (c.asset.key !== identity.key || c.state !== 'NORMAL' || c.peerConnected === false || unpriced(c) || cmpUnits(c.sendable, '0') <= 0) continue;
+				byPeer.set(c.peerPubkey, [...(byPeer.get(c.peerPubkey) || []), c]);
+			}
+			for (const list of byPeer.values()) {
+				const held = list.reduce((sum, c) => addUnits(sum, c.sendable), '0');
+				if (list.length < 2 || cmpUnits(held, assetAmount) < 0) continue;
+				let left = assetAmount;
+				parts = [];
+				for (const c of [...list].sort((a, b) => cmpUnits(b.sendable, a.sendable))) {
+					if (cmpUnits(left, '0') <= 0) break;
+					const units = cmpUnits(c.sendable, left) < 0 ? c.sendable : left;
+					parts.push({ channelId: c.channelId, units });
+					left = subUnits(left, units);
+				}
+				ch = S(id).channels.find((c) => c.channelId === parts[0].channelId);
+				break;
+			}
+		}
 		if (!ch) {
 			const idle = awayChannel(id, identity.key, 'out', assetAmount);
 			if (idle) throw peerOffline(idle, 'pay');
@@ -2032,7 +2061,9 @@ export function createAssetsMock(ctx) {
 			peerAlias: ch.peerAlias,
 			expiresAt: now() + PAY_QUOTE_MS,
 			sendable,
+			parts: parts ? parts.length : 1,
 			_channelId: ch.channelId,
+			_parts: parts,
 			_key: identity.key
 		};
 		S(id).quotes[quote.quoteId] = quote;
@@ -2100,10 +2131,15 @@ export function createAssetsMock(ctx) {
 					});
 					return;
 				}
-				ch.localBalance = subUnits(ch.localBalance, quote.assetAmount);
-				ch.remoteBalance = addUnits(ch.remoteBalance, quote.assetAmount);
-				ch.sendable = subUnits(ch.sendable, quote.assetAmount);
-				ch.receivable = addUnits(ch.receivable, quote.assetAmount);
+				// Each part leaves its own channel: one, or those of a payment in parts.
+				const debits = quote._parts || [{ channelId: ch.channelId, units: quote.assetAmount }];
+				for (const part of debits) {
+					const c = s.channels.find((x) => x.channelId === part.channelId) || ch;
+					c.localBalance = subUnits(c.localBalance, part.units);
+					c.remoteBalance = addUnits(c.remoteBalance, part.units);
+					c.sendable = subUnits(c.sendable, part.units);
+					c.receivable = addUnits(c.receivable, part.units);
+				}
 				const paymentHash = derivedHex(`pay:${id}:${quote.quoteId}`, 64);
 				const row = newRow(id, 'ln-send', {
 					state: 'complete',
@@ -2111,6 +2147,7 @@ export function createAssetsMock(ctx) {
 					paymentHash,
 					feeSats: 2,
 					clientRef: key || null,
+					...(debits.length > 1 ? { parts: debits.length } : {}),
 					_done: true
 				});
 				row.at.completed = now();
@@ -2119,7 +2156,7 @@ export function createAssetsMock(ctx) {
 				ctx.emit(id, 'assets:balance', { key: identity.key });
 				// The daemon's own word on it, marked as one an asset channel carried.
 				ctx.emit(id, 'payment:sent', { paymentHash, amountSats: 354, feeSats: 2, auxiliary: true });
-				resolve({ status: 'COMPLETED', paymentHash, assetAmount: quote.assetAmount, feeSats: 2, failureDescription: null });
+				resolve({ status: 'COMPLETED', paymentHash, assetAmount: quote.assetAmount, feeSats: 2, failureDescription: null, ...(debits.length > 1 ? { parts: debits.length } : {}) });
 			}, ctx.ticker === false ? 0 : PAY_ANSWERS_MS);
 		});
 	}

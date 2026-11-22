@@ -138,9 +138,28 @@ const LIGHTNING_REFUSALS = {
 	// The wallet's own limits, before anything was recorded or sent. The
 	// limit is named when the engine's refusal carries it (mapLightning).
 	ERR_BEIGNET_LN_SPENDING_LIMIT: ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid.", 409],
-	// The engine sends an asset payment in one part, and this one would
-	// have needed several. Nothing was recorded or sent.
-	ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED: ['PAYMENT_UNSUPPORTED', 'This payment would have to go out in several parts, and an asset payment goes out in one, so nothing was paid.', 409],
+	// The engine does not send this payment as an asset payment: an invoice
+	// of this node's own, a payment given up while a part of it is still
+	// out, one that would mix asset HTLCs with ones that carry no units, or
+	// a blinded path that starts at this node. A payment in parts is not
+	// among them: the library sends each part itself. Nothing was recorded
+	// or sent.
+	ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED: [
+		'PAYMENT_UNSUPPORTED',
+		"This wallet's node cannot pay this invoice with an asset, so nothing was paid. An invoice this wallet made itself is one it cannot pay that way.",
+		409
+	],
+	// The channel did not take the HTLC at its add: the peer accepts no
+	// more HTLCs or no more value in flight, or the HTLC would leave a side
+	// below its reserve. Said only when nothing of the payment left: for a
+	// later part of a payment in parts the library resolves instead, with
+	// the parts already out, and the row follows its record. The quote
+	// stays usable while it lasts.
+	ERR_BEIGNET_LN_HTLC_NOT_ADMITTED: [
+		'PAYMENT_NOT_ADMITTED',
+		'The asset channel did not take this payment when it was added, so nothing was paid. Nothing was sent for it: its peer takes no more payments or no more value at once for now, or the payment would leave a side of the channel below its reserve. Pay again in a while.',
+		409
+	],
 	// The wallet has not taken in what became of earlier payments on the
 	// channel. Not the payer's doing: it is for a restart, or for a look.
 	ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED: [
@@ -150,8 +169,8 @@ const LIGHTNING_REFUSALS = {
 	],
 	// An asset channel carries at most a few payments at once that have not
 	// ended (8 unless set otherwise), so that every one of them can still be
-	// claimed on chain in time. The library refuses the next before anything
-	// is sent or recorded.
+	// claimed on chain in time, each part of a payment in parts counting as
+	// one. The library refuses the next before anything is sent or recorded.
 	ERR_BEIGNET_LN_HTLC_LIMIT: [
 		'CHANNEL_PAYMENTS_FULL',
 		'The asset channel this would be paid through already carries as many payments that have not ended as it can hold at once, so nothing was paid. Pay again once one of them has ended.',

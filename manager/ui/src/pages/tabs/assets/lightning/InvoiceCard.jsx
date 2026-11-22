@@ -110,8 +110,9 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 		? invoiceStanding({ invoice: made, row, listed, now: ranOut === made.paymentHash && deadline ? deadline : Date.now() })
 		: null;
 	const what = made ? fmtAsset(made.assetAmount, made.asset) : '';
-	// What arrived, which a payer's price can leave a unit under what was
-	// asked for: the paid row says it, and so does the list of invoices.
+	// What arrived, which a payer's price can leave up to a unit under what
+	// was asked for for each part a payment arrives in: the paid row says
+	// it, and so does the list of invoices.
 	const got = made ? (row?.state === 'complete' ? row.assets?.[0]?.amount : listed?.receivedAmount) ?? null : null;
 	const short = made ? invoiceShortfall({ assetAmount: made.assetAmount, receivedAmount: got }, made.asset) : null;
 
@@ -342,8 +343,8 @@ export default function InvoiceCard({ api, asset, units, state, patch, rows, bum
 							</div>
 							{short && (
 								<div className="wallet-meta" data-testid="asset-invoice-short">
-									The invoice {short.text}. A payer&apos;s price can come to a unit less than an invoice names, and the
-									invoice is paid all the same.
+									The invoice {short.text}. A payer&apos;s price can leave a payment up to a unit short of what an
+									invoice names for each part it arrives in, and the invoice is paid all the same.
 								</div>
 							)}
 							<div className="center-actions" style={{ justifyContent: 'center', marginTop: 12 }}>

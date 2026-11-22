@@ -278,6 +278,9 @@ test('a payment the wallet has a note on is worded by the note, never as paid or
 	for (const notice of [undefined, null, {}, { code: 'X', message: ' ' }]) {
 		assert.equal(noticeOf({ notice }), null);
 		assert.equal(headline({ kind: 'ln-send', state: 'complete', assets: [busd], notice }), 'Paid 3.57 BUSD over Lightning');
+		// A payment that went in parts says how many.
+		assert.equal(headline({ kind: 'ln-send', state: 'complete', assets: [busd], parts: 3 }), 'Paid 3.57 BUSD over Lightning in 3 parts');
+		assert.equal(headline({ kind: 'ln-send', state: 'pending', assets: [busd], planned: 3 }), 'Paying 3.57 BUSD over Lightning');
 		assert.equal(isFailed({ kind: 'ln-send', state: 'failed', failed: true, assets: [busd], notice }), true);
 	}
 });

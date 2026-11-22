@@ -277,10 +277,10 @@ export function invoiceStanding({ invoice, row, listed, now = Date.now() } = {})
 /**
  * What a paid invoice asked for and what it brought in, where the two
  * differ: { asked, received, text }, with the text "asked for 250.00 BUSD,
- * received 249.99 BUSD". A payer's price can come to a unit under what the
- * invoice names, and the invoice is paid all the same. Null where they
- * agree, and for an invoice that is not paid yet (`receivedAmount` is null
- * until it is).
+ * received 249.99 BUSD". A payer's price can leave a payment up to a unit
+ * under what the invoice names for each part it arrives in, and the invoice
+ * is paid all the same. Null where they agree, and for an invoice that is
+ * not paid yet (`receivedAmount` is null until it is).
  */
 export function invoiceShortfall(invoice, asset) {
 	if (!invoice) return null;
