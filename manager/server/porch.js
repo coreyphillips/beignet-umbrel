@@ -78,10 +78,10 @@ function isPrivateHost(host) {
 function checkToken(token) {
 	const bad = (message) => httpError(400, 'BAD_PORCH_TOKEN', message);
 	if (typeof token !== 'string') throw bad('A registration token must be text.');
-	const clean = token.trim();
-	if (!clean) throw bad('A registration token cannot be blank. Remove it instead.');
-	if (Buffer.byteLength(clean) > MAX_TOKEN_BYTES) throw bad(`A registration token is at most ${MAX_TOKEN_BYTES} bytes.`);
-	return clean;
+	// Kept as typed: the engine sends it byte for byte, spaces included.
+	if (!token) throw bad('A registration token cannot be blank. Remove it instead.');
+	if (Buffer.byteLength(token) > MAX_TOKEN_BYTES) throw bad(`A registration token is at most ${MAX_TOKEN_BYTES} bytes.`);
+	return token;
 }
 
 /**

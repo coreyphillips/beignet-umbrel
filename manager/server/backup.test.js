@@ -444,6 +444,49 @@ test('Porch set by hand in config.json, proxy and token included, comes back fro
 	assert.deepEqual(state.tokens, { 'wss://relay.example': 'hand-set' });
 });
 
+test('a restore without a config file drops relays a deleted wallet left behind, and keeps its other keys', async () => {
+	const { a } = twoWalletBox();
+	const out = await quiet(() => manager().exportBackup({ passphrase: PASSPHRASE }));
+	const native = path.join(DATA_DIR, 'wallets', a.id, 'home', '.beignet', 'config.json');
+	fs.mkdirSync(path.dirname(native), { recursive: true });
+	fs.writeFileSync(native, JSON.stringify({ porchRelays: [{ url: 'wss://relay.example', token: 'later' }], porchVia: 'direct', other: 1 }));
+	writeRegistry([]);
+	const fresh = manager();
+	fresh.porchSupported = true;
+	await quiet(() => fresh.restoreBackup({ passphrase: PASSPHRASE, archive: out.archive.toString('base64') }));
+	assert.deepEqual(JSON.parse(fs.readFileSync(native, 'utf8')), { other: 1 });
+	assert.equal(fresh._porchState(fresh.registry.get(a.id)).source, null);
+});
+
+test('a Porch save writes config.json before any restart: a removed token is gone at once, and a file it cannot write refuses the save', async () => {
+	const { a } = twoWalletBox();
+	const m = manager();
+	m.porchSupported = true;
+	let restarts = 0;
+	m._restartWallet = async () => {
+		restarts += 1;
+	};
+	m.runtimeState(a.id).proc = {};
+	const native = path.join(DATA_DIR, 'wallets', a.id, 'home', '.beignet', 'config.json');
+	await quiet(() => m.updateWallet(a.id, { porch: { enabled: true, relays: [{ url: 'wss://relay.example', token: 'sekrit' }] } }));
+	assert.deepEqual(JSON.parse(fs.readFileSync(native, 'utf8')).porchRelays, [{ url: 'wss://relay.example', token: 'sekrit' }]);
+	await quiet(() => m.updateWallet(a.id, { porch: { relays: [{ url: 'wss://relay.example', token: null }] } }));
+	assert.deepEqual(JSON.parse(fs.readFileSync(native, 'utf8')).porchRelays, ['wss://relay.example']);
+	assert.equal(restarts, 2);
+
+	fs.chmodSync(path.dirname(native), 0o500);
+	try {
+		await assert.rejects(
+			quiet(() => m.updateWallet(a.id, { porch: { relays: [{ url: 'wss://relay.example', token: 'next' }] } })),
+			(err) => err.code === 'PORCH_CONFIG_UNWRITABLE'
+		);
+	} finally {
+		fs.chmodSync(path.dirname(native), 0o700);
+	}
+	assert.equal(restarts, 2);
+	assert.deepEqual(m.publicRecord(a.id).porch.relays, [{ url: 'wss://relay.example', hasToken: false }]);
+});
+
 test('an archive is never written larger than a restore accepts: the largest assets backups are left out and named', () => {
 	// A restore carries the archive as base64 in one request body.
 	assert.ok(Math.ceil((MAX_ARCHIVE_BYTES * 4) / 3) < RESTORE_BODY_LIMIT_BYTES);

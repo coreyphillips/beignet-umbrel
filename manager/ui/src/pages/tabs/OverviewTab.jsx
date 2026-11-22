@@ -361,7 +361,9 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
  * is offered only while a relay says ready.
  */
 function PorchCard({ rec }) {
-	const { data } = usePoll(() => manager.porchStatus(rec.id), 5000, [rec.id]);
+	const { data: last, error } = usePoll(() => manager.porchStatus(rec.id), 5000, [rec.id]);
+	// After a failed poll the last answer is stale, and a link it called ready may no longer be.
+	const data = error ? { running: true, error: error.message } : last;
 	const relays = data?.relays || [];
 	const uri = readyUri(data);
 	return (

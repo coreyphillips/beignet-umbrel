@@ -1,6 +1,6 @@
 /** The Porch rows the edit form starts from: a saved token is shown as saved, never as text. */
 export function porchRows(rec) {
-	return (rec?.porch?.relays || []).map((relay) => ({ url: relay.url, hasToken: !!relay.hasToken, token: '', removeToken: false }));
+	return (rec?.porch?.relays || []).map((relay) => ({ url: relay.url, savedUrl: relay.url, savedToken: !!relay.hasToken, hasToken: !!relay.hasToken, token: '', removeToken: false }));
 }
 
 /**
@@ -14,7 +14,7 @@ export function porchBody(enabled, via, rows) {
 	const relays = rows
 		.filter((row) => row.url.trim())
 		.map((row) => {
-			if (row.token.trim()) return { url: row.url.trim(), token: row.token.trim() };
+			if (row.token) return { url: row.url.trim(), token: row.token };
 			if (row.removeToken) return { url: row.url.trim(), token: null };
 			return { url: row.url.trim() };
 		});
@@ -27,7 +27,7 @@ export function porchChanged(rec, enabled, via, rows) {
 	if (!enabled) return false;
 	if (via !== (was.via || 'default')) return true;
 	const before = (was.relays || []).map((relay) => relay.url).join(' ');
-	return before !== rows.map((row) => row.url.trim()).join(' ') || rows.some((row) => row.token.trim() || row.removeToken);
+	return before !== rows.map((row) => row.url.trim()).join(' ') || rows.some((row) => row.token || row.removeToken);
 }
 
 /**

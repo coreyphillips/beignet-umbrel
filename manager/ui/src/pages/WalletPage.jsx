@@ -767,7 +767,11 @@ export function EditWalletModal({
 		const rows = porchRows(rec);
 		return rows.length ? rows : [{ url: '', token: '', hasToken: false, removeToken: false }];
 	});
-	const porchEdited = porchAvailable && porchChanged(rec, porchOn, porchVia, porchRelayRows.filter((row) => row.url.trim() || row.hasToken));
+	// Compared with Porch as the form opened, not the record (which refreshes
+	// while it is open), and sent only when edited: a stale relay list would
+	// otherwise drop a relay and its token saved from elsewhere since.
+	const [porchOpened] = useState(() => ({ porch: rec.porch }));
+	const porchEdited = porchAvailable && porchChanged(porchOpened, porchOn, porchVia, porchRelayRows.filter((row) => row.url.trim() || row.hasToken));
 	const announced = announce && (usesOnion(networkMode) || (usesPublic(networkMode) && !!publicHost.trim()));
 	const networkChanged =
 		networkMode !== modeOf(rec) || publicHost.trim() !== (rec.publicHost || '') || announce !== !!rec.announce || iroh !== !!rec.iroh?.enabled || irohRelays !== (rec.iroh?.relays || []).join(', ');
@@ -829,7 +833,7 @@ export function EditWalletModal({
 				...(allow ? { allowChainMismatch: true } : {}),
 				networkMode,
 				...(irohAvailable ? { iroh: irohBody(iroh && !onchainOnly, irohRelays) } : {}),
-				...(porchAvailable ? { porch: porchBody(porchOn && !onchainOnly, porchVia, porchRelayRows) } : {}),
+				...(porchEdited ? { porch: porchBody(porchOn && !onchainOnly, porchVia, porchRelayRows) } : {}),
 				publicHost,
 				announce: onchainOnly ? false : announce,
 				onchainOnly,

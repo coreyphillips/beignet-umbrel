@@ -37,7 +37,8 @@ export default function PorchField({ enabled, onEnabled, via, onVia, rows, onRow
 								<input
 									data-testid="porch-relay-url"
 									value={row.url}
-									onChange={(e) => set(i, { url: e.target.value })}
+									// A saved token belongs to the URL it was saved with.
+								onChange={(e) => set(i, { url: e.target.value, hasToken: !!row.savedToken && e.target.value.trim() === row.savedUrl })}
 									placeholder="wss://relay.example.com"
 								/>
 							</Field>

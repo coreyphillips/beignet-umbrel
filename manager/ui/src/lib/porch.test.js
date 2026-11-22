@@ -12,7 +12,7 @@ test('a saved token is kept unless replaced or removed', () => {
 	assert.deepEqual(porchBody(true, 'tor', rows), {
 		enabled: true,
 		via: 'tor',
-		relays: [{ url: 'wss://a.example', token: 'new' }, { url: 'wss://b.example', token: null }]
+		relays: [{ url: 'wss://a.example', token: ' new ' }, { url: 'wss://b.example', token: null }]
 	});
 });
 

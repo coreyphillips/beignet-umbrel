@@ -25,7 +25,7 @@ test('each relay keeps its own token: kept when left out, replaced, or removed',
 		ON
 	);
 	assert.deepEqual(first.porch, { enabled: true, relays: ['wss://a.example', 'wss://b.example'] });
-	assert.deepEqual(first.tokens, { 'wss://a.example': 'secret-a', 'wss://b.example': 'secret-b' });
+	assert.deepEqual(first.tokens, { 'wss://a.example': ' secret-a\n', 'wss://b.example': 'secret-b' });
 
 	const kept = porch.normalizePorch({ enabled: true, relays: [{ url: 'wss://a.example' }, { url: 'wss://b.example' }] }, {
 		...ON,

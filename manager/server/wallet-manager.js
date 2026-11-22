@@ -1699,11 +1699,16 @@ class WalletManager {
 						porchProxy: nativeConfig?.porchProxy
 				  })
 				: undefined;
-		// The restart writes the relays into config.json and will not write
-		// over a file it cannot read, so that is caught here, before the stop.
-		const porchAfter = nextPorch?.porch || rec.porch;
-		if (nativeConfig === null && porchAfter && porchRules.porchOn({ porch: porchAfter, onchainOnly: nextOnchainOnly }, this.porchAvailable())) {
-			throw httpError(400, 'PORCH_CONFIG_UNREADABLE', `${porchRules.nativeConfigPath(this.paths(id).home)} could not be read, so Porch cannot be set up in it. Repair or remove that file first.`);
+		// config.json is written here, before anything else changes, so a file
+		// that cannot be written refuses the edit before a running daemon is
+		// stopped, and a stopped wallet keeps no token the edit removed.
+		const porchAfter = nextPorch || (rec.porch ? { porch: rec.porch, tokens: porchWas.tokens } : null);
+		if (porchAfter) {
+			try {
+				porchRules.syncNativeConfig(this.paths(id).home, { porch: porchAfter.porch, onchainOnly: nextOnchainOnly }, porchAfter.tokens, this.porchAvailable());
+			} catch (err) {
+				throw httpError(400, 'PORCH_CONFIG_UNWRITABLE', `Porch was not saved: ${err.message}. Repair that file or its permissions first.`);
+			}
 		}
 		if (name !== undefined && String(name).trim()) rec.name = String(name).trim();
 		if (nextElectrum) rec.electrum = nextElectrum;
@@ -2119,9 +2124,11 @@ class WalletManager {
 		rt.spawnedEnv = env;
 		rt.startedAt = Date.now();
 
+		// A relay's error text can quote a token back.
+		const porchTokens = this._porchState(rec).tokens;
 		const emit = (line) => {
 			if (!line.trim()) return;
-			this._log(id, line.trim());
+			this._log(id, porchRules.redact(line.trim(), porchTokens));
 			this._noteStartFailure(rt, line.trim());
 			this._notePrintedStep(id, rt, line.trim());
 		};
@@ -3076,6 +3083,10 @@ class WalletManager {
 				const file = porchRules.nativeConfigPath(p.home);
 				fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
 				this._writeSecret(file, nativeConfig);
+			} else {
+				// A config file left by a deleted wallet must not bring back
+				// relays the archive never had.
+				porchRules.syncNativeConfig(p.home, { porch: { enabled: false, relays: [] } }, {}, false);
 			}
 			// The wallet's assets, when the archive carries them, wait where
 			// its assets host looks on its first start: a seed alone brings
