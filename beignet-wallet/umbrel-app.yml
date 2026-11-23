@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.43.0"
+version: "0.43.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,7 +30,23 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.45.0, with the assets library that needs it. An
+  Bundles beignet 0.45.0, as 0.43.0 did, with an assets library that
+  takes and sends asset payments in parts. An asset invoice of yours
+  offers to be paid in parts where your channels with the peer can
+  collect them, and what arrives can be up to one unit under the
+  invoice for each part. A payment no one channel can carry goes in
+  parts over your channels with one peer, at most eight; through a peer
+  that prices one channel at a time, as Lightning Labs' peers do, it
+  asks one price for each channel. An invoice whose payment the peer
+  took back on the chain reads lost. Your invoice names lnd's default
+  fee and delta where the wallet does not know the peer's. Going back
+  to app 0.43.0 keeps your wallets and channels: wait until invoices
+  that offered parts have expired and no payment in parts is pending;
+  a lost invoice's row stays, and 0.43.0 reads one with nothing left
+  received as paid.
+
+
+  From app 0.43.0: Bundles beignet 0.45.0, with the assets library that needs it. An
   asset invoice of yours names one way to reach you: through the peer
   that priced it, over your asset channel, and none of your bitcoin
   channels. It asks to be paid in one payment, not in parts. Beignet
