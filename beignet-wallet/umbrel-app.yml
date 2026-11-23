@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.43.1"
+version: "0.43.2"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,7 +30,22 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.45.0, as 0.43.0 did, with an assets library that
+  Bundles beignet 0.45.1, with an assets library that takes an
+  ordinary bitcoin payment a Lightning Labs peer sends over your asset
+  channel. When you have a bitcoin channel and an asset channel with
+  the same peer, the peer can send a payment to you over either, and a
+  payment that comes over the asset channel is taken: its invoice reads
+  paid, and its bitcoin joins your side of that channel, on the line of
+  bitcoin in asset channels and on the channel's row as your bitcoin in
+  it, and comes home when the channel closes. A price or a payment made
+  while a channel is reconnecting after a restart waits a moment for
+  it. Going back to app 0.43.1 keeps your wallets and channels: let
+  payments in flight end first; 0.43.1 takes no payment over an asset
+  channel, and the bitcoin already there stays until the channel
+  closes.
+
+
+  From app 0.43.1: Bundles beignet 0.45.0, as 0.43.0 did, with an assets library that
   takes and sends asset payments in parts. An asset invoice of yours
   offers to be paid in parts where your channels with the peer can
   collect them, and what arrives can be up to one unit under the
