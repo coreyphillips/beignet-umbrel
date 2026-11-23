@@ -875,7 +875,20 @@ env:
   # channels. It stores nothing new: the schema stays 21. The routes,
   # the environment settings and the runtime dependencies are unchanged
   # since 0.43.5.
-  BEIGNET_VERSION: "0.45.0"
+  # 0.45.1 (coreyphillips/beignet#2132) holds, claims and sweeps an HTLC
+  # without units that its host values on an asset channel as it does on an
+  # ordinary channel, and fails back such an HTLC of a hash the node is
+  # paying before the host is asked. The library at 4425eaf
+  # (coreyphillips/ts-tap#177) values such an HTLC at the bitcoin it
+  # carries when it pays an ordinary invoice of the node that is not a hold
+  # invoice, so the wallet takes an ordinary payment a peer sends over its
+  # asset channel, its bitcoin joining the wallet's side of that channel,
+  # and refuses one for a hold invoice there; and it counts an asset
+  # channel that is reconnecting as pending, a quote or a payment waiting
+  # up to 5 seconds for it (coreyphillips/ts-tap#175). No schema change: it
+  # stays 21. The routes, the environment settings and the runtime
+  # dependencies are unchanged since 0.43.5.
+  BEIGNET_VERSION: "0.45.1"
 
 jobs:
   build:

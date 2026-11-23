@@ -544,14 +544,21 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     pays up to a unit a part more than one HTLC would; `milliSatoshi` is
  *     what the routes carry together and `feeMsat` what they charge; and
  *     `carrierMsat` the bitcoin the HTLCs carry, one carrier each, which
- *     leaves with the payment beside the fee.
+ *     leaves with the payment beside the fee. While no channel of the
+ *     asset can send and one that holds units to send is reconnecting (its
+ *     peer connected, its reestablish under way), it waits up to 5 seconds
+ *     for that one, asking the peer nothing meanwhile, and goes on once it
+ *     is back, or refuses with CHANNEL_SETTLING.
  * 22. payInvoice({ quoteId, maxAssetAmount }) is one try at an invoice. It
  *     rejects only while nothing has left the wallet, and only with a code
  *     of the exported ASSET_PAYMENT_REFUSALS: PAYMENT among them for an
  *     engine that did not take the payment, SPENDING_LIMIT for the wallet's
  *     own spending limits refusing it before anything was recorded or sent,
  *     and UNSUPPORTED for an engine that does not state how it takes the
- *     asset side of a payment. The facade hands that list on as
+ *     asset side of a payment. While a channel its quote sends over is
+ *     reconnecting it waits up to 5 seconds for it, with nothing written,
+ *     and refuses with CHANNEL_SETTLING when it is still so: the quote
+ *     stays usable. The facade hands that list on as
  *     `refusals`, and the host keeps no copy of it. Once the payment is
  *     handed to the engine the call resolves, to { paymentHash,
  *     assetAmount, status, attempt, channelId, htlcId?, parts, planned,
@@ -604,10 +611,11 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *       - before `start`, and after `close`, it throws NOT_READY and never
  *         answers undefined for a payment it would know of.
  * 23. paymentLimits() is synchronous: for each asset, [{ assetId? |
- *     groupKey?, maxSend, maxReceive, sendChannelId?, sendPeer?,
- *     receiveChannelId? }], the most ONE payment can send and receive over
- *     NORMAL channels whose peer is connected, less what payments under way
- *     have set aside. A payment is sent over the asset channels of one
+ *     groupKey?, maxSend, maxReceive, pendingSend, pendingReceive,
+ *     sendChannelId?, sendPeer?, receiveChannelId? }], the most ONE
+ *     payment can send and receive over NORMAL channels whose peer is
+ *     connected, less what payments under way have set aside. A payment
+ *     is sent over the asset channels of one
  *     peer, in parts when one channel does not hold it, so `maxSend` is
  *     what the channels of the best peer (`sendPeer`) hold together, each
  *     with a slot and a carrier for one more HTLC, and `sendChannelId` the
@@ -615,7 +623,12 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     when its invoice offers basic_mpp, and in N parts takes up to N units
  *     more than one HTLC would. An invoice is quoted only through a channel
  *     that can receive the whole of it, so `maxReceive` is the best single
- *     channel's and never a sum.
+ *     channel's and never a sum. A channel that is reconnecting (its peer
+ *     connected, its reestablish under way, marked by the engine to return
+ *     to NORMAL) is in neither: what it would add to each is in
+ *     `pendingSend` and `pendingReceive`, always there and 0n when nothing
+ *     is pending. An asset whose channels are all reconnecting has an
+ *     entry that names no channel and no peer.
  *
  * Events and errors
  *
@@ -625,14 +638,14 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     CANCELLED, FEE_BOUND, UNKNOWN_CHANNEL, NO_QUOTE, QUOTE_EXPIRED,
  *     PRICE_BOUND, RATE_TOO_COARSE, SPENDING_LIMIT, INSUFFICIENT_OUTBOUND,
  *     INSUFFICIENT_INBOUND, BAD_INVOICE, INVOICE_EXPIRED, AMOUNT_REQUIRED,
- *     ALREADY_PAID and PAYMENT. RECORDS_UNCONFIRMED is no refusal and has
- *     no sentence: the payment it speaks of is followed (22). CHANNEL,
- *     FUNDING and RECOVERY carry the library's own account of what went
- *     wrong inside: that goes to the log, and the caller gets a sentence of
- *     the host's. So do the library's own ERR_LIGHTNING_* and ERR_FUNDING_*
- *     codes. The adapter's ERR_BEIGNET_FUNDING, ERR_BEIGNET_WALLET and
- *     ERR_BEIGNET_FEE pass through for the funding transaction, as for a
- *     mint or a send.
+ *     CHANNEL_SETTLING, ALREADY_PAID and PAYMENT. RECORDS_UNCONFIRMED is
+ *     no refusal and has no sentence: the payment it speaks of is followed
+ *     (22). CHANNEL, FUNDING and RECOVERY carry the library's own account
+ *     of what went wrong inside: that goes to the log, and the caller gets
+ *     a sentence of the host's. So do the library's own ERR_LIGHTNING_* and
+ *     ERR_FUNDING_* codes. The adapter's ERR_BEIGNET_FUNDING,
+ *     ERR_BEIGNET_WALLET and ERR_BEIGNET_FEE pass through for the funding
+ *     transaction, as for a mint or a send.
  * 25. onEvent receives { type: 'channel', pendingChannelId?, channelId?,
  *     phase?, error? }, { type: 'invoice', paymentHash, status: 'paid' |
  *     'lost', assetAmount, receivedAssetAmount, channelId } once for each
@@ -755,8 +768,9 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     gives { pubkey, remoteInit } for each peer, `remoteInit` set once
  *     the peer's greeting has arrived, which is the library's own rule
  *     for a peer a channel can be used with; listChannels() gives every
- *     channel of any kind with its `channelId`, and its
- *     `temporaryChannelId` where the engine has one. A channel's state
+ *     channel of any kind with its `channelId`, its `temporaryChannelId`
+ *     where the engine has one, and `localBalanceMsat`, this wallet's side
+ *     of the channel's bitcoin in millisatoshis. A channel's state
  *     word is one of the engine's ChannelState (views.channelWord has
  *     them all): AWAITING_REESTABLISH is a channel waiting for its peer,
  *     and ERRORED one the engine gave up, which closes only by force.
@@ -975,11 +989,35 @@ const attemptOf = (p) => (Number.isInteger(p.attempt) && p.attempt > 0 ? p.attem
 /** S4. The units an invoice brought in, or null when the library says only what was invoiced. */
 const receivedOf = (i) => (i.receivedAssetAmount === undefined || i.receivedAssetAmount === null ? null : BigInt(i.receivedAssetAmount));
 
-/** One entry of the service's list, in plain values. */
-function plainChannel(c) {
+/**
+ * This wallet's side of the bitcoin of each channel the node holds, in
+ * whole sats, by the channel's id and by the id its open was given: the
+ * node's `localBalanceMsat` (38). Empty when the node cannot say.
+ */
+function ownSatsOf(node) {
+	const out = new Map();
+	if (!node || typeof node.listChannels !== 'function') return out;
+	let held = [];
+	try {
+		held = node.listChannels() || [];
+	} catch (_) {
+		return out;
+	}
+	for (const c of held) {
+		if (!c || (typeof c.localBalanceMsat !== 'bigint' && !Number.isSafeInteger(c.localBalanceMsat))) continue;
+		const msat = BigInt(c.localBalanceMsat);
+		if (msat < 0n) continue;
+		for (const id of [c.channelId, c.temporaryChannelId]) if (id) out.set(asHex(id), Number(msat / 1000n));
+	}
+	return out;
+}
+
+/** One entry of the service's list, in plain values. `own` is what ownSatsOf read of the node. */
+function plainChannel(c, own = new Map()) {
 	const assets = outUnits(c.assets);
 	const phase = String(c.phase || '');
 	const state = c.state ? String(c.state) : null;
+	const ownKey = [c.channelId, c.pendingChannelId].map((id) => (id ? asHex(id) : null)).find((id) => id && own.has(id));
 	return {
 		pendingChannelId: asHex(c.pendingChannelId),
 		channelId: c.channelId ? asHex(c.channelId) : null,
@@ -1002,6 +1040,9 @@ function plainChannel(c) {
 		remote: BigInt(c.remoteAssetBalance || 0),
 		reserved: BigInt(c.reserved || 0),
 		fundingSats: Number(c.fundingSatoshis || 0),
+		// This wallet's side of the channel's bitcoin, while the node holds
+		// the channel: it comes home when the channel closes.
+		...(ownKey ? { localSats: own.get(ownKey) } : {}),
 		reserveSats: whole(c.reserveSatoshis),
 		// The name its funding inputs still sit under in the on-chain
 		// records, and what they hold, until the funding has confirmed.
@@ -1125,7 +1166,7 @@ function plainEvent(e) {
  *                                initiator, phase, engine, signed, committed,
  *                                confirmed, fundingTxid, state, assetId,
  *                                groupKey, assets, local, remote, reserved,
- *                                fundingSats, reserveSats,
+ *                                fundingSats, localSats?, reserveSats,
  *                                fundingReservation, fundingInputs,
  *                                recovery, cancelled, error }]
  *   connect({ pubkey, host, port })
@@ -1164,10 +1205,12 @@ function plainEvent(e) {
  *                                `attempt`, `lost` and `unconfirmed` as
  *                                well (S2, S3)
  *   paymentLimits()            [{ assetId, groupKey, maxSend, maxReceive,
- *                                sendChannelId, sendPeer, receiveChannelId }]:
- *                                the most one payment can move of each
- *                                asset, sent over one peer's channels and
- *                                received over one channel (23)
+ *                                pendingSend, pendingReceive, sendChannelId,
+ *                                sendPeer, receiveChannelId }]: the most one
+ *                                payment can move of each asset, sent over
+ *                                one peer's channels and received over one
+ *                                channel, and what channels that are
+ *                                reconnecting would add to each (23)
  *
  *   resume()                   carries opens on and confirms channels
  *   resumeRecovery()           -> [{ channelId, completed, pending, errors }]
@@ -1328,7 +1371,11 @@ function createLightning({ entry, storage, cfg, now = null }) {
 		ready: () => !!node && !!service,
 		refusals: Object.freeze(entry.ASSET_PAYMENT_REFUSALS.map(String)),
 
-		channels: () => live().channels().map(plainChannel),
+		channels: () => {
+			const listed = live().channels();
+			const own = ownSatsOf(node);
+			return listed.map((c) => plainChannel(c, own));
+		},
 		async connect({ pubkey, host, port }) {
 			live();
 			await node.connectPeer(pubkey, host, port);
@@ -1463,6 +1510,11 @@ function createLightning({ entry, storage, cfg, now = null }) {
 					groupKey: l.groupKey ? asHex(l.groupKey) : null,
 					maxSend: BigInt(l.maxSend || 0),
 					maxReceive: BigInt(l.maxReceive || 0),
+					// What the asset's channels that are reconnecting would add to
+					// each: the library waits a few seconds for such a channel
+					// before it prices or pays.
+					pendingSend: BigInt(l.pendingSend || 0),
+					pendingReceive: BigInt(l.pendingReceive || 0),
 					sendChannelId: l.sendChannelId ? asHex(l.sendChannelId) : null,
 					sendPeer: l.sendPeer ? asHex(l.sendPeer) : null,
 					receiveChannelId: l.receiveChannelId ? asHex(l.receiveChannelId) : null

@@ -103,8 +103,13 @@ test('a channel is shown in the asset it holds: both sides, what can move, and i
 			'Can send2,400.00BUSD',
 			'Can receive3,100.00BUSD',
 			'Capacity5,500.00BUSD',
-			'Bitcoin in the channel100,000 sats'
+			'Bitcoin in the channel100,000 sats',
+			'Your bitcoin in it98,292 satsComes home when the channel closes.'
 		]);
+		// The wallet's own side of that bitcoin is a line of its own, with when it comes home under it.
+		const own = r.test('asset-channel-own-bitcoin');
+		assert.equal(own.querySelector('dt').textContent, 'Your bitcoin in it');
+		assert.equal(own.querySelector('.asset-channel-carries').textContent, 'Comes home when the channel closes.');
 		assert.equal(r.test('asset-channel-close').textContent, 'Close');
 	} finally {
 		await r.unmount();
@@ -543,7 +548,7 @@ test('a wallet with nothing wrong with its channels shows no warning', async () 
 	}
 });
 
-const CHANNEL_KEYS = ['channelId', 'pendingChannelId', 'peerPubkey', 'peerAlias', 'state', 'failure', 'peerConnected', 'asset', 'capacity', 'localBalance', 'remoteBalance', 'sendable', 'receivable', 'channelSats', 'fundingTxid', 'reclaimable', 'reclaimTxid'];
+const CHANNEL_KEYS = ['channelId', 'pendingChannelId', 'peerPubkey', 'peerAlias', 'state', 'failure', 'peerConnected', 'asset', 'capacity', 'localBalance', 'remoteBalance', 'sendable', 'receivable', 'channelSats', 'localSats', 'fundingTxid', 'reclaimable', 'reclaimTxid'];
 const keyed = (key) => ({ headers: { 'X-Idempotency-Key': key } });
 
 test('the funding of an open that will not confirm can be taken back: asked once, said on the row, and the asset comes back', async () => {
@@ -810,9 +815,11 @@ test('a node that refused its fee settings is said in red, and the open dialog h
 test('the demo counts the bitcoin of a channel that is there, and says that of one being force closed as on its way back', async () => {
 	const backend = assetsBackend();
 	assert.deepEqual(backend.mock.channelBitcoin('demo-main'), { assetChannelSats: 98292 });
+	// Each row says its own side of that bitcoin, which is what the balance adds up.
+	assert.deepEqual((await backend.api('demo-main').get('/x/assets/channels')).channels.map((c) => c.localSats), [98292]);
 	assert.equal(backend.mock.seed('demo-main', 'channel-closing'), true);
 	const listed = (await backend.api('demo-main').get('/x/assets/channels')).channels;
-	assert.deepEqual(listed.map((c) => [c.state, c.sendable, c.receivable]), [['FORCE_CLOSING', '0', '0']]);
+	assert.deepEqual(listed.map((c) => [c.state, c.sendable, c.receivable, c.localSats]), [['FORCE_CLOSING', '0', '0', 98292]]);
 	assert.deepEqual(backend.mock.channelBitcoin('demo-main'), { assetChannelClosingSats: 98292 });
 	// A wallet with no asset channel has neither key, as on the engine.
 	assert.deepEqual(backend.mock.channelBitcoin('demo-savings'), {});

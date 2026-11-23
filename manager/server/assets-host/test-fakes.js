@@ -444,12 +444,21 @@ const fakeInvoice = ({ msat, hash } = {}) =>
  * refused with before anything is sent), payThrowsAfter (a code it rejects
  * with once the node has the payment, which the real entry never does),
  * payMoved (the peer's price is past the bound), payFeeMsat, payStopsAfter
- * (the parts of a payment in parts that go out before the sending stops).
+ * (the parts of a payment in parts that go out before the sending stops),
+ * settles (what happens while a quote or a payment waits for a channel
+ * that is reconnecting, such as the channel coming back).
  *
  * A payment one channel cannot carry goes in parts over the channels of
  * its peer that can carry it together, the fullest first, as the library's
  * does over one peer's asset channels; `paymentLimits()` gives what the
  * best peer's channels hold together.
+ *
+ * A confirmed channel in AWAITING_REESTABLISH whose peer is connected is
+ * reconnecting, as the library has it: it is in no figure of
+ * `paymentLimits()`, which says what it would add in `pendingSend` and
+ * `pendingReceive`. A quote while no channel of the asset can send, and a
+ * payment over such a channel, wait for it: `settles` runs, and a channel
+ * still reconnecting then is refused with CHANNEL_SETTLING.
  *
  * A test moves a channel on by hand: `confirm(id)` buries its funding and
  * makes it NORMAL, `set(id, fields)` changes it, `abandon(id, reason)` gives
@@ -477,6 +486,7 @@ const ASSET_PAYMENT_REFUSALS = Object.freeze(
 		'INVOICE_EXPIRED',
 		'AMOUNT_REQUIRED',
 		'ALREADY_PAID',
+		'CHANNEL_SETTLING',
 		'PAYMENT',
 		'PAYMENT_UNSUPPORTED',
 		'OUTCOMES_UNDELIVERED',
@@ -562,7 +572,8 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		payCause: null,
 		payThrowsAfter: null,
 		payMoved: false,
-		payFeeMsat: 2000n
+		payFeeMsat: 2000n,
+		settles: null
 	};
 	const flows = new Map();
 	// Opens given up, by id: one still running stops at its next step, and
@@ -608,6 +619,17 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 		return units > 0n ? units : 1n;
 	};
 	const byChannel = (channelId) => [...flows.values()].find((f) => f.channelId === channelId) || null;
+	// As the library: a channel that was open, whose peer is connected and
+	// that awaits its reestablish, is reconnecting. The engine makes it
+	// usable again by itself, and a quote or a payment waits for it.
+	const reconnecting = (f) => !!f && f.state === 'AWAITING_REESTABLISH' && f.confirmed && !opts.peerOffline && !opts.offlinePeers.includes(f.peerPubkey);
+	const spareOf = (f) => (f.local > f.reserved ? f.local - f.reserved : 0n);
+	/** Wait for a channel that is reconnecting while `waiting()` holds: `settles` is what happens meanwhile. */
+	const settle = (waiting) => {
+		if (!waiting()) return;
+		if (typeof opts.settles === 'function') opts.settles();
+		if (waiting()) throw refuse('CHANNEL_SETTLING', 'the asset channel is still reconnecting');
+	};
 	const total = (assets) => assets.reduce((sum, a) => sum + BigInt(a.amount), 0n);
 
 	/* The on-chain records an open holds: reserved under its name from the
@@ -750,10 +772,15 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			return [...all].filter((pubkey) => !opts.offlinePeers.includes(pubkey)).map((pubkey) => ({ pubkey, host: 'peer.example.com', port: 9735, state: 'ready', remoteInit: {} }));
 		},
 		// What the node itself holds: the channels the service lists with a state, and what a test adds.
+		// This wallet's side of a channel's bitcoin is the funding less what
+		// was pushed to the peer for an open of its own, and what the peer
+		// pushed for one the peer opened, unless a test sets `localBalanceMsat`.
 		listChannels() {
 			const held = [...flows.values()].filter((f) => f.state && f.engine !== 'missing' && f.engine !== 'absent');
+			const pushed = (f) => BigInt((f.request && f.request.pushSats) || 0);
+			const localMsat = (f) => (f.localBalanceMsat !== undefined ? BigInt(f.localBalanceMsat) : (f.initiator ? BigInt(f.fundingSats) - pushed(f) : pushed(f)) * 1000n);
 			return [
-				...held.map((f) => ({ channelId: bytes(f.channelId || f.pendingChannelId), temporaryChannelId: bytes(f.pendingChannelId), peerPubkey: f.peerPubkey, state: f.state })),
+				...held.map((f) => ({ channelId: bytes(f.channelId || f.pendingChannelId), temporaryChannelId: bytes(f.pendingChannelId), peerPubkey: f.peerPubkey, state: f.state, localBalanceMsat: localMsat(f) })),
 				...opts.engineChannels.map((c) => ({ channelId: bytes(c.channelId || c.temporaryChannelId), temporaryChannelId: bytes(c.temporaryChannelId || c.channelId), peerPubkey: c.peerPubkey || '', state: c.state || 'SENT_FUNDING_CREATED' }))
 			];
 		}
@@ -1187,6 +1214,10 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				refusePaid(invoice.hash);
 				const msat = invoice.msat !== null ? BigInt(invoice.msat) : amountMsat === undefined || amountMsat === null ? null : BigInt(amountMsat);
 				if (msat === null) throw refuse('AMOUNT_REQUIRED', 'the invoice names no amount');
+				// While no channel of the asset can send and one that holds units
+				// is reconnecting, the peer is asked nothing until it is back.
+				const ofAsset = (f) => f.confirmed && (groupKey ? f.groupKey === groupKey : f.assetId === assetId);
+				settle(() => ![...flows.values()].some((f) => ofAsset(f) && f.state === 'NORMAL' && spareOf(f) > 0n) && [...flows.values()].some((f) => ofAsset(f) && reconnecting(f) && spareOf(f) > 0n));
 				if (opts.quoteFails) throw quoteFailure(opts.quoteFails);
 				const flow = [...flows.values()].find((f) => f.state === 'NORMAL' && f.confirmed && (groupKey ? f.groupKey === groupKey : f.assetId === assetId));
 				if (!flow) throw refuse('INSUFFICIENT_OUTBOUND', 'no open asset channel carries this asset');
@@ -1241,6 +1272,9 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				const quote = quotes.get(wanted);
 				if (!quote || quote.kind !== 'pay') throw refuse('QUOTE_EXPIRED', 'the payment quote is used up or too old: ask for a new one');
 				refusePaid(quote.paymentHash);
+				// A channel the quote sends over that is reconnecting is waited
+				// for, with nothing written: still so, the quote stays usable.
+				settle(() => (quote.parts || [{ channelId: quote.channelId }]).some((part) => reconnecting(byChannel(part.channelId))));
 				quotes.delete(wanted);
 				// Refused while nothing has left: the record of an earlier try, if any, stands.
 				if (opts.payMoved || quote.assetAmount > BigInt(maxAssetAmount)) throw refuse('PRICE_BOUND', 'the price is past the bound');
@@ -1280,28 +1314,41 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			},
 			paymentLimits() {
 				reads('paymentLimits');
-				const limits = new Map();
-				const sending = new Map();
-				for (const f of flows.values()) {
-					if (f.state !== 'NORMAL' || !f.confirmed || opts.peerOffline) continue;
-					const name = f.groupKey ? `group:${f.groupKey}` : `asset:${f.assetId}`;
-					const limit = limits.get(name) || { ...(f.groupKey ? { groupKey: bytes(f.groupKey) } : { assetId: bytes(f.assetId) }), maxSend: 0n, maxReceive: 0n };
-					const send = f.local > f.reserved ? f.local - f.reserved : 0n;
-					// To send: what the channels of the best peer hold together, the
-					// fullest of them named. To receive: the best single channel.
-					const peer = `${name}|${f.peerPubkey}`;
-					const held = sending.get(peer) || { name, units: 0n, fullest: 0n };
-					held.units += send;
-					if (send > held.fullest) Object.assign(held, { fullest: send, channelId: f.channelId, peerPubkey: f.peerPubkey });
-					sending.set(peer, held);
-					if (f.remote > limit.maxReceive) Object.assign(limit, { maxReceive: f.remote, receiveChannelId: bytes(f.channelId) });
-					limits.set(name, limit);
-				}
-				for (const held of sending.values()) {
-					const limit = limits.get(held.name);
-					if (held.units > limit.maxSend) Object.assign(limit, { maxSend: held.units, sendChannelId: bytes(held.channelId), sendPeer: bytes(held.peerPubkey) });
-				}
-				return [...limits.values()];
+				const usable = (f) => f.state === 'NORMAL' && f.confirmed && !opts.peerOffline;
+				// What the channels `counted` lets in hold, by asset.
+				const figures = (counted) => {
+					const limits = new Map();
+					const sending = new Map();
+					for (const f of flows.values()) {
+						if (!counted(f)) continue;
+						const name = f.groupKey ? `group:${f.groupKey}` : `asset:${f.assetId}`;
+						const limit = limits.get(name) || { ...(f.groupKey ? { groupKey: bytes(f.groupKey) } : { assetId: bytes(f.assetId) }), maxSend: 0n, maxReceive: 0n };
+						const send = spareOf(f);
+						// To send: what the channels of the best peer hold together, the
+						// fullest of them named. To receive: the best single channel.
+						const peer = `${name}|${f.peerPubkey}`;
+						const held = sending.get(peer) || { name, units: 0n, fullest: 0n };
+						held.units += send;
+						if (send > held.fullest) Object.assign(held, { fullest: send, channelId: f.channelId, peerPubkey: f.peerPubkey });
+						sending.set(peer, held);
+						if (f.remote > limit.maxReceive) Object.assign(limit, { maxReceive: f.remote, receiveChannelId: bytes(f.channelId) });
+						limits.set(name, limit);
+					}
+					for (const held of sending.values()) {
+						const limit = limits.get(held.name);
+						if (held.units > limit.maxSend) Object.assign(limit, { maxSend: held.units, sendChannelId: bytes(held.channelId), sendPeer: bytes(held.peerPubkey) });
+					}
+					return limits;
+				};
+				// A channel that is reconnecting is in neither figure: what it
+				// would add to each is pending, and an asset with no other channel
+				// has an entry that names no channel and no peer.
+				const now = figures(usable);
+				const gain = (later, before) => (later > before ? later - before : 0n);
+				return [...figures((f) => usable(f) || reconnecting(f))].map(([name, later]) => {
+					const limit = now.get(name) || { ...(later.groupKey ? { groupKey: later.groupKey } : { assetId: later.assetId }), maxSend: 0n, maxReceive: 0n };
+					return { ...limit, pendingSend: gain(later.maxSend, limit.maxSend), pendingReceive: gain(later.maxReceive, limit.maxReceive) };
+				});
 			},
 			close() {
 				if (closed) return;

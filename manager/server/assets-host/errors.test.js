@@ -116,6 +116,7 @@ test('each refusal of the Lightning service becomes the code the dashboard words
 		['ERR_BEIGNET_LN_SPENDING_LIMIT', 'SPENDING_LIMIT', 409],
 		['ERR_BEIGNET_LN_HTLC_LIMIT', 'CHANNEL_PAYMENTS_FULL', 409],
 		['ERR_BEIGNET_LN_HTLC_NOT_ADMITTED', 'PAYMENT_NOT_ADMITTED', 409],
+		['ERR_BEIGNET_LN_CHANNEL_SETTLING', 'CHANNEL_SETTLING', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_OUTBOUND', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_INBOUND', 'INSUFFICIENT_INBOUND', 409],
 		['ERR_BEIGNET_LN_CARRIER_UNFUNDED', 'CHANNEL_BITCOIN_SHORT', 409],
@@ -397,8 +398,12 @@ test('the refusals the library added: this node\'s own no to an open, a refused 
 		'This wallet has not yet taken in the results of earlier payments on that channel, so nothing was paid. Nothing is wrong with this payment. Restart the wallet, and if this is said again afterwards, its log says why.'
 	);
 	assert.equal(said('ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED').details, undefined);
+	// A channel still reconnecting at the end of the wait for it: said as that, with nothing of the library's.
+	const settling = said('ERR_BEIGNET_LN_CHANNEL_SETTLING', { details: { channelId: 'aa'.repeat(32) } });
+	assert.deepEqual([settling.extensionCode, settling.status, settling.details], ['CHANNEL_SETTLING', 409, undefined]);
+	assert.equal(settling.message, 'The asset channel is reconnecting. Try again in a moment.');
 	// What the library wrote is in none of them.
-	for (const r of [mode, bare, policy, unsupported, admitted, undelivered]) assert.equal(/aux htlc mode|03aa/.test(r.message), false);
+	for (const r of [mode, bare, policy, unsupported, admitted, undelivered, settling]) assert.equal(/aux htlc mode|03aa/.test(r.message), false);
 	// A peer that is away, where the library says so: its own code only on a quote (lightning.js), the old one elsewhere.
 	assert.deepEqual([said('ERR_BEIGNET_LN_PEER_OFFLINE').extensionCode, said('ERR_BEIGNET_LN_PEER_OFFLINE').status], ['PEER_UNREACHABLE', 502]);
 	// A try that never entered the channel.

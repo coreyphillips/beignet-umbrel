@@ -176,6 +176,12 @@ const LIGHTNING_REFUSALS = {
 		'The asset channel this would be paid through already carries as many payments that have not ended as it can hold at once, so nothing was paid. Pay again once one of them has ended.',
 		409
 	],
+	// The channel is reconnecting: its peer is connected and the two are
+	// agreeing where the channel stands, which the node ends by itself. A
+	// price and a payment wait a few seconds for such a channel, and this is
+	// said when it was still reconnecting at the end. Nothing was priced,
+	// recorded or sent, and a price already given stays usable.
+	ERR_BEIGNET_LN_CHANNEL_SETTLING: ['CHANNEL_SETTLING', 'The asset channel is reconnecting. Try again in a moment.', 409],
 	ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND: ['INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409],
 	ERR_BEIGNET_LN_INSUFFICIENT_INBOUND: ['INSUFFICIENT_INBOUND', 'No asset channel of this wallet can receive that much.', 409],
 	// Every payment over an asset channel moves a little of the channel's

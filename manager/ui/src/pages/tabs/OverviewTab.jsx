@@ -130,6 +130,8 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 	// the Lightning figure nor the total (the daemon leaves it out of both),
 	// so without a line of its own an open would read as bitcoin gone. It is
 	// said the way sats locked with assets are: quietly, and added to nothing.
+	// A tile has room for the figure only, so that it comes home when the
+	// channel closes is said in the help.
 	const channelBitcoin = assetChannelBitcoin(bal);
 	const lightningSub = channelBitcoin ? (
 		<>
@@ -145,8 +147,8 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 						<Help label="About bitcoin in asset channels">
 							An asset channel is funded with bitcoin as well as the asset. The sats on your side of it are yours,
 							and they stay out of every balance here while the channel is there: they cannot be spent as bitcoin
-							or sent over Lightning. They come back when the channel is closed. While a channel is closing, its
-							bitcoin is on its way back, and it is said here until the close is over.
+							or sent over Lightning. They come home when the channel closes. While a channel is closing, its
+							bitcoin is on its way home, and it is said here until the close is over.
 						</Help>
 					)}
 				</span>

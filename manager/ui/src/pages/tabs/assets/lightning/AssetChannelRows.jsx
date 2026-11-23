@@ -15,7 +15,9 @@ import { FeePresets } from '../shared.jsx';
  * A channel funded with an asset is counted in the asset, so every figure
  * here is in its units: what is on each side, what can be sent and received
  * right now, and how much the channel holds in all. The bitcoin the channel
- * also holds is the one figure in sats, and is labelled as that.
+ * also holds is in sats, and is labelled as that: all of it, and, where the
+ * wallet's node says (`localSats`), this wallet's side of it, which is the
+ * wallet's own and comes home when the channel closes.
  *
  * A list and not a table: six figures a channel do not fit a phone as
  * columns, and a block wraps where a row would scroll sideways.
@@ -148,6 +150,15 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 								<dt>Bitcoin in the channel</dt>
 								<dd>{fmtSats(c.channelSats)}</dd>
 							</div>
+							{Number.isSafeInteger(c.localSats) && c.localSats >= 0 && (
+								<div data-testid="asset-channel-own-bitcoin">
+									<dt>Your bitcoin in it</dt>
+									<dd>
+										{fmtSats(c.localSats)}
+										<small className="asset-channel-carries">Comes home when the channel closes.</small>
+									</dd>
+								</div>
+							)}
 						</dl>
 							</>
 						)}
