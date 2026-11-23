@@ -459,6 +459,11 @@ test('a channel as the dashboard lists it', () => {
 		[open.channelId, open.pendingChannelId, open.peerAlias, open.state, open.capacity, open.sendable, open.receivable],
 		['bb'.repeat(32), 'aa'.repeat(32), 'edge', 'NORMAL', '600', '400', '150']
 	);
+	// This wallet's side of the channel's bitcoin where the node says it, beside the funding, and nothing where it does not.
+	const own = views.channelView({ ...c, localSats: 98292 }, reg);
+	assert.deepEqual(Object.keys(own).slice(Object.keys(own).indexOf('channelSats'), Object.keys(own).indexOf('channelSats') + 2), ['channelSats', 'localSats']);
+	assert.deepEqual([own.channelSats, own.localSats, views.channelView({ ...c, localSats: 0 }, reg).localSats], [100000, 98292, 0]);
+	for (const none of [null, undefined, -1, 1.5, '98292']) assert.equal('localSats' in views.channelView({ ...c, localSats: none }, reg), false, String(none));
 	// An asset the wallet knows only by its id is still listed.
 	assert.deepEqual(views.channelView(c, null).asset, { key: A1, assetId: A1, name: null, type: 'normal', decimalDisplay: 0 });
 	// A payment in flight is on neither side, and the channel is no smaller for it:

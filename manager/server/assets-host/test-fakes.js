@@ -772,10 +772,15 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			return [...all].filter((pubkey) => !opts.offlinePeers.includes(pubkey)).map((pubkey) => ({ pubkey, host: 'peer.example.com', port: 9735, state: 'ready', remoteInit: {} }));
 		},
 		// What the node itself holds: the channels the service lists with a state, and what a test adds.
+		// This wallet's side of a channel's bitcoin is the funding less what
+		// was pushed to the peer for an open of its own, and what the peer
+		// pushed for one the peer opened, unless a test sets `localBalanceMsat`.
 		listChannels() {
 			const held = [...flows.values()].filter((f) => f.state && f.engine !== 'missing' && f.engine !== 'absent');
+			const pushed = (f) => BigInt((f.request && f.request.pushSats) || 0);
+			const localMsat = (f) => (f.localBalanceMsat !== undefined ? BigInt(f.localBalanceMsat) : (f.initiator ? BigInt(f.fundingSats) - pushed(f) : pushed(f)) * 1000n);
 			return [
-				...held.map((f) => ({ channelId: bytes(f.channelId || f.pendingChannelId), temporaryChannelId: bytes(f.pendingChannelId), peerPubkey: f.peerPubkey, state: f.state })),
+				...held.map((f) => ({ channelId: bytes(f.channelId || f.pendingChannelId), temporaryChannelId: bytes(f.pendingChannelId), peerPubkey: f.peerPubkey, state: f.state, localBalanceMsat: localMsat(f) })),
 				...opts.engineChannels.map((c) => ({ channelId: bytes(c.channelId || c.temporaryChannelId), temporaryChannelId: bytes(c.temporaryChannelId || c.channelId), peerPubkey: c.peerPubkey || '', state: c.state || 'SENT_FUNDING_CREATED' }))
 			];
 		}

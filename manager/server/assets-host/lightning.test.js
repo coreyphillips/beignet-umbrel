@@ -264,6 +264,8 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 		sendable: '0',
 		receivable: '0',
 		channelSats: 100000,
+		// This wallet's side of that bitcoin, as its node holds it: all but what was pushed to the peer.
+		localSats: 98292,
 		// Its funding is made and not confirmed: should it never confirm, its bitcoin can be taken back.
 		fundingTxid: flow.fundingTxid,
 		reclaimable: true,
@@ -287,6 +289,14 @@ test('opening: the peer is asked, the proofs are published, one write, and only 
 	await h.host.pass({ block: true });
 	assert.deepEqual(h.tap.records.filter((r) => !r.spent).map((r) => [r.amount, r.reservedBy]), [['400', undefined]]);
 	assert.deepEqual((await h.get('/balances')).assets[0].balance, { ...balance, lightningSendable: '600' });
+	// The wallet's side of the channel's bitcoin follows the node, in whole sats.
+	h.ln.set(id, { localBalanceMsat: 97_645_999n });
+	assert.equal((await h.get('/channels')).channels[0].localSats, 97645);
+	// A channel the node no longer holds has no such figure, and neither does one that is over.
+	h.ln.set(id, { engine: 'missing' });
+	assert.equal('localSats' in (await h.get('/channels')).channels[0], false);
+	h.ln.set(id, { engine: undefined, state: 'CLOSED', recovery: 'complete' });
+	assert.deepEqual(lightning.channelList(h.host).map((c) => [c.word, c.localSats]), [['CLOSED', null]]);
 });
 
 test('a channel is OPENING until the library has confirmed it, and usable from then', async () => {

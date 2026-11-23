@@ -710,6 +710,9 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 	assert.equal(ln.peerConnected(hexOf(PEER)), false);
 	NODE.peers = [{ pubkey: hexOf(PEER).toUpperCase(), remoteInit: {} }];
 	assert.deepEqual([ln.peerConnected(hexOf(PEER)), ln.peerConnected(`03${'ee'.repeat(32)}`)], [true, false]);
+	// This wallet's side of a channel's bitcoin, as the node holds it under the channel's id, in whole sats.
+	NODE.channels = [{ channelId: buf(0xbb), localBalanceMsat: 98_292_999n }, { channelId: buf(0x77), temporaryChannelId: buf(0xcc), localBalanceMsat: 'many' }];
+	assert.deepEqual(ln.channels().map((c) => c.localSats), [98292, undefined, undefined, undefined]);
 	// What the node itself holds under an id, the open's or the channel's own, whatever kind of channel it is.
 	NODE.channels = [{ channelId: buf(0x51), temporaryChannelId: buf(0x52) }, { channelId: 'AB'.repeat(32) }];
 	assert.deepEqual([[hexOf(buf(0x51))], [hexOf(buf(0x52))], ['ab'.repeat(32)], [null, hexOf(buf(0x53))], []].map((ids) => ln.engineHolds(ids)), [true, true, true, false, false]);

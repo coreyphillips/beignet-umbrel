@@ -417,6 +417,10 @@ function channelView(c, reg) {
 		// height after which what is in the channel comes back on-chain.
 		...(Number.isInteger(c.waitsUntil) ? { recoveryWaitsUntil: c.waitsUntil } : {}),
 		channelSats: c.fundingSats,
+		// Where the wallet's node says: this wallet's side of the channel's
+		// bitcoin, in sats. It is the wallet's, and comes home when the
+		// channel closes.
+		...(Number.isSafeInteger(c.localSats) && c.localSats >= 0 ? { localSats: c.localSats } : {}),
 		// The funding transaction, once there is one. While it has not
 		// confirmed, `reclaimable` says its bitcoin can be taken back, which
 		// ends the open (POST /channels/reclaim), and `reclaimTxid` names the

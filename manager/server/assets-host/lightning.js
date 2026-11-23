@@ -448,6 +448,10 @@ function channelList(host) {
 			sendable: usable && paysOut ? spare : 0n,
 			receivable: usable && paysIn ? c.remote : 0n,
 			fundingSats: c.fundingSats || note.fundingSats || 0,
+			// This wallet's side of the channel's bitcoin, in sats, while the
+			// node holds the channel and it is not over: it comes home when the
+			// channel closes. Null where the node does not say.
+			localSats: Number.isSafeInteger(c.localSats) && c.localSats >= 0 && !isOver(word) ? c.localSats : null,
 			createdAt: note.createdAt || null,
 			closedAt: note.closedAt || null
 		});
@@ -502,6 +506,7 @@ function channelList(host) {
 			sendable: 0n,
 			receivable: 0n,
 			fundingSats: note.fundingSats || 0,
+			localSats: null,
 			createdAt: note.createdAt || null,
 			closedAt: note.closedAt || null
 		});

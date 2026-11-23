@@ -298,6 +298,8 @@ export function createAssetsMock(ctx) {
 	 * A channel as the host lists it on GET /channels, key for key
 	 * (assets-host/views.js channelView). A funding can be taken back while
 	 * this wallet's open has made its transaction and no block has taken it.
+	 * This wallet's side of the channel's bitcoin (`localSats`) is there
+	 * while the wallet's node holds the channel and it is not over.
 	 */
 	const pubChannel = (c) => ({
 		channelId: c.channelId,
@@ -314,6 +316,7 @@ export function createAssetsMock(ctx) {
 		sendable: c.sendable,
 		receivable: c.receivable,
 		channelSats: c.channelSats,
+		...(['CLOSED', 'FORCE_CLOSED', 'FAILED', 'MISSING'].includes(c.state) ? {} : { localSats: ownSats(c) }),
 		fundingTxid: c.fundingTxid || null,
 		reclaimable: c.state === 'OPENING' && !!c.fundingTxid,
 		reclaimTxid: c.reclaimTxid || null,
@@ -2687,11 +2690,20 @@ export function createAssetsMock(ctx) {
 		let open = null;
 		let closing = null;
 		for (const c of state.wallets[id].channels) {
-			const mine = Math.max(0, (Number(c.channelSats) || 0) - CHANNEL_PUSH_SATS);
+			const mine = ownSats(c);
 			if (c.state === 'CLOSING' || c.state === 'FORCE_CLOSING') closing = (closing || 0) + mine;
 			else if (c.state === 'OPENING' || c.state === 'NORMAL' || c.state === 'ERRORED') open = (open || 0) + mine;
 		}
 		return { ...(open !== null ? { assetChannelSats: open } : {}), ...(closing !== null ? { assetChannelClosingSats: closing } : {}) };
+	}
+
+	/**
+	 * This wallet's side of a channel's bitcoin, in sats: what it was funded
+	 * with less what was pushed to the peer. The row says it as `localSats`,
+	 * and the daemon's GET /balance sums it (channelBitcoin).
+	 */
+	function ownSats(c) {
+		return Math.max(0, (Number(c.channelSats) || 0) - CHANNEL_PUSH_SATS);
 	}
 
 	// The sats an asset payment carries beside the asset, as the daemon counts them.

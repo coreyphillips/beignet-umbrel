@@ -768,8 +768,9 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     gives { pubkey, remoteInit } for each peer, `remoteInit` set once
  *     the peer's greeting has arrived, which is the library's own rule
  *     for a peer a channel can be used with; listChannels() gives every
- *     channel of any kind with its `channelId`, and its
- *     `temporaryChannelId` where the engine has one. A channel's state
+ *     channel of any kind with its `channelId`, its `temporaryChannelId`
+ *     where the engine has one, and `localBalanceMsat`, this wallet's side
+ *     of the channel's bitcoin in millisatoshis. A channel's state
  *     word is one of the engine's ChannelState (views.channelWord has
  *     them all): AWAITING_REESTABLISH is a channel waiting for its peer,
  *     and ERRORED one the engine gave up, which closes only by force.
@@ -988,11 +989,35 @@ const attemptOf = (p) => (Number.isInteger(p.attempt) && p.attempt > 0 ? p.attem
 /** S4. The units an invoice brought in, or null when the library says only what was invoiced. */
 const receivedOf = (i) => (i.receivedAssetAmount === undefined || i.receivedAssetAmount === null ? null : BigInt(i.receivedAssetAmount));
 
-/** One entry of the service's list, in plain values. */
-function plainChannel(c) {
+/**
+ * This wallet's side of the bitcoin of each channel the node holds, in
+ * whole sats, by the channel's id and by the id its open was given: the
+ * node's `localBalanceMsat` (38). Empty when the node cannot say.
+ */
+function ownSatsOf(node) {
+	const out = new Map();
+	if (!node || typeof node.listChannels !== 'function') return out;
+	let held = [];
+	try {
+		held = node.listChannels() || [];
+	} catch (_) {
+		return out;
+	}
+	for (const c of held) {
+		if (!c || (typeof c.localBalanceMsat !== 'bigint' && !Number.isSafeInteger(c.localBalanceMsat))) continue;
+		const msat = BigInt(c.localBalanceMsat);
+		if (msat < 0n) continue;
+		for (const id of [c.channelId, c.temporaryChannelId]) if (id) out.set(asHex(id), Number(msat / 1000n));
+	}
+	return out;
+}
+
+/** One entry of the service's list, in plain values. `own` is what ownSatsOf read of the node. */
+function plainChannel(c, own = new Map()) {
 	const assets = outUnits(c.assets);
 	const phase = String(c.phase || '');
 	const state = c.state ? String(c.state) : null;
+	const ownKey = [c.channelId, c.pendingChannelId].map((id) => (id ? asHex(id) : null)).find((id) => id && own.has(id));
 	return {
 		pendingChannelId: asHex(c.pendingChannelId),
 		channelId: c.channelId ? asHex(c.channelId) : null,
@@ -1015,6 +1040,9 @@ function plainChannel(c) {
 		remote: BigInt(c.remoteAssetBalance || 0),
 		reserved: BigInt(c.reserved || 0),
 		fundingSats: Number(c.fundingSatoshis || 0),
+		// This wallet's side of the channel's bitcoin, while the node holds
+		// the channel: it comes home when the channel closes.
+		...(ownKey ? { localSats: own.get(ownKey) } : {}),
 		reserveSats: whole(c.reserveSatoshis),
 		// The name its funding inputs still sit under in the on-chain
 		// records, and what they hold, until the funding has confirmed.
@@ -1138,7 +1166,7 @@ function plainEvent(e) {
  *                                initiator, phase, engine, signed, committed,
  *                                confirmed, fundingTxid, state, assetId,
  *                                groupKey, assets, local, remote, reserved,
- *                                fundingSats, reserveSats,
+ *                                fundingSats, localSats?, reserveSats,
  *                                fundingReservation, fundingInputs,
  *                                recovery, cancelled, error }]
  *   connect({ pubkey, host, port })
@@ -1343,7 +1371,11 @@ function createLightning({ entry, storage, cfg, now = null }) {
 		ready: () => !!node && !!service,
 		refusals: Object.freeze(entry.ASSET_PAYMENT_REFUSALS.map(String)),
 
-		channels: () => live().channels().map(plainChannel),
+		channels: () => {
+			const listed = live().channels();
+			const own = ownSatsOf(node);
+			return listed.map((c) => plainChannel(c, own));
+		},
 		async connect({ pubkey, host, port }) {
 			live();
 			await node.connectPeer(pubkey, host, port);
