@@ -447,17 +447,21 @@ const wholeSats = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ?
  * (opening, open, waiting for their peer, failed and not yet closed) and
  * `assetChannelClosingSats` for those that are closing. Neither is in the
  * daemon's `lightning` or `total`, so a page says each on a quiet line of
- * its own and adds it to no figure: [{ kind, sats, words }], to follow the
- * amount. Both keys are absent on a wallet without an asset channel and on
- * an engine that cannot carry one, and the answer is null then.
+ * its own and adds it to no figure: [{ kind, sats, words, home }], to
+ * follow the amount. `home` says that the bitcoin of a channel that is
+ * there comes home when the channel closes, which a page says on the line
+ * or in its help, as its layout fits; a closing channel's line says it is
+ * on its way home already, and has none. Both keys are absent on a wallet
+ * without an asset channel and on an engine that cannot carry one, and the
+ * answer is null then.
  */
 export function assetChannelBitcoin(balance) {
 	if (!balance || typeof balance !== 'object') return null;
 	const open = wholeSats(balance.assetChannelSats);
 	const closing = wholeSats(balance.assetChannelClosingSats);
 	const lines = [];
-	if (open > 0) lines.push({ kind: 'open', sats: open, words: 'in asset channels' });
-	if (closing > 0) lines.push({ kind: 'closing', sats: closing, words: 'on their way back from a closing asset channel' });
+	if (open > 0) lines.push({ kind: 'open', sats: open, words: 'in asset channels', home: 'comes home when the channel closes' });
+	if (closing > 0) lines.push({ kind: 'closing', sats: closing, words: 'on their way home from a closing asset channel', home: null });
 	return lines.length > 0 ? lines : null;
 }
 

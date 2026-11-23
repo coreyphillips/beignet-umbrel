@@ -204,7 +204,9 @@ test('the bitcoin in asset channels is said under the Lightning balance, and is 
 		assert.equal(r.$('[data-testid="overview-asset-channel-closing-sats"]'), null);
 		const sub = tile(r, 'Lightning').querySelector('.stat-sub');
 		assert.equal(sub.querySelector('.help-btn').getAttribute('aria-label'), 'About bitcoin in asset channels');
-		assert.match(sub.textContent, /They come back when the channel is closed\./);
+		assert.match(sub.textContent, /They come home when the channel closes\. While a channel is closing, its bitcoin is on its way home/);
+		// The tile has room for the figure only: when it comes home is said in the help.
+		assert.doesNotMatch(line.textContent, /^\+ 98,292 sats in asset channels, comes home/);
 		// A quiet line: the figures themselves are the engine's, untouched.
 		assert.match(tile(r, 'Lightning').querySelector('.stat-value').textContent, /^2,000/);
 		assert.match(tile(r, 'Total').querySelector('.stat-value').textContent, /^12,000/);
@@ -224,7 +226,7 @@ test('the bitcoin of a channel that is closing is said as on its way back', asyn
 		assert.match(r.$('[data-testid="overview-asset-channel-sats"]').textContent, /^\+ 98,292 sats in asset channels/);
 		assert.match(
 			r.$('[data-testid="overview-asset-channel-closing-sats"]').textContent,
-			/^\+ 40,000 sats on their way back from a closing asset channel/
+			/^\+ 40,000 sats on their way home from a closing asset channel/
 		);
 	} finally {
 		await r.unmount();

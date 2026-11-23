@@ -134,7 +134,7 @@ test('the list says the bitcoin a wallet has in asset channels, which its figure
 	try {
 		const line = r.$('[data-testid="wallet-asset-channel-sats-w1"]');
 		assert.ok(line.classList.contains('wallet-meta'), 'one quiet line');
-		assert.equal(line.textContent, '+ 98,292 sats in asset channels');
+		assert.equal(line.textContent, '+ 98,292 sats in asset channels, comes home when the channel closes');
 	} finally {
 		await r.unmount();
 	}
@@ -145,7 +145,7 @@ test('it says a closing channel\'s bitcoin as on its way back, beside what is st
 	try {
 		assert.equal(
 			r.$('[data-testid="wallet-asset-channel-sats-w1"]').textContent,
-			'+ 98,292 sats in asset channels · + 40,000 sats on their way back from a closing asset channel'
+			'+ 98,292 sats in asset channels, comes home when the channel closes · + 40,000 sats on their way home from a closing asset channel'
 		);
 	} finally {
 		await r.unmount();

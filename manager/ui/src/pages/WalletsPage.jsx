@@ -601,15 +601,16 @@ function SeedModal({ name, mnemonic, onClose }) {
 /**
  * The bitcoin on a wallet's side of its asset channels. It is in neither
  * balance the row totals, so it is said on a quiet line of its own and
- * added to nothing. `balance` is the daemon's GET /balance, or nothing for
- * a wallet that was not asked.
+ * added to nothing, with when it comes home: the list has no help to say
+ * it in. `balance` is the daemon's GET /balance, or nothing for a wallet
+ * that was not asked.
  */
 export function AssetChannelBitcoinLine({ wallet, balance }) {
 	const lines = assetChannelBitcoin(balance);
 	if (!lines) return null;
 	return (
 		<div className="wallet-meta" data-testid={`wallet-asset-channel-sats-${wallet.id}`}>
-			{lines.map((line) => `+ ${fmtSats(line.sats)} ${line.words}`).join(' · ')}
+			{lines.map((line) => `+ ${fmtSats(line.sats)} ${line.words}${line.home ? `, ${line.home}` : ''}`).join(' · ')}
 		</div>
 	);
 }
