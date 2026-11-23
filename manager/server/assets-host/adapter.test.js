@@ -124,8 +124,10 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 			return id.equals(buf(0xdd)) ? 1 : 0;
 		},
 		paymentLimits: () => [
-			{ assetId: buf(0x11), maxSend: 450n, maxReceive: 200n, sendChannelId: buf(0xbb), sendPeer: PEER, receiveChannelId: buf(0xbc) },
-			{ groupKey: GROUP, maxSend: 0n, maxReceive: 7n, receiveChannelId: buf(0xbd) }
+			{ assetId: buf(0x11), maxSend: 450n, maxReceive: 200n, pendingSend: 0n, pendingReceive: 0n, sendChannelId: buf(0xbb), sendPeer: PEER, receiveChannelId: buf(0xbc) },
+			{ groupKey: GROUP, maxSend: 0n, maxReceive: 7n, pendingSend: 0n, pendingReceive: 0n, receiveChannelId: buf(0xbd) },
+			// An asset whose one channel is reconnecting: an entry that names no channel and no peer.
+			{ assetId: buf(0x12), maxSend: 0n, maxReceive: 0n, pendingSend: 300n, pendingReceive: 80n }
 		],
 		resume: async () => {
 			note('resume');
@@ -632,10 +634,11 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 	assert.deepEqual([ln.forgetChannel('dd'.repeat(32)), ln.forgetChannel('aa'.repeat(32))], [true, false]);
 	assert.deepEqual(calls('forgetChannel'), [buf(0xdd), buf(0xaa)]);
 
-	// What one payment can move, by asset or by group.
+	// What one payment can move, by asset or by group, and what channels that are reconnecting would add.
 	assert.deepEqual(ln.paymentLimits(), [
-		{ assetId: '11'.repeat(32), groupKey: null, maxSend: 450n, maxReceive: 200n, sendChannelId: 'bb'.repeat(32), sendPeer: hexOf(PEER), receiveChannelId: 'bc'.repeat(32) },
-		{ assetId: null, groupKey: group, maxSend: 0n, maxReceive: 7n, sendChannelId: null, sendPeer: null, receiveChannelId: 'bd'.repeat(32) }
+		{ assetId: '11'.repeat(32), groupKey: null, maxSend: 450n, maxReceive: 200n, pendingSend: 0n, pendingReceive: 0n, sendChannelId: 'bb'.repeat(32), sendPeer: hexOf(PEER), receiveChannelId: 'bc'.repeat(32) },
+		{ assetId: null, groupKey: group, maxSend: 0n, maxReceive: 7n, pendingSend: 0n, pendingReceive: 0n, sendChannelId: null, sendPeer: null, receiveChannelId: 'bd'.repeat(32) },
+		{ assetId: '12'.repeat(32), groupKey: null, maxSend: 0n, maxReceive: 0n, pendingSend: 300n, pendingReceive: 80n, sendChannelId: null, sendPeer: null, receiveChannelId: null }
 	]);
 
 	await ln.resume();
@@ -879,6 +882,8 @@ test(
 		for (const code of Object.keys(LIGHTNING_REFUSALS)) assert.equal(codes.includes(code), true, code);
 		for (const code of ['ERR_BEIGNET_LN_PEER_OFFLINE', 'ERR_BEIGNET_LN_MODE_UNAVAILABLE', 'ERR_BEIGNET_LN_FEE_POLICY_REFUSED']) assert.equal(codes.includes(code), true, code);
 		for (const code of ['ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED', 'ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED']) assert.equal(entry.ASSET_PAYMENT_REFUSALS.includes(code), true, code);
+		// A payment refused for a channel still reconnecting at the end of its wait sent nothing.
+		assert.equal(entry.ASSET_PAYMENT_REFUSALS.includes('ERR_BEIGNET_LN_CHANNEL_SETTLING'), true);
 		// Every reason the library names for an ended open has a sentence of the host's own.
 		if (Array.isArray(entry.ASSET_OPEN_ENDED_REASONS)) {
 			const { OPEN_ENDED_BECAUSE } = require('./lightning');

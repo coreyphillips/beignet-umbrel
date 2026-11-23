@@ -3254,9 +3254,16 @@ test('a price is refused with the peer named when the channel that could carry i
 	const much = await refused(h.call('POST /invoices/quote', { key: asset.key, amount: '201' }));
 	assert.deepEqual([much.extensionCode, much.details], ['INSUFFICIENT_INBOUND', { maxReceivable: '0' }]);
 	// The same while the channel waits for its peer in the engine's own word.
-	h.ln.opts.offlinePeers = [];
 	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
 	assert.deepEqual(await codeOf(h.call('POST /pay/quote', { bolt11, key: asset.key })), ['PEER_OFFLINE', 409]);
+	assert.deepEqual(await codeOf(h.call('POST /invoices/quote', { key: asset.key, amount: '150' })), ['PEER_OFFLINE', 409]);
+	assert.deepEqual(named(h, 'quotePayment'), []);
+	// With its peer connected again the channel is reconnecting: a price is
+	// asked of the library, which waits for it, and is refused as that when
+	// it is still reconnecting. The peer is not said to be away.
+	h.ln.opts.offlinePeers = [];
+	assert.deepEqual(await codeOf(h.call('POST /pay/quote', { bolt11, key: asset.key })), ['CHANNEL_SETTLING', 409]);
+	assert.equal(named(h, 'quotePayment').length, 1);
 	assert.deepEqual(await codeOf(h.call('POST /invoices/quote', { key: asset.key, amount: '150' })), ['PEER_OFFLINE', 409]);
 	h.ln.set(id, { state: 'NORMAL' });
 
@@ -3334,6 +3341,13 @@ test('a payment that never entered the channel says nothing left the wallet and 
 		assert.deepEqual([failure.code, failure.message], [hostCode, said.failureDescription], code);
 		h.ln.opts.payFails = null;
 	}
+	// A channel still reconnecting at the end of the library's wait for it: nothing was sent, in words of its own.
+	const settling = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	h.ln.opts.payFails = 'ERR_BEIGNET_LN_CHANNEL_SETTLING';
+	const reconnecting = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: settling.quoteId, maxAssetAmount: '50' }, 'key-CHANNEL_SETTLING');
+	assert.deepEqual([reconnecting.status, reconnecting.failureDescription], ['FAILED', 'The asset channel is reconnecting. Try again in a moment.']);
+	assert.deepEqual((await h.get('/activity', 'kind=ln-send')).rows[0].failure, { code: 'CHANNEL_SETTLING', message: reconnecting.failureDescription });
+	h.ln.opts.payFails = null;
 	// Why the channel did not take it is the engine's to say, and goes to the log only.
 	assert.equal(h.logs.filter(([, text]) => /an asset channel did not take a Lightning payment/.test(text)).length, 1);
 	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
@@ -3662,6 +3676,62 @@ test('paying on a price taken before the peer went away is refused with the peer
 	assert.deepEqual(named(h, 'payInvoice').map((c) => c[1]), [other.quoteId, quote.quoteId]);
 	// A price too large for any channel, peer there or not, is still said as an amount.
 	assert.deepEqual(await codeOf(h.call('POST /pay/quote', { bolt11: fakeInvoice({ msat: 5000000 }), key: asset.key })), ['INSUFFICIENT_OUTBOUND', 409]);
+});
+
+test('a price while the one channel is reconnecting is asked of the library, which waits for it: priced once it is back, and said as reconnecting when it is not', async () => {
+	const { h, asset, id } = await channelled({ remote: 200n });
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	// Its peer is connected and the two are agreeing where the channel stands:
+	// nothing can be sent now, and what it holds can be in a moment.
+	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
+	const limit = lightning.paymentLimits(h.host).get(asset.key);
+	assert.deepEqual([limit.maxSend, limit.pendingSend, limit.maxReceive, limit.pendingReceive, limit.send, limit.receive], [0n, 400n, 0n, 200n, null, null]);
+	assert.deepEqual(await rowOf(h), ['NORMAL', false, '0', '0']);
+	// Still reconnecting at the end of the wait: said as that, with nothing priced or kept.
+	const settling = await refused(h.call('POST /pay/quote', { bolt11, key: asset.key }));
+	assert.deepEqual([settling.extensionCode, settling.status, settling.message, 'details' in settling], ['CHANNEL_SETTLING', 409, 'The asset channel is reconnecting. Try again in a moment.', false]);
+	assert.equal(named(h, 'quotePayment').length, 1);
+	assert.deepEqual(keys(h, 'l-quote/'), []);
+	// Back during the wait: priced, with what the channel can send now and its peer named.
+	h.ln.opts.settles = () => h.ln.set(id, { state: 'NORMAL' });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	assert.deepEqual([quote.assetAmount, quote.sendable, quote.peerAlias, quote.parts], ['50', '400', 'edge', 1]);
+	assert.equal(keys(h, 'l-quote/').length, 1);
+	h.ln.opts.settles = null;
+
+	// A channel waiting for a peer that is not connected is nothing pending: the peer is named, and the library is not asked.
+	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
+	h.ln.opts.offlinePeers = [PEER.pubkey];
+	assert.equal(lightning.paymentLimits(h.host).get(asset.key), undefined);
+	const away = await refused(h.call('POST /pay/quote', { bolt11, key: asset.key }));
+	assert.deepEqual([away.extensionCode, away.status, away.details], ['PEER_OFFLINE', 409, { peerPubkey: PEER.pubkey, peerAlias: 'edge' }]);
+	// A reconnecting channel with nothing on this side to send is nothing pending either: the amount is the reason, as before.
+	h.ln.opts.offlinePeers = [];
+	h.ln.set(id, { local: 0n, remote: 600n });
+	assert.deepEqual([lightning.paymentLimits(h.host).get(asset.key).pendingSend, lightning.paymentLimits(h.host).get(asset.key).pendingReceive], [0n, 600n]);
+	const none = await refused(h.call('POST /pay/quote', { bolt11, key: asset.key }));
+	assert.deepEqual([none.extensionCode, none.details], ['INSUFFICIENT_OUTBOUND', { sendable: '0' }]);
+	assert.equal(named(h, 'quotePayment').length, 2);
+});
+
+test('paying over a channel that began to reconnect after its price was given is not said as a peer away: the library waits for it, pays once it is back, and says it is reconnecting when it is not', async () => {
+	const { h, asset, id } = await channelled();
+	const bolt11 = fakeInvoice({ msat: 50000 });
+	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
+	// Still reconnecting at the end of the wait: nothing was sent, and the row says why in the host's words.
+	const said = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: quote.assetAmount }, 'pay-settling');
+	assert.deepEqual([said.status, said.failureDescription], ['FAILED', 'The asset channel is reconnecting. Try again in a moment.']);
+	assert.equal(named(h, 'payInvoice').length, 1);
+	assert.deepEqual((await h.get('/activity', 'kind=ln-send')).rows[0].failure, { code: 'CHANNEL_SETTLING', message: said.failureDescription });
+	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
+	// A price given while it reconnects is paid once it is back during the wait.
+	h.ln.opts.settles = () => h.ln.set(id, { state: 'NORMAL' });
+	const again = await h.call('POST /pay/quote', { bolt11, key: asset.key });
+	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
+	const paid = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: again.quoteId, maxAssetAmount: again.assetAmount }, 'pay-back');
+	assert.deepEqual([paid.status, paid.assetAmount], ['COMPLETED', '50']);
+	assert.equal((await h.get('/channels')).channels[0].localBalance, '550');
 });
 
 test('a refusal of the library that names the peer as away is mapped for a payment nobody waits for any more', () => {

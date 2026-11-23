@@ -672,6 +672,13 @@ function warningsOf(host, fees = feeStatusOf(host)) {
  * channel has a slot and a carrier for one more HTLC. `send` is the fullest
  * channel of the best peer, and `receive` the channel that can receive the
  * most.
+ *
+ * `pendingSend` and `pendingReceive` are the library's word on what the
+ * asset's reconnecting channels would add to each: channels whose peer is
+ * connected and whose reestablish is under way, which the node makes usable
+ * again by itself. The host's list counts such a channel as away, so the
+ * figures are kept as the library gives them, also for an asset none of
+ * whose channels can carry a payment now.
  */
 function paymentLimits(host) {
 	const out = new Map();
@@ -679,12 +686,19 @@ function paymentLimits(host) {
 	if (!ln || !ln.ready()) return out;
 	const registry = host.registry();
 	const keyOf = (assetId, groupKey) => groupKey || (assetId && registry.get(assetId) ? registry.get(assetId).groupKey : null) || assetId || null;
+	const more = (a, b) => (a > b ? a : b);
+	const pending = (value) => (typeof value === 'bigint' && value > 0n ? value : 0n);
 	const said = new Map();
 	for (const l of ln.paymentLimits()) {
 		const key = keyOf(l.assetId, l.groupKey);
 		if (!key) continue;
-		const known = said.get(key) || { maxSend: 0n, maxReceive: 0n };
-		said.set(key, { maxSend: l.maxSend > known.maxSend ? l.maxSend : known.maxSend, maxReceive: l.maxReceive > known.maxReceive ? l.maxReceive : known.maxReceive });
+		const known = said.get(key) || { maxSend: 0n, maxReceive: 0n, pendingSend: 0n, pendingReceive: 0n };
+		said.set(key, {
+			maxSend: more(l.maxSend, known.maxSend),
+			maxReceive: more(l.maxReceive, known.maxReceive),
+			pendingSend: more(pending(l.pendingSend), known.pendingSend),
+			pendingReceive: more(pending(l.pendingReceive), known.pendingReceive)
+		});
 	}
 	// What the usable channels of each peer can send together, by asset.
 	const peers = new Map();
@@ -703,10 +717,17 @@ function paymentLimits(host) {
 		const limit = out.get(peer.key);
 		if (peer.units > limit.maxSend) Object.assign(limit, { maxSend: peer.units, send: peer.fullest });
 	}
-	for (const [key, limit] of out) {
-		const lib = said.get(key);
-		if (lib.maxSend < limit.maxSend) limit.maxSend = lib.maxSend;
-		if (lib.maxReceive < limit.maxReceive) limit.maxReceive = lib.maxReceive;
+	for (const [key, lib] of said) {
+		const limit = out.get(key);
+		if (limit) {
+			if (lib.maxSend < limit.maxSend) limit.maxSend = lib.maxSend;
+			if (lib.maxReceive < limit.maxReceive) limit.maxReceive = lib.maxReceive;
+			Object.assign(limit, { pendingSend: lib.pendingSend, pendingReceive: lib.pendingReceive });
+		} else if (lib.pendingSend > 0n || lib.pendingReceive > 0n) {
+			// No channel of the asset can carry a payment now, and one that is
+			// reconnecting will in a moment.
+			out.set(key, { maxSend: 0n, maxReceive: 0n, send: null, receive: null, pendingSend: lib.pendingSend, pendingReceive: lib.pendingReceive });
+		}
 	}
 	return out;
 }
@@ -1796,14 +1817,30 @@ const cleanInvoice = (text) =>
 		.replace(/^lightning:/i, '');
 
 /**
+ * Whether `units` are more than one payment can send now and no more than
+ * it could once the asset's reconnecting channels are usable again
+ * (`limit` is the asset's entry of paymentLimits). Such a channel has its
+ * peer connected, and the node ends its reconnecting by itself: the
+ * library waits a few seconds for it before it prices or pays, and refuses
+ * with CHANNEL_SETTLING when it is still reconnecting then. So the host
+ * asks the library, and never says the channel's peer is away.
+ */
+function settling(limit, units) {
+	if (!limit || !(limit.pendingSend > 0n)) return false;
+	return units > limit.maxSend && units <= limit.maxSend + limit.pendingSend;
+}
+
+/**
  * The channel a payment at this price would leave through whose peer is
- * away, or null when a channel that is usable now can carry it. A price
- * taken while the peer was there is still good when it is back.
+ * away, or null when a channel that is usable now can carry it, or one
+ * that is reconnecting will. A price taken while the peer was there is
+ * still good when it is back.
  */
 function awayForPayment(host, quote) {
 	const units = BigInt(quote.assetAmount);
 	const limit = paymentLimits(host).get(quote.key);
-	return units > (limit ? limit.maxSend : 0n) ? awayChannel(host, quote.key, 'couldSend', units) : null;
+	if (units <= (limit ? limit.maxSend : 0n) || settling(limit, units)) return null;
+	return awayChannel(host, quote.key, 'couldSend', units);
 }
 
 /** Ask the channel's peer what paying an invoice takes, and keep the answer until it is used or runs out. */
@@ -1818,32 +1855,42 @@ async function makePayQuote(host, body) {
 		if (!Number.isSafeInteger(asked) || asked <= 0) throw refusal('INVALID_PARAMS', 'The amount to pay must be a whole number of sats above zero.');
 		amountMsat = BigInt(asked) * 1000n;
 	}
-	const usable = channelList(host).filter((c) => c.key === key && c.usable);
+	let usable = channelList(host).filter((c) => c.key === key && c.usable);
 	// A payment leaves over the channels of one peer, in parts when one
 	// channel cannot carry it and the invoice offers basic_mpp: the most
 	// that can be paid is what the best peer's channels can send together.
-	const limit = paymentLimits(host).get(key);
-	const most = limit ? limit.maxSend : 0n;
+	let limit = paymentLimits(host).get(key);
+	let most = limit ? limit.maxSend : 0n;
 	const short = () => refusal('INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409, { sendable: most.toString() });
 	// Nothing can be sent now, and a channel could send were its peer there.
 	const idle = (units) => awayChannel(host, key, 'couldSend', units);
-	if (most === 0n) throw idle(1n) ? peerOffline(idle(1n), 'pay') : bitcoinShort(host, key, 'send', 1n) || short();
+	// Nothing can be sent now, and a channel that is reconnecting will send
+	// in a moment: the library is asked, and waits for it.
+	const waits = most === 0n && settling(limit, 1n);
+	if (most === 0n && !waits) throw idle(1n) ? peerOffline(idle(1n), 'pay') : bitcoinShort(host, key, 'send', 1n) || short();
 	let quoted;
 	try {
 		quoted = await host.ln.quotePayment({ bolt11, assetId: reg.assetId, groupKey: reg.groupKey || null, amountMsat });
 	} catch (err) {
 		// The library saw the peer go after the host's list was read.
-		if (codeOf(err) === 'ERR_BEIGNET_LN_PEER_OFFLINE') throw peerOffline(idle(1n) || limit.send, 'pay');
+		if (codeOf(err) === 'ERR_BEIGNET_LN_PEER_OFFLINE') throw peerOffline(idle(1n) || (limit && limit.send) || null, 'pay');
 		throw lightningError(host, err, { sendable: most.toString() });
+	}
+	// The channel the library waited for is back: what can be sent is read again.
+	if (waits) {
+		usable = channelList(host).filter((c) => c.key === key && c.usable);
+		limit = paymentLimits(host).get(key);
+		most = limit ? limit.maxSend : 0n;
 	}
 	// The channels the payment leaves on: one, or those of the parts of a
 	// payment in parts, all of one peer. Its units are held against what
-	// those channels can send as the host's list has them.
+	// those channels can send as the host's list has them, and against what
+	// they will send once a channel that is reconnecting is back.
 	const ids = Array.isArray(quoted.channelIds) && quoted.channelIds.length > 0 ? [...new Set(quoted.channelIds)] : [quoted.channelId];
 	const over = ids.map((id) => usable.find((c) => c.channelId === id) || null);
 	const through = over[0] || null;
 	const room = over.every(Boolean) ? over.reduce((sum, c) => sum + c.sendable, 0n) : most;
-	if (quoted.assetAmount > (room < most ? room : most)) {
+	if (quoted.assetAmount > (room < most ? room : most) && !settling(limit, quoted.assetAmount)) {
 		throw idle(quoted.assetAmount) ? peerOffline(idle(quoted.assetAmount), 'pay') : short();
 	}
 	const quote = {
