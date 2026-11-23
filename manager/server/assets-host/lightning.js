@@ -172,6 +172,9 @@ const PRICE_MOVED = ['ERR_BEIGNET_LN_PRICE_BOUND', 'ERR_BEIGNET_LN_QUOTE_EXPIRED
 // What the library says when the peer a payment would go through is not
 // connected.
 const PEER_AWAY = 'ERR_BEIGNET_LN_PEER_OFFLINE';
+// What the library says when the channel a payment would go over was still
+// reconnecting at the end of its wait for it.
+const SETTLING = 'ERR_BEIGNET_LN_CHANNEL_SETTLING';
 const CLOSED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 // The phases of an open that came to nothing. They say so only of an open
 // that signed nothing: a signed funding transaction is a channel in being.
@@ -2106,16 +2109,20 @@ async function sendPayment(host, { row, quote, quoteId, bound, key, route, body,
 		const refused = !!error && host.ln.refusals.includes(codeOf(error));
 		const earlier = !!seen && (Number.isInteger(seen.attempt) ? !ofThisTry(row, seen) : seen.status === 'failed');
 		if (refused && (seen === null || earlier)) {
-			// The library saw the peer go after the host's list was read, and
-			// lists that among the rejections it makes before sending. Nothing
-			// was sent, so this is no failed payment: it is said as the peer
-			// being away, with the peer named, and the price is kept for when
-			// it is back, as long as someone is waiting to hear it. From a
-			// library that does not list it, the row waits for the node's record.
-			if (codeOf(error) === PEER_AWAY) {
+			// The library saw the peer go after the host's list was read, or
+			// the channel was still reconnecting at the end of its wait for it,
+			// and lists that among the rejections it makes before sending.
+			// Nothing was sent, so this is no failed payment: it is said as the
+			// peer being away, with the peer named, or as the channel
+			// reconnecting, and the price is kept for a moment later, as long
+			// as someone is waiting to hear it. From a library that does not
+			// list it, the row waits for the node's record.
+			if (codeOf(error) === PEER_AWAY || codeOf(error) === SETTLING) {
 				const through =
-					awayChannel(host, quote.key, 'couldSend', BigInt(quote.assetAmount)) || channelList(host).find((c) => c.key === quote.key && c.peerPubkey === quote.peerPubkey && !c.over) || null;
-				const away = peerOffline(through, 'send');
+					codeOf(error) === PEER_AWAY
+						? awayChannel(host, quote.key, 'couldSend', BigInt(quote.assetAmount)) || channelList(host).find((c) => c.key === quote.key && c.peerPubkey === quote.peerPubkey && !c.over) || null
+						: null;
+				const away = codeOf(error) === PEER_AWAY ? peerOffline(through, 'send') : mapLightning(error);
 				if (state.answered) return { row: await failUnsent(host, row.id, { code: away.extensionCode, message: away.message }, { own: true }) };
 				await host.lock.run(() =>
 					host.rows.tx(() => {

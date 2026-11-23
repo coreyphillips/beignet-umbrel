@@ -3351,12 +3351,13 @@ test('a payment that never entered the channel says nothing left the wallet and 
 		assert.deepEqual([failure.code, failure.message], [hostCode, said.failureDescription], code);
 		h.ln.opts.payFails = null;
 	}
-	// A channel still reconnecting at the end of the library's wait for it: nothing was sent, in words of its own.
+	// A channel still reconnecting at the end of the library's wait for it: nothing was sent, so no payment is left behind, it is said in words of its own, and the price stays for a moment later.
 	const settling = await h.call('POST /pay/quote', { bolt11, key: asset.key });
 	h.ln.opts.payFails = 'ERR_BEIGNET_LN_CHANNEL_SETTLING';
-	const reconnecting = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: settling.quoteId, maxAssetAmount: '50' }, 'key-CHANNEL_SETTLING');
-	assert.deepEqual([reconnecting.status, reconnecting.failureDescription], ['FAILED', 'The asset channel is reconnecting. Try again in a moment.']);
-	assert.deepEqual((await h.get('/activity', 'kind=ln-send')).rows[0].failure, { code: 'CHANNEL_SETTLING', message: reconnecting.failureDescription });
+	const reconnecting = await refused(h.call('POST /pay', { bolt11, key: asset.key, quoteId: settling.quoteId, maxAssetAmount: '50' }, 'key-CHANNEL_SETTLING'));
+	assert.deepEqual([reconnecting.extensionCode, reconnecting.status, reconnecting.message], ['CHANNEL_SETTLING', 409, 'The asset channel is reconnecting. Try again in a moment.']);
+	assert.equal((await h.get('/activity', 'kind=ln-send')).rows.some((r) => r.failure && r.failure.code === 'CHANNEL_SETTLING'), false);
+	assert.equal(keys(h, 'l-quote/').some((k) => k.endsWith(`l-quote/${settling.quoteId}`)), true);
 	h.ln.opts.payFails = null;
 	// Why the channel did not take it is the engine's to say, and goes to the log only.
 	assert.equal(h.logs.filter(([, text]) => /an asset channel did not take a Lightning payment/.test(text)).length, 1);
@@ -3729,19 +3730,26 @@ test('paying over a channel that began to reconnect after its price was given is
 	const bolt11 = fakeInvoice({ msat: 50000 });
 	const quote = await h.call('POST /pay/quote', { bolt11, key: asset.key });
 	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
-	// Still reconnecting at the end of the wait: nothing was sent, and the row says why in the host's words.
-	const said = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: quote.assetAmount }, 'pay-settling');
-	assert.deepEqual([said.status, said.failureDescription], ['FAILED', 'The asset channel is reconnecting. Try again in a moment.']);
+	// Still reconnecting at the end of the wait: nothing was sent, so no payment is left behind, it is said in the host's words, and the price is kept.
+	const body = { bolt11, key: asset.key, quoteId: quote.quoteId, maxAssetAmount: quote.assetAmount };
+	const said = await refused(h.call('POST /pay', body, 'pay-settling'));
+	assert.deepEqual([said.extensionCode, said.status, said.message], ['CHANNEL_SETTLING', 409, 'The asset channel is reconnecting. Try again in a moment.']);
 	assert.equal(named(h, 'payInvoice').length, 1);
-	assert.deepEqual((await h.get('/activity', 'kind=ln-send')).rows[0].failure, { code: 'CHANNEL_SETTLING', message: said.failureDescription });
+	assert.deepEqual(h.host.listRows().filter((r) => r.kind === 'ln-send'), []);
 	assert.equal((await h.get('/channels')).channels[0].localBalance, '600');
-	// A price given while it reconnects is paid once it is back during the wait.
-	h.ln.opts.settles = () => h.ln.set(id, { state: 'NORMAL' });
-	const again = await h.call('POST /pay/quote', { bolt11, key: asset.key });
-	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
-	const paid = await h.call('POST /pay', { bolt11, key: asset.key, quoteId: again.quoteId, maxAssetAmount: again.assetAmount }, 'pay-back');
-	assert.deepEqual([paid.status, paid.assetAmount], ['COMPLETED', '50']);
+	// The same request on the same price pays once the channel is back.
+	h.ln.set(id, { state: 'NORMAL' });
+	const first = await h.call('POST /pay', body, 'pay-settling');
+	assert.deepEqual([first.status, first.assetAmount], ['COMPLETED', quote.assetAmount]);
 	assert.equal((await h.get('/channels')).channels[0].localBalance, '550');
+	// A price given while it reconnects is paid once it is back during the wait.
+	const other = fakeInvoice({ msat: 50000, hash: 'd4'.repeat(32) });
+	h.ln.opts.settles = () => h.ln.set(id, { state: 'NORMAL' });
+	const again = await h.call('POST /pay/quote', { bolt11: other, key: asset.key });
+	h.ln.set(id, { state: 'AWAITING_REESTABLISH' });
+	const paid = await h.call('POST /pay', { bolt11: other, key: asset.key, quoteId: again.quoteId, maxAssetAmount: again.assetAmount }, 'pay-back');
+	assert.deepEqual([paid.status, paid.assetAmount], ['COMPLETED', '50']);
+	assert.equal((await h.get('/channels')).channels[0].localBalance, '500');
 });
 
 test('a refusal of the library that names the peer as away is mapped for a payment nobody waits for any more', () => {
