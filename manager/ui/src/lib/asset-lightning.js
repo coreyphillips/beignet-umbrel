@@ -9,6 +9,7 @@
  * already holds.
  */
 import { cmpUnits, fmtAsset, isZero, toUnits } from './asset-amount.js';
+import { invoiceLost } from './asset-progress.js';
 import { isRefusal, lightningHeld, sentence } from './assets.js';
 import { fmtSats } from './format.js';
 import { assetsShown } from './wallet-assets.js';
@@ -253,13 +254,20 @@ export function invoiceDeadline(invoice) {
 const PAID = new Set(['PAID', 'SETTLED', 'COMPLETE', 'COMPLETED']);
 
 /**
- * Where an invoice made here stands: 'paid', 'failed', 'expired' or
- * 'waiting'. Paid is the activity row saying complete, or the invoice list
- * saying so, whichever is heard first; it is never guessed from the clock.
+ * Where an invoice made here stands: 'paid', 'lost', 'failed', 'expired'
+ * or 'waiting'. Paid is the activity row saying complete, or the invoice
+ * list saying so, whichever is heard first; it is never guessed from the
+ * clock. Lost is a paid invoice whose payment the peer took back on the
+ * chain, so nothing was received: the row saying so (INVOICE_LOST), or
+ * the list (LOST). The row, which the wallet sends as it changes, is
+ * believed before the list, which is asked only while the row is not paid.
  */
 export function invoiceStanding({ invoice, row, listed, now = Date.now() } = {}) {
+	if (invoiceLost(row)) return 'lost';
 	if (row && row.state === 'complete') return 'paid';
-	if (listed && PAID.has(String(listed.status || '').toUpperCase())) return 'paid';
+	const status = String((listed && listed.status) || '').toUpperCase();
+	if (status === 'LOST') return 'lost';
+	if (PAID.has(status)) return 'paid';
 	if (row && row.failed) return 'failed';
 	const deadline = invoiceDeadline(invoice);
 	if (deadline !== null && now >= deadline) return 'expired';
@@ -269,10 +277,10 @@ export function invoiceStanding({ invoice, row, listed, now = Date.now() } = {})
 /**
  * What a paid invoice asked for and what it brought in, where the two
  * differ: { asked, received, text }, with the text "asked for 250.00 BUSD,
- * received 249.99 BUSD". A payer's price can come to a unit under what the
- * invoice names, and the invoice is paid all the same. Null where they
- * agree, and for an invoice that is not paid yet (`receivedAmount` is null
- * until it is).
+ * received 249.99 BUSD". A payer's price can leave a payment up to a unit
+ * under what the invoice names for each part it arrives in, and the invoice
+ * is paid all the same. Null where they agree, and for an invoice that is
+ * not paid yet (`receivedAmount` is null until it is).
  */
 export function invoiceShortfall(invoice, asset) {
 	if (!invoice) return null;

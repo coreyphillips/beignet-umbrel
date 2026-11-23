@@ -138,9 +138,28 @@ const LIGHTNING_REFUSALS = {
 	// The wallet's own limits, before anything was recorded or sent. The
 	// limit is named when the engine's refusal carries it (mapLightning).
 	ERR_BEIGNET_LN_SPENDING_LIMIT: ['SPENDING_LIMIT', "This wallet's own spending limit refused the payment, so nothing was paid.", 409],
-	// The engine sends an asset payment in one part, and this one would
-	// have needed several. Nothing was recorded or sent.
-	ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED: ['PAYMENT_UNSUPPORTED', 'This payment would have to go out in several parts, and an asset payment goes out in one, so nothing was paid.', 409],
+	// The engine does not send this payment as an asset payment: an invoice
+	// of this node's own, a payment given up while a part of it is still
+	// out, one that would mix asset HTLCs with ones that carry no units, or
+	// a blinded path that starts at this node. A payment in parts is not
+	// among them: the library sends each part itself. Nothing was recorded
+	// or sent.
+	ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED: [
+		'PAYMENT_UNSUPPORTED',
+		"This wallet's node cannot pay this invoice with an asset, so nothing was paid. An invoice this wallet made itself is one it cannot pay that way.",
+		409
+	],
+	// The channel did not take the HTLC at its add: the peer accepts no
+	// more HTLCs or no more value in flight, or the HTLC would leave a side
+	// below its reserve. Said only when nothing of the payment left: for a
+	// later part of a payment in parts the library resolves instead, with
+	// the parts already out, and the row follows its record. The quote
+	// stays usable while it lasts.
+	ERR_BEIGNET_LN_HTLC_NOT_ADMITTED: [
+		'PAYMENT_NOT_ADMITTED',
+		'The asset channel did not take this payment when it was added, so nothing was paid. Nothing was sent for it: its peer takes no more payments or no more value at once for now, or the payment would leave a side of the channel below its reserve. Pay again in a while.',
+		409
+	],
 	// The wallet has not taken in what became of earlier payments on the
 	// channel. Not the payer's doing: it is for a restart, or for a look.
 	ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED: [
@@ -150,8 +169,8 @@ const LIGHTNING_REFUSALS = {
 	],
 	// An asset channel carries at most a few payments at once that have not
 	// ended (8 unless set otherwise), so that every one of them can still be
-	// claimed on chain in time. The library refuses the next before anything
-	// is sent or recorded.
+	// claimed on chain in time, each part of a payment in parts counting as
+	// one. The library refuses the next before anything is sent or recorded.
 	ERR_BEIGNET_LN_HTLC_LIMIT: [
 		'CHANNEL_PAYMENTS_FULL',
 		'The asset channel this would be paid through already carries as many payments that have not ended as it can hold at once, so nothing was paid. Pay again once one of them has ended.',
@@ -356,11 +375,39 @@ function modeUnavailable(reason) {
 const TOO_MANY_REQUESTS = 'ERR_LIGHTNING_TOO_MANY_REQUESTS';
 const TOO_MANY_QUOTES = 'The peer is already keeping as many unused prices for this wallet as it keeps at once, so it gave no new one. Try again in a few minutes.';
 
+// The codes of the quote protocol a peer may give with its refusal, which the
+// library passes on. A peer that prices no more than one of a wallet's
+// channels at a time, as Lightning Labs' tapd does, refuses a request for more
+// with "minimum fill not met" (2) or "fill-or-kill not viable" (4).
+const REFUSED_FOR_SIZE = new Set([2, 4]);
+const REFUSED_FOR_SIZE_SAID = "The channel's peer would not price that much at once, so nothing was done. A smaller amount may be priced.";
+
+/**
+ * ERR_BEIGNET_LN_NO_QUOTE in the host's words. Where the peer refused for the
+ * size of what was asked, it says so and does not ask to try again. The
+ * peer's code is kept in the details; its own words are logged by the caller
+ * and never shown.
+ */
+function noQuote(err) {
+	const [code, message, status] = LIGHTNING_REFUSALS.ERR_BEIGNET_LN_NO_QUOTE;
+	const peerCode = Number(detailOf(err, 'peerCode'));
+	const known = Number.isInteger(peerCode) && peerCode >= 0 && peerCode <= 255;
+	if (known && REFUSED_FOR_SIZE.has(peerCode)) return refusal(code, REFUSED_FOR_SIZE_SAID, status, { peerCode });
+	return refusal(code, message, status, known ? { peerCode } : undefined);
+}
+
+/** What the peer said with its refusal to price, as the library passed it on: one line, at most 200 characters. '' when it said nothing. */
+function peerWordsOf(err) {
+	const said = detailOf(err, 'peerMessage');
+	return typeof said === 'string' ? said.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+}
+
 function mapLightning(err, context = {}) {
 	if (isRefusal(err)) return err;
 	if (causesOf(err).some((e) => codeOf(e) === TOO_MANY_REQUESTS || new RegExp(`\\b${TOO_MANY_REQUESTS}\\b`).test(String((e && e.message) || '')))) {
 		return refusal('TOO_MANY_QUOTES', TOO_MANY_QUOTES, 429);
 	}
+	if (codeOf(err) === 'ERR_BEIGNET_LN_NO_QUOTE') return noQuote(err);
 	const engine = engineCodeOf(err);
 	if (codeOf(err) === 'ERR_BEIGNET_LN_MODE_UNAVAILABLE') return modeUnavailable(detailOf(err, 'reason'));
 	if (codeOf(err) === 'ERR_BEIGNET_LN_HTLC_LIMIT') {
@@ -487,6 +534,7 @@ module.exports = {
 	plainMessage,
 	mapError,
 	mapLightning,
+	peerWordsOf,
 	workingSats,
 	LIGHTNING_REFUSALS,
 	ENGINE_REFUSALS,

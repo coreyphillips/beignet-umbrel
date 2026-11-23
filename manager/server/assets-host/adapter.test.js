@@ -124,7 +124,7 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 			return id.equals(buf(0xdd)) ? 1 : 0;
 		},
 		paymentLimits: () => [
-			{ assetId: buf(0x11), maxSend: 450n, maxReceive: 200n, sendChannelId: buf(0xbb), receiveChannelId: buf(0xbc) },
+			{ assetId: buf(0x11), maxSend: 450n, maxReceive: 200n, sendChannelId: buf(0xbb), sendPeer: PEER, receiveChannelId: buf(0xbc) },
 			{ groupKey: GROUP, maxSend: 0n, maxReceive: 7n, receiveChannelId: buf(0xbd) }
 		],
 		resume: async () => {
@@ -168,11 +168,16 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 		invoices: () => [
 			{ paymentHash: buf(0x02), assetAmount: 150n, receivedAssetAmount: 149n, status: 'paid', bolt11: 'lnbcrt1invoice', description: 'tea' },
 			{ paymentHash: buf(0x03), assetAmount: 5n, receivedAssetAmount: 0n, status: 'something new' },
+			// Paid, and every HTLC of it taken back on the chain.
+			{ paymentHash: buf(0x0a), assetAmount: 5n, receivedAssetAmount: 0n, status: 'lost' },
 			// An entry that does not say what arrived.
 			{ paymentHash: buf(0x08), assetAmount: 5n, status: 'expired' }
 		],
 		quotePayment: async (request) => {
 			note('quotePayment', request);
+			// The first is a payment in parts over two channels of one peer. A
+			// library that says nothing of parts has its quote read as one HTLC.
+			const split = seen.calls.filter((c) => c[0] === 'quotePayment').length === 1;
 			return {
 				quoteId: buf(0x04),
 				paymentHash: buf(0x05),
@@ -183,15 +188,17 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 				feeMsat: 1000n,
 				assetRate: { coefficient: '4000000', scale: 0 },
 				expiresAt: 1700000060n,
-				priced: true
+				priced: true,
+				...(split ? { parts: 2, channelIds: [buf(0xbb), buf(0xbc)], carrierMsat: 708000n } : {})
 			};
 		},
 		payInvoice: async (request) => {
 			note('payInvoice', request);
-			return { paymentHash: buf(0x05), assetAmount: 50n, status: 'complete', attempt: 2, channelId: buf(0xbb), htlcId: 1n, feeMsat: 2000n, preimage: buf(0x99) };
+			return { paymentHash: buf(0x05), assetAmount: 50n, status: 'complete', attempt: 2, channelId: buf(0xbb), htlcId: 1n, parts: 2, planned: 2, feeMsat: 2000n, preimage: buf(0x99) };
 		},
 		payment: (hash) => {
-			if (hash.equals(buf(0x05))) return { paymentHash: hash, assetAmount: 50n, status: 'failed', attempt: 1, channelId: buf(0xbb), htlcId: 0n, failure: 'no route' };
+			// A payment in parts whose sending stopped after the first of three.
+			if (hash.equals(buf(0x05))) return { paymentHash: hash, assetAmount: 50n, status: 'failed', attempt: 1, channelId: buf(0xbb), htlcId: 0n, parts: 1, planned: 3, failure: 'no route' };
 			// One the engine forgot, and one it never confirmed as an asset payment.
 			if (hash.equals(buf(0x07))) return { paymentHash: hash, assetAmount: 9n, status: 'pending', attempt: 3, channelId: buf(0xbb), engineHasNoRecord: true, assetRecordsUnconfirmed: true };
 			// What only looks like the library's words is not taken for them.
@@ -627,8 +634,8 @@ test('opening and closing: hex and sats in, the library\'s buffers and bigints o
 
 	// What one payment can move, by asset or by group.
 	assert.deepEqual(ln.paymentLimits(), [
-		{ assetId: '11'.repeat(32), groupKey: null, maxSend: 450n, maxReceive: 200n, sendChannelId: 'bb'.repeat(32), receiveChannelId: 'bc'.repeat(32) },
-		{ assetId: null, groupKey: group, maxSend: 0n, maxReceive: 7n, sendChannelId: null, receiveChannelId: 'bd'.repeat(32) }
+		{ assetId: '11'.repeat(32), groupKey: null, maxSend: 450n, maxReceive: 200n, sendChannelId: 'bb'.repeat(32), sendPeer: hexOf(PEER), receiveChannelId: 'bc'.repeat(32) },
+		{ assetId: null, groupKey: group, maxSend: 0n, maxReceive: 7n, sendChannelId: null, sendPeer: null, receiveChannelId: 'bd'.repeat(32) }
 	]);
 
 	await ln.resume();
@@ -750,12 +757,14 @@ test('invoices and payments: amounts as bigint, times in milliseconds, a status 
 	assert.deepEqual(calls('createInvoice'), [{ quoteId: buf(0x01), description: 'tea', expirySeconds: 3600 }]);
 	await ln.createInvoice({ quoteId: quote.quoteId, description: '', expirySeconds: 60 });
 	assert.equal('description' in calls('createInvoice')[1], false);
-	// A status this host has no word for is an open invoice until it is paid
-	// or expired. What the engine still keeps of an invoice is not read: the
-	// host has its own row. What arrived stands beside what was invoiced.
+	// A status this host has no word for is an open invoice until it is
+	// paid, lost or expired. What the engine still keeps of an invoice is not
+	// read: the host has its own row. What arrived stands beside what was
+	// invoiced.
 	assert.deepEqual(ln.invoices(), [
 		{ paymentHash: '02'.repeat(32), assetAmount: 150n, received: 149n, status: 'paid' },
 		{ paymentHash: '03'.repeat(32), assetAmount: 5n, received: 0n, status: 'open' },
+		{ paymentHash: '0a'.repeat(32), assetAmount: 5n, received: 0n, status: 'lost' },
 		{ paymentHash: '08'.repeat(32), assetAmount: 5n, received: null, status: 'expired' }
 	]);
 
@@ -770,20 +779,25 @@ test('invoices and payments: amounts as bigint, times in milliseconds, a status 
 		feeMsat: 1000n,
 		unitsPerBtc: { coefficient: 4000000n, scale: 0 },
 		expiresAt: 1700000060000,
-		priced: true
+		priced: true,
+		parts: 2,
+		channelIds: ['bb'.repeat(32), 'bc'.repeat(32)],
+		carrierMsat: 708000n
 	});
 	assert.deepEqual(calls('quotePayment'), [{ invoice: 'lnbcrt1other', asset: { assetId: ASSET } }]);
-	await ln.quotePayment({ bolt11: 'lnbcrt1other', assetId: '11'.repeat(32), groupKey: null, amountMsat: 75000n });
+	const whole = await ln.quotePayment({ bolt11: 'lnbcrt1other', assetId: '11'.repeat(32), groupKey: null, amountMsat: 75000n });
 	assert.equal(calls('quotePayment')[1].amountMsat, 75000n);
+	// One HTLC, over the channel it names, where the library names no parts.
+	assert.deepEqual([whole.parts, whole.channelIds, whole.carrierMsat], [1, ['bb'.repeat(32)], null]);
 
 	const paid = await ln.payInvoice({ quoteId: pay.quoteId, maxAssetAmount: 50n });
 	// Which try the record stands for travels with it. The preimage does not.
-	assert.deepEqual(paid, { paymentHash: '05'.repeat(32), assetAmount: 50n, status: 'complete', feeMsat: 2000n, failure: null, attempt: 2, lost: false, unconfirmed: false });
+	assert.deepEqual(paid, { paymentHash: '05'.repeat(32), assetAmount: 50n, status: 'complete', feeMsat: 2000n, failure: null, attempt: 2, lost: false, unconfirmed: false, parts: 2, planned: 2 });
 	assert.deepEqual(calls('payInvoice'), [{ quoteId: buf(0x04), maxAssetAmount: 50n }]);
-	assert.deepEqual(ln.payment('05'.repeat(32)), { paymentHash: '05'.repeat(32), assetAmount: 50n, status: 'failed', feeMsat: null, failure: 'no route', attempt: 1, lost: false, unconfirmed: false });
+	assert.deepEqual(ln.payment('05'.repeat(32)), { paymentHash: '05'.repeat(32), assetAmount: 50n, status: 'failed', feeMsat: null, failure: 'no route', attempt: 1, lost: false, unconfirmed: false, parts: 1, planned: 3 });
 	// A payment the engine forgot, and one it never confirmed as an asset payment, say so.
-	assert.deepEqual(ln.payment('07'.repeat(32)), { paymentHash: '07'.repeat(32), assetAmount: 9n, status: 'pending', feeMsat: null, failure: null, attempt: 3, lost: true, unconfirmed: true });
-	assert.deepEqual(ln.payment('09'.repeat(32)), { paymentHash: '09'.repeat(32), assetAmount: 9n, status: 'pending', feeMsat: null, failure: null, attempt: null, lost: false, unconfirmed: false });
+	assert.deepEqual(ln.payment('07'.repeat(32)), { paymentHash: '07'.repeat(32), assetAmount: 9n, status: 'pending', feeMsat: null, failure: null, attempt: 3, lost: true, unconfirmed: true, parts: 1, planned: 1 });
+	assert.deepEqual(ln.payment('09'.repeat(32)), { paymentHash: '09'.repeat(32), assetAmount: 9n, status: 'pending', feeMsat: null, failure: null, attempt: null, lost: false, unconfirmed: false, parts: 1, planned: 1 });
 	// No record is the library's `undefined`, and the host's null.
 	assert.equal(ln.payment('06'.repeat(32)), null);
 });

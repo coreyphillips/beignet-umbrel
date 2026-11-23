@@ -50,6 +50,16 @@ export function isFailed(row) {
 }
 
 /**
+ * An invoice made here that was paid, and whose every HTLC the peer took
+ * back on the chain before the wallet could claim it: nothing was
+ * received. The wallet says it as a failure of its own (INVOICE_LOST),
+ * worded apart from an invoice that ran out unpaid.
+ */
+export function invoiceLost(row) {
+	return !!row && row.kind === 'ln-receive' && isFailed(row) && !!row.failure && row.failure.code === 'INVOICE_LOST';
+}
+
+/**
  * What the wallet says of a Lightning payment whose end it cannot vouch
  * for: { code, message }, or null for every other row. PAYMENT_UNACCOUNTED
  * is a payment the node no longer has a record of, which may have been
@@ -452,13 +462,15 @@ export function headline(row, { network } = {}) {
 			if (s === 'pending') return `Burning ${what}: broadcasting`;
 			return `Burning ${what}: waiting for a block`;
 		case 'ln-receive':
+			if (invoiceLost(row)) return `Lightning invoice for ${what}: taken back on the chain, nothing received`;
 			if (failed) return `Lightning invoice for ${what} expired`;
 			return s === 'complete' ? `Received ${what} over Lightning` : `Lightning invoice for ${what}: waiting to be paid`;
 		case 'ln-send':
 			// Neither "paid" nor "failed": the wallet cannot say which.
 			if (noticeOf(row)) return `Lightning payment of ${what}: ${noticeWords(noticeOf(row))[0]}`;
 			if (failed) return `Paying ${what} over Lightning failed`;
-			return s === 'complete' ? `Paid ${what} over Lightning` : `Paying ${what} over Lightning`;
+			if (s === 'complete') return row.parts > 1 ? `Paid ${what} over Lightning in ${row.parts} parts` : `Paid ${what} over Lightning`;
+			return `Paying ${what} over Lightning`;
 		default:
 			return names;
 	}
@@ -469,6 +481,7 @@ export function statusOf(row, { network } = {}) {
 	if (!row) return { text: '-', tone: 'muted' };
 	if (row.state === 'cancelled') return { text: 'cancelled', tone: 'muted' };
 	if (noticeOf(row)) return { text: noticeWords(noticeOf(row))[1], tone: 'blue' };
+	if (invoiceLost(row)) return { text: 'lost', tone: 'red' };
 	if (isFailed(row)) return { text: 'failed', tone: 'red' };
 	if (row.state === 'complete') return { text: 'complete', tone: 'green' };
 	if (unwatched(row)) return { text: 'not checked', tone: 'muted' };

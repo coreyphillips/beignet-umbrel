@@ -37,6 +37,9 @@ function tapError(code, message) {
 	return err;
 }
 
+/** A quote the peer refused: `quoteFails` is the library's code, or `{ code, details }` as the library gives a peer's refusal. */
+const quoteFailure = (fails) => (typeof fails === 'string' ? tapError(fails, 'the peer gave no price') : Object.assign(tapError(fails.code, 'the peer gave no price'), fails.details ? { details: fails.details } : {}));
+
 const encodeFake = (fields, hrp = 'taprt') => `${hrp}1${Buffer.from(JSON.stringify(fields)).toString('hex')}`;
 
 /**
@@ -440,12 +443,21 @@ const fakeInvoice = ({ msat, hash } = {}) =>
  * text a failed payment's record carries), payFails (a code the payment is
  * refused with before anything is sent), payThrowsAfter (a code it rejects
  * with once the node has the payment, which the real entry never does),
- * payMoved (the peer's price is past the bound), payFeeMsat.
+ * payMoved (the peer's price is past the bound), payFeeMsat, payStopsAfter
+ * (the parts of a payment in parts that go out before the sending stops).
+ *
+ * A payment one channel cannot carry goes in parts over the channels of
+ * its peer that can carry it together, the fullest first, as the library's
+ * does over one peer's asset channels; `paymentLimits()` gives what the
+ * best peer's channels hold together.
  *
  * A test moves a channel on by hand: `confirm(id)` buries its funding and
  * makes it NORMAL, `set(id, fields)` changes it, `abandon(id, reason)` gives
  * a signed funding up as unable to confirm, `recover(id)` brings a closed
  * channel's assets home, `settle(paymentHash)` pays an invoice,
+ * `settlePart(paymentHash, units)` settles one part of a payment in parts,
+ * `takeBack(paymentHash, units)` is the payer taking an HTLC that paid it
+ * back on the chain,
  * `finish(paymentHash, status)` ends a payment that was left pending, and
  * `offer(proposal)` is a peer offering a channel.
  */
@@ -467,7 +479,8 @@ const ASSET_PAYMENT_REFUSALS = Object.freeze(
 		'ALREADY_PAID',
 		'PAYMENT',
 		'PAYMENT_UNSUPPORTED',
-		'OUTCOMES_UNDELIVERED'
+		'OUTCOMES_UNDELIVERED',
+		'HTLC_NOT_ADMITTED'
 	].map((name) => LN + name)
 );
 // The rows a backup may carry, as the entry's own list has them.
@@ -820,6 +833,9 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			attempt: p.attempt || 1,
 			channelId: bytes(p.channelId || '00'.repeat(32)),
 			htlcId: BigInt((p.attempt || 1) - 1),
+			// The HTLCs the try went out as, and how many its quote was given for.
+			parts: p.parts ? p.parts.length : 1,
+			planned: p.planned || (p.parts ? p.parts.length : 1),
 			...(p.status === 'pending' && p.engineHasNoRecord ? { engineHasNoRecord: true } : {}),
 			...(p.assetRecordsUnconfirmed ? { assetRecordsUnconfirmed: true } : {}),
 			...(p.status === 'pending' || p.feeMsat === undefined || p.feeMsat === null ? {} : { feeMsat: p.feeMsat }),
@@ -1111,7 +1127,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				const groupKey = asset.groupKey ? hexOf(asset.groupKey) : null;
 				const peerPubkey = peer ? hexOf(peer) : null;
 				log('quoteInvoice', { assetId, groupKey, amount, peerPubkey, expirySeconds });
-				if (opts.quoteFails) throw tapError(opts.quoteFails, 'the peer gave no price');
+				if (opts.quoteFails) throw quoteFailure(opts.quoteFails);
 				const quoteId = id('quote');
 				// The quote stands as long as it was asked to, and no longer than the peer gives.
 				const lasts = Math.min(opts.quoteMs, (expirySeconds || 3600) * 1000);
@@ -1171,18 +1187,43 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				refusePaid(invoice.hash);
 				const msat = invoice.msat !== null ? BigInt(invoice.msat) : amountMsat === undefined || amountMsat === null ? null : BigInt(amountMsat);
 				if (msat === null) throw refuse('AMOUNT_REQUIRED', 'the invoice names no amount');
-				if (opts.quoteFails) throw tapError(opts.quoteFails, 'the peer gave no price');
+				if (opts.quoteFails) throw quoteFailure(opts.quoteFails);
 				const flow = [...flows.values()].find((f) => f.state === 'NORMAL' && f.confirmed && (groupKey ? f.groupKey === groupKey : f.assetId === assetId));
 				if (!flow) throw refuse('INSUFFICIENT_OUTBOUND', 'no open asset channel carries this asset');
 				const quoteId = id('quote');
 				const assetAmount = unitsOf(msat);
-				quotes.set(quoteId, { kind: 'pay', paymentHash: invoice.hash, assetAmount, channelId: flow.channelId, expiresAt: seconds(now() + opts.quoteMs) });
+				// One HTLC over the first channel, unless that cannot carry the
+				// payment and the channels of its peer can together: then it goes
+				// in parts over them, the fullest first, one carrier a part.
+				const spare = (f) => (f.local > f.reserved ? f.local - f.reserved : 0n);
+				const able = (f) => f.state === 'NORMAL' && f.confirmed && (groupKey ? f.groupKey === groupKey : f.assetId === assetId);
+				const whole = spare(flow) >= assetAmount ? flow : [...flows.values()].find((f) => able(f) && spare(f) >= assetAmount);
+				let parts = [{ channelId: (whole || flow).channelId, units: assetAmount }];
+				if (!whole) {
+					const own = [...flows.values()]
+						.filter((f) => able(f) && f.peerPubkey === flow.peerPubkey && spare(f) > 0n)
+						.sort((a, b) => (spare(b) > spare(a) ? 1 : spare(b) < spare(a) ? -1 : 0));
+					if (own.length > 1 && own.reduce((sum, f) => sum + spare(f), 0n) >= assetAmount) {
+						let left = assetAmount;
+						parts = [];
+						for (const f of own) {
+							if (left === 0n) break;
+							const units = spare(f) < left ? spare(f) : left;
+							parts.push({ channelId: f.channelId, units });
+							left -= units;
+						}
+					}
+				}
+				quotes.set(quoteId, { kind: 'pay', paymentHash: invoice.hash, assetAmount, channelId: parts[0].channelId, parts, expiresAt: seconds(now() + opts.quoteMs) });
 				persist();
 				return {
 					quoteId: bytes(quoteId),
 					paymentHash: bytes(invoice.hash),
 					peer: bytes(flow.peerPubkey),
-					channelId: bytes(flow.channelId),
+					channelId: bytes(parts[0].channelId),
+					parts: parts.length,
+					channelIds: parts.map((part) => bytes(part.channelId)),
+					carrierMsat: BigInt(parts.length) * 354000n,
 					assetAmount,
 					milliSatoshi: msat,
 					feeMsat: opts.payFeeMsat,
@@ -1207,10 +1248,16 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				// The node has the payment from here on. The record is written in
 				// the one write before it is handed over, and stands for this try.
 				const before = payments.get(quote.paymentHash);
-				const status = opts.payThrowsAfter ? 'pending' : opts.payStatus;
+				// Each part is sent once. A sending that stops leaves the parts
+				// out pending, to end as the payee lets them.
+				const planned = quote.parts || [{ channelId: quote.channelId, units: quote.assetAmount }];
+				const sent = opts.payStopsAfter && planned.length > 1 ? planned.slice(0, opts.payStopsAfter) : planned;
+				const status = opts.payThrowsAfter || sent.length < planned.length ? 'pending' : opts.payStatus;
 				const payment = {
 					paymentHash: quote.paymentHash,
-					assetAmount: quote.assetAmount,
+					assetAmount: sent.reduce((sum, part) => sum + part.units, 0n),
+					parts: sent,
+					planned: planned.length,
 					status,
 					attempt: (before ? before.attempt || 1 : 0) + 1,
 					feeMsat: opts.payFeeMsat,
@@ -1223,7 +1270,7 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 				payments.set(payment.paymentHash, payment);
 				persist();
 				if (opts.payThrowsAfter) throw tapError(opts.payThrowsAfter, 'no word from the node in time');
-				if (payment.status === 'complete') ln.move(payment.channelId, -payment.assetAmount);
+				if (payment.status === 'complete') for (const part of payment.parts) ln.move(part.channelId, -part.units);
 				return paymentView(payment);
 			},
 			payment(paymentHash) {
@@ -1234,14 +1281,25 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			paymentLimits() {
 				reads('paymentLimits');
 				const limits = new Map();
+				const sending = new Map();
 				for (const f of flows.values()) {
 					if (f.state !== 'NORMAL' || !f.confirmed || opts.peerOffline) continue;
 					const name = f.groupKey ? `group:${f.groupKey}` : `asset:${f.assetId}`;
 					const limit = limits.get(name) || { ...(f.groupKey ? { groupKey: bytes(f.groupKey) } : { assetId: bytes(f.assetId) }), maxSend: 0n, maxReceive: 0n };
 					const send = f.local > f.reserved ? f.local - f.reserved : 0n;
-					if (send > limit.maxSend) Object.assign(limit, { maxSend: send, sendChannelId: bytes(f.channelId) });
+					// To send: what the channels of the best peer hold together, the
+					// fullest of them named. To receive: the best single channel.
+					const peer = `${name}|${f.peerPubkey}`;
+					const held = sending.get(peer) || { name, units: 0n, fullest: 0n };
+					held.units += send;
+					if (send > held.fullest) Object.assign(held, { fullest: send, channelId: f.channelId, peerPubkey: f.peerPubkey });
+					sending.set(peer, held);
 					if (f.remote > limit.maxReceive) Object.assign(limit, { maxReceive: f.remote, receiveChannelId: bytes(f.channelId) });
 					limits.set(name, limit);
+				}
+				for (const held of sending.values()) {
+					const limit = limits.get(held.name);
+					if (held.units > limit.maxSend) Object.assign(limit, { maxSend: held.units, sendChannelId: bytes(held.channelId), sendPeer: bytes(held.peerPubkey) });
 				}
 				return [...limits.values()];
 			},
@@ -1479,6 +1537,50 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			channelId: bytes(flow ? flow.channelId : '00'.repeat(32))
 		});
 	};
+	/**
+	 * One part of a payment in parts settles an invoice, `units` of it: the
+	 * invoice reads paid from the first part, with what arrived so far, and
+	 * each part is said as an event of its own.
+	 */
+	ln.settlePart = (paymentHash, units) => {
+		const invoice = invoices.get(paymentHash);
+		invoice.status = 'paid';
+		invoice.received = (invoice.received === undefined ? 0n : invoice.received) + BigInt(units);
+		const flow = [...flows.values()].find((f) => f.peerPubkey === invoice.peerPubkey && f.state === 'NORMAL');
+		if (flow) ln.move(flow.channelId, BigInt(units));
+		persist();
+		emit({
+			type: 'invoice',
+			paymentHash: bytes(paymentHash),
+			status: 'paid',
+			assetAmount: invoice.assetAmount,
+			receivedAssetAmount: invoice.received,
+			channelId: bytes(flow ? flow.channelId : '00'.repeat(32))
+		});
+	};
+	/**
+	 * The payer takes an HTLC that paid an invoice, `units` of it, back on
+	 * the chain after the wallet had let its preimage go: they are no longer
+	 * received, and an invoice with none left received reads lost, never
+	 * open again.
+	 */
+	ln.takeBack = (paymentHash, units) => {
+		const invoice = invoices.get(paymentHash);
+		const left = (invoice.received === undefined ? 0n : invoice.received) - BigInt(units);
+		invoice.received = left > 0n ? left : 0n;
+		if (invoice.received === 0n) invoice.status = 'lost';
+		const flow = [...flows.values()].find((f) => f.peerPubkey === invoice.peerPubkey && f.state === 'NORMAL');
+		if (flow) ln.move(flow.channelId, -BigInt(units));
+		persist();
+		emit({
+			type: 'invoice',
+			paymentHash: bytes(paymentHash),
+			status: 'lost',
+			assetAmount: invoice.assetAmount,
+			receivedAssetAmount: invoice.received,
+			channelId: bytes(flow ? flow.channelId : '00'.repeat(32))
+		});
+	};
 	/** The engine forgets a payment it once had: the record of it stays pending, and says so. */
 	ln.forget = (paymentHash) => {
 		payments.get(paymentHash).engineHasNoRecord = true;
@@ -1487,9 +1589,18 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 	ln.finish = (paymentHash, status, failure = null) => {
 		const payment = payments.get(paymentHash);
 		Object.assign(payment, { status, failure });
-		if (status === 'complete') ln.move(payment.channelId, -payment.assetAmount);
+		if (status === 'complete') for (const part of payment.parts || [{ channelId: payment.channelId, units: payment.assetAmount }]) ln.move(part.channelId, -part.units);
 		persist();
-		emit({ type: 'payment', paymentHash: bytes(paymentHash), attempt: payment.attempt || 1, status, assetAmount: payment.assetAmount, channelId: bytes(payment.channelId), ...(failure ? { failure } : {}) });
+		emit({
+			type: 'payment',
+			paymentHash: bytes(paymentHash),
+			attempt: payment.attempt || 1,
+			status,
+			assetAmount: payment.assetAmount,
+			channelId: bytes(payment.channelId),
+			parts: payment.parts ? payment.parts.length : 1,
+			...(failure ? { failure } : {})
+		});
 	};
 	/** A peer offers a channel: what the service asks the wallet, in the library's own values. */
 	ln.offer = async ({ pendingChannelId, peerPubkey = `03${'cd'.repeat(32)}`, assets = [], groupKey = null }) => {

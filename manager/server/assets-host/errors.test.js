@@ -19,6 +19,7 @@ const {
 	plainMessage,
 	mapError,
 	mapLightning,
+	peerWordsOf,
 	workingSats,
 	LIGHTNING_REFUSALS,
 	ENGINE_REFUSALS,
@@ -114,6 +115,7 @@ test('each refusal of the Lightning service becomes the code the dashboard words
 		['ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', 'OUTCOMES_UNDELIVERED', 409],
 		['ERR_BEIGNET_LN_SPENDING_LIMIT', 'SPENDING_LIMIT', 409],
 		['ERR_BEIGNET_LN_HTLC_LIMIT', 'CHANNEL_PAYMENTS_FULL', 409],
+		['ERR_BEIGNET_LN_HTLC_NOT_ADMITTED', 'PAYMENT_NOT_ADMITTED', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_OUTBOUND', 409],
 		['ERR_BEIGNET_LN_INSUFFICIENT_INBOUND', 'INSUFFICIENT_INBOUND', 409],
 		['ERR_BEIGNET_LN_CARRIER_UNFUNDED', 'CHANNEL_BITCOIN_SHORT', 409],
@@ -363,7 +365,7 @@ test('bitcoin that is not on native SegWit addresses is said with what is there,
 	assert.equal(mapLightning(Object.assign(new Error('draining'), { code: 'ERR_BEIGNET_LN_SERVICE_DRAINING', details: { reason: 'SERVICE_DRAINING' } })).message, 'This wallet is shutting down or in maintenance and takes no new payments, so nothing was paid. Pay again once it is running.');
 });
 
-test('the refusals the library added: this node\'s own no to an open, a refused fee policy, a payment in parts, and results not taken in', () => {
+test('the refusals the library added: this node\'s own no to an open, a refused fee policy, a payment the node does not send as an asset payment, a channel that did not take the payment, and results not taken in', () => {
 	const said = (code, extra = {}) => mapLightning(Object.assign(new Error('the engine wrote: aux htlc mode 7 of 03aa'), { code, ...extra }));
 	// A refusal that is this node's own is never worded as the peer's, and carries the engine's reason.
 	const mode = said('ERR_BEIGNET_LN_MODE_UNAVAILABLE', { details: { reason: 'the peer and this node agree on no way\n to carry an asset payment' } });
@@ -377,10 +379,17 @@ test('the refusals the library added: this node\'s own no to an open, a refused 
 	const policy = said('ERR_BEIGNET_LN_FEE_POLICY_REFUSED');
 	assert.deepEqual([policy.extensionCode, policy.status], ['FEE_POLICY_REFUSED', 409]);
 	assert.match(policy.message, /did not take the settings this app gives it for the miner fees of asset channels/);
-	// Nothing was recorded or sent by either of these.
-	const parts = said('ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED');
-	assert.deepEqual([parts.extensionCode, parts.status], ['PAYMENT_UNSUPPORTED', 409]);
-	assert.equal(parts.message, 'This payment would have to go out in several parts, and an asset payment goes out in one, so nothing was paid.');
+	// Nothing was recorded or sent by any of these. A payment in parts is no
+	// longer among what the node does not send as an asset payment.
+	const unsupported = said('ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED');
+	assert.deepEqual([unsupported.extensionCode, unsupported.status], ['PAYMENT_UNSUPPORTED', 409]);
+	assert.equal(unsupported.message, "This wallet's node cannot pay this invoice with an asset, so nothing was paid. An invoice this wallet made itself is one it cannot pay that way.");
+	assert.equal(/parts/.test(unsupported.message), false);
+	// The channel did not take the HTLC at its add: nothing was sent for it, whatever the engine's reason.
+	const admitted = said('ERR_BEIGNET_LN_HTLC_NOT_ADMITTED', { details: { channelId: 'aa'.repeat(32), reason: 'commitment transaction exceeds max HTLC count' } });
+	assert.deepEqual([admitted.extensionCode, admitted.status, admitted.details], ['PAYMENT_NOT_ADMITTED', 409, undefined]);
+	assert.match(admitted.message, /^The asset channel did not take this payment when it was added, so nothing was paid\. Nothing was sent for it: /);
+	assert.equal(/max HTLC count|aaaa/.test(admitted.message), false);
 	const undelivered = said('ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED', { details: { undeliveredOutcomes: 3 } });
 	assert.deepEqual([undelivered.extensionCode, undelivered.status, undelivered.details], ['OUTCOMES_UNDELIVERED', 409, { undeliveredOutcomes: 3 }]);
 	assert.equal(
@@ -389,12 +398,31 @@ test('the refusals the library added: this node\'s own no to an open, a refused 
 	);
 	assert.equal(said('ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED').details, undefined);
 	// What the library wrote is in none of them.
-	for (const r of [mode, bare, policy, parts, undelivered]) assert.equal(/aux htlc mode|03aa/.test(r.message), false);
+	for (const r of [mode, bare, policy, unsupported, admitted, undelivered]) assert.equal(/aux htlc mode|03aa/.test(r.message), false);
 	// A peer that is away, where the library says so: its own code only on a quote (lightning.js), the old one elsewhere.
 	assert.deepEqual([said('ERR_BEIGNET_LN_PEER_OFFLINE').extensionCode, said('ERR_BEIGNET_LN_PEER_OFFLINE').status], ['PEER_UNREACHABLE', 502]);
 	// A try that never entered the channel.
 	assert.equal(paymentFailure('anything at all', { neverSent: true }).message, 'This payment never left the wallet, so nothing was paid. The invoice can be paid again.');
 	assert.equal(paymentFailure('anything at all', { neverSent: true }).known, true);
+});
+
+test('a peer that refused to price: for the size asked, said without asking to try again; its code kept, its own words never in the sentence', () => {
+	const said = (details) => mapLightning(Object.assign(new Error('the peer refused to price the asset'), { code: 'ERR_BEIGNET_LN_NO_QUOTE', ...(details ? { details } : {}) }));
+	const size = said({ peerCode: 2, peerMessage: 'minimum fill not met' });
+	assert.deepEqual([size.extensionCode, size.status, size.details], ['PEER_GAVE_NO_PRICE', 502, { peerCode: 2 }]);
+	assert.equal(size.message, "The channel's peer would not price that much at once, so nothing was done. A smaller amount may be priced.");
+	assert.equal(said({ peerCode: 4, peerMessage: 'fill-or-kill not viable' }).message, size.message);
+	const other = said({ peerCode: 1, peerMessage: 'Quote is unavailable' });
+	assert.deepEqual([other.extensionCode, other.status, other.details], ['PEER_GAVE_NO_PRICE', 502, { peerCode: 1 }]);
+	assert.equal(other.message, "The channel's peer did not give a price, so nothing was done. Try again in a moment.");
+	const none = said();
+	assert.deepEqual([none.extensionCode, none.status, 'details' in none], ['PEER_GAVE_NO_PRICE', 502, false]);
+	assert.equal('details' in said({ peerCode: 'two' }), false);
+	for (const r of [size, other, none]) assert.equal(/minimum fill|unavailable|fill-or-kill/i.test(r.message), false);
+	// What the peer said, for the log: one line, its controls taken out, at most 200 characters.
+	assert.equal(peerWordsOf(Object.assign(new Error('x'), { details: { peerMessage: 'minimum\n fill\u202e not\u2028met\u200f' } })), 'minimum fill not met');
+	assert.equal(peerWordsOf(Object.assign(new Error('x'), { details: { peerMessage: 'a'.repeat(300) } })).length, 200);
+	assert.equal(peerWordsOf(new Error('x')), '');
 });
 
 test('a peer that keeps no more unused prices for this wallet: said as a wait of a few minutes, also when it is the cause of what the library threw', () => {

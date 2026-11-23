@@ -510,11 +510,19 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  * 20. invoices() is synchronous: [{ paymentHash, assetAmount,
  *     receivedAssetAmount, milliSatoshi, expiresAt, status, bolt11?,
  *     description? }] for every asset invoice kept, `status` being 'open',
- *     'paid' or 'expired'. `assetAmount` is what was invoiced, and
+ *     'paid', 'lost' or 'expired'. `assetAmount` is what was invoiced, and
  *     `receivedAssetAmount` what arrived, summed over the HTLCs that
- *     settled it: 0 while none has, and at most one unit under the amount
- *     invoiced, where the rate rounds a payer down. A paid invoice keeps
- *     reading `paid` after the engine has forgotten the payment. `bolt11`
+ *     settled it, less those the payer took back on the chain: 0 while
+ *     none has. Each HTLC can come a unit short where the rate rounds a
+ *     payer down, so it can be under the amount invoiced by up to one unit
+ *     for each HTLC that paid it. A payer may pay an invoice in parts, each
+ *     an HTLC of its own: the invoice reads `paid` from the first part that
+ *     settles, and `receivedAssetAmount` rises as each later part's end
+ *     arrives. It falls when the payer takes an HTLC back on the chain
+ *     after the wallet had let its preimage go, and once none is left
+ *     received the invoice reads `lost`, never `open` again. A paid
+ *     invoice keeps reading `paid` after the engine has forgotten the
+ *     payment. `bolt11`
  *     and `description` are there only while the engine keeps the invoice,
  *     so the host keeps its own row of each (`inv/<hash>`). The record of
  *     an invoice is pruned a day after it expired: its hash then stays on
@@ -522,8 +530,21 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     refused, so plain bitcoin never settles an asset invoice.
  * 21. quotePayment({ invoice, asset, amountMsat?, channelId? }) resolves to
  *     { quoteId, paymentHash, peer, channelId, assetAmount, milliSatoshi,
- *     feeMsat, assetRate, expiresAt, priced } and sends nothing.
- *     `amountMsat` is for an invoice that names no amount.
+ *     feeMsat, assetRate, expiresAt, priced, parts, channelIds,
+ *     carrierMsat } and sends nothing. `amountMsat` is for an invoice that
+ *     names no amount. It first tries one HTLC over every channel, whatever
+ *     its peer. When none carries the payment, and the invoice offers
+ *     basic_mpp with a payment secret, the payment goes in parts over the
+ *     asset channels of one peer, at the rate of that peer's own quote:
+ *     the fewest parts the channels and routes allow, at most 8
+ *     (MAX_ASSET_PAYMENT_PARTS), under one quote. `parts` is 1 for one
+ *     HTLC; `channelIds` names each part's channel in the order they are
+ *     sent, `channelId` the first; `assetAmount` is the units of every
+ *     part, each the fewest worth what its route carries, so the payer
+ *     pays up to a unit a part more than one HTLC would; `milliSatoshi` is
+ *     what the routes carry together and `feeMsat` what they charge; and
+ *     `carrierMsat` the bitcoin the HTLCs carry, one carrier each, which
+ *     leaves with the payment beside the fee.
  * 22. payInvoice({ quoteId, maxAssetAmount }) is one try at an invoice. It
  *     rejects only while nothing has left the wallet, and only with a code
  *     of the exported ASSET_PAYMENT_REFUSALS: PAYMENT among them for an
@@ -533,9 +554,18 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     asset side of a payment. The facade hands that list on as
  *     `refusals`, and the host keeps no copy of it. Once the payment is
  *     handed to the engine the call resolves, to { paymentHash,
- *     assetAmount, status, attempt, channelId, htlcId?, feeMsat?, failure?,
- *     preimage?, engineHasNoRecord?, assetRecordsUnconfirmed? }, with
- *     `pending` while the end is not known. There is one rejection after
+ *     assetAmount, status, attempt, channelId, htlcId?, parts, planned,
+ *     feeMsat?, failure?, preimage?, engineHasNoRecord?,
+ *     assetRecordsUnconfirmed? }, with `pending` while the end is not
+ *     known. A payment in parts starts only with 20 seconds of its quote
+ *     left (QUOTE_EXPIRED otherwise), checks every part before the first
+ *     is sent and sends each part once: `parts` is how many went out and
+ *     `planned` how many the quote was given for. When a later part is
+ *     refused the call resolves `pending` with `parts` under `planned`,
+ *     and the parts out end as the payee lets them, by its timeout when it
+ *     does not take them; a refusal of the first part rejects, nothing
+ *     having left. The record completes at the first part that settles and
+ *     fails once no part can settle. There is one rejection after
  *     that point, and it is not in the list: RECORDS_UNCONFIRMED, for a
  *     send the engine does not confirm to carry the asset records. The
  *     record is then kept, flagged `assetRecordsUnconfirmed`, and ends as
@@ -574,11 +604,18 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *       - before `start`, and after `close`, it throws NOT_READY and never
  *         answers undefined for a payment it would know of.
  * 23. paymentLimits() is synchronous: for each asset, [{ assetId? |
- *     groupKey?, maxSend, maxReceive, sendChannelId?, receiveChannelId? }],
- *     the most ONE payment can send and receive, from the best single
- *     NORMAL channel whose peer is connected, less what payments under way
- *     have set aside. A payment is never split across channels, so these
- *     are never sums.
+ *     groupKey?, maxSend, maxReceive, sendChannelId?, sendPeer?,
+ *     receiveChannelId? }], the most ONE payment can send and receive over
+ *     NORMAL channels whose peer is connected, less what payments under way
+ *     have set aside. A payment is sent over the asset channels of one
+ *     peer, in parts when one channel does not hold it, so `maxSend` is
+ *     what the channels of the best peer (`sendPeer`) hold together, each
+ *     with a slot and a carrier for one more HTLC, and `sendChannelId` the
+ *     fullest of them. A payment above what one channel holds goes only
+ *     when its invoice offers basic_mpp, and in N parts takes up to N units
+ *     more than one HTLC would. An invoice is quoted only through a channel
+ *     that can receive the whole of it, so `maxReceive` is the best single
+ *     channel's and never a sum.
  *
  * Events and errors
  *
@@ -597,10 +634,13 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     ERR_BEIGNET_FEE pass through for the funding transaction, as for a
  *     mint or a send.
  * 25. onEvent receives { type: 'channel', pendingChannelId?, channelId?,
- *     phase?, error? }, { type: 'invoice', paymentHash, status: 'paid',
- *     assetAmount, receivedAssetAmount, channelId }, { type: 'payment',
- *     paymentHash, attempt, status, assetAmount, channelId, feeMsat?,
- *     failure? } and { type: 'recovery',
+ *     phase?, error? }, { type: 'invoice', paymentHash, status: 'paid' |
+ *     'lost', assetAmount, receivedAssetAmount, channelId } once for each
+ *     HTLC that paid an invoice (`lost` for one the payer took back on the
+ *     chain, with what is left received), { type: 'payment',
+ *     paymentHash, attempt, status, assetAmount, channelId, parts,
+ *     feeMsat?, failure? } once a payment, a payment in parts included, on
+ *     the end of the part that ended it, and { type: 'recovery',
  *     channelId, status }, each after the change is stored and outside any
  *     storage transaction. A peer that turns an open down after openChannel
  *     ended is a channel event with `error`; a payment's end after
@@ -739,12 +779,18 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  * 41. quotePayment and quoteInvoice reject with
  *     ERR_BEIGNET_LN_PEER_OFFLINE when a channel could carry the amount
  *     and its peer is away. ASSET_PAYMENT_REFUSALS also holds
- *     ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED (the engine refuses an asset
- *     payment in several parts) and ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED
+ *     ERR_BEIGNET_LN_PAYMENT_UNSUPPORTED (the engine does not send the
+ *     payment as an asset payment: an invoice of its own, a payment given
+ *     up while a part of it is still out, asset HTLCs mixed with ones that
+ *     carry no units, a blinded path that starts at this node; a payment
+ *     in parts is not among them), ERR_BEIGNET_LN_OUTCOMES_UNDELIVERED
  *     (results of earlier payments on the channel were not taken in;
  *     `details.undeliveredOutcomes`, and the channel's view carries
- *     `undeliveredOutcomes` while above zero): nothing was recorded or
- *     sent by either. A try that ended because its HTLC never entered
+ *     `undeliveredOutcomes` while above zero) and, since the library at
+ *     dc499b8, ERR_BEIGNET_LN_HTLC_NOT_ADMITTED (the channel did not take
+ *     the HTLC at its add; `details.channelId` and `details.reason`, the
+ *     engine's words): nothing was recorded or sent by any of them, and for
+ *     a payment in parts no part left. A try that ended because its HTLC never entered
  *     the channel is `failed` with `neverSent: true`: nothing left the
  *     wallet, and the invoice can be paid again. The library hands over
  *     no forwarding hooks.
@@ -990,6 +1036,10 @@ function plainChannel(c) {
 	};
 }
 
+// How many HTLCs a payment goes or went out as: 1 where the library says
+// nothing, as a library before payments in parts does not.
+const partsOf = (n) => (Number.isSafeInteger(n) && n >= 1 ? n : 1);
+
 const plainPayment = (p) => ({
 	paymentHash: p.paymentHash ? asHex(p.paymentHash) : null,
 	assetAmount: p.assetAmount === undefined || p.assetAmount === null ? null : BigInt(p.assetAmount),
@@ -1002,15 +1052,22 @@ const plainPayment = (p) => ({
 	// asset records: its units are not known to have left, whatever its status.
 	unconfirmed: p.assetRecordsUnconfirmed === true,
 	// A failed try whose HTLC never entered the channel: nothing left the wallet.
-	...(p.neverSent === true ? { neverSent: true } : {})
+	...(p.neverSent === true ? { neverSent: true } : {}),
+	// The HTLCs the try went out as, and how many its quote was given for:
+	// fewer went out when the sending of a payment in parts stopped short.
+	parts: partsOf(p.parts),
+	planned: Math.max(partsOf(p.planned), partsOf(p.parts))
 });
+
+// The statuses of an invoice the host has words for, beside 'open' (20).
+const INVOICE_ENDS = Object.freeze(['paid', 'lost', 'expired']);
 
 const plainInvoice = (i) => ({
 	paymentHash: asHex(i.paymentHash),
 	assetAmount: BigInt(i.assetAmount),
 	received: receivedOf(i),
-	// A status this host has no word for is an open invoice until it is paid or expired.
-	status: i.status === 'paid' || i.status === 'expired' ? i.status : 'open'
+	// A status this host has no word for is an open invoice until it is paid, lost or expired.
+	status: INVOICE_ENDS.includes(i.status) ? i.status : 'open'
 });
 
 /** S7. One report of what became of a funding's reservation, in plain values. */
@@ -1092,21 +1149,25 @@ function plainEvent(e) {
  *                                   amountMsat, expiresAt }
  *   invoices()                 [{ paymentHash, assetAmount, received,
  *                                status }], assetAmount being what was
- *                                invoiced and received what arrived (S4)
+ *                                invoiced and received what arrived (S4),
+ *                                status 'open', 'paid', 'lost' or 'expired'
  *
  *   quotePayment({ bolt11, assetId, groupKey, amountMsat })
  *                              -> { quoteId, paymentHash, peerPubkey,
  *                                   channelId, assetAmount, amountMsat,
- *                                   feeMsat, unitsPerBtc, expiresAt, priced }
+ *                                   feeMsat, unitsPerBtc, expiresAt, priced,
+ *                                   parts, channelIds, carrierMsat } (21)
  *   payInvoice({ quoteId, maxAssetAmount })
  *                              -> { paymentHash, assetAmount, status,
- *                                   feeMsat, failure }
+ *                                   feeMsat, failure, parts, planned }
  *   payment(paymentHash)       the same shape, or null. Both carry
  *                                `attempt`, `lost` and `unconfirmed` as
  *                                well (S2, S3)
  *   paymentLimits()            [{ assetId, groupKey, maxSend, maxReceive,
- *                                sendChannelId, receiveChannelId }]: the
- *                                most one payment can move of each asset
+ *                                sendChannelId, sendPeer, receiveChannelId }]:
+ *                                the most one payment can move of each
+ *                                asset, sent over one peer's channels and
+ *                                received over one channel (23)
  *
  *   resume()                   carries opens on and confirms channels
  *   resumeRecovery()           -> [{ channelId, completed, pending, errors }]
@@ -1381,7 +1442,12 @@ function createLightning({ entry, storage, cfg, now = null }) {
 				feeMsat: q.feeMsat === undefined || q.feeMsat === null ? null : BigInt(q.feeMsat),
 				unitsPerBtc: rateOf(q.assetRate),
 				expiresAt: millis(q.expiresAt),
-				priced: !!q.priced
+				priced: !!q.priced,
+				// One HTLC, or the parts of a payment over one peer's channels,
+				// each with a carrier of its own (21).
+				parts: partsOf(q.parts),
+				channelIds: Array.isArray(q.channelIds) && q.channelIds.length > 0 ? q.channelIds.map(asHex) : [asHex(q.channelId)],
+				carrierMsat: q.carrierMsat === undefined || q.carrierMsat === null ? null : BigInt(q.carrierMsat)
 			};
 		},
 		payInvoice: async ({ quoteId, maxAssetAmount }) => plainPayment(await live().payInvoice({ quoteId: unhex(quoteId), maxAssetAmount: BigInt(maxAssetAmount) })),
@@ -1398,6 +1464,7 @@ function createLightning({ entry, storage, cfg, now = null }) {
 					maxSend: BigInt(l.maxSend || 0),
 					maxReceive: BigInt(l.maxReceive || 0),
 					sendChannelId: l.sendChannelId ? asHex(l.sendChannelId) : null,
+					sendPeer: l.sendPeer ? asHex(l.sendPeer) : null,
 					receiveChannelId: l.receiveChannelId ? asHex(l.receiveChannelId) : null
 				})),
 

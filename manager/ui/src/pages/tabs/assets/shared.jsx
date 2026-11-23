@@ -193,6 +193,15 @@ export function AssetTransferDetail({ row, network, host, origin, onClose, child
 						</DetailRow>
 					)}
 					{row.anchorSats > 0 && <DetailRow label="Locked with it">{fmtSats(row.anchorSats)}</DetailRow>}
+					{row.kind === 'ln-send' && (row.parts > 1 || row.planned > 1) && (
+						<DetailRow label="Sent in">
+							<span data-testid="asset-detail-parts">
+								{row.planned > (row.parts || 1)
+									? `${row.parts || 1} of ${row.planned} parts: the sending stopped, and the payee takes none of them without the rest`
+									: `${row.parts} parts, over the channels of one peer`}
+							</span>
+						</DetailRow>
+					)}
 					{row.address && (
 						<DetailRow label="Address">
 							<CopyText value={row.address} label={shortId(row.address, 12)} />

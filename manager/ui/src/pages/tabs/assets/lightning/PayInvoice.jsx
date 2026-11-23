@@ -353,6 +353,18 @@ export default function PayInvoice({ api, invoice, amountSats, holdings, state, 
 												<td>{fmtAsset(quote.sendable, asset)} over Lightning</td>
 											</tr>
 										)}
+										{quote.parts > 1 && (
+											<tr data-testid="asset-pay-parts">
+												<td>Goes as</td>
+												<td>
+													{quote.parts} parts over your channels with {quote.peerAlias || 'one peer'}
+													<span className="kv-sub">
+														No one channel can carry it whole. Each part carries a little of its channel&apos;s bitcoin to the
+														peer, and the amount above counts up to a unit more for each part.
+													</span>
+												</td>
+											</tr>
+										)}
 										<tr>
 											<td>{quotePriced(quote) ? 'Price held for' : 'Held for'}</td>
 											<td>

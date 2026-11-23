@@ -120,8 +120,14 @@
  * Being paid
  *
  *   An invoice says what was invoiced and, once paid, what arrived: a
- *   payer's rate can round that one unit down. The activity row and the
- *   balance count what arrived.
+ *   payer's rate can round each HTLC that paid it one unit down. The
+ *   activity row and the balance count what arrived, and follow the node's
+ *   figure after the row is paid: a payment in parts is paid from its
+ *   first part and rises as each later part's end comes, and the figure
+ *   falls when the payer takes an HTLC back on the chain. An invoice whose
+ *   every HTLC the payer took back on the chain, after the wallet had let
+ *   its preimage go, is lost: nothing was received, and it never waits to
+ *   be paid again.
  *
  * Rows
  *
@@ -139,7 +145,7 @@
 const crypto = require('crypto');
 const { sha256Hex } = require('./store');
 const { CHANNEL_SATS, CARRIER_SATS, unhex } = require('./adapter');
-const { refusal, isRefusal, mapLightning, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS, LIGHTNING_REFUSALS, modeUnavailable, FEE_POLICY_REFUSED } = require('./errors');
+const { refusal, isRefusal, mapLightning, peerWordsOf, isFenced, plainMessage, codeOf, paymentFailure, engineCodeOf, ENGINE_REFUSALS, LIGHTNING_REFUSALS, modeUnavailable, FEE_POLICY_REFUSED } = require('./errors');
 const views = require('./views');
 const ops = require('./ops');
 
@@ -656,10 +662,16 @@ function warningsOf(host, fees = feeStatusOf(host)) {
 
 /**
  * The most one payment can send and can receive of each asset, by the
- * host's key for it. A payment goes over one channel, so each figure is
- * that of the best single channel and never a sum: the least of what the
- * host's own list says a usable channel can move and what the library says,
- * which also knows whether the channel's peer is there.
+ * host's key for it. A payment is sent over the asset channels of one peer,
+ * in parts when one channel cannot carry it and its invoice lets it, so
+ * what can be sent is what the usable channels of the best peer can send
+ * together. An invoice is quoted only through a channel that can receive
+ * the whole of it, so what can be received is the best single channel's,
+ * never a sum. Each is the least of what the host's own list says and what
+ * the library says, which also knows whether a peer is there and whether a
+ * channel has a slot and a carrier for one more HTLC. `send` is the fullest
+ * channel of the best peer, and `receive` the channel that can receive the
+ * most.
  */
 function paymentLimits(host) {
 	const out = new Map();
@@ -674,12 +686,22 @@ function paymentLimits(host) {
 		const known = said.get(key) || { maxSend: 0n, maxReceive: 0n };
 		said.set(key, { maxSend: l.maxSend > known.maxSend ? l.maxSend : known.maxSend, maxReceive: l.maxReceive > known.maxReceive ? l.maxReceive : known.maxReceive });
 	}
+	// What the usable channels of each peer can send together, by asset.
+	const peers = new Map();
 	for (const c of channelList(host)) {
 		if (!c.usable || !c.key || !said.has(c.key)) continue;
 		const limit = out.get(c.key) || { maxSend: 0n, maxReceive: 0n, send: null, receive: null };
-		if (c.sendable > limit.maxSend) Object.assign(limit, { maxSend: c.sendable, send: c });
 		if (c.receivable > limit.maxReceive) Object.assign(limit, { maxReceive: c.receivable, receive: c });
 		out.set(c.key, limit);
+		const name = `${c.key}|${c.peerPubkey}`;
+		const peer = peers.get(name) || { key: c.key, units: 0n, fullest: null };
+		peer.units += c.sendable;
+		if (c.sendable > 0n && (!peer.fullest || c.sendable > peer.fullest.sendable)) peer.fullest = c;
+		peers.set(name, peer);
+	}
+	for (const peer of peers.values()) {
+		const limit = out.get(peer.key);
+		if (peer.units > limit.maxSend) Object.assign(limit, { maxSend: peer.units, send: peer.fullest });
 	}
 	for (const [key, limit] of out) {
 		const lib = said.get(key);
@@ -1450,9 +1472,16 @@ function lightningError(host, err, details) {
 		host.say('warn', `assets: a Lightning request failed: ${plainMessage(err)}`);
 		return refusal('LIGHTNING_FAILED', 'Lightning could not do that just now. Try again in a moment.', 502);
 	}
+	// A peer that refused to price: what it said goes to the log, never to
+	// the screen, and its code stays in the details.
+	if (mapped.extensionCode === 'PEER_GAVE_NO_PRICE') {
+		const words = peerWordsOf(err);
+		const peerCode = mapped.details && mapped.details.peerCode;
+		if (words || peerCode !== undefined) host.say('warn', `assets: the channel's peer refused to price a Lightning request${peerCode !== undefined ? ` (code ${peerCode})` : ''}${words ? `: ${words}` : ''}`);
+	}
 	// Only those whose figures the dashboard words carry them: the two that
 	// are about a channel's balance, and bitcoin on the wrong address types.
-	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS', 'PEER_OFFLINE', 'CHANNEL_MODE_UNAVAILABLE', 'OUTCOMES_UNDELIVERED', 'CHANNEL_PAYMENTS_FULL'].includes(mapped.extensionCode)) delete mapped.details;
+	if (!['INSUFFICIENT_OUTBOUND', 'INSUFFICIENT_INBOUND', 'FUNDING_INPUTS', 'PEER_OFFLINE', 'CHANNEL_MODE_UNAVAILABLE', 'OUTCOMES_UNDELIVERED', 'CHANNEL_PAYMENTS_FULL', 'PEER_GAVE_NO_PRICE'].includes(mapped.extensionCode)) delete mapped.details;
 	return mapped;
 }
 
@@ -1465,8 +1494,16 @@ const peerSaid = (c) => c.peerAlias || `${String(c.peerPubkey).slice(0, 8)}\u202
  * the most. Null when there is none, which leaves the amount as the reason.
  */
 function awayChannel(host, key, side, units) {
-	const idle = channelList(host).filter((c) => c.key === key && c.away && c[side] >= units && c[side] > 0n);
-	return idle.sort((a, b) => (b[side] > a[side] ? 1 : b[side] < a[side] ? -1 : 0))[0] || null;
+	const idle = channelList(host).filter((c) => c.key === key && c.away && c[side] > 0n);
+	const fullest = (list) => list.sort((a, b) => (b[side] > a[side] ? 1 : b[side] < a[side] ? -1 : 0))[0] || null;
+	const one = fullest(idle.filter((c) => c[side] >= units));
+	if (one || side !== 'couldSend') return one;
+	// A payment goes in parts over the channels of one peer: those of a peer
+	// that is away, together, are named by the fullest of them.
+	const byPeer = new Map();
+	for (const c of idle) byPeer.set(c.peerPubkey, [...(byPeer.get(c.peerPubkey) || []), c]);
+	for (const list of byPeer.values()) if (list.reduce((sum, c) => sum + c[side], 0n) >= units) return fullest(list);
+	return null;
 }
 
 /**
@@ -1511,8 +1548,10 @@ async function invoiceQuote(host, body) {
 	requireFull(host);
 	const amount = ops.parseUnits(body.amount);
 	const { reg, key } = knownAsset(host, body.key);
-	// A payment arrives through one channel: the most that can be received
-	// is the most any one of them has on the peer's side.
+	// The library quotes an invoice only through a channel that can receive
+	// the whole of it, though a payer may then split the payment over the
+	// peer's channels: the most an invoice can ask for is the most any one
+	// channel has on the peer's side.
 	const limit = paymentLimits(host).get(key);
 	const best = limit ? limit.receive : null;
 	const maxReceivable = best ? limit.maxReceive : 0n;
@@ -1575,10 +1614,11 @@ function invoiceView(host, inv) {
 		invoiceExpiresAt: inv.invoiceExpiresAt,
 		description: inv.description,
 		asset: inv.asset,
-		status: inv.status === 'PAID' ? 'PAID' : deadline <= host.now() ? 'EXPIRED' : 'OPEN',
-		// What a paid invoice brought in. A payer's rate can round it one
-		// unit under what was invoiced, which `assetAmount` goes on saying.
-		receivedAmount: inv.status === 'PAID' ? inv.receivedAmount || inv.assetAmount : null,
+		status: inv.status === 'PAID' || inv.status === 'LOST' ? inv.status : deadline <= host.now() ? 'EXPIRED' : 'OPEN',
+		// What a paid invoice brought in. A payer's rate can round each HTLC
+		// that paid it one unit under what it declared, and `assetAmount`
+		// goes on saying what was invoiced. A lost invoice brought in nothing.
+		receivedAmount: inv.status === 'PAID' ? inv.receivedAmount || inv.assetAmount : inv.status === 'LOST' ? '0' : null,
 		createdAt: inv.createdAt
 	};
 }
@@ -1669,27 +1709,48 @@ function listInvoices(host) {
 	return { invoices: all.slice(0, MAX_INVOICES_LISTED).map((inv) => invoiceView(host, inv)) };
 }
 
+// An invoice whose every HTLC the payer took back on the chain after the
+// wallet had let its preimage go. The row says it as a failure of its own.
+const INVOICE_LOST = Object.freeze({
+	code: 'INVOICE_LOST',
+	message: 'This invoice was paid, but the peer took the payment back on the chain before the wallet could claim it, so nothing was received.'
+});
+const isLostRow = (row) => row.state === 'failed' && !!row.failure && row.failure.code === INVOICE_LOST.code;
+
 /**
- * An invoice was paid, or ran out unpaid. That it was paid is the node's
- * word and wins at any time, also over a row that already says nobody
- * paid: a payment can arrive as the invoice runs out. `received` is what
- * arrived, which is what the row then counts: the amount invoiced stays on
- * the invoice.
+ * An invoice was paid, was lost, or ran out unpaid. That it was paid or
+ * lost is the node's word and wins at any time, also over a row that
+ * already says nobody paid: a payment can arrive as the invoice runs out.
+ * `received` is what arrived, which is what the row then counts: the
+ * amount invoiced stays on the invoice. A paid row takes the node's figure
+ * again whenever it moves, and is said again marked as such (`again`): a
+ * payment in parts rises as each part's end comes, and the figure falls
+ * when the payer takes an HTLC back on the chain. A lost row received
+ * nothing, and names what was invoiced, as one that ran out does.
  */
 function recordInvoice(host, rowId, outcome, received) {
 	const { rows } = host;
 	return host.lock.run(() => {
 		const row = host.getRow(rowId);
-		if (!row || row.kind !== 'ln-receive' || row.state === 'complete') return null;
-		if (outcome !== 'paid' && row.state !== 'waiting') return null;
+		if (!row || row.kind !== 'ln-receive') return null;
+		const got = received === undefined || received === null ? null : received.toString();
+		const paidBefore = row.state === 'complete';
+		if (outcome === 'paid' && paidBefore && (got === null || !row.assets[0] || row.assets[0].amount === got)) return null;
+		if (outcome === 'lost' && isLostRow(row)) return null;
+		if (outcome === 'expired' && row.state !== 'waiting') return null;
 		const next = clone(row);
 		const now = host.now();
 		const inv = rows.get(`inv/${row.paymentHash}`);
 		if (outcome === 'paid') {
 			next.state = 'complete';
 			next.failure = null;
-			next.at.completed = now;
-			if (received !== undefined && received !== null && next.assets[0]) next.assets[0].amount = received.toString();
+			// When it was first paid, which a figure that moves after does not change.
+			if (!paidBefore || !next.at.completed) next.at.completed = now;
+			if (got !== null && next.assets[0]) next.assets[0].amount = got;
+		} else if (outcome === 'lost') {
+			next.state = 'failed';
+			next.failure = { ...INVOICE_LOST };
+			if (inv && next.assets[0]) next.assets[0].amount = String(inv.assetAmount);
 		} else {
 			next.state = 'failed';
 			next.failure = { code: 'INVOICE_EXPIRED', message: 'Nobody paid this invoice before it ran out.' };
@@ -1697,12 +1758,14 @@ function recordInvoice(host, rowId, outcome, received) {
 		rows.tx(() => {
 			rows.put(`row/${rowId}`, next);
 			if (inv && outcome === 'paid') {
-				rows.put(`inv/${row.paymentHash}`, { ...inv, status: 'PAID', paidAt: now, ...(received !== undefined && received !== null ? { receivedAmount: received.toString() } : {}) });
+				rows.put(`inv/${row.paymentHash}`, { ...inv, status: 'PAID', paidAt: inv.paidAt || now, ...(got !== null ? { receivedAmount: got } : {}) });
+			} else if (inv && outcome === 'lost') {
+				rows.put(`inv/${row.paymentHash}`, { ...inv, status: 'LOST', lostAt: now, receivedAmount: '0' });
 			}
 		});
 		host.markDirty();
-		host.emitRow(next);
-		if (outcome === 'paid') for (const a of next.assets || []) host.emitEvent('balance', { key: a.key });
+		host.emitRow(next, outcome === 'paid' && paidBefore ? { again: true } : undefined);
+		if (outcome !== 'expired') for (const a of next.assets || []) host.emitEvent('balance', { key: a.key });
 		return next;
 	});
 }
@@ -1720,7 +1783,11 @@ const payQuoteView = (q) => ({
 	priced: q.priced,
 	peerAlias: q.peerAlias,
 	expiresAt: q.expiresAt,
-	sendable: q.sendable
+	sendable: q.sendable,
+	// The HTLCs the payment goes out as: 1, or the parts of a payment over
+	// the channels of one peer, each carrying a little of the bitcoin of its
+	// channel to the peer.
+	parts: Number.isInteger(q.parts) && q.parts > 1 ? q.parts : 1
 });
 
 const cleanInvoice = (text) =>
@@ -1752,8 +1819,9 @@ async function makePayQuote(host, body) {
 		amountMsat = BigInt(asked) * 1000n;
 	}
 	const usable = channelList(host).filter((c) => c.key === key && c.usable);
-	// A payment leaves through one channel: the most that can be paid is
-	// the most any one of them can send.
+	// A payment leaves over the channels of one peer, in parts when one
+	// channel cannot carry it and the invoice offers basic_mpp: the most
+	// that can be paid is what the best peer's channels can send together.
 	const limit = paymentLimits(host).get(key);
 	const most = limit ? limit.maxSend : 0n;
 	const short = () => refusal('INSUFFICIENT_OUTBOUND', 'No asset channel of this wallet can send that much.', 409, { sendable: most.toString() });
@@ -1768,8 +1836,14 @@ async function makePayQuote(host, body) {
 		if (codeOf(err) === 'ERR_BEIGNET_LN_PEER_OFFLINE') throw peerOffline(idle(1n) || limit.send, 'pay');
 		throw lightningError(host, err, { sendable: most.toString() });
 	}
-	const through = usable.find((c) => c.channelId === quoted.channelId) || null;
-	if (quoted.assetAmount > (through && through.sendable < most ? through.sendable : most)) {
+	// The channels the payment leaves on: one, or those of the parts of a
+	// payment in parts, all of one peer. Its units are held against what
+	// those channels can send as the host's list has them.
+	const ids = Array.isArray(quoted.channelIds) && quoted.channelIds.length > 0 ? [...new Set(quoted.channelIds)] : [quoted.channelId];
+	const over = ids.map((id) => usable.find((c) => c.channelId === id) || null);
+	const through = over[0] || null;
+	const room = over.every(Boolean) ? over.reduce((sum, c) => sum + c.sendable, 0n) : most;
+	if (quoted.assetAmount > (room < most ? room : most)) {
 		throw idle(quoted.assetAmount) ? peerOffline(idle(quoted.assetAmount), 'pay') : short();
 	}
 	const quote = {
@@ -1784,8 +1858,10 @@ async function makePayQuote(host, body) {
 		peerPubkey: quoted.peerPubkey,
 		peerAlias: through ? through.peerAlias : null,
 		channelId: quoted.channelId,
+		// One HTLC, or the parts of a payment in parts, each with a carrier.
+		parts: Number.isInteger(quoted.parts) && quoted.parts > 1 ? quoted.parts : 1,
 		expiresAt: quoted.expiresAt,
-		// What one payment can send, whichever channel this one goes through.
+		// What one payment can send, over whichever channels this one goes.
 		sendable: most.toString()
 	};
 	await host.lock.run(() => {
@@ -1807,7 +1883,10 @@ const payAnswer = (row) => ({
 	assetAmount: row.assets && row.assets[0] ? row.assets[0].amount : null,
 	feeSats: row.feeSats === undefined ? null : row.feeSats,
 	failureDescription: row.failure ? row.failure.message : null,
-	...(row.notice ? { notice: row.notice } : {})
+	...(row.notice ? { notice: row.notice } : {}),
+	// A payment in parts, and how many its quote was given for where fewer went out.
+	...(row.parts > 1 ? { parts: row.parts } : {}),
+	...(row.planned > (row.parts || 1) ? { planned: row.planned } : {})
 });
 
 // What a payment's row says while the node cannot say how it ended, or did
@@ -1907,6 +1986,11 @@ function recordPayment(host, rowId, seen, { handed = false, own = false } = {}) 
 		// Pending for good, as far as anything can say now: the node forgot
 		// the payment. And, whatever became of it, a send the node never
 		// confirmed as an asset payment.
+		// A payment in parts: how many went out, and how many its quote was
+		// given for where the sending stopped short. The parts out end as the
+		// payee lets them, and the record says how.
+		if (seen && Number.isInteger(seen.parts) && seen.parts > 1) next.parts = seen.parts;
+		if (seen && Number.isInteger(seen.planned) && seen.planned > (next.parts || 1)) next.planned = seen.planned;
 		const notice = seen && seen.status === 'pending' && seen.lost ? PAYMENT_UNACCOUNTED : seen && seen.unconfirmed ? PAYMENT_UNCONFIRMED : null;
 		if (notice) next.notice = { ...notice };
 		else if (seen) delete next.notice;
@@ -2009,6 +2093,9 @@ async function sendPayment(host, { row, quote, quoteId, bound, key, route, body,
 			}
 			const mapped = mapLightning(error);
 			if (!mapped) host.say('warn', `assets: a Lightning payment was not sent: ${plainMessage(error)}`);
+			// The channel did not take the payment at its add. Why is the
+			// engine's to say, and that goes to the log.
+			else if (codeOf(error) === 'ERR_BEIGNET_LN_HTLC_NOT_ADMITTED') host.say('warn', `assets: an asset channel did not take a Lightning payment: ${plainMessage(error)}`);
 			const failure = mapped ? { code: mapped.extensionCode, message: mapped.message } : { code: 'PAYMENT_NOT_SENT', message: 'This payment was not sent, so nothing was paid.' };
 			return { row: await failUnsent(host, row.id, failure, { own: true }) };
 		}
@@ -2166,17 +2253,23 @@ async function settleRows(host) {
 			await failUnsent(host, row.id, { code: 'PAYMENT_NOT_SENT', message: 'This payment was never sent, so nothing was paid.' });
 		}
 	}
-	// Every invoice that is not paid yet, the ones written down as run out
-	// among them: the node saying one was paid is the last word on it.
-	const unpaid = stored.filter((r) => r.kind === 'ln-receive' && r.state !== 'complete');
-	if (unpaid.length === 0) return;
+	// Every invoice, the ones written down as run out, paid or lost among
+	// them: what the node says of one is the last word on it. A paid one is
+	// looked at again while the node knows it, since its figure moves with
+	// a payment in parts and with an HTLC the payer took back on the chain.
+	const invoices = stored.filter((r) => r.kind === 'ln-receive');
+	if (invoices.length === 0) return;
 	const known = new Map(ln.invoices().map((i) => [i.paymentHash, i]));
-	for (const row of unpaid) {
+	for (const row of invoices) {
 		if (host.mem.stopped) return;
 		const inv = known.get(row.paymentHash);
-		// What arrived, where the library says it: never nothing for an invoice it calls paid.
-		if (inv && inv.status === 'paid') await recordInvoice(host, row.id, 'paid', inv.received !== null && inv.received > 0n ? inv.received : inv.assetAmount);
-		else if (row.state === 'waiting' && ((inv && inv.status === 'expired') || (row.expiresAt || 0) <= host.now())) await recordInvoice(host, row.id, 'expired');
+		if (inv && inv.status === 'paid') {
+			// What arrived, where the library says it: never nothing for an invoice it calls paid.
+			const received = inv.received !== null && inv.received > 0n ? inv.received : inv.assetAmount;
+			if (row.state !== 'complete' || (row.assets[0] && row.assets[0].amount !== received.toString())) await recordInvoice(host, row.id, 'paid', received);
+		} else if (inv && inv.status === 'lost') {
+			if (!isLostRow(row)) await recordInvoice(host, row.id, 'lost');
+		} else if (row.state === 'waiting' && ((inv && inv.status === 'expired') || (row.expiresAt || 0) <= host.now())) await recordInvoice(host, row.id, 'expired');
 	}
 }
 
@@ -2636,7 +2729,8 @@ function prune(host) {
 	dropOldQuotes(host);
 	for (const { key, value } of host.rows.list('inv/')) {
 		const deadline = Math.min(value.expiresAt || 0, value.invoiceExpiresAt || 0);
-		if (value.status !== 'PAID' && deadline + INVOICE_KEEP_MS < now) host.rows.del(key);
+		// One that was paid stays on the list, also once the payer took it back.
+		if (value.status !== 'PAID' && value.status !== 'LOST' && deadline + INVOICE_KEEP_MS < now) host.rows.del(key);
 	}
 }
 

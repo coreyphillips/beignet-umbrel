@@ -43,6 +43,8 @@
  *            txid, feeSats, satsPerVbyte, anchorSats, address, courier,
  *            paymentHash, confirmations, confirmationsRequired, stuck,
  *            at: { created, broadcast, confirmed, proof, completed }, clientRef }
+ *          An 'ln-send' row that went in parts has `parts`, and `planned` where
+ *          fewer went out than its price was given for.
  *
  *   Preview { previewId, expiresAt, asset, amount, change,
  *             fee: { sats, vbytes, feeRate },
@@ -174,11 +176,17 @@ export function assetsApi(api) {
 		createInvoice: ({ key, amount, description, quoteId }) => post('/invoices', { key, amount, description, quoteId }),
 		/**
 		 * { invoices: [{ bolt11, paymentHash, assetAmount, amountSats, rateText, priced, expiresAt, invoiceExpiresAt,
-		 *   description, asset, status: 'OPEN' | 'PAID' | 'EXPIRED', receivedAmount, createdAt }] }
-		 * `receivedAmount` is what a paid invoice brought in, and null until it is paid.
+		 *   description, asset, status: 'OPEN' | 'PAID' | 'LOST' | 'EXPIRED', receivedAmount, createdAt }] }
+		 * `receivedAmount` is what a paid invoice brought in, and null until it is paid. A payment in parts
+		 * raises it as each part arrives. LOST is a paid invoice whose payment the peer took back on the
+		 * chain: it brought in '0', and its row is failed with INVOICE_LOST.
 		 */
 		invoices: () => get('/invoices'),
-		/** A price for paying: { quoteId, assetAmount, amountSats, rateText, peerAlias, expiresAt, sendable } */
+		/**
+		 * A price for paying: { quoteId, assetAmount, amountSats, rateText, peerAlias, expiresAt, sendable, parts }.
+		 * `sendable` is what the channels of one peer can send together, and `parts` the HTLCs the
+		 * payment goes as: 1, or more for a payment in parts over the channels of one peer.
+		 */
 		payQuote: ({ bolt11, key, amountSats }) => post('/pay/quote', { bolt11, key, amountSats }),
 		/** { status, paymentHash, assetAmount, feeSats, failureDescription }, or QUOTE_CHANGED with details.quote. */
 		pay: ({ bolt11, key: assetKey, quoteId, maxAssetAmount }, key) =>

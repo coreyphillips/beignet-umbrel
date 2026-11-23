@@ -204,6 +204,25 @@ test('an event is announced when something finishes or fails, with what it was',
 	assert.equal(describeAssetEvent('assets:status', { row: null }), null);
 });
 
+test('an invoice is announced once when it is paid, and again only when the payment was taken back', () => {
+	const asset = { name: 'BUSD', type: 'normal', decimalDisplay: 2, amount: '15000' };
+	const invoice = (extra) => ({ kind: 'ln-receive', state: 'complete', failed: false, failure: null, assets: [asset], ...extra });
+	assert.deepEqual(describeAssetEvent('assets:invoice', { row: invoice() }), { text: 'Received 150.00 BUSD over Lightning', tone: 'success', duration: 8000 });
+	// The figure of a paid invoice moved as a later part arrived: the same payment, not news.
+	assert.equal(describeAssetEvent('assets:invoice', { row: invoice({ assets: [{ ...asset, amount: '14900' }] }), again: true }), null);
+	// The peer took the payment back on the chain: news, in words of its own.
+	const lost = invoice({ state: 'failed', failed: true, failure: { code: 'INVOICE_LOST', message: 'This invoice was paid, but the peer took the payment back on the chain before the wallet could claim it, so nothing was received.' } });
+	assert.deepEqual(describeAssetEvent('assets:invoice', { row: lost }), {
+		text: 'The Lightning payment of 150.00 BUSD was taken back on the chain, so nothing was received',
+		tone: 'error',
+		duration: 12000
+	});
+	// One that ran out unpaid, or is still waiting, is not announced.
+	const ranOut = invoice({ state: 'failed', failed: true, failure: { code: 'INVOICE_EXPIRED', message: 'Nobody paid this invoice before it ran out.' } });
+	assert.equal(describeAssetEvent('assets:invoice', { row: ranOut }), null);
+	assert.equal(describeAssetEvent('assets:invoice', { row: invoice({ state: 'waiting' }) }), null);
+});
+
 test('a request whose answer was lost is asked about before it is sent again', async () => {
 	const calls = [];
 	const lost = Object.assign(new Error('gateway timeout'), { code: 'PROXY_ERROR' });

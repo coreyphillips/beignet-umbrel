@@ -110,6 +110,10 @@ function rowView(row, { tip = 0, cfg, now = Date.now(), watched = null }) {
 		address: row.address || null,
 		courier: row.courier || null,
 		paymentHash: row.paymentHash || null,
+		// A Lightning payment that went in parts: how many went out, and how
+		// many its quote was given for where fewer did.
+		...(row.parts > 1 ? { parts: row.parts } : {}),
+		...(row.planned > (row.parts || 1) ? { planned: row.planned } : {}),
 		confirmations,
 		confirmationsRequired: cfg.minConfirmations,
 		blockHeight: row.blockHeight || null,
@@ -171,15 +175,22 @@ function assetViews({ records, registry, groups = new Map(), rows = [], channels
 	const byKey = new Map();
 	// What each asset has in channels: `channels` are the host's own entries
 	// (lightning.js channelList), the ones whose assets have left the chain.
-	// A payment goes over one channel, so what can be sent and received is
-	// the most one of them can move, and never their sum. `limits` is the
-	// library's word on that, by asset: it also knows which peers are there.
+	// A payment is sent over the channels of one peer, in parts when one
+	// channel cannot carry it, so what can be sent is what the best peer's
+	// channels can send together. An invoice is received through one
+	// channel, so what can be received is the most one of them can take,
+	// never a sum. `limits` is the library's word on both, by asset: it also
+	// knows which peers are there.
 	const inChannels = new Map();
+	const byPeer = new Map();
 	for (const c of channels) {
 		if (!c.counted || !c.key) continue;
 		const sum = inChannels.get(c.key) || { local: 0n, sendable: 0n, receivable: 0n, assetId: c.assetId, groupKey: c.groupKey || null };
 		sum.local += c.local;
-		if (c.sendable > sum.sendable) sum.sendable = c.sendable;
+		const peer = `${c.key}|${c.peerPubkey}`;
+		const out = (byPeer.get(peer) || 0n) + (c.sendable || 0n);
+		byPeer.set(peer, out);
+		if (out > sum.sendable) sum.sendable = out;
 		if (c.receivable > sum.receivable) sum.receivable = c.receivable;
 		inChannels.set(c.key, sum);
 	}

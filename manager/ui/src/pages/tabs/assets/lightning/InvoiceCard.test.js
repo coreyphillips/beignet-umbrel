@@ -237,6 +237,65 @@ test('an invoice whose time ran out unpaid stops being shown as one to scan', as
 	}
 });
 
+test('an invoice whose payment the peer took back on the chain says nothing was received, in its card and its row', async () => {
+	const backend = assetsBackend();
+	const real = backend.api('demo-main');
+	const LOST = { code: 'INVOICE_LOST', message: 'This invoice was paid, but the peer took the payment back on the chain before the wallet could claim it, so nothing was received.' };
+	let made = null;
+	let lost = false;
+	// The wallet's answers once the peer has taken the payment back: the
+	// row failed in words of its own, and the list says LOST.
+	const api = {
+		...real,
+		post: async (path, body, options) => {
+			const answer = await real.post(path, body, options);
+			if (path === '/x/assets/invoices') made = answer.paymentHash;
+			return answer;
+		},
+		get: async (path, ...rest) => {
+			const answer = await real.get(path, ...rest);
+			if (!lost || !made) return answer;
+			if (path.startsWith('/x/assets/activity')) {
+				return { ...answer, rows: answer.rows.map((x) => (x.paymentHash === made ? { ...x, state: 'failed', failed: true, failure: LOST } : x)) };
+			}
+			if (path === '/x/assets/invoices') {
+				return { ...answer, invoices: answer.invoices.map((i) => (i.paymentHash === made ? { ...i, status: 'LOST', receivedAmount: '0' } : i)) };
+			}
+			return answer;
+		}
+	};
+	const r = await asking(backend, 'demo-main', 'BUSD', '250', { api });
+	try {
+		await click(r.test('asset-invoice-create'));
+		await settle(ANSWERED_MS);
+		assert.ok(r.test('asset-invoice-qr'));
+
+		lost = true;
+		await r.refresh();
+		await settle(60);
+		assert.equal(r.test('asset-invoice-card').getAttribute('data-state'), 'lost');
+		assert.equal(r.test('asset-invoice-qr'), null, 'it is not shown as one to scan');
+		assert.equal(r.test('asset-invoice-paid'), null, 'a payment taken back is never read as received');
+		const over = r.test('asset-invoice-expired');
+		assert.equal(over.getAttribute('data-state'), 'lost');
+		assert.match(
+			over.textContent,
+			/^The invoice for 250\.00 BUSD was paid, but the peer took the payment back on the chain before the wallet could claim it, so nothing was received\. Make a new one if the payer is to pay again\.$/
+		);
+		// Its row among the receives says lost too, never waiting.
+		const row = r.tests('asset-receive-row').find((tr) => tr.getAttribute('data-state') === 'failed');
+		assert.ok(row, 'the row of that invoice');
+		assert.deepEqual([...row.querySelectorAll('.badge')].map((b) => b.textContent), ['lightning', 'lost']);
+
+		await click(r.test('asset-invoice-new'));
+		await settle(PRICED_MS);
+		assert.equal(r.test('asset-invoice-expired'), null);
+		assert.ok(r.test('asset-invoice-create'));
+	} finally {
+		await r.unmount();
+	}
+});
+
 test('a price that expired before the invoice was made is said in plain words, and asked for again', async () => {
 	const backend = assetsBackend();
 	const real = backend.api('demo-main');
@@ -336,7 +395,7 @@ test('an invoice that brought in a unit less than it asked for says both, in its
 		assert.equal(r.tests('asset-receive-short').length, 1, 'and no other row says anything');
 		await click(mine);
 		await settle(60);
-		assert.match(r.test('asset-invoice-short').textContent, /^The invoice asked for 250\.00 BUSD, received 249\.99 BUSD\. A payer's price can come to a unit less than an invoice names, and\s+the invoice is paid all the same\.$/);
+		assert.match(r.test('asset-invoice-short').textContent, /^The invoice asked for 250\.00 BUSD, received 249\.99 BUSD\. A payer's price can leave a payment up to a unit short of what an\s+invoice names for each part it arrives in, and the invoice is paid all the same\.$/);
 	} finally {
 		await r.unmount();
 	}
