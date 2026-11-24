@@ -26,6 +26,7 @@ import { describeRecovery } from '../../lib/recovery.js';
 
 import { currentEpoch, describeEpoch, slotCounts } from '../../lib/ffor.js';
 import { nodeUris } from '../../lib/node-uris.js';
+import { relayStateLabel, relayAdvice, readyUri } from '../../lib/porch.js';
 import { liquiditySendableSats } from '../../lib/sendable.js';
 
 // How many holdings the Overview lists before it hands over to the Assets tab.
@@ -333,6 +334,7 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
 
 
 				{!onchainOnly && <ConnectCard info={info} rec={rec} config={config} bump={bump} />}
+				{!onchainOnly && config?.porchAvailable && rec?.porch?.enabled && <PorchCard rec={rec} />}
 			</div>
 		</div>
 	);
@@ -355,6 +357,49 @@ export default function OverviewTab({ id, api, info, health, recovery, rec, tick
  * hands is decided at the moment of handing it out. Changing it restarts
  * the wallet, so the change is confirmed first.
  */
+/**
+ * The wallet's Porch relays as the engine reports them, and the peer link
+ * they serve. Porch being on is not the same as being registered: the link
+ * is offered only while a relay says ready.
+ */
+function PorchCard({ rec }) {
+	const { data: last, error } = usePoll(() => manager.porchStatus(rec.id), 5000, [rec.id]);
+	// After a failed poll the last answer is stale, and a link it called ready may no longer be.
+	const data = error ? { running: true, error: error.message } : last;
+	const relays = data?.relays || [];
+	const uri = readyUri(data);
+	return (
+		<Card
+			title="Porch peer link"
+			help="A peer link through your Porch relay. It names the relay and this wallet's node id, not this Umbrel's address. The relay's operator sees this Umbrel's IP address unless the relay connection is proxied."
+		>
+			<div data-testid="porch-status">
+				{!data?.running && <div className="empty">Start the wallet to register with its relays.</div>}
+				{data?.error && <div className="error-note">{data.error}</div>}
+				{data?.problem && <div className="error-note">{data.problem}</div>}
+				{relays.map((relay) => (
+					<div key={relay.relay} style={{ marginBottom: 8 }} data-testid="porch-relay-state">
+						<span className="mono">{relay.relay}</span> <Badge tone={relay.state === 'ready' ? 'green' : relay.state === 'connecting' ? 'muted' : 'red'}>{relayStateLabel(relay.state)}</Badge>{' '}
+						<span className="wallet-meta">{relay.proxied ? 'Proxied: the relay does not see this Umbrel’s IP' : 'Direct: the relay sees this Umbrel’s IP'}</span>
+						{relay.lastError && relay.state !== 'ready' && <div className="field-hint">{relay.lastError}</div>}
+						{relayAdvice(relay) && <div className="field-hint">{relayAdvice(relay)}</div>}
+					</div>
+				))}
+				{uri ? (
+					<>
+						<CopyText value={uri} />
+						<div style={{ marginTop: 12, textAlign: 'center' }}>
+							<QR value={uri} />
+						</div>
+					</>
+				) : (
+					data?.running && !data?.problem && <div className="empty">No link yet: waiting for a relay to report ready.</div>
+				)}
+			</div>
+		</Card>
+	);
+}
+
 function ConnectCard({ info, rec, config, bump }) {
 	const toast = useToast();
 	const [picked, setPicked] = useState(null);

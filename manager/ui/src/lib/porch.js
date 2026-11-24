@@ -1,0 +1,75 @@
+/** The Porch rows the edit form starts from: a saved token is shown as saved, never as text. */
+export function porchRows(rec) {
+	return (rec?.porch?.relays || []).map((relay) => ({ url: relay.url, savedUrl: relay.url, savedToken: !!relay.hasToken, hasToken: !!relay.hasToken, token: '', removeToken: false }));
+}
+
+function relaysChanged(rec, rows) {
+	const kept = rows.filter((row) => row.url.trim());
+	const before = (rec?.porch?.relays || []).map((relay) => relay.url).join(' ');
+	return before !== kept.map((row) => row.url.trim()).join(' ') || kept.some((row) => row.token || row.removeToken);
+}
+
+/**
+ * The porch block of a wallet update. A token is sent only when one was
+ * typed (set or replace) or removed on purpose (null); left out, the saved
+ * one is kept. The relay list and connection go only when they differ from
+ * `opened` (Porch as the form opened), so a save about something else keeps
+ * relays saved elsewhere since. Turning Porch off sends nothing else, so a
+ * half-typed relay never blocks it.
+ */
+export function porchBody(enabled, via, rows, opened) {
+	if (!enabled) return { enabled: false };
+	const relays = rows
+		.filter((row) => row.url.trim())
+		.map((row) => {
+			if (row.token) return { url: row.url.trim(), token: row.token };
+			if (row.removeToken) return { url: row.url.trim(), token: null };
+			return { url: row.url.trim() };
+		});
+	return {
+		enabled: true,
+		...(via !== (opened?.porch?.via || 'default') ? { via } : {}),
+		...(relaysChanged(opened, rows) ? { relays } : {})
+	};
+}
+
+export function porchChanged(rec, enabled, via, rows) {
+	const was = rec?.porch || {};
+	if (enabled !== !!was.enabled) return true;
+	if (!enabled) return false;
+	if (via !== (was.via || 'default')) return true;
+	return relaysChanged(rec, rows);
+}
+
+/**
+ * The default link's URI at a relay that reports ready, or null. A link
+ * carries one URI per relay in configured order, so the first one may name
+ * a relay that refused it.
+ */
+export function readyUri(status) {
+	if (!status?.listening) return null;
+	const ready = (status.relays || []).filter((relay) => relay.state === 'ready').map((relay) => relay.relay);
+	const links = status.links || [];
+	const link = links.find((l) => l.default) || links[0];
+	return (link?.uris || []).find((uri) => ready.some((origin) => uri.includes(`@${origin}/`))) || null;
+}
+
+const STATES = {
+	ready: 'Ready',
+	connecting: 'Connecting',
+	unreachable: 'Unreachable',
+	refused: 'Refused',
+	'no-links': 'No links',
+	stopped: 'Stopped'
+};
+
+export function relayStateLabel(state) {
+	return STATES[state] || state || 'Unknown';
+}
+
+/** What a relay's state asks of the owner, when it asks anything. */
+export function relayAdvice(relay) {
+	if (relay?.state === 'refused') return 'The relay turned this wallet down. Check its registration token, or whether the relay allows more links.';
+	if (relay?.state === 'unreachable') return 'The relay could not be reached. Check the URL and that the relay is running; the wallet keeps trying.';
+	return null;
+}

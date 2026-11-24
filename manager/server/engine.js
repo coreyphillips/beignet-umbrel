@@ -208,6 +208,15 @@ function irohRelayOnlyAvailable(bin = process.env.BEIGNET_BIN) {
 		&& probe(bin, 'beignet-node.js', ['irohRelayOnlyMode']);
 }
 
+/**
+ * True when the engine behind `bin` waits at Porch relays with a token per
+ * relay and reports each relay's state (beignet docs/PORCH.md, 0.45.0).
+ */
+function porchAvailable(bin = process.env.BEIGNET_BIN) {
+	return probe(bin, 'porch-config.js', ['BEIGNET_PORCH_RELAYS', 'porchRelayEntries'])
+		&& probe(bin, 'daemon.js', ["'GET /porch/links'"]);
+}
+
 /** The directory of the beignet package `bin` belongs to, or null. */
 function enginePackageDir(bin = process.env.BEIGNET_BIN) {
 	if (!bin) return null;
@@ -282,6 +291,7 @@ module.exports = {
 	ASSETS_PACKAGES,
 	irohAvailable,
 	irohRelayOnlyAvailable,
+	porchAvailable,
 	concurrentOfflineReceiveAvailable,
 
 	offlineReceiveAvailable,
