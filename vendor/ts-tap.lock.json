@@ -1,20 +1,20 @@
 {
 	"repository": "https://github.com/coreyphillips/ts-tap",
-	"commit": "4425eafc98f96bea4656a953207bc7ff018945f4",
-	"sourceDateEpoch": 1795449581,
-	"engine": ">=0.45.1 <0.46.0",
+	"commit": "e4dd61195bc369aeb760191001b29d0382590dae",
+	"sourceDateEpoch": 1795652231,
+	"engine": ">=0.45.1 <0.47.0",
 	"packages": [
 		{
 			"name": "ts-tap",
 			"version": "0.0.1",
-			"file": "ts-tap-0.0.1-g4425eafc98f9.tgz",
-			"sha256": "7cc91950a2cf15ef5bd126e0fabb8cca5df9f82b2e3bcd89e4ed8bdf77b731a8"
+			"file": "ts-tap-0.0.1-ge4dd61195bc3.tgz",
+			"sha256": "0c5f2992aedfd23ed89722587db788c730aff4858444860141584383604ff861"
 		},
 		{
 			"name": "@ts-tap/beignet",
 			"version": "0.0.1",
-			"file": "ts-tap-beignet-0.0.1-g4425eafc98f9.tgz",
-			"sha256": "7f59ee067a820a8c9a690884132d9d7aab0c83ed60e20c982205aee7dfa697ed"
+			"file": "ts-tap-beignet-0.0.1-ge4dd61195bc3.tgz",
+			"sha256": "dc5089c00dc6467d656c2514215f3827978f179f25ada4922e5ddfbf0db7d2a1"
 		}
 	]
 }

@@ -325,8 +325,10 @@ function buildAdapter({ tap, bridge, wallet, storage, cfg, lock, courierFor, pro
  *     fails, the peer's channel is not accepted and onError hears
  *     ERR_BEIGNET_LN_GROUP_PROOF.
  *
- *     A channel is funded with units of ONE asset ID (docs/beignet.md,
- *     "Grouped assets"): quoteFunding and openChannel take `assets` with
+ *     A channel this wallet funds holds units of ONE asset ID (docs/beignet.md,
+ *     "Grouped assets"); one a peer funds may hold units of up to three
+ *     issuances of one group, and acceptIncoming takes it. quoteFunding and
+ *     openChannel take `assets` with
  *     exactly one entry, and several asset IDs, a collectible, or a
  *     `groupKey` the asset is not of are refused with
  *     ERR_BEIGNET_LN_CHANNEL_ASSETS before anything is written or funded.
