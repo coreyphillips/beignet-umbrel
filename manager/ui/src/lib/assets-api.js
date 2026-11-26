@@ -155,8 +155,11 @@ export function assetsApi(api) {
 
 		/* -------------------------------------------------------- lightning */
 		/**
-		 * { channels: [{ channelId, pendingChannelId, peerPubkey, peerAlias, state, asset, capacity, localBalance,
-		 *   remoteBalance, sendable, receivable, channelSats, fundingTxid, reclaimable, reclaimTxid }] }
+		 * { channels: [{ channelId, pendingChannelId, peerPubkey, peerAlias, state, failure, peerConnected, asset,
+		 *   capacity, localBalance, remoteBalance, issuances?, sendable, receivable, sendablePayments?,
+		 *   receivablePayments?, recoveryWaitsUntil?, channelSats, localSats?, fundingTxid, reclaimable,
+		 *   reclaimTxid, undeliveredOutcomes? }] }. `issuances`, only for a channel of several issuances of one
+		 *   group: [{ asset, amount, local?, remote? }], a side left out where the wallet's node does not say it.
 		 */
 		channels: () => get('/channels'),
 		/** { channelSats, feeSats, totalSats, spendableSats, sufficient } */

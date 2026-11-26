@@ -388,8 +388,40 @@ function channelCapacity(c) {
 	return funded > 0n ? funded : c.local + c.remote;
 }
 
-/** A channel as GET /channels lists it. `c` is one of the host's entries, `reg` what it knows of the asset. */
-function channelView(c, reg) {
+/**
+ * What a channel of several issuances of one group holds of each: what it
+ * was funded with, and each side's part of it where the wallet's node says
+ * (`local`, `remote`, without units a payment in flight holds). A side the
+ * node does not say is left out, never read as none. Null for a channel of
+ * one issuance, whose figures are its totals. Each issuance is named by
+ * what the wallet knows of its own ID (`lookup`), or as the channel's asset
+ * with that ID where it knows nothing of it.
+ */
+function channelIssuances(c, reg, lookup) {
+	const list = Array.isArray(c.assets) ? c.assets : [];
+	if (list.length < 2) return null;
+	const side = (value) => (value === undefined || value === null ? null : String(value));
+	// Every issuance is under the channel's group, whatever the wallet has on record of it.
+	const group = c.groupKey || (reg && reg.groupKey) || null;
+	return list.map((a) => {
+		const own = (typeof lookup === 'function' && lookup(a.assetId)) || null;
+		const named =
+			own && own.assetId === a.assetId
+				? { ...own, groupKey: own.groupKey || group }
+				: { assetId: a.assetId, groupKey: group, name: (reg && reg.name) || null, type: (reg && reg.type) || 'normal', decimalDisplay: reg ? reg.decimalDisplay : 0 };
+		const local = side(a.local);
+		const remote = side(a.remote);
+		return { asset: brief(named), amount: String(a.amount || 0), ...(local !== null ? { local } : {}), ...(remote !== null ? { remote } : {}) };
+	});
+}
+
+/**
+ * A channel as GET /channels lists it. `c` is one of the host's entries,
+ * `reg` what it knows of the asset, and `lookup` what it knows of one asset
+ * ID, for a channel of several issuances.
+ */
+function channelView(c, reg, lookup) {
+	const issuances = channelIssuances(c, reg, lookup);
 	return {
 		// The engine's id once it has one. Until then the id the open was given.
 		channelId: c.channelId || c.id,
@@ -406,6 +438,9 @@ function channelView(c, reg) {
 		capacity: channelCapacity(c).toString(),
 		localBalance: c.local.toString(),
 		remoteBalance: c.remote.toString(),
+		// Only for a channel of several issuances of one group: the units of
+		// each, on each side where the wallet's node says.
+		...(issuances ? { issuances } : {}),
 		sendable: c.sendable.toString(),
 		receivable: c.receivable.toString(),
 		// Where the wallet's node says: how many more payments this side's

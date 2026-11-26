@@ -313,6 +313,7 @@ export function createAssetsMock(ctx) {
 		capacity: c.capacity,
 		localBalance: c.localBalance,
 		remoteBalance: c.remoteBalance,
+		...(Array.isArray(c.issuances) && c.issuances.length > 1 ? { issuances: c.issuances.map((i) => ({ ...i, asset: { ...i.asset } })) } : {}),
 		sendable: c.sendable,
 		receivable: c.receivable,
 		channelSats: c.channelSats,
@@ -959,6 +960,39 @@ export function createAssetsMock(ctx) {
 				_openedAt: now() - HOUR,
 				_fundingRate: 2,
 				_stuck: true
+			});
+			return true;
+		},
+		// A channel a peer funded with units of both issuances of BUSD. Each
+		// issuance's units are on each side, but for one whose split the
+		// wallet's node does not say. It has no price, so the demo's payments
+		// leave it be and its figures stay as they are.
+		'channel-issuances'(id) {
+			const s = S(id);
+			if (s.channels.some((c) => c._issuances)) return false;
+			const rec = Object.values(s.assets).find((a) => a.groupKey && (a.issuances || []).length > 1);
+			if (!rec) return false;
+			const [one, two] = rec.issuances;
+			const named = (i) => ({ ...brief(rec), assetId: i.assetId });
+			s.channels.push({
+				channelId: derivedHex(`seed-channel-issuances:${id}`, 64),
+				peerPubkey: `03${derivedHex('seed-peer:issuances', 64)}`,
+				peerAlias: 'Grouped edge',
+				state: 'NORMAL',
+				fundingTxid: derivedHex(`seed-funding-issuances:${id}`, 64),
+				asset: named(one),
+				capacity: '1500000',
+				localBalance: '420000',
+				remoteBalance: '1080000',
+				issuances: [
+					{ asset: named(one), amount: '900000', local: '420000', remote: '480000' },
+					{ asset: named(two), amount: '600000' }
+				],
+				sendable: '0',
+				receivable: '0',
+				channelSats: 100000,
+				_unpriced: true,
+				_issuances: true
 			});
 			return true;
 		},

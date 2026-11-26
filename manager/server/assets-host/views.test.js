@@ -474,6 +474,84 @@ test('a channel as the dashboard lists it', () => {
 	assert.equal(two.capacity, '850');
 	// With no funding on record it is the sum of the last balances.
 	assert.equal(views.channelView({ ...c, assets: [], local: 450n, remote: 150n }, reg).capacity, '600');
+	// A channel of one issuance lists no issuances: its figures are its totals.
+	assert.equal('issuances' in paying, false);
+	assert.equal('issuances' in views.channelView({ ...c, assets: [{ assetId: A1, amount: 600n, local: 600n, remote: 0n }] }, reg), false);
+	assert.equal('issuances' in views.channelView({ ...c, assets: [] }, reg), false);
+	assert.equal('issuances' in views.channelView(c, reg), false);
+	// Without the node's word on the sides, each issuance has its funding and no side at all.
+	assert.deepEqual(two.issuances, [
+		{ asset: { key: A1, assetId: A1, name: 'coin', type: 'normal', decimalDisplay: 2 }, amount: '600' },
+		{ asset: { key: 'cd'.repeat(32), assetId: 'cd'.repeat(32), name: 'coin', type: 'normal', decimalDisplay: 2 }, amount: '250' }
+	]);
+});
+
+test('a channel of several issuances of one group lists the units of each on each side, each issuance by its own ID', () => {
+	const G = 'ee'.repeat(32);
+	const B1 = 'b1'.repeat(32);
+	const B2 = 'b2'.repeat(32);
+	const B3 = 'b3'.repeat(32);
+	const known = new Map([
+		[B1, { assetId: B1, groupKey: G, name: 'coin', type: 0, decimalDisplay: 2 }],
+		[B2, { assetId: B2, groupKey: G, name: 'coin', type: 0, decimalDisplay: 2 }]
+	]);
+	const lookup = (id) => known.get(id) || null;
+	const c = {
+		id: 'aa'.repeat(32),
+		channelId: 'bb'.repeat(32),
+		peerPubkey: `02${'ab'.repeat(32)}`,
+		word: 'NORMAL',
+		assetId: B1,
+		groupKey: G,
+		assets: [
+			{ assetId: B1, amount: 12000n, local: 7000n, remote: 4600n },
+			{ assetId: B2, amount: 10000n, local: 0n, remote: 10000n },
+			// One the wallet knows nothing of, and whose sides the node does not say.
+			{ assetId: B3, amount: 8000n }
+		],
+		local: 7000n,
+		remote: 22600n,
+		sendable: 7000n,
+		receivable: 22600n,
+		fundingSats: 100000
+	};
+	const out = views.channelView(c, known.get(B1), lookup);
+	// Right after the two sides, in the order the view lists its keys.
+	const keys = Object.keys(out);
+	assert.deepEqual(keys.slice(keys.indexOf('remoteBalance'), keys.indexOf('remoteBalance') + 3), ['remoteBalance', 'issuances', 'sendable']);
+	assert.deepEqual(out.issuances, [
+		{ asset: { key: G, assetId: B1, name: 'coin', type: 'normal', decimalDisplay: 2 }, amount: '12000', local: '7000', remote: '4600' },
+		// A side of none is said as none: the node said it.
+		{ asset: { key: G, assetId: B2, name: 'coin', type: 'normal', decimalDisplay: 2 }, amount: '10000', local: '0', remote: '10000' },
+		// Not known to the wallet: named as the channel's asset with its own ID, and no side.
+		{ asset: { key: G, assetId: B3, name: 'coin', type: 'normal', decimalDisplay: 2 }, amount: '8000' }
+	]);
+	assert.deepEqual([out.asset.key, out.asset.assetId, out.capacity, out.localBalance, out.remoteBalance], [G, B1, '30000', '7000', '22600']);
+	// An issuance on record without its group is still under the channel's.
+	const ungrouped = views.channelView(c, known.get(B1), (id) => (id === B2 ? { ...known.get(B2), groupKey: null } : lookup(id)));
+	assert.deepEqual(ungrouped.issuances.map((i) => i.asset.key), [G, G, G]);
+	// A lookup that answers for another ID is not taken as the issuance's own.
+	const wrong = views.channelView(c, known.get(B1), () => known.get(B2));
+	assert.deepEqual(wrong.issuances.map((i) => i.asset.assetId), [B1, B2, B3]);
+	// With nothing known of the asset at all, each issuance is still listed by its ID, under the group.
+	const bare = views.channelView(c, null);
+	assert.deepEqual(
+		bare.issuances.map((i) => [i.asset.key, i.asset.assetId, i.asset.name, i.asset.decimalDisplay]),
+		[
+			[G, B1, null, 0],
+			[G, B2, null, 0],
+			[G, B3, null, 0]
+		]
+	);
+	// One side said and the other not; neither said.
+	const half = views.channelView({ ...c, assets: [{ assetId: B1, amount: 5n, local: 5n }, { assetId: B2, amount: 3n, remote: null }] }, known.get(B1), lookup);
+	assert.deepEqual(
+		half.issuances.map((i) => ['local' in i, 'remote' in i]),
+		[
+			[true, false],
+			[false, false]
+		]
+	);
 });
 
 test('a peer\'s price as a sentence, and none for one unit to the sat', () => {

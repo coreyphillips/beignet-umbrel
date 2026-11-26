@@ -1368,6 +1368,41 @@ pre.asset-meta {
 	font-weight: 500;
 }
 
+/* A channel of several issuances: the units of each, under the two sides. */
+.asset-channel-issuances {
+	margin-top: 10px;
+}
+
+.asset-channel-issuance-list {
+	list-style: none;
+	margin: 8px 0 0;
+	padding: 0;
+	display: grid;
+	gap: 6px;
+	font-size: 12.5px;
+}
+
+.asset-channel-issuance {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 4px 12px;
+	min-width: 0;
+}
+
+.asset-channel-issuance-sides {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	font-weight: 600;
+}
+
+.asset-channel-issuance .side-word {
+	color: var(--muted);
+	font-weight: 500;
+}
+
 .asset-channel-facts {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));

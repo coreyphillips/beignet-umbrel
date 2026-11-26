@@ -811,7 +811,13 @@ function fakeLightning({ now = () => Date.now(), tap, storage, held = () => fals
 			...(stateWord ? { state: stateWord } : {}),
 			fundingSatoshis: BigInt(f.fundingSats),
 			...(f.reserveSats === null || f.reserveSats === undefined ? {} : { reserveSatoshis: BigInt(f.reserveSats) }),
-			assets: f.assets.map((a) => ({ assetId: bytes(a.assetId), amount: BigInt(a.amount), ...(one ? { local: f.local, remote: f.remote } : {}) })),
+			// As the library: each side's part of each issuance. A channel of one
+			// has its totals; one of several has what its record names, if anything.
+			assets: f.assets.map((a) => ({
+				assetId: bytes(a.assetId),
+				amount: BigInt(a.amount),
+				...(one ? { local: f.local, remote: f.remote } : a.local !== undefined && a.remote !== undefined ? { local: BigInt(a.local), remote: BigInt(a.remote) } : {})
+			})),
 			...(f.groupKey ? { groupKey: bytes(f.groupKey) } : {}),
 			decimalDisplay: f.decimalDisplay || 0,
 			localAssetBalance: f.local,
