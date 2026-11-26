@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.44.0"
+version: "0.44.1"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,7 +30,18 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.46.0, with an assets library that takes an asset
+  Bundles beignet 0.46.0, as 0.44.0 did. An asset channel a peer
+  funded with units of several issuances of one asset group now shows
+  each issuance on its row: under the two sides, a folded "Units of N
+  issuances" lists each one by its asset ID, with its units on your
+  side and on the peer's. Where the wallet's node cannot say how an
+  issuance is split between the sides, the line says so and gives what
+  the channel holds of it. Such a channel is now named by its own first
+  issuance. Going back to app 0.44.0 keeps your wallets and channels;
+  its rows show the group's totals only.
+
+
+  From app 0.44.0: Bundles beignet 0.46.0, with an assets library that takes an asset
   channel a peer funds with units of up to three issuances of one
   asset group. Each issuance must be one your wallet knows or can find
   on its proof server, and none may be a collectible. The channel is
