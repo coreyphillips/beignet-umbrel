@@ -4,7 +4,7 @@ name: Beignet
 tagline: Self-custodial Bitcoin and Lightning wallets
 icon: https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/icon.svg
 category: bitcoin
-version: "0.43.2"
+version: "0.44.0"
 port: 2113
 description: >-
   Beignet lets you run one or many self-custodial Bitcoin and Lightning wallets
@@ -30,7 +30,19 @@ gallery:
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/2.png
   - https://raw.githubusercontent.com/coreyphillips/beignet-umbrel/main/beignet-wallet/gallery/3.png
 releaseNotes: >-
-  Bundles beignet 0.45.1, with an assets library that takes an
+  Bundles beignet 0.46.0, with an assets library that takes an asset
+  channel a peer funds with units of up to three issuances of one
+  asset group. Each issuance must be one your wallet knows or can find
+  on its proof server, and none may be a collectible. The channel is
+  listed under its first issuance, with all its units in its figures.
+  A channel your wallet opens still holds one issuance. Beignet 0.46.0
+  adds new kinds of channel behind profiles a wallet joins on regtest
+  only; a wallet of this app joins none of them and runs as before.
+  Going back to app 0.43.2 keeps your wallets and channels: close any
+  asset channel a peer funded with more than one issuance first.
+
+
+  From app 0.43.2: Bundles beignet 0.45.1, with an assets library that takes an
   ordinary bitcoin payment a Lightning Labs peer sends over your asset
   channel. When you have a bitcoin channel and an asset channel with
   the same peer, the peer can send a payment to you over either, and a
