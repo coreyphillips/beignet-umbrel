@@ -888,7 +888,29 @@ env:
   # up to 5 seconds for it (coreyphillips/ts-tap#175). No schema change: it
   # stays 21. The routes, the environment settings and the runtime
   # dependencies are unchanged since 0.43.5.
-  BEIGNET_VERSION: "0.45.1"
+  # 0.46.0 (coreyphillips/beignet#2134 to #2148) adds private Taproot
+  # channels opened through v2, dual-funded asset channels, asset channel
+  # splices and recovery across a pending splice, each behind a profile a
+  # wallet enrolls in at `beignet init`, on regtest only. The manager starts
+  # its daemons with `beignet start` and no such flag, and the assets host
+  # gives the library no dual funding policy, so a wallet of this app
+  # enrolls in none and runs as on 0.45.1. AUXILIARY_CHANNELS_API names
+  # three more surfaces (dualFunding:v1, assetSplice:v1 and
+  # assetSpliceRecovery:v1), which the library looks for only under such a
+  # policy, and the new channel state CHANNEL_READY is set only by the
+  # final Taproot opening of an enrolled wallet. Wallet.fetchTransactionDetails,
+  # which the library reads transactions with, answers an error where 0.45.1
+  # could answer no transaction or another one than asked. The library at
+  # e4dd611 (coreyphillips/ts-tap#178 to #185) takes a channel a peer funds
+  # with units of up to three issuances of one group, where it turned down
+  # every channel of more than one; answers a peer that asks which assets
+  # it offers, for this app's host with none; and accepts engines from
+  # 0.45.1 to below 0.47.0. No schema change: it stays 21. The one new
+  # route, POST /channel/asset-splice, is for an enrolled wallet, and the
+  # app does not call it. The environment settings and the runtime
+  # dependencies are unchanged since 0.43.5, and the capability probes in
+  # server/engine.js answer as for 0.45.1.
+  BEIGNET_VERSION: "0.46.0"
 
 jobs:
   build:
