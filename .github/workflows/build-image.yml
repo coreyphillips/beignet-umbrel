@@ -899,8 +899,9 @@ env:
   # assetSpliceRecovery:v1), which the library looks for only under such a
   # policy, and the new channel state CHANNEL_READY is set only by the
   # final Taproot opening of an enrolled wallet. Wallet.fetchTransactionDetails,
-  # which the library reads transactions with, answers an error where 0.45.1
-  # could answer no transaction or another one than asked. The library at
+  # which the library reads transactions with, answers an error when the
+  # Electrum server's answer failed, is missing or is of another
+  # transaction than the one asked for. The library at
   # e4dd611 (coreyphillips/ts-tap#178 to #185) takes a channel a peer funds
   # with units of up to three issuances of one group, where it turned down
   # every channel of more than one; answers a peer that asks which assets
