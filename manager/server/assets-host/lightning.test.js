@@ -2807,6 +2807,37 @@ test('the status says how many asset channels are not over, and says nothing rat
 	assert.equal((await plain.get('/status')).assetChannels, 0);
 });
 
+test('a channel of several issuances lists the units of each on each side, as the library has them from the signed commitment', async () => {
+	const { h, id } = await channelled();
+	const before = (await h.get('/channels')).channels[0];
+	// One issuance: its figures are its totals, and nothing more is listed.
+	assert.equal('issuances' in before, false);
+	const f = h.ln.flow(id);
+	const mine = before.asset.assetId;
+	const other = 'c4'.repeat(32);
+	f.assets = [
+		{ assetId: mine, amount: 450n, local: 450n, remote: 0n },
+		{ assetId: other, amount: 150n, local: 150n, remote: 0n }
+	];
+	await h.host.pass();
+	const [c] = (await h.get('/channels')).channels;
+	// Named by its own first issuance, with the totals it had.
+	assert.deepEqual([c.asset, c.capacity, c.localBalance, c.remoteBalance], [before.asset, '600', '600', '0']);
+	assert.deepEqual(c.issuances, [
+		{ asset: before.asset, amount: '450', local: '450', remote: '0' },
+		// One the wallet knows nothing of: named as the channel's asset, by its own ID.
+		{ asset: { ...before.asset, key: other, assetId: other }, amount: '150', local: '150', remote: '0' }
+	]);
+	// Where the library does not say how an issuance is split, neither does the row.
+	f.assets = [{ assetId: mine, amount: 450n }, { assetId: other, amount: 150n }];
+	await h.host.pass();
+	const unsaid = (await h.get('/channels')).channels[0].issuances;
+	assert.deepEqual(unsaid.map((i) => [i.amount, 'local' in i, 'remote' in i]), [
+		['450', false, false],
+		['150', false, false]
+	]);
+});
+
 test('a peer\'s asset of a group this wallet has never held is taken: the issuance that made the group is fetched from the proof server for the library to verify', async () => {
 	const { h, asset } = await funded();
 	const group = `02${'9c'.repeat(32)}`;
@@ -2919,6 +2950,35 @@ test('a channel is funded with one issuance of a grouped asset, and a price is a
 	// The rest of the group goes into a channel of its own, an issuance at a time.
 	assert.equal((await h.call('POST /channels/quote', { key: asset.key, amount: '400', feeRate: 2 })).sufficient, true);
 	assert.deepEqual(await codeOf(h.call('POST /channels/quote', { key: asset.key, amount: '700', feeRate: 2 })), ['CHANNEL_ASSETS', 409]);
+});
+
+test('a channel of several issuances of a group is named by its own first issuance, under the group, and lists each by its own ID', async () => {
+	const { h, asset, groupKey } = await grouped();
+	const open = await h.call('POST /channels/open', openBody(asset, '600'), 'open-key');
+	h.ln.confirm(open.pendingChannelId);
+	await h.host.pass({ block: true });
+	const before = (await h.get('/channels')).channels[0];
+	assert.deepEqual([before.asset.key, 'issuances' in before], [groupKey, false]);
+	// The issuance the channel was funded with, and the group's other one.
+	const funded = before.asset.assetId;
+	const other = [...h.host.registry().keys()].find((id) => id !== funded);
+	assert.equal(typeof other, 'string');
+	// As the library lists a channel whose first issuance is the other one.
+	h.ln.flow(open.pendingChannelId).assets = [
+		{ assetId: other, amount: 250n, local: 250n, remote: 0n },
+		{ assetId: funded, amount: 350n, local: 350n, remote: 0n }
+	];
+	await h.host.pass();
+	const [c] = (await h.get('/channels')).channels;
+	// Named by its own first issuance, and still under its group: the key it is counted under.
+	assert.deepEqual([c.asset.key, c.asset.assetId, c.asset.name, c.capacity], [groupKey, other, 'coin', '600']);
+	assert.deepEqual(
+		c.issuances.map((i) => [i.asset.key, i.asset.assetId, i.asset.name, i.amount, i.local, i.remote]),
+		[
+			[groupKey, other, 'coin', '250', '250', '0'],
+			[groupKey, funded, 'coin', '350', '350', '0']
+		]
+	);
 });
 
 test('bitcoin on addresses a channel cannot be funded from is said with the figures, and nothing is opened', async () => {

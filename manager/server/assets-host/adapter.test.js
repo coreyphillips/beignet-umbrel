@@ -68,8 +68,10 @@ function fakeEntry({ supported = true, startFails = null } = {}) {
 		state: 'NORMAL',
 		fundingSatoshis: 100000n,
 		reserveSatoshis: 1000n,
+		// Each side's part of the first issuance, as the library says it from
+		// the signed commitment; of the second it says nothing.
 		assets: [
-			{ assetId: ASSET, amount: 500n },
+			{ assetId: ASSET, amount: 500n, local: 400n, remote: 100n },
 			{ assetId: buf(0x12), amount: 50n }
 		],
 		localAssetBalance: 450n,
@@ -539,11 +541,12 @@ test('channels: every one and every open that ended, in plain values', () => {
 		confirmed: true,
 		fundingTxid: 'f1'.repeat(32),
 		state: 'NORMAL',
-		// A channel of several issuances is one figure a side, named by the first.
+		// A channel of several issuances is one figure a side, named by the
+		// first, with each side's part of each issuance where the library says it.
 		assetId: '11'.repeat(32),
 		groupKey: null,
 		assets: [
-			{ assetId: '11'.repeat(32), amount: 500n },
+			{ assetId: '11'.repeat(32), amount: 500n, local: 400n, remote: 100n },
 			{ assetId: '12'.repeat(32), amount: 50n }
 		],
 		local: 450n,

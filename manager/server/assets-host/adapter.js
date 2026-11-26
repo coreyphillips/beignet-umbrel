@@ -951,6 +951,16 @@ const whole = (value) => (value === undefined || value === null ? null : Number(
 const specifier = ({ assetId, groupKey }) => (groupKey ? { groupKey: unhex(groupKey) } : { assetId: unhex(assetId) });
 const inUnits = (list) => list.map((a) => ({ assetId: unhex(a.assetId), amount: BigInt(a.amount) }));
 const outUnits = (list) => (list || []).map((a) => ({ assetId: asHex(a.assetId), amount: BigInt(a.amount || 0) }));
+// What a channel holds of each issuance, with each side's part of it where
+// the library says (`local`, `remote`). A side it leaves out is not known,
+// and stays out: it is never read as none.
+const sideOf = (value) => (value === undefined || value === null ? null : BigInt(value));
+const channelUnits = (list) =>
+	(list || []).map((a) => {
+		const local = sideOf(a.local);
+		const remote = sideOf(a.remote);
+		return { assetId: asHex(a.assetId), amount: BigInt(a.amount || 0), ...(local !== null ? { local } : {}), ...(remote !== null ? { remote } : {}) };
+	});
 const rateOf = (r) => ({ coefficient: BigInt(r.coefficient), scale: Number(r.scale) || 0 });
 const notReady = () => Object.assign(new Error('ERR_BEIGNET_LN_NOT_READY: asset channels have not started'), { code: 'ERR_BEIGNET_LN_NOT_READY' });
 
@@ -1016,7 +1026,7 @@ function ownSatsOf(node) {
 
 /** One entry of the service's list, in plain values. `own` is what ownSatsOf read of the node. */
 function plainChannel(c, own = new Map()) {
-	const assets = outUnits(c.assets);
+	const assets = channelUnits(c.assets);
 	const phase = String(c.phase || '');
 	const state = c.state ? String(c.state) : null;
 	const ownKey = [c.channelId, c.pendingChannelId].map((id) => (id ? asHex(id) : null)).find((id) => id && own.has(id));

@@ -740,6 +740,17 @@ function paymentLimits(host) {
 	return out;
 }
 
+/**
+ * What a channel is named by: its own first issuance where the wallet knows
+ * it, and its group where it does not. Either way it stays under the
+ * channel's group, so the row's key is the key it is counted under.
+ */
+function channelAsset(host, c) {
+	const own = c.assetId ? host.known(c.assetId) : null;
+	if (own && own.assetId === c.assetId) return { ...own, groupKey: own.groupKey || c.groupKey || null };
+	return c.key ? host.known(c.key) : null;
+}
+
 function listChannels(host) {
 	host.requireUp();
 	// A wallet that cannot have an asset channel has none, and says so: the
@@ -753,7 +764,7 @@ function listChannels(host) {
 	return {
 		channels: channelList(host)
 			.filter(shown)
-			.map((c) => views.channelView(c, c.key ? host.known(c.key) : null))
+			.map((c) => views.channelView(c, channelAsset(host, c), (id) => host.known(id)))
 	};
 }
 

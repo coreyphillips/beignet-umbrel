@@ -116,6 +116,54 @@ test('a channel is shown in the asset it holds: both sides, what can move, and i
 	}
 });
 
+test('a channel of several issuances shows the units of each on each side, and says so where the split is not known', async () => {
+	const backend = assetsBackend();
+	assert.equal(backend.mock.seed('demo-main', 'channel-issuances'), true);
+	const listed = (await backend.api('demo-main').get('/x/assets/channels')).channels;
+	const [plain, grouped] = listed;
+	// One issuance: the keys it always had. Several: the issuances right after the two sides.
+	assert.deepEqual(Object.keys(plain), CHANNEL_KEYS);
+	assert.deepEqual(Object.keys(grouped), [...CHANNEL_KEYS.slice(0, CHANNEL_KEYS.indexOf('remoteBalance') + 1), 'issuances', ...CHANNEL_KEYS.slice(CHANNEL_KEYS.indexOf('remoteBalance') + 1)]);
+	assert.deepEqual(
+		grouped.issuances.map((i) => [i.asset.key, i.asset.assetId === grouped.asset.assetId, i.amount, i.local, i.remote]),
+		[
+			[grouped.asset.key, true, '900000', '420000', '480000'],
+			[grouped.asset.key, false, '600000', undefined, undefined]
+		]
+	);
+	const r = await mount(backend);
+	try {
+		const rows = r.tests('asset-channel');
+		assert.equal(rows.length, 2);
+		// The channel of one issuance has nothing more to show.
+		assert.equal(rows[0].querySelector('[data-testid="asset-channel-issuances"]'), null);
+		const row = rows[1];
+		assert.match(row.textContent, /with Grouped edge/);
+		// Its totals as for any channel.
+		assert.match(row.querySelector('[data-testid="asset-channel-local"]').textContent, /4,200\.00\s*BUSD\s*yours/);
+		assert.match(row.querySelector('[data-testid="asset-channel-remote"]').textContent, /theirs\s*10,800\.00\s*BUSD/);
+		// Under them, folded away, each issuance by its ID.
+		const details = row.querySelector('[data-testid="asset-channel-issuances"]');
+		assert.equal(details.tagName, 'DETAILS');
+		assert.equal(details.open, false);
+		assert.equal(details.querySelector('summary').textContent, 'Units of 2 issuances');
+		const lines = [...details.querySelectorAll('[data-testid="asset-channel-issuance"]')];
+		assert.deepEqual(
+			lines.map((l) => l.getAttribute('data-asset-id')),
+			grouped.issuances.map((i) => i.asset.assetId)
+		);
+		assert.match(lines[0].querySelector('.copytext').textContent, /^[0-9a-f]{4,}…[0-9a-f]{4,}$/);
+		assert.match(lines[0].querySelector('[data-testid="asset-channel-issuance-local"]').textContent, /4,200\.00\s*BUSD\s*yours/);
+		assert.match(lines[0].querySelector('[data-testid="asset-channel-issuance-remote"]').textContent, /theirs\s*4,800\.00\s*BUSD/);
+		assert.equal(lines[0].querySelector('[data-testid="asset-channel-issuance-unknown"]'), null);
+		// Where the wallet's node does not say the split: what the channel holds of it, and that.
+		assert.equal(lines[1].querySelector('[data-testid="asset-channel-issuance-local"]'), null);
+		assert.match(lines[1].querySelector('[data-testid="asset-channel-issuance-unknown"]').textContent.replace(/\s+/g, ' '), /^6,000\.00 ?BUSD in all, each side's share not known$/);
+	} finally {
+		await r.unmount();
+	}
+});
+
 test('a wallet with no asset channel is told what one is for', async () => {
 	const backend = assetsBackend();
 	const r = await mount(backend, { id: 'demo-testnet' });

@@ -182,7 +182,7 @@ The bitcoin in the channel stays yours and comes back when the channel is closed
 - **The wallet needs a proof server.** The proofs of the asset are put there before the open, and that is where the peer's wallet checks what it is being handed.
 - **Keep bitcoin on-chain beside it.** The dialog says how much, and [Fee coins](#fee-coins) says why.
 
-**A channel a peer opens to you is accepted by itself.** Nobody is asked. It is taken when asset channels are on for the wallet and it has finished starting, when fewer than four channels that peers began are still opening, when the asset is one this wallet knows or one whose issuance its own proof server can show, and when it is not a collectible. Anything else is turned down, and the wallet's log says why. A peer may also fund such a channel with units of up to three issuances of one asset's group. The wallet takes it on the same terms, which each of those issuances has to meet, and lists it under the first of them, with the units of all of them in its figures.
+**A channel a peer opens to you is accepted by itself.** Nobody is asked. It is taken when asset channels are on for the wallet and it has finished starting, when fewer than four channels that peers began are still opening, when the asset is one this wallet knows or one whose issuance its own proof server can show, and when it is not a collectible. Anything else is turned down, and the wallet's log says why. A peer may also fund such a channel with units of up to three issuances of one asset's group. The wallet takes it on the same terms, which each of those issuances has to meet, and lists it under the first of them, with the units of all of them in its figures. Under the two sides, the channel opens to show each issuance by its asset ID, with its units on your side and on the peer's. Where the wallet's node cannot say how an issuance is split between the sides, the line says so and gives what the channel holds of it.
 
 **While it opens.** The channel is listed as **opening**, with "Opening. It can carry payments once its funding transaction has confirmed." That takes three confirmations. A funding transaction that will not confirm can be taken back: **Take the funding back** on the row sends a transaction that spends the same bitcoin back to this wallet at a higher fee, so the funding can never confirm and the asset stays in the wallet. The miner fee comes out of the bitcoin that returns. Most fundings confirm by themselves, and waiting costs nothing.
 
@@ -361,7 +361,7 @@ With an asset channel, also:
 - **For assets over Lightning:**
   - Forwarding a payment for anyone else.
   - A payment in more than eight parts, or over the channels of more than one peer, either way.
-  - Several assets in one channel. A channel a peer funds with several issuances of one asset is taken, but a channel this wallet opens holds one issuance.
+  - Several assets in one channel. A channel a peer funds with several issuances of one asset is taken, and its row shows each issuance's units on each side, but a channel this wallet opens holds one issuance.
   - Splicing an asset channel, or funding one from both sides.
   - BOLT 12 offers for assets.
   - Receiving an asset while the wallet is offline.

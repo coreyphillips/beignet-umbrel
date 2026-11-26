@@ -22,6 +22,12 @@ import { FeePresets } from '../shared.jsx';
  * A list and not a table: six figures a channel do not fit a phone as
  * columns, and a block wraps where a row would scroll sideways.
  *
+ * A channel a peer funded with units of several issuances of one group is
+ * listed under its first, and its figures are of all of them. Under the two
+ * sides it can be opened to show each issuance by its ID, with its units on
+ * each side; where the wallet's node does not say how an issuance is split,
+ * the line says so and gives what the channel holds of it.
+ *
  * An open whose funding transaction has not confirmed says so, and where
  * the wallet says its bitcoin can be taken back (`reclaimable`) the line
  * offers that, quietly: most fundings confirm by themselves. Once a
@@ -116,6 +122,35 @@ export default function AssetChannelRows({ channels, network, onClose, onReclaim
 								<span className="side-word">theirs</span> <AssetAmount value={c.remoteBalance} asset={c.asset} />
 							</span>
 						</div>
+						{/* A channel of several issuances of one group: what it holds of each, on each side where the wallet's node says. */}
+						{Array.isArray(c.issuances) && c.issuances.length > 1 && (
+							<details className="asset-details asset-channel-issuances" data-testid="asset-channel-issuances">
+								<summary>Units of {c.issuances.length} issuances</summary>
+								<ul className="asset-channel-issuance-list">
+									{c.issuances.map((i) => (
+										<li key={i.asset.assetId} className="asset-channel-issuance" data-testid="asset-channel-issuance" data-asset-id={i.asset.assetId}>
+											<CopyText value={i.asset.assetId} label={shortId(i.asset.assetId)} />
+											{i.local !== undefined && i.remote !== undefined ? (
+												<span className="asset-channel-issuance-sides">
+													<span data-testid="asset-channel-issuance-local">
+														<AssetAmount value={i.local} asset={i.asset} /> <span className="side-word">yours</span>
+													</span>
+													<span data-testid="asset-channel-issuance-remote">
+														<span className="side-word">theirs</span> <AssetAmount value={i.remote} asset={i.asset} />
+													</span>
+												</span>
+											) : (
+												<span className="asset-channel-issuance-sides" data-testid="asset-channel-issuance-unknown">
+													<span>
+														<AssetAmount value={i.amount} asset={i.asset} /> <span className="side-word">in all, each side&apos;s share not known</span>
+													</span>
+												</span>
+											)}
+										</li>
+									))}
+								</ul>
+							</details>
+						)}
 
 						<dl className="asset-channel-facts">
 							<div>
